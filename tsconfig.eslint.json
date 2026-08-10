@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Covers the root-level TypeScript config files (eslint.config.ts, prettier.config.ts, commitlint.config.ts) that belong to no workspace package. Referenced by the root `pnpm typecheck` pass so those files are actually checked rather than silently skipped.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["*.config.ts"]
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+.wrangler/
+*.tsbuildinfo
+
+pnpm-lock.yaml
+
+# Markdown is deliberately outside the format gate.
+#
+# Prettier pads Markdown table columns to the width of the widest cell. The
+# tables in docs/ carry paragraph-length rationale, so padding them produces
+# 1500-character lines and makes every subsequent edit re-flow the whole table.
+# The prose in this repo is written by humans for humans; Prettier's value here
+# is on code and config, not narrative.
+*.md
+**/*.md
