@@ -27,6 +27,15 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
 
   if (!isPow2(tileSize)) throw new Error(`tileSize must be a power of two (got ${tileSize})`);
 
+  // build() is the tiler's public library entry point; opts.pano is joined
+  // into the output path below with no other sanitization. path.join
+  // normalizes `..` segments, so an unvalidated pano (e.g. derived from an
+  // upload name by a future caller) could write the pyramid outside outDir.
+  // Every legitimate pano today (a developer-typed CLI slug, or a
+  // server-generated crypto.randomUUID()) matches this charset.
+  if (!/^[A-Za-z0-9_-]+$/.test(opts.pano))
+    throw new Error(`pano must match /^[A-Za-z0-9_-]+$/ (got ${opts.pano})`);
+
   const meta = await sharp(opts.src).metadata();
   if (!meta.width || !meta.height) throw new Error('source has no dimensions');
 
@@ -40,6 +49,13 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
+  // removeAlpha() strips an alpha band if present; it does not force an RGB
+  // colorspace. A grayscale source decodes to 1 channel, and remap.ts's
+  // bilinear sampler indexes with a fixed stride of 3, so silently trusting
+  // `channels: 3` here would read out of bounds and produce mostly-black
+  // tiles with no error. Fail loudly instead.
+  if (info.channels !== 3)
+    throw new Error(`expected a 3-channel RGB source after removeAlpha, got ${info.channels}`);
   const srcImg: RgbImage = {
     data,
     width: info.width,
