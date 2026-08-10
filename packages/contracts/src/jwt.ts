@@ -25,6 +25,10 @@ export const assertClaims = (
   if (c.iss !== opts.issuer) throw new Error('bad issuer');
   const auds = Array.isArray(c.aud) ? c.aud : [c.aud];
   if (!auds.includes(opts.audience)) throw new Error('bad audience');
+  // c is an unchecked cast from a JSON.parse'd payload (see verifyJwt below),
+  // so a missing or non-numeric exp must fail closed here rather than let
+  // `NaN <= Date.now()` (always false) treat the token as never expiring.
+  if (typeof c.exp !== 'number' || !Number.isFinite(c.exp)) throw new Error('bad exp');
   if (c.exp * 1000 <= Date.now()) throw new Error('token expired');
   if (!c.sub) throw new Error('no subject');
   return { sub: c.sub };

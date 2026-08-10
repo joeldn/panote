@@ -46,8 +46,10 @@ describe('makeJwksLoader', () => {
     vi.useRealTimers();
   });
 
-  it('caches within the TTL and force-refetches on demand', async () => {
-    const loader = makeJwksLoader('https://issuer/', 1000);
+  it('caches within the TTL and force-refetches on demand once past the forced-refetch interval', async () => {
+    // minForceIntervalMs: 0 opts out of the throttle below, isolating "does
+    // force actually refetch at all" from "is a forced refetch throttled".
+    const loader = makeJwksLoader('https://issuer/', 1000, 0);
     expect(await loader.get()).toEqual(keys);
     await loader.get();
     expect(fetchSpy).toHaveBeenCalledTimes(1); // served from cache
@@ -62,6 +64,38 @@ describe('makeJwksLoader', () => {
     vi.advanceTimersByTime(1500);
     await loader.get();
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('throttles forced refetches within the minimum interval', async () => {
+    // Simulates a stream of tokens with random, unknown `kid`s each forcing
+    // a refetch via verifyWithRotation -- none of them should reach fetchJwks
+    // again until the minimum interval has passed.
+    const loader = makeJwksLoader('https://issuer/', 1_000_000, 60_000);
+    await loader.get();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    await loader.get(true);
+    await loader.get(true);
+    await loader.get(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours a forced refetch again once the minimum interval has elapsed', async () => {
+    vi.useFakeTimers();
+    const loader = makeJwksLoader('https://issuer/', 1_000_000, 1000);
+    await loader.get();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1500);
+    await loader.get(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces concurrent callers onto a single in-flight fetch', async () => {
+    const loader = makeJwksLoader('https://issuer/', 1000);
+    const [a, b, c] = await Promise.all([loader.get(), loader.get(), loader.get()]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(keys);
+    expect(b).toEqual(keys);
+    expect(c).toEqual(keys);
   });
 });
 
