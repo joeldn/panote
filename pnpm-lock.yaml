@@ -10,6 +10,9 @@ catalogs:
     '@changesets/cli':
       specifier: 2.31.1
       version: 2.31.1
+    '@cloudflare/workers-types':
+      specifier: 5.20260808.1
+      version: 5.20260808.1
     '@commitlint/cli':
       specifier: 21.2.1
       version: 21.2.1
@@ -25,9 +28,24 @@ catalogs:
     '@types/node':
       specifier: 26.2.0
       version: 26.2.0
+    '@vitest/coverage-v8':
+      specifier: 4.1.10
+      version: 4.1.10
     eslint:
       specifier: 10.8.1
       version: 10.8.1
+    eslint-config-prettier:
+      specifier: 10.1.8
+      version: 10.1.8
+    eslint-plugin-react-hooks:
+      specifier: 7.1.1
+      version: 7.1.1
+    eslint-plugin-react-refresh:
+      specifier: 0.5.3
+      version: 0.5.3
+    globals:
+      specifier: 17.9.0
+      version: 17.9.0
     jiti:
       specifier: 2.7.0
       version: 2.7.0
@@ -96,6 +114,30 @@ importers:
       typescript-eslint:
         specifier: 'catalog:'
         version: 8.66.0(eslint@10.8.1)(supports-color@7.2.0)(typescript@6.0.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.10(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(vite@8.2.1)
+
+  packages/core:
+    devDependencies:
+      '@internal/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@internal/vitest-config':
+        specifier: workspace:*
+        version: link:../vitest-config
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.2.0
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 4.1.10(vitest@4.1.10)
+      eslint:
+        specifier: 'catalog:'
+        version: 10.8.1(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
       vitest:
         specifier: 'catalog:'
         version: 4.1.10(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(vite@8.2.1)
