@@ -19,7 +19,6 @@ catalog:
   # repo history before changing this.
   typescript: 6.0.3
   '@types/node': 26.2.0
-  '@cloudflare/workers-types': 5.20260808.1
 
   # --- Task runner ---
   turbo: 2.10.9

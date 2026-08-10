@@ -10,9 +10,6 @@ catalogs:
     '@changesets/cli':
       specifier: 2.31.1
       version: 2.31.1
-    '@cloudflare/workers-types':
-      specifier: 5.20260808.1
-      version: 5.20260808.1
     '@commitlint/cli':
       specifier: 21.2.1
       version: 21.2.1
@@ -246,9 +243,6 @@ importers:
 
   packages/typescript-config:
     devDependencies:
-      '@cloudflare/workers-types':
-        specifier: 'catalog:'
-        version: 5.20260808.1
       '@types/node':
         specifier: 'catalog:'
         version: 26.2.0
@@ -437,9 +431,6 @@ packages:
 
   '@changesets/write@0.4.0':
     resolution: {integrity: sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q==}
-
-  '@cloudflare/workers-types@5.20260808.1':
-    resolution: {integrity: sha512-DN7G9SMyeOq031YhQexoExFAK78ms74cFiFF1teDlTK4+LjHgIc5Z8VbvXQtcCIP//o38btxzxW0b9MGPA83CA==}
 
   '@commitlint/cli@21.2.1':
     resolution: {integrity: sha512-blsZGe29hJ72VGEFVl72IVYX+1vsfINpjA9yWQA6i7OKD/McGEOXg08sKIRKjFk4JvzhV/9n0l3i6NooPLTNfg==}
@@ -2490,8 +2481,6 @@ snapshots:
       fs-extra: 7.0.1
       human-id: 4.2.0
       prettier: 2.8.8
-
-  '@cloudflare/workers-types@5.20260808.1': {}
 
   '@commitlint/cli@21.2.1(@types/node@26.2.0)(conventional-commits-parser@7.1.2)(typescript@6.0.3)':
     dependencies:

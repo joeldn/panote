@@ -72,12 +72,6 @@
       groupName: 'cloudflare',
     },
     {
-      description: '@cloudflare/workers-types publishes a new build most days; batch it weekly instead of one PR per day.',
-      matchPackageNames: ['@cloudflare/workers-types'],
-      schedule: ['before 6am on monday'],
-      groupName: 'cloudflare',
-    },
-    {
       description: 'Node types must not jump ahead of the Node major we actually run.',
       matchPackageNames: ['@types/node'],
       allowedVersions: '<27',
