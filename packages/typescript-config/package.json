@@ -1,0 +1,32 @@
+{
+  "name": "@internal/typescript-config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared TypeScript configurations for the panote monorepo",
+  "license": "UNLICENSED",
+  "files": [
+    "base.json",
+    "workers.json",
+    "react.json"
+  ],
+  "exports": {
+    "./base.json": "./base.json",
+    "./workers.json": "./workers.json",
+    "./react.json": "./react.json"
+  },
+  "scripts": {
+    "build": "echo \"@internal/typescript-config: nothing to build (JSON only)\"",
+    "lint": "eslint . --no-error-on-unmatched-pattern",
+    "lint:fix": "eslint . --fix --no-error-on-unmatched-pattern",
+    "typecheck": "echo \"@internal/typescript-config: nothing to typecheck (JSON only)\"",
+    "test": "echo \"@internal/typescript-config: no tests\"",
+    "test:coverage": "echo \"@internal/typescript-config: no tests\""
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:"
+  }
+}

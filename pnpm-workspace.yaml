@@ -1,0 +1,94 @@
+packages:
+  - 'apps/*'
+  - 'services/*'
+  - 'packages/*'
+
+# ---------------------------------------------------------------------------
+# Version catalog.
+#
+# Every third-party dependency version in this monorepo is written EXACTLY
+# ONCE, here. Workspace packages reference it as the literal string "catalog:"
+# and never as a semver range. All versions are pinned exactly - no ^ or ~
+# anywhere, including in this catalog. Renovate bumps this file; nothing else.
+# ---------------------------------------------------------------------------
+catalog:
+  # --- TypeScript toolchain ---
+  # NOTE: TypeScript is held at 6.0.x because typescript-eslint 8.x declares a
+  # peer range of ">=4.8.4 <6.1.0". Bumping to TS 7 (the native port) requires
+  # a typescript-eslint major that supports it. See the deviation note in the
+  # repo history before changing this.
+  typescript: 6.0.3
+  '@types/node': 26.2.0
+  '@cloudflare/workers-types': 5.20260808.1
+
+  # --- Task runner ---
+  turbo: 2.10.9
+
+  # --- Testing ---
+  vitest: 4.1.10
+  '@vitest/coverage-v8': 4.1.10
+
+  # --- Linting / formatting ---
+  eslint: 10.8.1
+  '@eslint/js': 10.0.1
+  typescript-eslint: 8.66.0
+  eslint-config-prettier: 10.1.8
+  eslint-plugin-react-hooks: 7.1.1
+  eslint-plugin-react-refresh: 0.5.3
+  globals: 17.9.0
+  prettier: 3.9.6
+
+  # --- Config loading (eslint.config.ts / prettier.config.ts) ---
+  jiti: 2.7.0
+
+  # --- Release / commit hygiene ---
+  '@changesets/cli': 2.31.1
+  '@commitlint/cli': 21.2.1
+  '@commitlint/config-conventional': 21.2.0
+  '@commitlint/types': 21.2.0
+
+# ---------------------------------------------------------------------------
+# Install governance
+# ---------------------------------------------------------------------------
+
+# `pnpm add <pkg>` must write the version into the catalog above and leave the
+# package manifest holding the literal string "catalog:". Without this, a
+# version string can be added directly to a package and quietly diverge.
+catalogMode: strict
+
+# `pnpm add` writes an exact version, never "^x.y.z". Combined with
+# catalogMode: strict this is what actually enforces "pinned exactly, once" -
+# catalogMode alone will happily write a caret range into the catalog.
+savePrefix: ''
+
+# Drop catalog entries that no package references any more, so the catalog
+# cannot silently rot into a list of things we stopped using.
+cleanupUnusedCatalogs: true
+
+# Collapse peer dependency ranges to a single resolution where possible,
+# instead of installing several copies of the same peer.
+dedupePeers: true
+
+# Refuse to install any package version published less than 24h ago. Blunt but
+# effective mitigation against a freshly-published compromised release.
+minimumReleaseAge: 1440
+
+# Fail the install if a dependency has a build (install/postinstall) script
+# that is neither allowlisted below nor explicitly ignored. New native deps
+# have to be a conscious decision, not something that silently runs code.
+strictDepBuilds: true
+
+# The only dependencies permitted to run install scripts. esbuild/workerd are
+# pulled in by vite/wrangler; sharp is the image pipeline used by the tiler.
+#
+# MUST be a map of packageName: true|false, NOT a YAML list. pnpm reads this
+# with Object.entries(allowBuilds); given a list, that yields index keys
+# ("0", "1", ...) that never match true/false, so nothing gets allowlisted
+# and (with strictDepBuilds: true) install hard-fails with
+# ERR_PNPM_IGNORED_BUILDS. Worse, pnpm then rewrites this block on disk into
+# a corrupted mixed object - so if this ever looks like a list again, that's
+# a symptom of the same bug, not a valid alternate form.
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true

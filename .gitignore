@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+.output/
+*.tsbuildinfo
+
+# Test output
+coverage/
+
+# Tool caches
+.turbo/
+.wrangler/
+.vite/
+.eslintcache
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# Registry auth - never commit a real one, see .npmrc.example
+.npmrc
+
+# Agent scaffolding
+.claude/
+.superpowers/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp

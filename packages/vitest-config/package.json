@@ -1,0 +1,51 @@
+{
+  "name": "@internal/vitest-config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Vitest configuration for the panote monorepo",
+  "license": "UNLICENSED",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./base": {
+      "types": "./dist/base.d.ts",
+      "default": "./dist/base.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc -b",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "dependencies": {
+    "@vitest/coverage-v8": "catalog:"
+  },
+  "devDependencies": {
+    "@internal/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "vitest": "catalog:"
+  }
+}

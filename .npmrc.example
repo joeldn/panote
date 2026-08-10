@@ -1,0 +1,13 @@
+# Copy to `.npmrc` and fill in. `.npmrc` is gitignored and must never be
+# committed - it is the file that ends up holding registry auth tokens.
+#
+# Almost all pnpm behaviour for this repo is configured in pnpm-workspace.yaml
+# (catalog, catalogMode, minimumReleaseAge, allowBuilds, ...), not here. Keep
+# this file for machine-local and credential settings only.
+
+# --- Registry auth (CI sets these from secrets; do not hardcode tokens) ---
+# //registry.npmjs.org/:_authToken=${NPM_TOKEN}
+
+# --- Machine-local overrides ---
+# store-dir=/path/to/a/faster/disk/.pnpm-store
+# network-concurrency=8

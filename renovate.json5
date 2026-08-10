@@ -1,0 +1,91 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+
+  extends: [
+    'config:recommended',
+    ':semanticCommits',
+    ':semanticCommitTypeAll(chore)',
+    'group:monorepos',
+    'group:recommended',
+    ':prHourlyLimit2',
+    ':prConcurrentLimit10',
+  ],
+
+  timezone: 'Australia/Sydney',
+  schedule: ['before 6am on monday'],
+
+  // Every version in this repo is pinned exactly and lives in the
+  // pnpm-workspace.yaml catalog. Renovate must edit the catalog, never
+  // reintroduce a range.
+  rangeStrategy: 'pin',
+  separateMinorPatch: false,
+
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ['before 6am on the first day of the month'],
+  },
+
+  // Mirrors pnpm's minimumReleaseAge: 1440. Do not let Renovate propose a
+  // version that pnpm would then refuse to install.
+  minimumReleaseAge: '1 day',
+
+  postUpdateOptions: ['pnpmDedupe'],
+
+  vulnerabilityAlerts: {
+    enabled: true,
+    schedule: ['at any time'],
+    minimumReleaseAge: null,
+    labels: ['security'],
+  },
+
+  packageRules: [
+    {
+      description: 'TypeScript moves fast and breaks type-checks; keep it on its own PR.',
+      matchPackageNames: ['typescript'],
+      groupName: 'typescript',
+      // typescript-eslint pins a peer range on typescript. Do not let a
+      // TypeScript major land ahead of typescript-eslint support.
+      dependencyDashboardApproval: true,
+    },
+    {
+      description: 'Lint and format toolchain moves together.',
+      matchPackageNames: [
+        'eslint',
+        '@eslint/**',
+        'typescript-eslint',
+        '@typescript-eslint/**',
+        'eslint-config-prettier',
+        'eslint-plugin-**',
+        'prettier',
+        'globals',
+      ],
+      groupName: 'lint toolchain',
+    },
+    {
+      description: 'Vitest core and its ecosystem must stay in lockstep.',
+      matchPackageNames: ['vitest', '@vitest/**', '@cloudflare/vitest-pool-workers'],
+      groupName: 'vitest',
+    },
+    {
+      description: 'Cloudflare tooling moves together.',
+      matchPackageNames: ['wrangler', '@cloudflare/**', 'miniflare'],
+      groupName: 'cloudflare',
+    },
+    {
+      description: '@cloudflare/workers-types publishes a new build most days; batch it weekly instead of one PR per day.',
+      matchPackageNames: ['@cloudflare/workers-types'],
+      schedule: ['before 6am on monday'],
+      groupName: 'cloudflare',
+    },
+    {
+      description: 'Node types must not jump ahead of the Node major we actually run.',
+      matchPackageNames: ['@types/node'],
+      allowedVersions: '<27',
+    },
+    {
+      description: 'Turborepo and pnpm are build-critical; review them individually.',
+      matchPackageNames: ['turbo', 'pnpm'],
+      dependencyDashboardApproval: true,
+    },
+  ],
+}

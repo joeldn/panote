@@ -1,0 +1,15 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  // This package ships JSON only - no compiler runs and no tests run, so it
+  // produces none of the outputs the root task definitions declare. Overriding
+  // them to [] stops turbo warning about missing output on every run.
+  "tasks": {
+    "build": {
+      "outputs": []
+    },
+    "test:coverage": {
+      "outputs": []
+    }
+  }
+}

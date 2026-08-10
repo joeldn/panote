@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Root config. Workspace packages are built individually via `turbo run build` -> `tsc -b` in each package, so this file exists purely so that editors and the root-level `tsc --noEmit` have sane defaults. It compiles nothing itself; see tsconfig.eslint.json for what the root lint pass type-checks.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "files": [],
+  "include": []
+}

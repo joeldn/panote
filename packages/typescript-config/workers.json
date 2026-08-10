@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Cloudflare Workers config. workerd is not Node: no @types/node here. Wrangler/esbuild does the bundling, so tsc is type-check-only (noEmit). Consuming worker packages must declare @cloudflare/workers-types in their own devDependencies (catalog:) - pnpm's isolated node_modules means a types package declared only here will not resolve from the consumer's typeRoots.",
+  "extends": "./base.json",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": ["@cloudflare/workers-types"],
+
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true,
+    "noEmit": true
+  }
+}

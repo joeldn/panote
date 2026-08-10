@@ -1,0 +1,58 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "globalDependencies": [
+    ".nvmrc",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+    "tsconfig.eslint.json",
+    "eslint.config.ts",
+    "prettier.config.ts",
+    ".prettierignore"
+  ],
+  "globalEnv": ["NODE_ENV", "CI"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "!dist/**/*.tsbuildinfo"]
+    },
+
+    "lint": {
+      "dependsOn": ["^build", "build"],
+      "outputs": []
+    },
+    "lint:fix": {
+      "dependsOn": ["^build", "build"],
+      "cache": false,
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^build", "build"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build", "build"],
+      "outputs": []
+    },
+    "test:coverage": {
+      "dependsOn": ["^build", "build"],
+      "outputs": ["coverage/**"]
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
+
+    "//#lint:root": {
+      "dependsOn": ["@internal/eslint-config#build"],
+      "inputs": ["*.config.ts"],
+      "outputs": []
+    },
+    "//#typecheck:root": {
+      "dependsOn": ["@internal/eslint-config#build"],
+      "inputs": ["*.config.ts", "tsconfig.eslint.json"],
+      "outputs": []
+    }
+  }
+}

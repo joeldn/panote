@@ -1,0 +1,47 @@
+{
+  "name": "panote",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "panote - free hosted 360-degree panorama viewing and hosting",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint lint:root",
+    "lint:fix": "turbo run lint:fix && pnpm lint:root --fix",
+    "lint:root": "eslint --max-warnings 0 *.config.ts",
+    "typecheck": "turbo run typecheck typecheck:root",
+    "typecheck:root": "tsc -p tsconfig.eslint.json",
+    "test": "turbo run test",
+    "test:coverage": "turbo run test:coverage",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "changeset": "changeset",
+    "changeset:status": "changeset status",
+    "changeset:version": "changeset version",
+    "changeset:publish": "pnpm build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "catalog:",
+    "@commitlint/cli": "catalog:",
+    "@commitlint/config-conventional": "catalog:",
+    "@commitlint/types": "catalog:",
+    "@eslint/js": "catalog:",
+    "@internal/eslint-config": "workspace:*",
+    "@internal/typescript-config": "workspace:*",
+    "@internal/vitest-config": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "jiti": "catalog:",
+    "prettier": "catalog:",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  }
+}
