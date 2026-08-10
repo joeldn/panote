@@ -87,4 +87,32 @@ describe('parseManifest', () => {
 
   it('throws for a blank/whitespace-only pano string', () =>
     expect(() => parseManifest({ ...valid, pano: '   ' })).toThrow());
+
+  it('rejects a tiny tileSize even though faceSize/maxLevel are internally consistent', () => {
+    // tileSize=1 with a small maxLevel drives selectLevel() to a huge grid
+    // (6 * 4^level tileVisible checks/frame) regardless of maxLevel, so this
+    // must be rejected even though faceSize === tileSize * 2^maxLevel holds
+    // and maxLevel is well under the cap.
+    expect(() => parseManifest({ ...valid, tileSize: 1, maxLevel: 14, faceSize: 2 ** 14 })).toThrow(
+      /tileSize/,
+    );
+  });
+
+  it('rejects a maxLevel above a sane pyramid depth even with a large tileSize', () => {
+    expect(() =>
+      parseManifest({ ...valid, tileSize: 512, maxLevel: 9, faceSize: 512 * 2 ** 9 }),
+    ).toThrow(/maxLevel/);
+  });
+
+  it('rejects a tileSize that is not a power of two, even within range', () => {
+    expect(() =>
+      parseManifest({ ...valid, tileSize: 300, maxLevel: 5, faceSize: 300 * 2 ** 5 }),
+    ).toThrow(/tileSize/);
+  });
+
+  it('accepts the largest pyramid the tiler can realistically emit', () => {
+    expect(() =>
+      parseManifest({ ...valid, tileSize: 512, maxLevel: 5, faceSize: 512 * 2 ** 5 }),
+    ).not.toThrow();
+  });
 });

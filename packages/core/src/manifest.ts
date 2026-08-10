@@ -28,6 +28,18 @@ export function manifestUrl(baseUrl: string, pano: string): string {
   return `${baseUrl}${pano}/manifest.json`;
 }
 
+// The two real levers on tile-layer.ts's per-frame visibility loop (which runs
+// 6 * 4^level `tileVisible` checks) are maxLevel and tileSize — and tileSize is
+// the dangerous one: selectLevel() already clamps the *chosen* level by field
+// of view, so a large maxLevel with a sane tileSize is harmless, but a tiny
+// tileSize forces selectLevel to pick a very deep level regardless of maxLevel
+// (e.g. tileSize=1, maxLevel=14 drives ~1.6e9 iterations/frame). A tileSize
+// floor closes that off; the maxLevel cap is a second, independent bound with
+// generous headroom over what the tiler can ever emit (<=5 at its 150MP cap).
+const MIN_TILE_SIZE = 128;
+const MAX_TILE_SIZE = 4096;
+const MAX_LEVEL_CAP = 8;
+
 export function parseManifest(raw: unknown): Manifest {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('manifest must be an object');
@@ -46,10 +58,15 @@ export function parseManifest(raw: unknown): Manifest {
   const quality = num('quality');
   if (!Number.isInteger(tileSize) || tileSize <= 0)
     throw new Error('manifest.tileSize must be a positive integer');
+  if (tileSize < MIN_TILE_SIZE || tileSize > MAX_TILE_SIZE || (tileSize & (tileSize - 1)) !== 0)
+    throw new Error(
+      `manifest.tileSize must be a power of two in [${MIN_TILE_SIZE}, ${MAX_TILE_SIZE}]`,
+    );
   if (!Number.isInteger(faceSize) || faceSize <= 0)
     throw new Error('manifest.faceSize must be a positive integer');
   if (!Number.isInteger(maxLevel) || maxLevel < 0)
     throw new Error('manifest.maxLevel must be a non-negative integer');
+  if (maxLevel > MAX_LEVEL_CAP) throw new Error(`manifest.maxLevel must be <= ${MAX_LEVEL_CAP}`);
   if (!Number.isFinite(quality) || quality <= 0 || quality > 100)
     throw new Error('manifest.quality must be a finite number in (0, 100]');
   if (faceSize !== tileSize * 2 ** maxLevel) {
