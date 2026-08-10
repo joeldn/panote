@@ -1,0 +1,66 @@
+{
+  "name": "@internal/worker-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Cloudflare Worker glue for panote - Auth0 JWT verification, a typed error mapper, and the two R2 access patterns",
+  "license": "UNLICENSED",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./r2-binding": {
+      "types": "./dist/r2-binding.d.ts",
+      "default": "./dist/r2-binding.js"
+    },
+    "./r2-s3": {
+      "types": "./dist/r2-s3.d.ts",
+      "default": "./dist/r2-s3.js"
+    },
+    "./hono": {
+      "types": "./dist/hono.d.ts",
+      "default": "./dist/hono.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "types": "wrangler types ./src/worker-configuration.d.ts --include-env=false",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "dependencies": {
+    "@internal/contracts": "workspace:*",
+    "aws4fetch": "catalog:"
+  },
+  "devDependencies": {
+    "@internal/typescript-config": "workspace:*",
+    "@internal/vitest-config": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "hono": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  },
+  "peerDependencies": {
+    "hono": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
+  }
+}

@@ -14,6 +14,12 @@ pnpm-lock.yaml
 worker-configuration.d.ts
 **/worker-configuration.d.ts
 
+# Same generator, same reason, for the per-service Env-only half
+# (`wrangler types --include-runtime=false`). Scoped to each service's
+# package root so it does not also swallow hand-written `src/env.d.ts` files
+# (secret bindings), which are ordinary linted/formatted source.
+services/*/env.d.ts
+
 # Markdown is deliberately outside the format gate.
 #
 # Prettier pads Markdown table columns to the width of the widest cell. The

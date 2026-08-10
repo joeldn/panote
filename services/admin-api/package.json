@@ -1,0 +1,32 @@
+{
+  "name": "@service/admin-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Auth0-JWT authed panote API - pano and tour management under /api/admin/*",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "echo \"@service/admin-api: nothing to build (wrangler bundles at deploy time)\"",
+    "dev": "wrangler dev --env dev",
+    "deploy": "wrangler deploy --env dev",
+    "types": "wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@internal/contracts": "workspace:*",
+    "@internal/worker-kit": "workspace:*",
+    "hono": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@internal/typescript-config": "workspace:*",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

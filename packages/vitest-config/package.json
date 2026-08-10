@@ -24,6 +24,10 @@
     "./browser": {
       "types": "./dist/browser.d.ts",
       "default": "./dist/browser.js"
+    },
+    "./workers": {
+      "types": "./dist/workers.d.ts",
+      "default": "./dist/workers.js"
     }
   },
   "scripts": {
@@ -36,6 +40,7 @@
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
   "dependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
     "@vitest/coverage-v8": "catalog:"
   },
   "devDependencies": {

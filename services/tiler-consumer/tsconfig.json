@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Worker side (src/consumer.ts + the pure helpers it and the tests share). noEmit - wrangler bundles. The container entrypoint is a separate Node build; see tsconfig.container.json.",
+  "extends": "@internal/typescript-config/workers.json",
+  "include": [
+    "src/consumer.ts",
+    "src/container-env.ts",
+    "src/r2io.ts",
+    "env.d.ts",
+    "../../packages/worker-kit/src/worker-configuration.d.ts"
+  ],
+  "exclude": ["src/**/*.test.ts"]
+}

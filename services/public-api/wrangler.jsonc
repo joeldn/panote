@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Deploys REQUIRE an environment: `wrangler deploy --env dev|production`.
+  // Wrangler does NOT inherit vars/bindings into named environments, so every
+  // binding is repeated under each env block. A bare `wrangler deploy` has none.
+  "name": "panote-public-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "env": {
+    "dev": {
+      "name": "panote-public-api-dev",
+      "durable_objects": {
+        "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
+      "vars": {
+        "OAUTH_ISSUER": "https://YOUR_DEV_TENANT.auth0.com/",
+        "OAUTH_AUDIENCE": "https://api.panote.dev",
+      },
+    },
+    "production": {
+      "name": "panote-public-api",
+      "durable_objects": {
+        "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
+      "vars": {
+        "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
+        "OAUTH_AUDIENCE": "https://api.panote.io",
+      },
+    },
+  },
+}

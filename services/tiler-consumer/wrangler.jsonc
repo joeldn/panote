@@ -1,0 +1,68 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Deploys REQUIRE an environment: `wrangler deploy --env dev|production`.
+  // Wrangler does NOT inherit vars/bindings into named environments, so every
+  // binding is repeated under each env block. A bare `wrangler deploy` has none.
+  // `main` exports no fetch handler - this Worker is a queue consumer
+  // only, see src/consumer.ts.
+  "name": "panote-tiler-consumer",
+  "main": "src/consumer.ts",
+  "compatibility_date": "2026-01-01",
+  // Genuinely load-bearing here (unlike the other two Workers): @cloudflare/containers
+  // depends on it.
+  "compatibility_flags": ["nodejs_compat"],
+  "env": {
+    "dev": {
+      "name": "panote-tiler-consumer-dev",
+      "durable_objects": {
+        "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
+      },
+      // Container classes are Durable Objects and must be registered via a
+      // migration or `wrangler deploy` is rejected; container DOs require
+      // SQLite-backed storage.
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tiler"] }],
+      // The `containers` block (image: "./Dockerfile", image_build_context:
+      // "../..", instance_type: "standard-1", max_instances: 5) is added
+      // together with the Dockerfile itself in a later commit - `wrangler
+      // types`/`deploy` validate that the image path actually resolves, and
+      // the Dockerfile does not exist yet at this commit.
+      "queues": {
+        "consumers": [
+          {
+            "queue": "pano-uploads-dev",
+            "max_batch_size": 1,
+            "max_retries": 3,
+            "dead_letter_queue": "pano-uploads-dlq-dev",
+          },
+        ],
+      },
+      "vars": {
+        "MAX_ORIGINAL_BYTES": "157286400",
+        "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "R2_BUCKET": "pano-content-dev",
+      },
+    },
+    "production": {
+      "name": "panote-tiler-consumer",
+      "durable_objects": {
+        "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tiler"] }],
+      "queues": {
+        "consumers": [
+          {
+            "queue": "pano-uploads",
+            "max_batch_size": 1,
+            "max_retries": 3,
+            "dead_letter_queue": "pano-uploads-dlq",
+          },
+        ],
+      },
+      "vars": {
+        "MAX_ORIGINAL_BYTES": "157286400",
+        "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "R2_BUCKET": "pano-content",
+      },
+    },
+  },
+}
