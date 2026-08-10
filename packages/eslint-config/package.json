@@ -25,8 +25,8 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc -b --watch",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
     "typecheck": "tsc -b",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"

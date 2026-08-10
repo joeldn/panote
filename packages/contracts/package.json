@@ -18,9 +18,9 @@
   "scripts": {
     "build": "tsc -b",
     "dev": "tsc -b --watch",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
-    "typecheck": "tsc -b",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
