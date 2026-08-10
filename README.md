@@ -18,7 +18,7 @@ to run.
 | `services/public-api` | `@service/*` | Anonymous Worker — view/like/stats, owns the `TourStats` Durable Object |
 | `services/admin-api` | `@service/*` | Fully authed Worker (Auth0 JWT) — tour management |
 | `services/tiler-consumer` | `@service/*` | Queue consumer Worker — tiles uploaded panoramas |
-| `packages/viewer` | `@panote/*` | Publishable three.js viewer library |
+| `packages/viewer` | `@panote/*` | Publishable hand-rolled WebGL2 viewer library — no third-party runtime dependencies |
 | `packages/core` | `@panote/*` | Publishable geometry/tiling/manifest primitives |
 | `packages/tiler` | `@internal/*` | Panorama-to-tile-pyramid tiling logic |
 | `packages/contracts` | `@internal/*` | Shared zod schemas — request validation and frontend form validation from one source of truth |
