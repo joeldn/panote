@@ -8,8 +8,6 @@ export interface InfoHotspotData {
   title: string;
   /** Markdown body shown in the panel when the hotspot is opened. */
   body?: string;
-  /** Pre-rendered HTML body, used instead of `body` when provided. */
-  html?: string;
   /** Optional short caption shown under the title. */
   subtitle?: string;
 }
@@ -152,7 +150,7 @@ function createPanel(container: HTMLElement): Panel {
       } else {
         subEl.style.display = 'none';
       }
-      bodyEl.innerHTML = data.html ?? renderMarkdown(data.body ?? '');
+      bodyEl.innerHTML = renderMarkdown(data.body ?? '');
       panel.scrollTop = 0;
       isOpen = true;
       panel.style.transform = 'translateX(0)';
