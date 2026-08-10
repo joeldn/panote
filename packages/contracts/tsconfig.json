@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Web-standard code (fetch/WebCrypto/atob) that must EMIT dist/ and is tested under Node but consumed by workerd. Neither workers.json (noEmit) nor base.json unmodified fits: extend base.json and override lib/types. lib: DOM here supplies Web-standard globals (JsonWebKey, SubtleCrypto, fetch) - not actual DOM; this package touches no document/window. types: [] is load-bearing - it keeps Node-only globals from type-checking in code that runs in workerd, where they do not exist.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "types": [],
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

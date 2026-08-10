@@ -28,6 +28,11 @@ catalog:
   vitest: 4.1.10
   '@vitest/coverage-v8': 4.1.10
 
+  # --- Runtime libraries ---
+  # zod is pinned at 3.x deliberately - see the port spec's zod 3-vs-4 analysis.
+  # Moving to zod 4 is a separate, deliberate change, not a side effect of a port.
+  zod: 3.25.76
+
   # --- Linting / formatting ---
   eslint: 10.8.1
   '@eslint/js': 10.0.1

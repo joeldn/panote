@@ -1,0 +1,107 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { makeJwksLoader, verifyWithRotation } from './jwks.js';
+
+const b64url = (bytes: Uint8Array): string =>
+  btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+const b64urlStr = (s: string): string => b64url(new TextEncoder().encode(s));
+
+/** Mint a genuinely RS256-signed token plus the public JWK that verifies it. */
+async function makeSignedToken(
+  claims: Record<string, unknown>,
+): Promise<{ token: string; jwk: Record<string, unknown> }> {
+  const kp = (await crypto.subtle.generateKey(
+    {
+      name: 'RSASSA-PKCS1-v1_5',
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: 'SHA-256',
+    },
+    true,
+    ['sign', 'verify'],
+  )) as CryptoKeyPair;
+  const pub = await crypto.subtle.exportKey('jwk', kp.publicKey);
+  const kid = 'test-key';
+  const header = b64urlStr(JSON.stringify({ alg: 'RS256', kid }));
+  const payload = b64urlStr(JSON.stringify(claims));
+  const data = new TextEncoder().encode(`${header}.${payload}`);
+  const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, data));
+  return {
+    token: `${header}.${payload}.${b64url(sig)}`,
+    jwk: { kid, kty: 'RSA', n: pub.n, e: pub.e, alg: 'RS256' },
+  };
+}
+
+describe('makeJwksLoader', () => {
+  const keys = [{ kid: 'k1', kty: 'RSA', n: 'n', e: 'AQAB' }];
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ keys }) }));
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('caches within the TTL and force-refetches on demand', async () => {
+    const loader = makeJwksLoader('https://issuer/', 1000);
+    expect(await loader.get()).toEqual(keys);
+    await loader.get();
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // served from cache
+    await loader.get(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // forced refetch
+  });
+
+  it('refetches after the TTL expires', async () => {
+    vi.useFakeTimers();
+    const loader = makeJwksLoader('https://issuer/', 1000);
+    await loader.get();
+    vi.advanceTimersByTime(1500);
+    await loader.get();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('verifyWithRotation', () => {
+  it('refetches JWKS once on an unknown kid and verifies with the rotated key', async () => {
+    const { token, jwk } = await makeSignedToken({
+      sub: 'auth0|me',
+      iss: 'https://issuer/',
+      aud: 'api',
+      exp: 9999999999,
+    });
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce([]) // stale cache: rotated kid absent
+      .mockResolvedValueOnce([jwk]); // forced refetch: new key present
+    const res = await verifyWithRotation(token, {
+      issuer: 'https://issuer/',
+      audience: 'api',
+      loader: { get },
+    });
+    expect(res.sub).toBe('auth0|me');
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenLastCalledWith(true);
+  });
+
+  it('does not refetch on a non-kid failure (e.g. bad audience)', async () => {
+    const { token, jwk } = await makeSignedToken({
+      sub: 'x',
+      iss: 'https://issuer/',
+      aud: 'api',
+      exp: 9999999999,
+    });
+    const get = vi.fn().mockResolvedValue([jwk]);
+    await expect(
+      verifyWithRotation(token, {
+        issuer: 'https://issuer/',
+        audience: 'WRONG',
+        loader: { get },
+      }),
+    ).rejects.toThrow('bad audience');
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
