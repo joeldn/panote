@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Browser library that EMITS. None of the three shared variants fits as-is: base.json is Node-typed and DOM-less, while react.json has the right lib but is noEmit + jsx + allowImportingTsExtensions (and turning noEmit off there trips TS5096). So: extend base.json for the emitting/nodenext half, and override lib/types for the browser half. `types: []` is load-bearing - it keeps Node globals from type-checking in code that only ever runs in a browser.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}
