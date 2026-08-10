@@ -15,7 +15,14 @@ function escapeHtml(s: string): string {
 // data:, vbscript:) renders as plain text so a description can't smuggle code.
 function safeUrl(url: string): string | null {
   const u = url.trim();
-  if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u) || u.startsWith('/')) {
+  if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u)) {
+    return u;
+  }
+  // Same-origin relative only. `/^\/(?![/\\])/` admits `/foo` but rejects
+  // both `//evil.com` (protocol-relative) and `/\evil.com` — browsers
+  // resolve a leading backslash the same as a leading slash per the WHATWG
+  // URL spec, so `/\host` is an equivalent bypass of a `//`-only check.
+  if (/^\/(?![/\\])/.test(u)) {
     return u;
   }
   return null;
@@ -27,7 +34,12 @@ function inline(text: string): string {
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, rawUrl: string) => {
     const url = safeUrl(rawUrl);
     if (!url) return label;
-    return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    // Not escapeHtml(url) here: `text` was already escaped as a whole above,
+    // so `url` (sliced out of that escaped text) is already HTML-safe.
+    // Escaping it again double-encodes entities already produced by that
+    // pass — e.g. `&` in a query string becomes `&amp;amp;` — corrupting
+    // any link whose URL contains `&`, `<`, `>`, or `"`.
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
   });
   out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');

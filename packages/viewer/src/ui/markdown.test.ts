@@ -38,6 +38,29 @@ describe('renderMarkdown', () => {
     expect(renderMarkdown('[rel](/tour)')).toContain('href="/tour"');
   });
 
+  it('rejects protocol-relative links, keeping the text', () => {
+    // `//evil.com` starts with `/`, but browsers resolve it as an absolute,
+    // cross-origin URL (https://evil.com), not a same-origin relative link.
+    expect(renderMarkdown('[x](//evil.com/phish)')).toBe('<p>x</p>');
+  });
+
+  it('rejects backslash-prefixed links, keeping the text', () => {
+    // `/\evil.com` also starts with `/`, and per the WHATWG URL spec
+    // browsers treat a backslash the same as a forward slash in a
+    // special-scheme URL, so this resolves identically to `//evil.com` —
+    // a well-known bypass of a `//`-only check.
+    expect(renderMarkdown('[x](/\\evil.com)')).toBe('<p>x</p>');
+  });
+
+  it('does not double-escape a URL containing an ampersand', () => {
+    // inline() escapes the whole input up front, so by the time the link
+    // regex runs, `&` in the URL is already `&amp;`. Escaping it again here
+    // would turn it into `&amp;amp;`, corrupting the link.
+    expect(renderMarkdown('[site](https://example.com?a=1&b=2)')).toBe(
+      '<p><a href="https://example.com?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">site</a></p>',
+    );
+  });
+
   it('renders unordered lists', () => {
     expect(renderMarkdown('- one\n- two')).toBe('<ul><li>one</li><li>two</li></ul>');
   });
