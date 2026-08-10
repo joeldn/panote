@@ -28,17 +28,20 @@ export function manifestUrl(baseUrl: string, pano: string): string {
   return `${baseUrl}${pano}/manifest.json`;
 }
 
-// The two real levers on tile-layer.ts's per-frame visibility loop (which runs
-// 6 * 4^level `tileVisible` checks) are maxLevel and tileSize — and tileSize is
-// the dangerous one: selectLevel() already clamps the *chosen* level by field
-// of view, so a large maxLevel with a sane tileSize is harmless, but a tiny
-// tileSize forces selectLevel to pick a very deep level regardless of maxLevel
-// (e.g. tileSize=1, maxLevel=14 drives ~1.6e9 iterations/frame). A tileSize
-// floor closes that off; the maxLevel cap is a second, independent bound with
-// generous headroom over what the tiler can ever emit (<=5 at its 150MP cap).
-const MIN_TILE_SIZE = 128;
-const MAX_TILE_SIZE = 4096;
-const MAX_LEVEL_CAP = 8;
+// These bounds are derived, not provisional guesses — see docs/decisions.md.
+// faceSize and maxLevel bound two *different* quantities, and a cap on only
+// one of them does not compose with tileSize: a prior version of this file
+// bounded tileSize >= 128 and maxLevel <= 8, and {tileSize: 128, maxLevel: 7,
+// faceSize: 16384} passed both checks while still driving tile-layer.ts's
+// per-frame visibility loop (6 * 4^level `tileVisible` checks) to ~19.3
+// ms/frame — well over a 60fps budget. The fix is to bound faceSize directly
+// (it is also the storage/spend lever: bytes scale as faceSize^2) and to
+// bound maxLevel independently (it is what the per-frame loop actually scales
+// with), then restrict tileSize to the two values that reach the faceSize cap
+// exactly with no wasted headroom: 512*2^5 = 1024*2^4 = 16384.
+const ALLOWED_TILE_SIZES = [512, 1024] as const;
+const MAX_FACE_SIZE = 16384;
+const MAX_LEVEL_CAP = 5;
 
 export function parseManifest(raw: unknown): Manifest {
   if (typeof raw !== 'object' || raw === null) {
@@ -58,12 +61,11 @@ export function parseManifest(raw: unknown): Manifest {
   const quality = num('quality');
   if (!Number.isInteger(tileSize) || tileSize <= 0)
     throw new Error('manifest.tileSize must be a positive integer');
-  if (tileSize < MIN_TILE_SIZE || tileSize > MAX_TILE_SIZE || (tileSize & (tileSize - 1)) !== 0)
-    throw new Error(
-      `manifest.tileSize must be a power of two in [${MIN_TILE_SIZE}, ${MAX_TILE_SIZE}]`,
-    );
+  if (!(ALLOWED_TILE_SIZES as readonly number[]).includes(tileSize))
+    throw new Error(`manifest.tileSize must be one of ${ALLOWED_TILE_SIZES.join(', ')}`);
   if (!Number.isInteger(faceSize) || faceSize <= 0)
     throw new Error('manifest.faceSize must be a positive integer');
+  if (faceSize > MAX_FACE_SIZE) throw new Error(`manifest.faceSize must be <= ${MAX_FACE_SIZE}`);
   if (!Number.isInteger(maxLevel) || maxLevel < 0)
     throw new Error('manifest.maxLevel must be a non-negative integer');
   if (maxLevel > MAX_LEVEL_CAP) throw new Error(`manifest.maxLevel must be <= ${MAX_LEVEL_CAP}`);

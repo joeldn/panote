@@ -99,9 +99,13 @@ describe('parseManifest', () => {
   });
 
   it('rejects a maxLevel above a sane pyramid depth even with a large tileSize', () => {
-    expect(() =>
-      parseManifest({ ...valid, tileSize: 512, maxLevel: 9, faceSize: 512 * 2 ** 9 }),
-    ).toThrow(/maxLevel/);
+    // faceSize is kept within its own cap here so this exercises the maxLevel
+    // check specifically, not the faceSize one (the two would otherwise
+    // always fire together, since faceSize = tileSize * 2^maxLevel and
+    // tileSize's floor is 512).
+    expect(() => parseManifest({ ...valid, tileSize: 512, maxLevel: 6, faceSize: 16384 })).toThrow(
+      /maxLevel/,
+    );
   });
 
   it('rejects a tileSize that is not a power of two, even within range', () => {
@@ -110,9 +114,31 @@ describe('parseManifest', () => {
     ).toThrow(/tileSize/);
   });
 
-  it('accepts the largest pyramid the tiler can realistically emit', () => {
+  it('rejects the gap the old bounds left: tileSize 128 forces a deep level to reach a passing faceSize', () => {
+    // Under the old bounds (tileSize >= 128, maxLevel <= 8) this combination
+    // passed validation while still driving tile-layer.ts's per-frame
+    // visibility loop to level 7 (~19.3 ms/frame measured, well over a 60fps
+    // budget). tileSize is no longer in the allowed set, so this must throw.
+    expect(() => parseManifest({ ...valid, tileSize: 128, maxLevel: 7, faceSize: 16384 })).toThrow(
+      /tileSize/,
+    );
+  });
+
+  it('rejects a faceSize above the derived cap even when internally consistent', () => {
+    expect(() =>
+      parseManifest({ ...valid, tileSize: 1024, maxLevel: 5, faceSize: 1024 * 2 ** 5 }),
+    ).toThrow(/faceSize/);
+  });
+
+  it('accepts the largest legitimate pyramid at tileSize 512', () => {
     expect(() =>
       parseManifest({ ...valid, tileSize: 512, maxLevel: 5, faceSize: 512 * 2 ** 5 }),
+    ).not.toThrow();
+  });
+
+  it('accepts the largest legitimate pyramid at tileSize 1024', () => {
+    expect(() =>
+      parseManifest({ ...valid, tileSize: 1024, maxLevel: 4, faceSize: 1024 * 2 ** 4 }),
     ).not.toThrow();
   });
 });
