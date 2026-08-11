@@ -34,6 +34,7 @@ export class PanoViewer implements ControlHost {
   private renderCbs = new Set<(view: View) => void>();
   private home: View;
   private transitionOverlay: HTMLDivElement | undefined;
+  private resizeObserver: ResizeObserver | undefined;
   // The view-projection matrix for the frame currently being drawn.
   private viewProj: Mat4;
 
@@ -67,6 +68,15 @@ export class PanoViewer implements ControlHost {
     this.renderer.resize(container.clientWidth || 1, container.clientHeight || 1);
     this.viewProj = viewProjection(this.view, this.aspect(), this.opts.maxHorizontalFov);
     window.addEventListener('resize', this.onResize);
+    // window's resize event only fires on the browser viewport changing size,
+    // not on the container itself being resized by layout — flex/grid
+    // reflow, a sidebar toggling, display:none → visible, splitter panes.
+    // ResizeObserver catches those too so the canvas doesn't get left at a
+    // stale size/pixel ratio.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(this.onResize);
+      this.resizeObserver.observe(container);
+    }
     this.loop();
   }
 
@@ -105,6 +115,7 @@ export class PanoViewer implements ControlHost {
 
     const res = await fetch(manifestUrl(this.opts.baseUrl, pano));
     if (this.disposed || token !== this.loadToken) return;
+    if (!res.ok) throw new Error(`manifest ${res.status}`);
 
     const manifest = parseManifest(await res.json());
     if (this.disposed || token !== this.loadToken) return;
@@ -258,7 +269,16 @@ export class PanoViewer implements ControlHost {
     this.viewProj = viewProjection(this.view, aspect, this.opts.maxHorizontalFov);
     this.renderer.setCamera(this.viewProj);
     const fwd = dirFromYawPitch(this.view.yaw, this.view.pitch);
-    this.layer?.update(this.viewProj, vfovDeg, fwd, this.container.clientHeight || 1);
+    // selectLevel()'s math (see packages/core/src/lod.ts) compares texel
+    // density against what is actually rasterised, so it needs the
+    // framebuffer's device-pixel height, not the container's CSS-pixel
+    // clientHeight — the renderer sizes the canvas by devicePixelRatio (see
+    // gl-renderer.ts's resize()), so on any DPR>1 display clientHeight alone
+    // under-counts the real pixel budget and the pyramid picks one level
+    // coarser than the screen can show. this.renderer.canvas.height is the
+    // already-DPR-scaled raster height, so it's used directly here instead
+    // of re-deriving devicePixelRatio.
+    this.layer?.update(this.viewProj, vfovDeg, fwd, this.renderer.canvas.height || 1);
 
     const pending = this.layer?.hasPending() ?? false;
     if (this.wasPending && !pending) this.emitter.emit('tiles-settled', undefined);
@@ -355,6 +375,7 @@ export class PanoViewer implements ControlHost {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onResize);
+    this.resizeObserver?.disconnect();
     this.controls?.dispose();
     this.layer?.dispose();
     this.hotspots.clear();

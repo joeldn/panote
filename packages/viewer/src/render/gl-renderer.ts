@@ -270,6 +270,13 @@ export class GLRenderer {
   dispose(): void {
     for (const handle of [...this.tiles.keys()]) this.removeTile(handle);
     this.gl.deleteProgram(this.program);
+    // Deleting individual resources frees GPU memory but does not release the
+    // context slot itself — browsers cap live WebGL contexts per page
+    // (commonly 8-16), and that slot is only reclaimed on GC. Explicitly
+    // losing the context releases it immediately so an app that creates and
+    // destroys many PanoViewer instances (a gallery, route changes) doesn't
+    // exhaust the pool.
+    this.gl.getExtension('WEBGL_lose_context')?.loseContext();
     this.canvas.remove();
   }
 }
