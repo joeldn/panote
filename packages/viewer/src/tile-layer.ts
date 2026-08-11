@@ -43,8 +43,17 @@ type TileLoadOutcome =
  * base and the load fails. `cause` carries the underlying rejection (a
  * `TileHttpError`, a fetch `TypeError`, a decode error) for callers that want
  * to distinguish "the origin is down" from "this panorama is not published".
+ *
+ * `permanent` is that distinction pre-classified: `true` for a 404/410/401/403
+ * (retrying cannot help — the panorama is not published, or not accessible to
+ * this caller), `false` for everything else (a timeout, a 5xx, a dropped
+ * connection — the origin is unavailable right now). It is derived with the
+ * same `classifyFailure` the retry budget itself uses, so a caller can check
+ * `error.permanent` instead of inspecting or string-matching `cause`.
  */
 export class BaseTileLoadError extends Error {
+  readonly permanent: boolean;
+
   constructor(
     readonly pano: string,
     readonly face: Face,
@@ -55,6 +64,7 @@ export class BaseTileLoadError extends Error {
       cause,
     });
     this.name = 'BaseTileLoadError';
+    this.permanent = classifyFailure(cause) === 'permanent';
   }
 }
 

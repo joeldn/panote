@@ -425,7 +425,10 @@ describe('TileLayer failure handling', () => {
       const broken = baseUrl(FACES[2]!);
       respond = (url) => (url === broken ? { status: 500 } : { status: 200 });
 
-      await expect(layer.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
+      // 500 is transient - retrying is still worth it, just not for this load.
+      await expect(layer.loadBase()).rejects.toMatchObject({
+        permanent: false,
+      });
 
       // The full per-tile budget is spent first (1 initial + 2 retries), on the
       // same escalating cooldown every other tile uses.
@@ -438,7 +441,11 @@ describe('TileLayer failure handling', () => {
       const missing = baseUrl(FACES[3]!);
       respond = (url) => (url === missing ? { status: 404 } : { status: 200 });
 
-      await expect(layer.loadBase()).rejects.toThrow(/tile 404/);
+      // 404: the panorama is not published, and no amount of retrying fixes that.
+      await expect(layer.loadBase()).rejects.toMatchObject({
+        message: expect.stringContaining('tile 404'),
+        permanent: true,
+      });
 
       expect(requests.filter((u) => u === missing)).toHaveLength(1);
       expect(sleeps).toHaveLength(0);
