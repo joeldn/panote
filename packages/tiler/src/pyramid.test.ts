@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { nextPow2, isPow2, computeFaceSize, computeMaxLevel } from './pyramid.js';
+import {
+  nextPow2,
+  isPow2,
+  computeFaceSize,
+  computeMaxLevel,
+  assertPyramidBounds,
+} from './pyramid.js';
 
 describe('nextPow2', () => {
   it('returns the same value for exact powers of two', () => {
@@ -58,6 +64,20 @@ describe('computeFaceSize', () => {
     // also with maxSize below tileSize
     expect(computeFaceSize(4, 512, 256)).toBe(512);
   });
+
+  it('defaults to capping at MAX_FACE_SIZE (16384) when no maxSize is given', () => {
+    // A source wide enough to otherwise demand a far larger face (a
+    // 4,000,000px-wide equirect, e.g.) must still be gracefully down-capped
+    // to the derived faceSize bound rather than silently exceeding it.
+    expect(computeFaceSize(4_000_000, 512)).toBe(16384);
+  });
+
+  it('an explicit maxSize can still request above the default, for callers that check bounds themselves', () => {
+    // computeFaceSize itself has no opinion beyond its own default; build()
+    // is what enforces the hard cap via assertPyramidBounds regardless of
+    // what maxSize a caller passes.
+    expect(computeFaceSize(4_000_000, 512, 65536)).toBe(65536);
+  });
 });
 
 describe('computeMaxLevel', () => {
@@ -65,6 +85,27 @@ describe('computeMaxLevel', () => {
     expect(computeMaxLevel(4096, 512)).toBe(3);
     expect(computeMaxLevel(2048, 512)).toBe(2);
     expect(computeMaxLevel(512, 512)).toBe(0);
+  });
+});
+
+describe('assertPyramidBounds', () => {
+  it('accepts both allowed tileSizes at their respective faceSize/maxLevel caps', () => {
+    expect(() => assertPyramidBounds(512, 16384, 5)).not.toThrow();
+    expect(() => assertPyramidBounds(1024, 16384, 4)).not.toThrow();
+  });
+
+  it('rejects a tileSize outside the allowed set, even one that used to be valid', () => {
+    // The exact gap the old bounds left: tileSize 128 combined with a deep
+    // level reached faceSize 16384 without tripping either old check.
+    expect(() => assertPyramidBounds(128, 16384, 7)).toThrow(/tileSize/);
+  });
+
+  it('rejects a faceSize above the cap even with an allowed tileSize', () => {
+    expect(() => assertPyramidBounds(1024, 32768, 5)).toThrow(/faceSize/);
+  });
+
+  it('rejects a maxLevel above the cap even with an allowed tileSize', () => {
+    expect(() => assertPyramidBounds(512, 16384, 6)).toThrow(/maxLevel/);
   });
 });
 

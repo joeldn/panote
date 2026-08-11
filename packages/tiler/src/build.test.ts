@@ -97,6 +97,41 @@ describe('build', () => {
     });
   });
 
+  describe('pyramid bounds enforcement', () => {
+    // These throw before the raw RGB decode (see build.ts), so metadata is
+    // the only sharp call that needs a resolved value — toBuffer is never
+    // reached.
+
+    it('rejects a tileSize outside the allowed set', async () => {
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ width: 8192, height: 4096 });
+      await expect(
+        build({ src: 'fake-source.png', outDir, pano: 'ok-pano', tileSize: 128 }),
+      ).rejects.toThrow(/tileSize/);
+    });
+
+    it('rejects an explicit maxSize that would push faceSize above the derived cap', async () => {
+      // computeFaceSize's own default caps at 16384, but a caller can still
+      // pass an explicit maxSize above that -- assertPyramidBounds is what
+      // makes that unable to produce an out-of-bounds pyramid.
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ width: 200_000, height: 100_000 });
+      await expect(
+        build({ src: 'fake-source.png', outDir, pano: 'ok-pano', maxSize: 32768 }),
+      ).rejects.toThrow(/faceSize/);
+    });
+
+    it('rejects the exact gap the old validator left: tileSize 128 reaching faceSize 16384 at maxLevel 7', async () => {
+      const outDir = await tmp();
+      // width chosen so computeFaceSize(width, 128) lands exactly on 16384:
+      // width / 4 = 16384 → width = 65536.
+      metadata.mockResolvedValue({ width: 65_536, height: 32_768 });
+      await expect(
+        build({ src: 'fake-source.png', outDir, pano: 'ok-pano', tileSize: 128 }),
+      ).rejects.toThrow(/tileSize/);
+    });
+  });
+
   describe('build channel-count guard', () => {
     it('throws instead of silently corrupting output when the decode is not 3-channel RGB', async () => {
       metadata.mockResolvedValue({ width: 8, height: 4 });

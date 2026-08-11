@@ -39,9 +39,12 @@ export function manifestUrl(baseUrl: string, pano: string): string {
 // bound maxLevel independently (it is what the per-frame loop actually scales
 // with), then restrict tileSize to the two values that reach the faceSize cap
 // exactly with no wasted headroom: 512*2^5 = 1024*2^4 = 16384.
-const ALLOWED_TILE_SIZES = [512, 1024] as const;
-const MAX_FACE_SIZE = 16384;
-const MAX_LEVEL_CAP = 5;
+//
+// Exported so the tiler (the write side of this invariant) enforces the exact
+// same bounds instead of maintaining its own copy that could drift.
+export const ALLOWED_TILE_SIZES = [512, 1024] as const;
+export const MAX_FACE_SIZE = 16384;
+export const MAX_LEVEL_CAP = 5;
 
 export function parseManifest(raw: unknown): Manifest {
   if (typeof raw !== 'object' || raw === null) {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { FACES, type Face, type Manifest, type TileFormat, tilesPerEdge } from '@panote/core';
 import { renderFace, type RgbImage } from './remap.js';
-import { isPow2, computeFaceSize, computeMaxLevel } from './pyramid.js';
+import { assertPyramidBounds, computeFaceSize, computeMaxLevel } from './pyramid.js';
 
 export interface BuildOptions {
   src: string;
@@ -25,8 +25,6 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
   const encoder = (s: sharp.Sharp): sharp.Sharp =>
     fmt === 'webp' ? s.webp({ quality }) : s.jpeg({ quality, mozjpeg: true });
 
-  if (!isPow2(tileSize)) throw new Error(`tileSize must be a power of two (got ${tileSize})`);
-
   // build() is the tiler's public library entry point; opts.pano is joined
   // into the output path below with no other sanitization. path.join
   // normalizes `..` segments, so an unvalidated pano (e.g. derived from an
@@ -41,6 +39,7 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
 
   const faceSize = computeFaceSize(meta.width, tileSize, opts.maxSize);
   const maxLevel = computeMaxLevel(faceSize, tileSize);
+  assertPyramidBounds(tileSize, faceSize, maxLevel);
 
   log(`source ${meta.width}x${meta.height} → faceSize ${faceSize}, maxLevel ${maxLevel}`);
 
