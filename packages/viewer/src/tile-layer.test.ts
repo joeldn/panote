@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES, type Manifest } from '@panote/core';
-import { TileLayer } from './tile-layer.js';
+import { BaseTileLoadError, TileLayer } from './tile-layer.js';
 import { TileFailureMonitor } from './tile-retry.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
-import type { GLRenderer } from './render/gl-renderer.js';
+import { sortDrawList, type GLRenderer } from './render/gl-renderer.js';
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -52,6 +52,10 @@ describe('TileLayer failure handling', () => {
   let renderer: FakeRenderer;
   let requests: string[];
   let script: Scripted;
+  /** Per-URL response override; falls back to `script` when it returns null. */
+  let respond: ((url: string) => Scripted | null) | undefined;
+  /** Every base-layer inter-attempt wait, in order, for exact assertions. */
+  let sleeps: number[];
 
   const advance = (ms: number): void => {
     clock += ms;
@@ -63,16 +67,29 @@ describe('TileLayer failure handling', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  function makeLayer(pano = 'pano-a'): TileLayer {
+  function makeLayer(pano = 'pano-a', textureBudgetMB = 128): TileLayer {
     return new TileLayer(
       renderer as unknown as GLRenderer,
       makeManifest(pano),
       '/tiles/',
-      128,
+      textureBudgetMB,
       () => {},
       8,
       monitor,
+      // The injected sleep advances the same clock the retry budget measures
+      // its cooldowns against, so a base-layer retry is exercised for real
+      // without any test waiting on a real timer.
+      (ms: number) => {
+        sleeps.push(ms);
+        clock += ms;
+        return Promise.resolve();
+      },
     );
+  }
+
+  /** URL of the level-0 base tile for a face. */
+  function baseUrl(face: string, pano = 'pano-a'): string {
+    return `/tiles/${pano}/0/${face}/0-0.jpg`;
   }
 
   /** One render frame at the given yaw, matching PanoViewer's loop() call. */
@@ -91,15 +108,18 @@ describe('TileLayer failure handling', () => {
     monitor = new TileFailureMonitor({ now: () => clock, baseDelayMs: BACKOFF_MS });
     renderer = new FakeRenderer();
     requests = [];
+    sleeps = [];
+    respond = undefined;
     script = { status: 200 };
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string) => {
         requests.push(url);
-        if (script.network) return Promise.reject(new TypeError('Failed to fetch'));
+        const scripted = respond?.(url) ?? script;
+        if (scripted.network) return Promise.reject(new TypeError('Failed to fetch'));
         return Promise.resolve({
-          ok: script.status >= 200 && script.status < 300,
-          status: script.status,
+          ok: scripted.status >= 200 && scripted.status < 300,
+          status: scripted.status,
           blob: () => Promise.resolve({}),
         });
       }),
@@ -337,5 +357,212 @@ describe('TileLayer failure handling', () => {
     expect(requests).toHaveLength(started);
     expect(monitor.escalationLevel).toBe(0);
     layer.dispose();
+  });
+
+  describe('low-resolution base layer', () => {
+    it('loads exactly one level-0 tile per cube face — the whole panorama, coarsely', async () => {
+      const layer = makeLayer();
+
+      await expect(layer.loadBase()).resolves.toBeUndefined();
+
+      expect(requests).toHaveLength(FACES.length);
+      for (const face of FACES) expect(requests).toContain(baseUrl(face));
+      expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length);
+      // Resident and drawable before a single frame has been rendered.
+      expect(layer.drawList()).toHaveLength(FACES.length);
+      expect(layer.drawList().every((d) => d.level === 0)).toBe(true);
+    });
+
+    it('does not resolve until every face is in, not just the first one', async () => {
+      const layer = makeLayer();
+      let releaseLast: (() => void) | undefined;
+      const lastFace = FACES[FACES.length - 1]!;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          requests.push(url);
+          const body = { ok: true, status: 200, blob: () => Promise.resolve({}) };
+          if (url !== baseUrl(lastFace)) return Promise.resolve(body);
+          return new Promise((resolve) => {
+            releaseLast = () => resolve(body);
+          });
+        }),
+      );
+
+      let settled = false;
+      const load = layer.loadBase().then(() => {
+        settled = true;
+      });
+      await flush();
+
+      // Five faces are already uploaded — and the load is still outstanding.
+      expect(requests).toHaveLength(FACES.length);
+      expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length - 1);
+      expect(settled).toBe(false);
+
+      releaseLast!();
+      await load;
+      expect(settled).toBe(true);
+      expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length);
+    });
+
+    it('retries a transiently failing base tile and still resolves when the retry works', async () => {
+      const layer = makeLayer();
+      const flaky = baseUrl(FACES[0]!);
+      let failuresLeft = 1;
+      respond = (url) => (url === flaky && failuresLeft-- > 0 ? { status: 503 } : { status: 200 });
+
+      // A blip on one of six requests must not kill the load.
+      await expect(layer.loadBase()).resolves.toBeUndefined();
+
+      expect(requests.filter((u) => u === flaky)).toHaveLength(2);
+      expect(sleeps).toEqual([TILE_COOLDOWN_MS]);
+      expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length);
+    });
+
+    it('rejects once a base tile has exhausted its retry budget', async () => {
+      const layer = makeLayer();
+      const broken = baseUrl(FACES[2]!);
+      respond = (url) => (url === broken ? { status: 500 } : { status: 200 });
+
+      await expect(layer.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
+
+      // The full per-tile budget is spent first (1 initial + 2 retries), on the
+      // same escalating cooldown every other tile uses.
+      expect(requests.filter((u) => u === broken)).toHaveLength(3);
+      expect(sleeps).toEqual([TILE_COOLDOWN_MS, TILE_COOLDOWN_MS * 2]);
+    });
+
+    it('rejects immediately on a permanent status, without spending retries', async () => {
+      const layer = makeLayer();
+      const missing = baseUrl(FACES[3]!);
+      respond = (url) => (url === missing ? { status: 404 } : { status: 200 });
+
+      await expect(layer.loadBase()).rejects.toThrow(/tile 404/);
+
+      expect(requests.filter((u) => u === missing)).toHaveLength(1);
+      expect(sleeps).toHaveLength(0);
+    });
+
+    it('names the panorama and the face in the rejection', async () => {
+      const layer = makeLayer('pano-a');
+      respond = (url) => (url === baseUrl('ny') ? { status: 410 } : { status: 200 });
+
+      await expect(layer.loadBase()).rejects.toThrow(/panorama "pano-a".*face "ny"/);
+    });
+
+    it('rejects when the network is down entirely', async () => {
+      const layer = makeLayer();
+      script = { status: 0, network: true };
+
+      await expect(layer.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
+      // Every face got its full budget before the load was declared dead.
+      expect(requests).toHaveLength(FACES.length * 3);
+    });
+
+    it('still feeds base failures to the shared monitor for cross-panorama detection', async () => {
+      script = { status: 500 };
+
+      const layerA = makeLayer('pano-a');
+      await expect(layerA.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
+      // One panorama failing is bad tiles, not a bad origin.
+      expect(monitor.escalationLevel).toBe(0);
+      layerA.dispose();
+
+      const layerB = makeLayer('pano-b');
+      await expect(layerB.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
+      expect(monitor.escalationLevel).toBeGreaterThan(0);
+      layerB.dispose();
+    });
+
+    it('is not suppressed by an active global backoff', async () => {
+      // Trip the backoff the ordinary way, from two panoramas' per-frame loads.
+      script = { status: 500 };
+      const layerA = makeLayer('pano-a');
+      await render(layerA, 0);
+      layerA.dispose();
+      const layerB = makeLayer('pano-b');
+      await render(layerB, 0);
+      expect(monitor.backingOff()).toBe(true);
+      layerB.dispose();
+
+      // A new load's base layer is six bounded, user-initiated requests, and it
+      // is the difference between a viewer that shows something and one that
+      // errors — so the backoff must not be allowed to decide it fails.
+      script = { status: 200 };
+      requests = [];
+      const layerC = makeLayer('pano-c');
+      await expect(layerC.loadBase()).resolves.toBeUndefined();
+      expect(requests).toHaveLength(FACES.length);
+    });
+
+    it('does not reject when the layer is disposed mid-load', async () => {
+      const layer = makeLayer();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          requests.push(url);
+          return new Promise((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => {
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          });
+        }),
+      );
+
+      const load = layer.loadBase();
+      layer.dispose();
+      await expect(load).resolves.toBeUndefined();
+    });
+  });
+
+  describe('coarse fallback', () => {
+    it('keeps drawing the base where a deeper tile is missing, instead of nothing', async () => {
+      const layer = makeLayer();
+      await layer.loadBase();
+      const base = new Set(layer.drawList().map((d) => d.handle));
+      expect(base.size).toBe(FACES.length);
+
+      // Every tile below the base is gone for good — the worst case this whole
+      // change exists for.
+      respond = (url) => (url.includes('/0/') ? { status: 200 } : { status: 404 });
+      await render(layer, 0);
+
+      const list = layer.drawList();
+      expect(list.length).toBeGreaterThan(0);
+      expect(new Set(list.map((d) => d.handle))).toEqual(base);
+      expect(list.every((d) => d.level === 0)).toBe(true);
+    });
+
+    it('refines the base with deeper levels rather than replacing it', async () => {
+      const layer = makeLayer();
+      await layer.loadBase();
+      await render(layer, 0);
+
+      const list = layer.drawList();
+      expect(list.some((d) => d.level === 0)).toBe(true);
+      expect(list.some((d) => d.level > 0)).toBe(true);
+      // Painter's order: the base paints first and the finer levels over it, so
+      // a hole at any deeper level shows soft base texels, never the clear
+      // colour.
+      const levels = sortDrawList(list).map((d) => d.level);
+      expect(levels[0]).toBe(0);
+      expect(levels[levels.length - 1]).toBeGreaterThan(0);
+    });
+
+    it('never evicts the base, however much finer detail is loaded', async () => {
+      // A budget small enough that a full sweep at maximum detail overflows it
+      // — the whole pyramid at maxLevel 2 fits inside the default one.
+      const layer = makeLayer('pano-a', 1);
+      await layer.loadBase();
+      const base = new Set(layer.drawList().map((d) => d.handle));
+
+      // Sweep the whole sphere at full detail to push the cache past budget.
+      for (let i = 0; i < 8; i++) await render(layer, (i * Math.PI) / 4);
+
+      expect(renderer.removeTile).toHaveBeenCalled();
+      const drawn = new Set(layer.drawList().map((d) => d.handle));
+      for (const handle of base) expect(drawn.has(handle)).toBe(true);
+    });
   });
 });

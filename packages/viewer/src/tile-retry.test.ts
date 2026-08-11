@@ -166,6 +166,51 @@ describe('TileRetryBudget', () => {
     expect(budget.eligible('a')).toBe(true);
     expect(budget.eligible('b')).toBe(true);
   });
+
+  describe('waitMs', () => {
+    it('is 0 for a tile that has never failed', () => {
+      const budget = new TileRetryBudget(fakeClock().now);
+      expect(budget.waitMs('k')).toBe(0);
+    });
+
+    it('counts down the cooldown, then reaches 0', () => {
+      const clock = fakeClock();
+      const budget = new TileRetryBudget(clock.now, { baseDelayMs: 1_000 });
+      budget.recordFailure('k', 'transient');
+      expect(budget.waitMs('k')).toBe(1_000);
+      clock.advance(400);
+      expect(budget.waitMs('k')).toBe(600);
+      clock.advance(600);
+      expect(budget.waitMs('k')).toBe(0);
+    });
+
+    it('is Infinity for a permanent failure — there is nothing to wait for', () => {
+      const budget = new TileRetryBudget(fakeClock().now);
+      budget.recordFailure('k', 'permanent');
+      expect(budget.waitMs('k')).toBe(Infinity);
+    });
+
+    it('is Infinity once the attempt cap is spent', () => {
+      const clock = fakeClock();
+      const budget = new TileRetryBudget(clock.now);
+      for (let i = 0; i < DEFAULT_MAX_ATTEMPTS; i++) {
+        budget.recordFailure('k', 'transient');
+        clock.advance(60_000);
+      }
+      expect(budget.eligible('k')).toBe(false);
+      expect(budget.waitMs('k')).toBe(Infinity);
+    });
+
+    it('agrees with eligible() at every step', () => {
+      const clock = fakeClock();
+      const budget = new TileRetryBudget(clock.now, { baseDelayMs: 1_000 });
+      budget.recordFailure('k', 'transient');
+      for (const step of [0, 500, 400, 100, 1_000]) {
+        clock.advance(step);
+        expect(budget.eligible('k')).toBe(budget.waitMs('k') === 0);
+      }
+    });
+  });
 });
 
 describe('TileFailureMonitor', () => {
@@ -367,6 +412,52 @@ describe('TileFailureMonitor', () => {
     const monitor = new TileFailureMonitor();
     const before = Date.now();
     expect(monitor.now()).toBeGreaterThanOrEqual(before);
+  });
+
+  describe('acquireExempt', () => {
+    it('hands out a permit even while the backoff is suppressing everything else', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now });
+      tripBackoff(monitor);
+      expect(monitor.acquire()).toBeNull();
+      expect(monitor.acquireExempt()).not.toBeNull();
+    });
+
+    it('is not the recovery probe and does not consume it', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now });
+      tripBackoff(monitor);
+      const exempt = monitor.acquireExempt();
+      expect(exempt.probe).toBe(false);
+      monitor.fail(exempt, 'pano-c', 'transient');
+
+      // The probe is still there to be taken at the halfway mark — an exempt
+      // base fetch neither used it nor forced the ladder up as a failed probe
+      // would have.
+      expect(monitor.escalationLevel).toBe(1);
+      clock.advance(500);
+      expect(monitor.acquire()?.probe).toBe(true);
+    });
+
+    it('still reports its outcome: a successful base fetch clears the backoff', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now });
+      tripBackoff(monitor);
+      expect(monitor.backingOff()).toBe(true);
+      monitor.succeed(monitor.acquireExempt());
+      expect(monitor.backingOff()).toBe(false);
+      expect(monitor.escalationLevel).toBe(0);
+    });
+
+    it('still feeds cross-panorama detection from a healthy state', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now });
+      monitor.fail(monitor.acquireExempt(), 'pano-a', 'transient');
+      expect(monitor.backingOff()).toBe(false);
+      monitor.fail(monitor.acquireExempt(), 'pano-b', 'transient');
+      expect(monitor.backingOff()).toBe(true);
+      expect(monitor.escalationLevel).toBe(1);
+    });
   });
 });
 

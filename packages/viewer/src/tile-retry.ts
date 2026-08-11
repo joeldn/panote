@@ -151,6 +151,26 @@ export class TileRetryBudget {
     return this.attempts.get(key)?.count ?? 0;
   }
 
+  /**
+   * How long until this tile may be fetched again: 0 when it may go now,
+   * `Infinity` when it never may again (permanent status, or the attempt cap
+   * is spent).
+   *
+   * `eligible()` answers the same question as a boolean, which is all the
+   * per-frame path needs — it simply skips the tile and asks again next frame.
+   * The base-layer load has no next frame to fall back on: it must *wait* the
+   * cooldown out before its next attempt, and must be able to tell "not yet"
+   * from "never" so it can fail the panorama load immediately on a 404 instead
+   * of sleeping through a budget that will never allow another request.
+   */
+  waitMs(key: string): number {
+    if (this.permanent.has(key)) return Infinity;
+    const record = this.attempts.get(key);
+    if (!record) return 0;
+    if (record.count >= this.maxAttempts) return Infinity;
+    return Math.max(0, record.nextAt - this.now());
+  }
+
   clear(): void {
     this.attempts.clear();
     this.permanent.clear();
@@ -249,6 +269,32 @@ export class TileFailureMonitor {
   canStart(): boolean {
     const now = this.now();
     return now >= this.backoffUntil || this.probeReady(now);
+  }
+
+  /**
+   * Permission for a fetch that the backoff is not allowed to suppress.
+   *
+   * Reserved for the six level-0 tiles of a panorama load (see
+   * `TileLayer.loadBase()`). The backoff exists to stop the *speculative*
+   * per-frame refill traffic — an unbounded stream of requests the user did not
+   * ask for — from piling onto an origin that is already struggling. The base
+   * layer is neither speculative nor unbounded: it is six requests, issued once
+   * per user-initiated load, and it is the difference between a panorama that
+   * shows something and a panorama that fails outright. Suppressing it would
+   * mean one unrelated panorama's failure seconds ago deterministically kills
+   * this load without a single request being made — an error page for an origin
+   * that may well be serving this panorama perfectly.
+   *
+   * The exemption is one-way: a base fetch is not *stopped* by the backoff, but
+   * its outcome is still reported through `succeed()`/`fail()`, so it keeps
+   * feeding cross-panorama detection and keeps the ladder escalating for
+   * everything that is suppressible.
+   *
+   * `probe: false` deliberately — it is not the monitor's recovery probe, and
+   * must not consume it or trip the failed-probe escalation path.
+   */
+  acquireExempt(): TileFetchPermit {
+    return { probe: false, settled: false };
   }
 
   /** Take permission to start one fetch, or null while suppressed. */

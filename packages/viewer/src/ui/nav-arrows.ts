@@ -73,15 +73,26 @@ export function mountNavArrows(viewer: PanoViewer, tour: Tour): Navigator {
   };
 
   const go = (to: string) => {
+    const from = scene;
     const link = tour.scenes[scene]?.links.find((l) => l.to === to);
     scene = to;
     // Hide all buttons while transitioning.
     transitioning = true;
     for (const { btn } of buttons) btn.style.display = 'none';
-    void viewer.transitionTo(to, link ? arrivalView(link) : undefined).then(() => {
-      transitioning = false;
-      render();
-    });
+    void viewer
+      .transitionTo(to, link ? arrivalView(link) : undefined)
+      .catch(() => {
+        // load() rejects if the target panorama has no manifest or no
+        // low-resolution base layer, and PanoViewer leaves the previous
+        // panorama on screen when it does. Snap the tour back to the scene
+        // actually being shown, so the arrows match it — and so a failed jump
+        // does not strand the navigation hidden forever.
+        scene = from;
+      })
+      .finally(() => {
+        transitioning = false;
+        render();
+      });
   };
 
   render();

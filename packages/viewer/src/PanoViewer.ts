@@ -120,9 +120,6 @@ export class PanoViewer implements ControlHost {
     const manifest = parseManifest(await res.json());
     if (this.disposed || token !== this.loadToken) return;
 
-    this.layer?.dispose();
-    this.layer = undefined;
-
     const layer = new TileLayer(
       this.renderer,
       manifest,
@@ -133,13 +130,34 @@ export class PanoViewer implements ControlHost {
       },
       this.opts.maxConcurrent,
     );
-    await layer.loadPreview();
+
+    // Blocking: the panorama is not loaded until its low-resolution base is.
+    // The six level-0 tiles are one per cube face, so together they are the
+    // whole panorama at its coarsest — with them resident every direction has a
+    // texture, and a high-resolution tile that fails or is missing degrades to
+    // soft detail rather than to a black patch. A partial load would ship that
+    // guarantee as a maybe, so a base that cannot be fetched is fatal here.
+    try {
+      await layer.loadBase();
+    } catch (err) {
+      layer.dispose();
+      // A superseded or disposed load is not this caller's failure to hear
+      // about — the load that replaced it owns the outcome.
+      if (this.disposed || token !== this.loadToken) return;
+      throw err;
+    }
 
     if (this.disposed || token !== this.loadToken) {
       layer.dispose();
       return;
     }
 
+    // The outgoing panorama is only torn down now that the incoming one can
+    // actually be drawn. Disposing it before the base was resident would blank
+    // the viewer for the length of the fetch, and would leave it blank for good
+    // if the fetch failed; this way a rejected load leaves exactly what was on
+    // screen before it was called.
+    this.layer?.dispose();
     this.layer = layer;
     this.home = {
       yaw: this.target.yaw,

@@ -2,8 +2,8 @@
 
 Free hosted 360-degree panorama viewing and hosting. Upload an equirectangular
 image, panote tiles it into a cube-face pyramid, and serves it through a
-progressive multiresolution viewer — instant low-res preview, streamed
-higher-resolution tiles as you pan and zoom.
+progressive multiresolution viewer — a low-res base layer covering the whole
+panorama up front, streamed higher-resolution tiles as you pan and zoom.
 
 Cloudflare-native: Workers, R2, Durable Objects, Queues, and Pages. No servers
 to run.
