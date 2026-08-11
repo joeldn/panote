@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
+  DEFAULT_BACKOFF_BASE_MS,
   DEFAULT_MAX_ATTEMPTS,
   TileFailureMonitor,
   TileHttpError,
@@ -7,9 +8,16 @@ import {
   classifyFailure,
   classifyStatus,
   isAbortError,
+  monotonicClock,
   setSharedTileFailureMonitor,
   sharedTileFailureMonitor,
+  type TileFetchPermit,
 } from './tile-retry.js';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 // Everything here runs on an injected clock, never on wall time or timers, so
 // the whole policy is exercised deterministically under plain Node (this
@@ -408,10 +416,104 @@ describe('TileFailureMonitor', () => {
     expect(monitor.escalationLevel).toBe(0);
   });
 
-  it('runs on Date.now by default', () => {
-    const monitor = new TileFailureMonitor();
-    const before = Date.now();
-    expect(monitor.now()).toBeGreaterThanOrEqual(before);
+  describe('the probe belongs to the window that issued it', () => {
+    /**
+     * Open window 1, take its probe, let the window expire, then open window 2
+     * — leaving window 1's probe outstanding across the boundary. Returns the
+     * stale permit; window 2 is rung 2, runs [1000, 3000) and probes at 2000.
+     */
+    function probeOutlivingItsWindow(
+      monitor: TileFailureMonitor,
+      clock: { advance: (ms: number) => void },
+    ): TileFetchPermit {
+      tripBackoff(monitor); // window 1: [0, 1000), probe at 500
+      clock.advance(500);
+      const stale = monitor.acquire()!;
+      expect(stale.probe).toBe(true);
+      clock.advance(500); // window 1 expires with its probe still in flight
+      tripBackoff(monitor); // window 2 opens and issues a probe of its own
+      expect(monitor.escalationLevel).toBe(2);
+      expect(monitor.backoffRemainingMs()).toBe(2_000);
+      return stale;
+    }
+
+    it('does not escalate on a stale probe failure — that is one-window-old evidence', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now, windowMs: 60_000 });
+      const stale = probeOutlivingItsWindow(monitor, clock);
+
+      monitor.fail(stale, 'pano-a', 'transient');
+
+      // The forced escalation a failed probe triggers is only earned by the
+      // probe of the *current* window: this one proves nothing that the window
+      // it belongs to has not already been judged on.
+      expect(monitor.escalationLevel).toBe(2);
+      expect(monitor.backoffRemainingMs()).toBe(2_000);
+    });
+
+    it('does not clear a live window on a stale probe success', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now, windowMs: 60_000 });
+      const stale = probeOutlivingItsWindow(monitor, clock);
+
+      monitor.succeed(stale);
+
+      // Handing the origin the full request rate back because a request issued
+      // a window ago finally came in is exactly the wrong reaction.
+      expect(monitor.backingOff()).toBe(true);
+      expect(monitor.escalationLevel).toBe(2);
+      expect(monitor.acquire()).toBeNull();
+    });
+
+    it('still gives the current window its own probe, which works as documented', () => {
+      const clock = fakeClock();
+      const monitor = new TileFailureMonitor({ now: clock.now, windowMs: 60_000 });
+      const stale = probeOutlivingItsWindow(monitor, clock);
+      monitor.fail(stale, 'pano-a', 'transient'); // ignored, and consumes nothing
+
+      clock.advance(1_000); // t = 2000: window 2's halfway mark
+      const current = monitor.acquire();
+      expect(current?.probe).toBe(true);
+      // Exactly one, and it is the live window's: recovery is still noticed at
+      // the halfway mark rather than at the end of the window.
+      expect(monitor.acquire()).toBeNull();
+      monitor.succeed(current!);
+      expect(monitor.backingOff()).toBe(false);
+      expect(monitor.escalationLevel).toBe(0);
+    });
+  });
+
+  describe('clock', () => {
+    it('runs on a monotonic clock by default, not on the wall clock', () => {
+      const monitor = new TileFailureMonitor();
+      // performance.now() counts from process start, so it is far below the
+      // epoch milliseconds Date.now() reports — proof this is not the wall clock.
+      expect(monitor.now()).toBeLessThan(Date.now());
+      const first = monitor.now();
+      expect(monitor.now()).toBeGreaterThanOrEqual(first);
+    });
+
+    it('is unaffected by the wall clock being corrected backwards', () => {
+      const monitor = new TileFailureMonitor();
+      const a = monitor.acquire()!;
+      const b = monitor.acquire()!;
+      monitor.fail(a, 'pano-a', 'transient');
+      monitor.fail(b, 'pano-b', 'transient');
+      expect(monitor.backingOff()).toBe(true);
+
+      // An NTP step, a DST bug, or the user setting the system clock back an
+      // hour. On Date.now() this left the backoff (and, since the per-tile
+      // budget shares this clock, every tile cooldown with it) suppressing
+      // fetches for the next 3,600 seconds.
+      vi.spyOn(Date, 'now').mockReturnValue(Date.now() - 3_600_000);
+
+      expect(monitor.backoffRemainingMs()).toBeLessThanOrEqual(DEFAULT_BACKOFF_BASE_MS);
+    });
+
+    it('falls back to the wall clock where performance.now is unavailable', () => {
+      vi.stubGlobal('performance', undefined);
+      expect(monotonicClock()).toBe(Date.now);
+    });
   });
 
   describe('acquireExempt', () => {

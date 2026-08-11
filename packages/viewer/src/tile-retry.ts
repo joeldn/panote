@@ -199,7 +199,38 @@ export interface TileFailureMonitorOptions {
  */
 export interface TileFetchPermit {
   readonly probe: boolean;
+  /**
+   * Which backoff window issued this permit. Bumped whenever the backoff state
+   * is replaced — a window opening, or any reset of one — so a probe that
+   * settles after its own window has passed can be recognised and ignored
+   * rather than taken as evidence about the window that replaced it. See
+   * `TileFailureMonitor.fail()`.
+   */
+  readonly generation: number;
   settled: boolean;
+}
+
+/**
+ * The default clock for `TileFailureMonitor` (and therefore, since it hands its
+ * clock to `TileRetryBudget`, for every per-tile cooldown too).
+ *
+ * `performance.now()` where it exists, because every deadline here is a
+ * *duration* measured forward from now. `Date.now()` is the wall clock: an NTP
+ * step, a DST bug or the user correcting the system clock moves it backwards,
+ * and an absolute `now + delay` stamp taken before the correction then sits
+ * that far in the future. A −1h correction against a 30s backoff cap left the
+ * viewer suppressing every per-frame fetch for the next 3,600 seconds — not
+ * permanently dead (a success resets it, and base loads are exempt), but
+ * panning within the current panorama fetched nothing for the duration.
+ *
+ * The fallback is `Date.now` for hosts without `performance`. Both are plain
+ * millisecond counters, so nothing downstream can tell them apart, and the
+ * monitor still takes an injected `now` so tests never touch either.
+ */
+export function monotonicClock(): () => number {
+  const perf: Pick<Performance, 'now'> | undefined =
+    typeof performance === 'undefined' ? undefined : performance;
+  return perf ? () => perf.now() : Date.now;
 }
 
 /**
@@ -222,6 +253,15 @@ export interface TileFetchPermit {
  * 8s mark instead of the 16s mark, and a probe that fails is proof the outage
  * continues, so it escalates and re-arms the window immediately rather than
  * letting the rest of the window expire into another full-rate burst.
+ *
+ * "Exactly one" is per window, and a probe can outlive the window that issued
+ * it — a request that has not come back yet when the next window opens. The new
+ * window still gets its own probe (waiting on the old one would make recovery
+ * hostage to a request that may never settle), so two can be in flight at once;
+ * what is guaranteed is that only the *live* window's probe is acted on.
+ * `generation` stamps each permit, and a probe whose window has passed is
+ * discarded on arrival: it neither escalates the ladder nor clears the backoff,
+ * because it is evidence about an outage that has already been judged.
  */
 export class TileFailureMonitor {
   private readonly clock: () => number;
@@ -237,9 +277,11 @@ export class TileFailureMonitor {
   private probeAllowedAt = 0;
   private probeUsed = false;
   private probeInFlight = false;
+  /** Bumped whenever the backoff state is replaced. See `TileFetchPermit`. */
+  private generation = 0;
 
   constructor(options: TileFailureMonitorOptions = {}) {
-    this.clock = options.now ?? Date.now;
+    this.clock = options.now ?? monotonicClock();
     this.baseDelayMs = options.baseDelayMs ?? DEFAULT_BACKOFF_BASE_MS;
     this.maxDelayMs = options.maxDelayMs ?? DEFAULT_BACKOFF_MAX_MS;
     this.windowMs = options.windowMs ?? DEFAULT_FAILURE_WINDOW_MS;
@@ -294,35 +336,49 @@ export class TileFailureMonitor {
    * must not consume it or trip the failed-probe escalation path.
    */
   acquireExempt(): TileFetchPermit {
-    return { probe: false, settled: false };
+    return { probe: false, generation: this.generation, settled: false };
   }
 
   /** Take permission to start one fetch, or null while suppressed. */
   acquire(): TileFetchPermit | null {
     const now = this.now();
-    if (now >= this.backoffUntil) return { probe: false, settled: false };
+    if (now >= this.backoffUntil) {
+      return { probe: false, generation: this.generation, settled: false };
+    }
     if (!this.probeReady(now)) return null;
     this.probeUsed = true;
     this.probeInFlight = true;
-    return { probe: true, settled: false };
+    return { probe: true, generation: this.generation, settled: false };
   }
 
   /** The fetch loaded: the origin is healthy, so drop all failure state. */
   succeed(permit: TileFetchPermit): void {
     if (this.settle(permit)) return;
+    // A probe that outlived its window says nothing about the window now in
+    // force. Clearing on it would hand the origin the full request rate back
+    // on the strength of a request issued a whole window ago.
+    if (permit.probe && permit.generation !== this.generation) return;
     this.failingPanos.clear();
     this.level = 0;
     this.backoffUntil = 0;
     this.probeAllowedAt = 0;
     this.probeUsed = false;
     this.probeInFlight = false;
+    this.generation++;
   }
 
   /** The fetch failed. Only transient failures are evidence of ill health. */
   fail(permit: TileFetchPermit, pano: string, kind: FailureKind): void {
     const wasProbe = permit.probe;
+    const stale = permit.generation !== this.generation;
     if (this.settle(permit)) return;
     if (kind !== 'transient') return;
+    // The mirror image of the check in succeed(): a stale probe must not force
+    // the ladder up a rung either. Discarded outright rather than demoted to
+    // ordinary evidence — it is one request from a window that has already been
+    // judged, and counting it would let a single slow response re-trip on its
+    // own once its panorama is re-recorded as failing.
+    if (wasProbe && stale) return;
     const now = this.now();
     this.failingPanos.set(pano, now);
     for (const [id, at] of this.failingPanos) {
@@ -350,6 +406,7 @@ export class TileFailureMonitor {
     this.probeAllowedAt = 0;
     this.probeUsed = false;
     this.probeInFlight = false;
+    this.generation++;
   }
 
   private probeReady(now: number): boolean {
@@ -360,7 +417,9 @@ export class TileFailureMonitor {
   private settle(permit: TileFetchPermit): boolean {
     if (permit.settled) return true;
     permit.settled = true;
-    if (permit.probe) this.probeInFlight = false;
+    // Only the live window's probe owns that window's in-flight slot; a
+    // superseded probe must not release a slot it no longer holds.
+    if (permit.probe && permit.generation === this.generation) this.probeInFlight = false;
     return false;
   }
 
@@ -373,6 +432,9 @@ export class TileFailureMonitor {
     this.probeAllowedAt = now + Math.floor(delay / 2);
     this.probeUsed = false;
     this.probeInFlight = false;
+    // A fresh window: any probe still in flight belongs to the old one, and its
+    // outcome is discarded when it arrives.
+    this.generation++;
   }
 }
 
