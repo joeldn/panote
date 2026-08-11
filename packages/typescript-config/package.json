@@ -8,17 +8,19 @@
   "files": [
     "base.json",
     "workers.json",
-    "react.json"
+    "react.json",
+    "tests.json"
   ],
   "exports": {
     "./base.json": "./base.json",
     "./workers.json": "./workers.json",
-    "./react.json": "./react.json"
+    "./react.json": "./react.json",
+    "./tests.json": "./tests.json"
   },
   "scripts": {
     "build": "echo \"@internal/typescript-config: nothing to build (JSON only)\"",
-    "lint": "eslint . --no-error-on-unmatched-pattern",
-    "lint:fix": "eslint . --fix --no-error-on-unmatched-pattern",
+    "lint": "eslint . --no-error-on-unmatched-pattern --max-warnings 0",
+    "lint:fix": "eslint . --fix --no-error-on-unmatched-pattern --max-warnings 0",
     "typecheck": "echo \"@internal/typescript-config: nothing to typecheck (JSON only)\"",
     "test": "echo \"@internal/typescript-config: no tests\"",
     "test:coverage": "echo \"@internal/typescript-config: no tests\""

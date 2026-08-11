@@ -1,10 +1,11 @@
 {
-  "name": "@internal/eslint-config",
+  "name": "@panote/viewer",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Shared ESLint flat configs for the panote monorepo",
+  "description": "Progressive multiresolution cubemap panorama viewer - hand-rolled WebGL2 renderer, no framework, no third-party runtime dependencies",
   "license": "UNLICENSED",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -13,13 +14,9 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./base": {
-      "types": "./dist/base.d.ts",
-      "default": "./dist/base.js"
-    },
-    "./react": {
-      "types": "./dist/react.d.ts",
-      "default": "./dist/react.js"
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "default": "./dist/ui/index.js"
     }
   },
   "scripts": {
@@ -27,26 +24,19 @@
     "dev": "tsc -b --watch",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
   "dependencies": {
-    "@eslint/js": "catalog:",
-    "eslint-config-prettier": "catalog:",
-    "eslint-plugin-react-hooks": "catalog:",
-    "eslint-plugin-react-refresh": "catalog:",
-    "globals": "catalog:",
-    "typescript-eslint": "catalog:"
+    "@panote/core": "workspace:*"
   },
   "devDependencies": {
     "@internal/typescript-config": "workspace:*",
-    "@types/node": "catalog:",
+    "@internal/vitest-config": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
-  },
-  "peerDependencies": {
-    "eslint": "catalog:"
   }
 }

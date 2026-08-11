@@ -41,18 +41,20 @@ Design choices and best practices that apply across this monorepo.
 
 ## TypeScript
 
-`@internal/typescript-config` ships three variants. Every workspace extends one of them by subpath — there is no single shared config that everything inherits directly, and `@tsconfig/recommended` is not used anywhere in this repo.
+`@internal/typescript-config` ships four variants. Every workspace extends one of them by subpath — there is no single shared config that everything inherits directly, and `@tsconfig/recommended` is not used anywhere in this repo.
 
 | Variant | For | Extends | Differs from `base.json` by |
 |---|---|---|---|
 | `base.json` | Node/library builds (`tsc -b`) | — | `types: ["node"]`; `module`/`moduleResolution: nodenext`; emits — `composite`, `declaration`, `declarationMap`, `sourceMap` all on |
 | `workers.json` | Cloudflare Workers (`services/*`) | `base.json` | `types: ["@cloudflare/workers-types"]` (no `node` types — workerd isn't Node); `module: ESNext` / `moduleResolution: bundler`; `noEmit: true` — Wrangler/esbuild does the bundling, so `tsc` is type-check-only |
 | `react.json` | Vite SPAs (`apps/*`) | `base.json` | `types: []` (apps supply their own ambient types, e.g. `vite/client`); `lib` adds `DOM`/`DOM.Iterable`; `jsx: react-jsx`; `module: ESNext` / `moduleResolution: bundler`; `noEmit: true` — Vite does the bundling |
+| `tests.json` | Type-checking `*.test.ts` alongside a package's own `tsconfig.json` | — (combined via array `extends`, not layered on `base.json`) | `composite`, `incremental`, `declaration`, `declarationMap` all off; `noEmit: true`; `exclude: []` (clears the consuming package's own `"exclude": ["src/**/*.test.ts"]`) |
 
 - `strict: true`, plus the stricter flags on top of it (`noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `noUnusedLocals`, etc.), are all set explicitly in `base.json`. Nothing is inherited from `@tsconfig/recommended` — that package isn't a dependency anywhere in this repo
-- Target: `ES2023` across all three variants
+- Target: `ES2023` across all four variants
 - A workspace extends a variant by subpath, e.g. `"extends": "@internal/typescript-config/workers.json"`
 - **Gotcha — `@cloudflare/workers-types` must be a devDependency of the Worker package itself, not just of `@internal/typescript-config`.** pnpm's isolated `node_modules` means a types package declared only in the config package's `devDependencies` will not resolve from a consumer's `typeRoots`. Skip this and the symptom is `TS2688: Cannot find type definition file for '@cloudflare/workers-types'`. Every `services/*` package must list `@cloudflare/workers-types: catalog:` in its own `devDependencies`
+- **Test files are type-checked separately from the build, via `tsc -p tsconfig.test.json` — never by widening the build `tsconfig.json`.** Every package's `tsconfig.json` excludes `src/**/*.test.ts` so `tsc -b` never emits a test file into `dist/`; the tradeoff on its own would mean `tsc -b` never type-checks test files either. Each package that has test files adds a sibling `tsconfig.test.json` that combines its own `tsconfig.json` with the shared `tests.json` overlay via TypeScript's array `extends` (package config first, `tests.json` second, so its `noEmit`/`exclude: []` overrides win): `"extends": ["./tsconfig.json", "@internal/typescript-config/tests.json"]`. The package's `typecheck` script then runs both: `"typecheck": "tsc -b && tsc -p tsconfig.test.json"`. This is currently wired up in `packages/core`, `packages/contracts`, `packages/tiler`, and `packages/viewer`; a package with no test files has no reason to add it
 
 ---
 
@@ -71,6 +73,7 @@ Design choices and best practices that apply across this monorepo.
   - **Markdown is excluded from the format gate** (`*.md` / `**/*.md` in `.prettierignore`). Prettier pads Markdown table columns to the width of the widest cell; the tables in `docs/` carry paragraph-length rationale, so padding them produces ~1500-character lines and re-flows the whole table on every edit. If a doc file looks unformatted, that's deliberate, not an oversight
 - Scripts in every workspace `package.json`: `lint`, `lint:fix`, `typecheck`, `test`, `test:coverage`, `build` — run across the monorepo via `turbo run <script>`
 - `format` and `format:check` are **root-only** scripts (`prettier --write .` / `prettier --check .` over the whole repo). No individual workspace has its own `format` script — Prettier isn't scoped per package
+- **Every workspace's `lint` and `lint:fix` script passes `--max-warnings 0`.** Some rules (e.g. `no-console`) are deliberately configured at `'warn'`, not `'error'` — that severity is about how noisy the message is, not about whether it should block CI. Without `--max-warnings 0`, `eslint` exits `0` regardless of how many warnings it reports, so a warn-level rule could never fail the gate. `--max-warnings 0` makes any warning a lint failure, same as an error would be
 
 ---
 

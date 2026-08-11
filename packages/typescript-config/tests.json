@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Test type-checking overlay. Combine with a package's own tsconfig.json via array extends, package's config FIRST so this one's overrides win: \"extends\": [\"./tsconfig.json\", \"@internal/typescript-config/tests.json\"]. tsc -b's composite mode requires declaration emit, and test files must never land in dist/, so those two constraints can't share one tsconfig. This overlay turns emit off entirely and drops composite/incremental so a plain `tsc -p tsconfig.test.json` type-checks src + test files together without writing anything - it is never built with -b and nothing references it as a project reference.",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
+  },
+  "exclude": []
+}
