@@ -14,6 +14,7 @@
   "env": {
     "dev": {
       "name": "panote-tiler-consumer-dev",
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev
       "durable_objects": {
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
       },
@@ -52,6 +53,7 @@
     },
     "production": {
       "name": "panote-tiler-consumer",
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production
       "durable_objects": {
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
       },

@@ -8,24 +8,22 @@ import { build } from '@internal/tiler';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 import { uploadDir, type PutFn } from './r2io.js';
 
-// TODO(commit 11): every one of these is read from `process.env` at MODULE
-// SCOPE, but nothing currently supplies them to this process - the Tiler DO
-// (src/consumer.ts) never sets `envVars`, and wrangler's `[[containers]]`
-// block only carries build-time `image_vars`, never a runtime env. Right
-// now each of R2_ACCOUNT_ID / R2_BUCKET / R2_ACCESS_KEY_ID /
-// R2_SECRET_ACCESS_KEY is `undefined`, so this client is built against
-// `https://undefined.r2.cloudflarestorage.com/undefined` and every tile job
-// fails: the consumer retries, and after max_retries it lands in the DLQ -
-// silently, because the upload itself succeeded and the pano just never
-// becomes ready. This is a pre-existing bug in the source (pano-viewer),
-// ported here faithfully and not fixed - the next commit forwards the
-// credentials through `Container.envVars` and fails fast here instead of
-// building an undefined URL.
+// The Tiler DO (src/consumer.ts) forwards these through `Container.envVars`
+// (src/container-env.ts) because wrangler's `[[containers]]` block only
+// carries build-time `image_vars`, never a runtime env. Fail loudly here
+// instead of silently building an `https://undefined...` URL and 500ing
+// every tile job into the DLQ.
+const requireEnv = (name: string): string => {
+  const value = process.env[name];
+  if (!value) throw new Error(`tiler container: missing required env ${name}`);
+  return value;
+};
+
 const r2 = createR2S3Client({
-  accountId: process.env.R2_ACCOUNT_ID!,
-  bucket: process.env.R2_BUCKET!,
-  accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  accountId: requireEnv('R2_ACCOUNT_ID'),
+  bucket: requireEnv('R2_BUCKET'),
+  accessKeyId: requireEnv('R2_ACCESS_KEY_ID'),
+  secretAccessKey: requireEnv('R2_SECRET_ACCESS_KEY'),
 });
 // The /tile body is a tiny `{ key }` JSON; cap it so a malformed request
 // can't buffer unbounded memory.

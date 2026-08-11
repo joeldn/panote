@@ -1,16 +1,6 @@
 import { Container } from '@cloudflare/containers';
+import { containerEnvVars } from './container-env.js';
 
-// TODO(commit 11): container.ts builds its AwsClient from process.env at
-// module scope, but this class never sets `envVars`, and wrangler's
-// `[[containers]]` block only carries build-time `image_vars` - so at
-// runtime the container's S3 client points at
-// https://undefined.r2.cloudflarestorage.com/undefined and every tile job
-// 500s into the DLQ, silently (the upload itself succeeds; the pano just
-// never becomes ready). This is a pre-existing bug carried over faithfully
-// from the source (pano-viewer), not introduced by this port. The next
-// commit fixes it by forwarding the R2 credentials through `envVars`
-// (src/container-env.ts) and failing fast in the container if they are
-// missing.
 export class Tiler extends Container<Env> {
   override defaultPort = 8080;
   // Each pano keys its own container (idFromName(key)), so a warm instance is
@@ -18,6 +8,17 @@ export class Tiler extends Container<Env> {
   // for nothing. Tiling itself (~2-4 min) is billed regardless; this only
   // trims the idle tail after the tile response returns.
   override sleepAfter = '1m';
+
+  constructor(ctx: ConstructorParameters<typeof Container<Env>>[0], env: Env) {
+    super(ctx, env);
+    // wrangler's `[[containers]]` block only carries build-time `image_vars`,
+    // never a runtime env - so the R2 credentials the container process reads
+    // from process.env (src/container.ts) have to be forwarded explicitly
+    // here, or the container's S3 client resolves to
+    // https://undefined.r2.cloudflarestorage.com/undefined and every tile job
+    // 500s into the DLQ, silently. See src/container-env.ts.
+    this.envVars = containerEnvVars(env);
+  }
 }
 
 interface R2Event {
