@@ -22,13 +22,14 @@ export const makeJwksLoader = (
   issuer: string,
   ttlMs = 3_600_000,
   minForceIntervalMs = 60_000,
+  timeoutMs?: number,
 ): JwksLoader => {
   let keys: Jwk[] | null = null;
   let fetchedAt = 0;
   let inflight: Promise<Jwk[]> | null = null;
 
   const refresh = async (): Promise<Jwk[]> => {
-    inflight ??= fetchJwks(issuer)
+    inflight ??= fetchJwks(issuer, { timeoutMs })
       .then((fetched) => {
         keys = fetched;
         fetchedAt = Date.now();
