@@ -21,11 +21,19 @@
       // migration or `wrangler deploy` is rejected; container DOs require
       // SQLite-backed storage.
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tiler"] }],
-      // The `containers` block (image: "./Dockerfile", image_build_context:
-      // "../..", instance_type: "standard-1", max_instances: 5) is added
-      // together with the Dockerfile itself in a later commit - `wrangler
-      // types`/`deploy` validate that the image path actually resolves, and
-      // the Dockerfile does not exist yet at this commit.
+      // Build context = repo root so the Dockerfile can vendor workspace
+      // deps (@internal/tiler, @internal/contracts). Defaults to the
+      // Dockerfile's own dir otherwise.
+      "containers": [
+        {
+          "class_name": "Tiler",
+          "image": "./Dockerfile",
+          "image_build_context": "../..",
+          // >=4 GiB RAM; source spike showed 2.08 GiB peak at 134 MP.
+          "instance_type": "standard-1",
+          "max_instances": 5,
+        },
+      ],
       "queues": {
         "consumers": [
           {
@@ -48,6 +56,15 @@
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tiler"] }],
+      "containers": [
+        {
+          "class_name": "Tiler",
+          "image": "./Dockerfile",
+          "image_build_context": "../..",
+          "instance_type": "standard-1",
+          "max_instances": 5,
+        },
+      ],
       "queues": {
         "consumers": [
           {
