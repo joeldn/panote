@@ -72,6 +72,24 @@ describe('POST /api/tours/:tourId/like', () => {
     expect(await second.json()).toMatchObject({ likes: 1 });
   });
 
+  it('does not collide two X-Client-Id values that share a raw "&u=" substring', async () => {
+    // The DO dedupe key is built as `?u=${encodeURIComponent(who)}`. Without
+    // the encode, X-Client-Id 'a&u=b' would inject a second `u` query param
+    // and url.searchParams.get('u') would read back 'a' - colliding with a
+    // distinct client whose id really is 'a'.
+    const like = (clientId: string) =>
+      SELF.fetch('https://x/api/tours/like-collision/like', {
+        method: 'POST',
+        headers: { 'X-Client-Id': clientId },
+      });
+    const first = await like('a');
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ likes: 1 });
+    const second = await like('a&u=b');
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ likes: 2 });
+  });
+
   it('degrades to the X-Client-Id key when the bearer token is rejected, rather than 401ing', async () => {
     // Pins the authenticateOptional contract: a rejected token must not become
     // a 401. If someone swaps authenticateOptional for authenticate here, this
