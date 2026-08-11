@@ -7,6 +7,14 @@
 // second, different validation scheme.
 export const encUser = (sub: string): string => encodeURIComponent(sub);
 
+// The exact inverse of encUser, kept in this module so encode and decode of a
+// key segment never drift apart. Callers that read a raw key segment back out
+// of R2 (e.g. listChildren()'s output) must run it through decUser before
+// handing it back to anything that will re-encode it - otherwise a
+// caller-supplied id containing a URL-significant character survives one
+// round trip encoded and is double-encoded on the next.
+export const decUser = (s: string): string => decodeURIComponent(s);
+
 export const panoPrefix = (u: string, p: string): string => `panos/${encUser(u)}/${encUser(p)}/`;
 export const originalKey = (u: string, p: string): string => `${panoPrefix(u, p)}original`;
 export const manifestKey = (u: string, p: string): string => `${panoPrefix(u, p)}manifest.json`;
@@ -18,5 +26,5 @@ export const tourKey = (u: string, t: string): string =>
 const OWNER_RE = /^panos\/([^/]+)\/([^/]+)\//;
 export const parseOwnerFromKey = (key: string): { userId: string; panoId: string } | null => {
   const m = OWNER_RE.exec(key);
-  return m ? { userId: decodeURIComponent(m[1]!), panoId: decodeURIComponent(m[2]!) } : null;
+  return m ? { userId: decUser(m[1]!), panoId: decUser(m[2]!) } : null;
 };

@@ -6,6 +6,8 @@ import {
   userPanosPrefix,
   parseOwnerFromKey,
   tourKey,
+  encUser,
+  decUser,
 } from './keys.js';
 
 describe('keys', () => {
@@ -44,6 +46,11 @@ describe('keys', () => {
         userId: 'auth0|abc',
         panoId: 'a/b',
       });
+    });
+
+    it('decUser is the exact inverse of encUser', () => {
+      const raw = 'probe pano|1';
+      expect(decUser(encUser(raw))).toBe(raw);
     });
   });
 });
