@@ -1,4 +1,11 @@
-import { FACES, type Manifest as CoreManifest, type TileFormat } from '@panote/core';
+import {
+  ALLOWED_TILE_SIZES,
+  FACES,
+  MAX_FACE_SIZE,
+  MAX_LEVEL_CAP,
+  type Manifest as CoreManifest,
+  type TileFormat,
+} from '@panote/core';
 import { z } from 'zod';
 
 /**
@@ -16,17 +23,43 @@ export const TILE_FORMATS = ['jpg', 'webp'] as const satisfies readonly TileForm
  * `@panote/core` owns the *type* (`Manifest`) so that the viewer never pulls zod
  * into its bundle; this schema is the *runtime* half, derived from core's
  * constants and kept in lockstep by the two assertions below. The constraints
- * here mirror `core`'s `parseManifest`, which is the authoritative validator.
+ * here mirror `core`'s `parseManifest`, which is the authoritative validator —
+ * including its numeric bounds and its two structural invariants (faceSize ===
+ * tileSize * 2^maxLevel, and faces matching FACES exactly, in order), via the
+ * `.refine()` clauses below. Without them this schema would accept manifests
+ * `parseManifest` rejects — any server-side path that validates with this
+ * schema instead of `parseManifest` would otherwise have no bounds at all.
  */
-export const ManifestSchema = z.object({
-  pano: z.string().min(1),
-  faceSize: z.number().int().positive(),
-  tileSize: z.number().int().positive(),
-  maxLevel: z.number().int().nonnegative(),
-  faces: z.array(z.enum(FACES)).readonly(),
-  quality: z.number().positive().max(100),
-  format: z.enum(TILE_FORMATS),
-});
+export const ManifestSchema = z
+  .object({
+    pano: z.string().min(1),
+    faceSize: z.number().int().positive(),
+    tileSize: z.number().int().positive(),
+    maxLevel: z.number().int().nonnegative(),
+    faces: z.array(z.enum(FACES)).readonly(),
+    quality: z.number().positive().max(100),
+    format: z.enum(TILE_FORMATS),
+  })
+  .refine((m) => (ALLOWED_TILE_SIZES as readonly number[]).includes(m.tileSize), {
+    message: `tileSize must be one of ${ALLOWED_TILE_SIZES.join(', ')}`,
+    path: ['tileSize'],
+  })
+  .refine((m) => m.faceSize <= MAX_FACE_SIZE, {
+    message: `faceSize must be <= ${MAX_FACE_SIZE}`,
+    path: ['faceSize'],
+  })
+  .refine((m) => m.maxLevel <= MAX_LEVEL_CAP, {
+    message: `maxLevel must be <= ${MAX_LEVEL_CAP}`,
+    path: ['maxLevel'],
+  })
+  .refine((m) => m.faceSize === m.tileSize * 2 ** m.maxLevel, {
+    message: 'faceSize must equal tileSize * 2^maxLevel',
+    path: ['faceSize'],
+  })
+  .refine((m) => m.faces.length === FACES.length && m.faces.every((f, i) => f === FACES[i]), {
+    message: `faces must equal ${FACES.join(', ')} in order`,
+    path: ['faces'],
+  });
 
 export type Manifest = z.infer<typeof ManifestSchema>;
 
