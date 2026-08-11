@@ -219,10 +219,10 @@ describe('PanoViewer', () => {
      * Stub fetch so manifests always resolve and tiles are answered by
      * `onTile`, which returns either a response-ish object or a pending promise.
      */
-    function stubFetch(onTile: (url: string) => unknown): void {
+    function stubFetch(onTile: (url: string, init: { signal: AbortSignal }) => unknown): void {
       vi.stubGlobal(
         'fetch',
-        vi.fn((url: string) => {
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
           const manifest = /\/tiles\/([^/]+)\/manifest\.json$/.exec(url);
           if (manifest) {
             return Promise.resolve({
@@ -232,7 +232,7 @@ describe('PanoViewer', () => {
             });
           }
           tileRequests.push(url);
-          return onTile(url);
+          return onTile(url, init);
         }),
       );
       vi.stubGlobal(
@@ -326,6 +326,77 @@ describe('PanoViewer', () => {
       // pano", never to a black canvas.
       expect((viewer as unknown as { layer: unknown }).layer).toBe(loaded);
       viewer.dispose();
+    });
+
+    describe('dispose during an in-flight base load', () => {
+      // Until its base is resident the incoming layer is only reachable from
+      // load()'s local, so a dispose() that only reaches `this.layer` never
+      // marks it disposed — every `if (this.disposed)` guard inside it is dead
+      // code, and the six base fetches outlive the WebGL context they will
+      // upload into.
+      const fakeRendererOf = (viewer: PanoViewer) =>
+        (viewer as unknown as { renderer: { uploadTile: ReturnType<typeof vi.fn> } }).renderer;
+
+      it('aborts the in-flight base fetches and uploads nothing', async () => {
+        stubFetch(
+          (_url, init) =>
+            new Promise((_resolve, reject) => {
+              init.signal.addEventListener('abort', () => {
+                reject(new DOMException('aborted', 'AbortError'));
+              });
+            }),
+        );
+
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        const ready = vi.fn();
+        viewer.on('ready', ready);
+
+        let settled = false;
+        const load = viewer.load('pano-a').then(() => {
+          settled = true;
+        });
+        await flush();
+        expect(tileRequests).toHaveLength(FACES.length);
+
+        viewer.dispose();
+        // Resolving (not rejecting) is the deliberate choice: it matches every
+        // other disposed/superseded exit in load(), and a caller that disposed
+        // the viewer is not waiting to be told its load did not finish.
+        await load;
+        expect(settled).toBe(true);
+        expect(tileRequests).toHaveLength(FACES.length);
+        expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
+        expect(ready).not.toHaveBeenCalled();
+        expect((viewer as unknown as { layer: unknown }).layer).toBeUndefined();
+      });
+
+      it('does not fetch, decode or upload after dispose while retrying', async () => {
+        // Transient failures make it worse than a single wasted round: the base
+        // loader sleeps and retries, so the traffic continues for seconds after
+        // dispose() and finally uploads into a destroyed context.
+        let status = 503;
+        stubFetch(() =>
+          Promise.resolve({
+            ok: status === 200,
+            status,
+            blob: () => Promise.resolve({}),
+          }),
+        );
+
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        const load = viewer.load('pano-a');
+        await flush();
+        // One failed attempt per face; each is now inside its retry cooldown.
+        expect(tileRequests).toHaveLength(FACES.length);
+
+        status = 200; // the origin recovers — a retry would now succeed
+        viewer.dispose();
+        await expect(load).resolves.toBeUndefined();
+        await flush();
+
+        expect(tileRequests).toHaveLength(FACES.length);
+        expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
+      });
     });
   });
 });

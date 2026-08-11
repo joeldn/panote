@@ -21,6 +21,14 @@ export class PanoViewer implements ControlHost {
   private emitter = new Emitter<PanoViewerEvents>();
   private controls?: Controls;
   private layer: TileLayer | undefined;
+  // Layers still loading their base. Until a layer's base is resident it is not
+  // assigned to `this.layer`, so without this set dispose() cannot reach it:
+  // its `disposed` flag stays false, every guard inside it is dead code, and
+  // its fetches keep running (and retrying, and uploading) against a renderer
+  // whose WebGL context is already gone. A set, not a field, because load() can
+  // legitimately be in flight more than once — a superseded load is still
+  // holding a layer that has to be torn down.
+  private pendingLayers = new Set<TileLayer>();
   private raf = 0;
   private dirty = true;
   private wasPending = false;
@@ -137,16 +145,23 @@ export class PanoViewer implements ControlHost {
     // texture, and a high-resolution tile that fails or is missing degrades to
     // soft detail rather than to a black patch. A partial load would ship that
     // guarantee as a maybe, so a base that cannot be fetched is fatal here.
+    this.pendingLayers.add(layer);
     try {
       await layer.loadBase();
     } catch (err) {
+      this.pendingLayers.delete(layer);
       layer.dispose();
       // A superseded or disposed load is not this caller's failure to hear
       // about — the load that replaced it owns the outcome.
       if (this.disposed || token !== this.loadToken) return;
       throw err;
     }
+    this.pendingLayers.delete(layer);
 
+    // Disposed under this load: dispose() has already torn the layer down, so
+    // this resolves quietly. Rejecting would be defensible too, but every other
+    // disposed/superseded exit above returns, and a caller that disposed the
+    // viewer is not waiting to be told the load it abandoned did not finish.
     if (this.disposed || token !== this.loadToken) {
       layer.dispose();
       return;
@@ -395,6 +410,10 @@ export class PanoViewer implements ControlHost {
     window.removeEventListener('resize', this.onResize);
     this.resizeObserver?.disconnect();
     this.controls?.dispose();
+    // Pending layers first: they are the ones with fetches still in flight, and
+    // they must stop before the renderer's GL context is destroyed below.
+    for (const pending of this.pendingLayers) pending.dispose();
+    this.pendingLayers.clear();
     this.layer?.dispose();
     this.hotspots.clear();
     this.renderCbs.clear();

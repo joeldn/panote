@@ -530,6 +530,89 @@ describe('TileLayer failure handling', () => {
     });
   });
 
+  describe('disposal', () => {
+    /** fetch that never settles until its request is aborted. */
+    function stubHangingFetch(): void {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          requests.push(url);
+          return new Promise((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => {
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          });
+        }),
+      );
+    }
+
+    it('starts no further tile fetches once the layer is disposed', async () => {
+      const layer = makeLayer();
+      stubHangingFetch();
+
+      frame(layer, 0);
+      const started = requests.length;
+      expect(started).toBeGreaterThan(0);
+
+      // update() left the rest of the candidate list queued behind the
+      // concurrency limit. Disposing aborts what is in flight, and every abort
+      // frees a slot — so without a disposed check the queue drains straight
+      // into a second full round of fetches that are downloaded and decoded
+      // only to be thrown away.
+      layer.dispose();
+      await flush();
+      expect(requests).toHaveLength(started);
+    });
+
+    it('re-queues nothing from a frame rendered after dispose', async () => {
+      const layer = makeLayer();
+      stubHangingFetch();
+
+      layer.dispose();
+      frame(layer, 0);
+      await flush();
+      expect(requests).toHaveLength(0);
+    });
+
+    it('aborts a base-layer retry wait instead of sleeping it out', async () => {
+      // The wait between base-tile attempts is seconds long. A disposal must be
+      // noticed inside it, not after it: otherwise the loader wakes up in a
+      // torn-down layer and issues another round of fetches (the measured
+      // symptom was 3s of post-dispose fetch/sleep/retry activity).
+      let waitSignal: AbortSignal | undefined;
+      const layer = new TileLayer(
+        renderer as unknown as GLRenderer,
+        makeManifest('pano-a'),
+        '/tiles/',
+        128,
+        () => {},
+        8,
+        monitor,
+        (ms: number, signal: AbortSignal) => {
+          sleeps.push(ms);
+          waitSignal = signal;
+          return new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        },
+      );
+      script = { status: 503 };
+
+      const load = layer.loadBase();
+      await flush();
+      // Every face failed its first attempt and is now waiting out a cooldown.
+      expect(requests).toHaveLength(FACES.length);
+      expect(sleeps).toHaveLength(FACES.length);
+      expect(waitSignal?.aborted).toBe(false);
+
+      layer.dispose();
+      expect(waitSignal?.aborted).toBe(true);
+      await expect(load).resolves.toBeUndefined();
+      expect(requests).toHaveLength(FACES.length);
+      expect(renderer.uploadTile).not.toHaveBeenCalled();
+    });
+  });
+
   describe('coarse fallback', () => {
     it('keeps drawing the base where a deeper tile is missing, instead of nothing', async () => {
       const layer = makeLayer();

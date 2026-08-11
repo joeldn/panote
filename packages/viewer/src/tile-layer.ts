@@ -74,9 +74,29 @@ export class BaseTileLoadError extends Error {
  * Wait between base-tile attempts. Injectable through the constructor for the
  * same reason the failure monitor owns the clock: the tests advance time by
  * hand rather than sleeping, so no test waits on a real timer.
+ *
+ * The signal cuts the wait short — it is the layer's lifetime (see
+ * `TileLayer.lifetime`), so a disposal is noticed within a microtask instead of
+ * at the end of a cooldown that can be seconds long. It resolves rather than
+ * rejects on abort: the caller re-checks `disposed` immediately afterwards, so
+ * there is nothing an extra rejection path would add.
  */
-const defaultSleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 
 interface TileEntry {
   key: string;
@@ -107,6 +127,9 @@ export class TileLayer {
   private maxTiles: number;
   private maxConcurrent: number;
   private disposed = false;
+  // Aborted by dispose(). Only the base loader's retry wait listens to it: the
+  // in-flight fetches are cancelled through their own controllers in `inflight`.
+  private lifetime = new AbortController();
 
   // Per-tile retry accounting for this panorama load. Replaces the old
   // permanent `failed` set: a transiently-failed tile stays re-queueable (so a
@@ -134,7 +157,7 @@ export class TileLayer {
     private onInvalidate: () => void,
     maxConcurrent = 8,
     monitor: TileFailureMonitor = sharedTileFailureMonitor(),
-    private sleep: (ms: number) => Promise<void> = defaultSleep,
+    private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
   ) {
     const tileMB = (manifest.tileSize * manifest.tileSize * 4) / (1024 * 1024);
     this.maxTiles = Math.max(24, Math.floor(textureBudgetMB / tileMB));
@@ -200,7 +223,10 @@ export class TileLayer {
       // three requests on a URL that cannot start existing.
       const wait = this.retry.waitMs(key);
       if (!Number.isFinite(wait)) break;
-      if (wait > 0) await this.sleep(wait);
+      // The wait is cut short by dispose() rather than slept out — otherwise a
+      // torn-down layer wakes up seconds later and issues another round of
+      // fetches against a renderer that no longer has a GL context.
+      if (wait > 0) await this.sleep(wait, this.lifetime.signal);
       if (this.disposed) return;
     }
     throw new BaseTileLoadError(this.manifest.pano, face, cause);
@@ -213,6 +239,7 @@ export class TileLayer {
     fwd: { x: number; y: number; z: number },
     viewportHeight: number,
   ): void {
+    if (this.disposed) return;
     this.clock++;
     const level = selectLevel(
       fovDeg,
@@ -298,6 +325,12 @@ export class TileLayer {
   }
 
   private pump(): void {
+    // ensureTile()'s `finally` pumps unconditionally, and dispose() aborts
+    // every in-flight fetch at once — so without this guard a disposal frees
+    // maxConcurrent slots and drains whatever update() last queued into a
+    // fresh round of fetches that are downloaded and decoded only to be
+    // discarded.
+    if (this.disposed) return;
     while (this.inflight.size < this.maxConcurrent && this.queue.length > 0) {
       // Global backoff: hold the queue intact rather than draining it into
       // no-op ensureTile calls. update() rebuilds it next frame anyway, and
@@ -360,6 +393,7 @@ export class TileLayer {
     y: number,
     exempt = false,
   ): Promise<TileLoadOutcome> {
+    if (this.disposed) return { kind: 'aborted' };
     const key = tileKey(level, face, x, y);
     if (this.cache.has(key)) return { kind: 'loaded' };
     if (this.inflight.has(key)) return { kind: 'skipped' };
@@ -446,6 +480,14 @@ export class TileLayer {
 
   dispose(): void {
     this.disposed = true;
+    // Cuts short the base loader's retry wait; the fetches themselves are
+    // cancelled through their own controllers just below.
+    this.lifetime.abort();
+    // The queue is what pump() would otherwise drain the moment those aborts
+    // free their concurrency slots.
+    this.queue = [];
+    this.candidates.length = 0;
+    this.desired.clear();
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
     for (const e of this.cache.values()) {
