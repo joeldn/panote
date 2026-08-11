@@ -114,8 +114,13 @@ describe('build', () => {
       // computeFaceSize's own default caps at 16384, but a caller can still
       // pass an explicit maxSize above that -- assertPyramidBounds is what
       // makes that unable to produce an out-of-bounds pyramid.
+      // width chosen so computeFaceSize(width, 512, 32768) lands exactly on
+      // 32768 (width / 4 = 32768 -> width = 131072); height kept small so
+      // width * height stays under the MAX_INPUT_PIXELS decode cap and this
+      // test exercises assertPyramidBounds's faceSize check specifically,
+      // not the separate pixel-cap check.
       const outDir = await tmp();
-      metadata.mockResolvedValue({ width: 200_000, height: 100_000 });
+      metadata.mockResolvedValue({ width: 131_072, height: 1024 });
       await expect(
         build({ src: 'fake-source.png', outDir, pano: 'ok-pano', maxSize: 32768 }),
       ).rejects.toThrow(/faceSize/);
@@ -124,11 +129,99 @@ describe('build', () => {
     it('rejects the exact gap the old validator left: tileSize 128 reaching faceSize 16384 at maxLevel 7', async () => {
       const outDir = await tmp();
       // width chosen so computeFaceSize(width, 128) lands exactly on 16384:
-      // width / 4 = 16384 → width = 65536.
-      metadata.mockResolvedValue({ width: 65_536, height: 32_768 });
+      // width / 4 = 16384 → width = 65536. height kept small (not the
+      // realistic 2:1 equirect ratio) so width * height stays under the
+      // MAX_INPUT_PIXELS decode cap and this test exercises the tileSize
+      // check specifically, not the separate pixel-cap check.
+      metadata.mockResolvedValue({ width: 65_536, height: 2048 });
       await expect(
         build({ src: 'fake-source.png', outDir, pano: 'ok-pano', tileSize: 128 }),
       ).rejects.toThrow(/tileSize/);
+    });
+  });
+
+  describe('input pixel cap', () => {
+    // This must throw before the raw RGB decode (toBuffer), same as the
+    // pyramid-bounds tests above -- toBuffer is deliberately left unresolved
+    // so a regression that moved this check too late would fail with a
+    // TypeError instead of the expected message, not silently pass.
+    it('rejects a source whose decoded pixel count exceeds MAX_INPUT_PIXELS', async () => {
+      const outDir = await tmp();
+      // 20,000 x 10,000 = 200,000,000 px > MAX_INPUT_PIXELS (150,000,000).
+      metadata.mockResolvedValue({ width: 20_000, height: 10_000 });
+      await expect(build({ src: 'fake-source.png', outDir, pano: 'ok-pano' })).rejects.toThrow(
+        /exceeds the 150000000px decode cap/,
+      );
+    });
+
+    it('does not reject a source exactly at the pixel cap (only over it)', async () => {
+      const outDir = await tmp();
+      // 15,000 x 10,000 = 150,000,000 px, exactly at MAX_INPUT_PIXELS, not
+      // over it. Reuses the channel-count guard's mock shape (channels: 1)
+      // so this proves the pixel-cap check let it through by observing it
+      // fail for that *later*, unrelated reason instead -- without actually
+      // running a 150-megapixel image through the real remap/tiling loop,
+      // which the mocked `sharp` in this file does not simulate anyway.
+      metadata.mockResolvedValue({ width: 15_000, height: 10_000 });
+      toBuffer.mockResolvedValue({
+        data: Buffer.alloc(8),
+        info: { width: 15_000, height: 10_000, channels: 1 },
+      });
+      await expect(build({ src: 'fake-source.png', outDir, pano: 'ok-pano' })).rejects.toThrow(
+        /3-channel/,
+      );
+    });
+  });
+
+  describe('option validation', () => {
+    // These throw before sharp is ever touched, same as the pano checks
+    // above, so no metadata mock is needed.
+
+    it('rejects a quality below the valid range', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', quality: -3 }),
+      ).rejects.toThrow(/quality/);
+    });
+
+    it('rejects a quality above the valid range', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', quality: 500 }),
+      ).rejects.toThrow(/quality/);
+    });
+
+    it('rejects a non-finite quality', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', quality: NaN }),
+      ).rejects.toThrow(/quality/);
+    });
+
+    it('rejects an unsupported format', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({
+          src: '/nonexistent/src.png',
+          outDir,
+          pano: 'ok-pano',
+          format: 'png' as unknown as 'jpg' | 'webp',
+        }),
+      ).rejects.toThrow(/format/);
+    });
+
+    it('rejects a non-integer maxSize', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', maxSize: 100.5 }),
+      ).rejects.toThrow(/maxSize/);
+    });
+
+    it('rejects a non-positive maxSize', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', maxSize: 0 }),
+      ).rejects.toThrow(/maxSize/);
     });
   });
 

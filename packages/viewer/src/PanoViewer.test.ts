@@ -1,0 +1,489 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { FACES } from '@panote/core';
+import { PanoViewer } from './PanoViewer.js';
+import { setSharedTileFailureMonitor } from './tile-retry.js';
+
+// This package's vitest config runs under Node, not jsdom (see
+// vitest.config.ts) — deliberately, so the package pays for no DOM test
+// dependency. PanoViewer.ts is DOM/WebGL-driven throughout, so rather than
+// building a full fake canvas/WebGL2 context (exercised instead by actually
+// running the viewer — see the coverage `exclude` comment in
+// vitest.config.ts), this file takes the same "minimal stand-in for exactly
+// what's touched" approach as ui/info-hotspots.test.ts, and additionally
+// swaps out GLRenderer for a lightweight fake via vi.mock so PanoViewer can
+// be constructed at all without a real WebGL2 context.
+//
+// GLRenderer itself (the actual WebGL surface, including the
+// WEBGL_lose_context dispose fix) is exercised directly in
+// render/gl-renderer.test.ts using a fake WebGL2 context, not here.
+
+// vi.mock's factory is hoisted above this file's imports, so it cannot close
+// over any module-scope binding declared here — the fake class is therefore
+// defined entirely inside the factory itself.
+vi.mock('./render/gl-renderer.js', () => {
+  class FakeGLRenderer {
+    // Scaled 2x on resize to stand in for a devicePixelRatio-2 display — real
+    // GLRenderer.resize() does exactly this scaling (see gl-renderer.ts).
+    // The listener/style/tabIndex surface is what Controls attaches to once a
+    // load succeeds (see controls.ts) — nothing here reads it back.
+    canvas = {
+      width: 0,
+      height: 0,
+      style: {} as Record<string, string>,
+      tabIndex: 0,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    nextHandle = 1;
+    dispose = vi.fn();
+    uploadTile = vi.fn(() => this.nextHandle++);
+    removeTile = vi.fn();
+    resize(w: number, h: number): void {
+      this.canvas.width = Math.round(w * 2);
+      this.canvas.height = Math.round(h * 2);
+    }
+    setCamera(): void {}
+    render(): void {}
+    snapshot(): string {
+      return 'data:image/png;base64,';
+    }
+  }
+  return { GLRenderer: FakeGLRenderer };
+});
+
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  observed: unknown[] = [];
+  disconnect = vi.fn();
+  constructor(private cb: () => void) {
+    FakeResizeObserver.instances.push(this);
+  }
+  observe(el: unknown): void {
+    this.observed.push(el);
+  }
+  unobserve(): void {}
+  trigger(): void {
+    this.cb();
+  }
+}
+
+function makeContainer(width: number, height: number): HTMLElement {
+  return { clientWidth: width, clientHeight: height } as unknown as HTMLElement;
+}
+
+describe('PanoViewer', () => {
+  beforeEach(() => {
+    vi.stubGlobal('window', {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      matchMedia: vi.fn(() => ({ matches: false })),
+    });
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn(() => 1),
+    );
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    FakeResizeObserver.instances = [];
+    // load() builds a TileLayer on the module-scoped failure monitor; drop it
+    // so no backoff state survives from one test to the next.
+    setSharedTileFailureMonitor();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setSharedTileFailureMonitor();
+  });
+
+  describe('device-pixel-ratio-aware level selection', () => {
+    it('passes the renderer canvas device-pixel height to the tile layer, not the CSS clientHeight', () => {
+      // Regression test for the DPR quality bug: selectLevel() (see
+      // packages/core/src/lod.ts, used from tile-layer.ts's update()) needs
+      // the framebuffer's device-pixel height. Before the fix, PanoViewer
+      // passed container.clientHeight (CSS pixels) straight through, so on
+      // any DPR>1 display the pyramid picked one level coarser than the
+      // screen could actually show. FakeGLRenderer.resize() scales by 2x, so
+      // clientHeight=800 (CSS) means canvas.height=1600 (device pixels) —
+      // the update() call must receive 1600, not 800.
+      const container = makeContainer(400, 800);
+      const viewer = new PanoViewer(container);
+
+      const updateSpy = vi.fn();
+      // Bypass load()'s fetch/parseManifest/TileLayer construction entirely —
+      // only the loop()'s call arguments to layer.update() are under test.
+      (viewer as unknown as { layer: unknown }).layer = {
+        update: updateSpy,
+        drawList: () => [],
+        hasPending: () => false,
+      };
+
+      // The constructor already runs loop() once (to draw the first frame),
+      // which consumes the initial `dirty = true` and sets it back to false
+      // once the frame settles — so it must be re-armed here for this
+      // explicit call to run the render body instead of early-returning on
+      // the `if (!this.dirty) return;` guard.
+      (viewer as unknown as { dirty: boolean }).dirty = true;
+      (viewer as unknown as { loop: () => void }).loop();
+
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+      const viewportHeightArg = updateSpy.mock.calls[0]![3];
+      expect(viewportHeightArg).toBe(1600);
+      expect(viewportHeightArg).not.toBe(container.clientHeight);
+    });
+
+    it('falls back to 1 when the renderer canvas has zero height', () => {
+      // The constructor's own `container.clientHeight || 1` guard means a
+      // zero-height container never actually reaches resize() as 0 - so to
+      // exercise loop()'s `this.renderer.canvas.height || 1` fallback
+      // directly, force canvas.height to 0 on the (fake) renderer after
+      // construction, as if some other code path had produced it.
+      const container = makeContainer(400, 800);
+      const viewer = new PanoViewer(container);
+      (viewer as unknown as { renderer: { canvas: { height: number } } }).renderer.canvas.height =
+        0;
+      const updateSpy = vi.fn();
+      (viewer as unknown as { layer: unknown }).layer = {
+        update: updateSpy,
+        drawList: () => [],
+        hasPending: () => false,
+      };
+      (viewer as unknown as { dirty: boolean }).dirty = true;
+      (viewer as unknown as { loop: () => void }).loop();
+      expect(updateSpy.mock.calls[0]![3]).toBe(1);
+    });
+  });
+
+  describe('device-pixel-ratio-aware texture budget', () => {
+    // The other half of the DPR fix. Selecting levels from device pixels means
+    // a DPR-2 display holds four times as many tiles on screen, against a
+    // budget that was calibrated when it held one quarter as many — so the
+    // default budget scales with the ratio too (capped; see texture-budget.ts).
+    // A caller-supplied budget is absolute and is passed through untouched.
+    const manifest = {
+      pano: 'pano-a',
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: [...FACES],
+      quality: 82,
+      format: 'jpg',
+    };
+
+    /** Stub a host whose display reports `dpr`, with every fetch succeeding. */
+    function stubDisplay(dpr: number | undefined): void {
+      vi.stubGlobal('window', {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        matchMedia: vi.fn(() => ({ matches: false })),
+        ...(dpr === undefined ? {} : { devicePixelRatio: dpr }),
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) =>
+          Promise.resolve(
+            url.endsWith('manifest.json')
+              ? { ok: true, status: 200, json: () => Promise.resolve(manifest) }
+              : { ok: true, status: 200, blob: () => Promise.resolve({}) },
+          ),
+        ),
+      );
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => Promise.resolve({ close: vi.fn() })),
+      );
+    }
+
+    /**
+     * The budget as the tile layer actually received it, in tiles. This
+     * manifest's tileSize is 512, so one tile is 512 * 512 * 4 = 1 MiB and the
+     * tile count equals the budget in MB — the layer having the right number of
+     * them is the only thing the budget is for.
+     */
+    async function loadedMaxTiles(viewer: PanoViewer): Promise<number> {
+      await viewer.load('pano-a');
+      return (viewer as unknown as { layer: { maxTiles: number } }).layer.maxTiles;
+    }
+
+    it('doubles the default budget on a devicePixelRatio-2 display', async () => {
+      stubDisplay(2);
+      const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(256);
+      viewer.dispose();
+    });
+
+    it('leaves the default budget alone when the host reports no pixel ratio', async () => {
+      stubDisplay(undefined);
+      const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(128);
+      viewer.dispose();
+    });
+
+    it('does not scale past the cap on a devicePixelRatio-3 display', async () => {
+      stubDisplay(3);
+      const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(256);
+      viewer.dispose();
+    });
+
+    it('honours an explicit textureBudgetMB exactly, scaling it neither up nor down', async () => {
+      // A caller who names a budget is naming an absolute one: it is not
+      // multiplied by the pixel ratio, and it is not clamped to the cap the
+      // default is subject to.
+      stubDisplay(2);
+      const small = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 64 });
+      expect(await loadedMaxTiles(small)).toBe(64);
+      small.dispose();
+
+      const large = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 512 });
+      expect(await loadedMaxTiles(large)).toBe(512);
+      large.dispose();
+    });
+  });
+
+  describe('resize observation', () => {
+    it('observes the container with a ResizeObserver and disconnects it on dispose', () => {
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+      const container = makeContainer(400, 800);
+      const viewer = new PanoViewer(container);
+
+      expect(FakeResizeObserver.instances).toHaveLength(1);
+      const observer = FakeResizeObserver.instances[0]!;
+      expect(observer.observed).toContain(container);
+
+      viewer.dispose();
+      expect(observer.disconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not construct a ResizeObserver when it is unavailable in the environment', () => {
+      // No ResizeObserver stubbed in this test (afterEach's unstubAllGlobals
+      // from the previous test already cleared it) — construction must not
+      // throw when the global is absent.
+      const container = makeContainer(400, 800);
+      expect(() => new PanoViewer(container)).not.toThrow();
+    });
+  });
+
+  describe('manifest fetch error handling', () => {
+    it('rejects when the manifest fetch response is not ok, instead of attempting to parse it as JSON', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 404,
+          json: () => Promise.reject(new Error('should not be called')),
+        }),
+      );
+      const container = makeContainer(400, 800);
+      const viewer = new PanoViewer(container);
+      await expect(viewer.load('missing-pano')).rejects.toThrow(/404/);
+    });
+  });
+
+  describe('blocking low-resolution base layer', () => {
+    // Level 0 is exactly one tile per cube face, so the six of them are a
+    // complete low-resolution copy of the panorama. load() is not allowed to
+    // resolve until they are all resident, which is what makes "a failed
+    // high-resolution tile degrades to blurry" a guarantee rather than a hope.
+    const manifestFor = (pano: string) => ({
+      pano,
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: [...FACES],
+      quality: 82,
+      format: 'jpg',
+    });
+
+    const tileBody = { ok: true, status: 200, blob: () => Promise.resolve({}) };
+    const baseTileUrl = (face: string, pano = 'pano-a'): string =>
+      `/tiles/${pano}/0/${face}/0-0.jpg`;
+
+    /** Drain the microtask chains load() and the tile loader start. */
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+    let tileRequests: string[];
+
+    /**
+     * Stub fetch so manifests always resolve and tiles are answered by
+     * `onTile`, which returns either a response-ish object or a pending promise.
+     */
+    function stubFetch(onTile: (url: string, init: { signal: AbortSignal }) => unknown): void {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          const manifest = /\/tiles\/([^/]+)\/manifest\.json$/.exec(url);
+          if (manifest) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () => Promise.resolve(manifestFor(manifest[1]!)),
+            });
+          }
+          tileRequests.push(url);
+          return onTile(url, init);
+        }),
+      );
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => Promise.resolve({ close: vi.fn() })),
+      );
+    }
+
+    beforeEach(() => {
+      tileRequests = [];
+    });
+
+    it('resolves only once all six base tiles are in', async () => {
+      let releaseLast: (() => void) | undefined;
+      const lastFace = FACES[FACES.length - 1]!;
+      stubFetch((url) => {
+        if (url !== baseTileUrl(lastFace)) return Promise.resolve(tileBody);
+        return new Promise((resolve) => {
+          releaseLast = () => resolve(tileBody);
+        });
+      });
+
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const ready = vi.fn();
+      viewer.on('ready', ready);
+
+      let settled = false;
+      const load = viewer.load('pano-a').then(() => {
+        settled = true;
+      });
+      await flush();
+
+      // Five faces are already uploaded, and the load is still outstanding —
+      // "loaded" means the whole panorama, not most of it.
+      expect(tileRequests).toHaveLength(FACES.length);
+      for (const face of FACES) expect(tileRequests).toContain(baseTileUrl(face));
+      expect(settled).toBe(false);
+      expect(ready).not.toHaveBeenCalled();
+
+      releaseLast!();
+      await load;
+      expect(settled).toBe(true);
+      expect(ready).toHaveBeenCalledTimes(1);
+      viewer.dispose();
+    });
+
+    it('rejects when a base tile is permanently missing', async () => {
+      stubFetch((url) =>
+        url === baseTileUrl('py')
+          ? Promise.resolve({ ok: false, status: 404, blob: () => Promise.resolve({}) })
+          : Promise.resolve(tileBody),
+      );
+
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const ready = vi.fn();
+      viewer.on('ready', ready);
+
+      await expect(viewer.load('pano-a')).rejects.toThrow(/low-resolution base tile for face "py"/);
+      expect(ready).not.toHaveBeenCalled();
+      viewer.dispose();
+    });
+
+    it('leaves no layer behind when the base load fails, and disposes cleanly', async () => {
+      stubFetch(() => Promise.resolve({ ok: false, status: 404, blob: () => Promise.resolve({}) }));
+
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await expect(viewer.load('pano-a')).rejects.toThrow();
+
+      expect((viewer as unknown as { layer: unknown }).layer).toBeUndefined();
+      expect(() => viewer.dispose()).not.toThrow();
+      // Idempotent: a second dispose after a failed load is still harmless.
+      expect(() => viewer.dispose()).not.toThrow();
+    });
+
+    it('keeps the panorama already on screen when a later load fails', async () => {
+      stubFetch(() => Promise.resolve(tileBody));
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await viewer.load('pano-a');
+      const loaded = (viewer as unknown as { layer: unknown }).layer;
+      expect(loaded).toBeDefined();
+
+      stubFetch((url) =>
+        url.startsWith('/tiles/pano-b/')
+          ? Promise.resolve({ ok: false, status: 404, blob: () => Promise.resolve({}) })
+          : Promise.resolve(tileBody),
+      );
+      await expect(viewer.load('pano-b')).rejects.toThrow();
+
+      // The outgoing panorama is only torn down once the incoming one can
+      // actually be drawn, so a failed load degrades to "still showing the old
+      // pano", never to a black canvas.
+      expect((viewer as unknown as { layer: unknown }).layer).toBe(loaded);
+      viewer.dispose();
+    });
+
+    describe('dispose during an in-flight base load', () => {
+      // Until its base is resident the incoming layer is only reachable from
+      // load()'s local, so a dispose() that only reaches `this.layer` never
+      // marks it disposed — every `if (this.disposed)` guard inside it is dead
+      // code, and the six base fetches outlive the WebGL context they will
+      // upload into.
+      const fakeRendererOf = (viewer: PanoViewer) =>
+        (viewer as unknown as { renderer: { uploadTile: ReturnType<typeof vi.fn> } }).renderer;
+
+      it('aborts the in-flight base fetches and uploads nothing', async () => {
+        stubFetch(
+          (_url, init) =>
+            new Promise((_resolve, reject) => {
+              init.signal.addEventListener('abort', () => {
+                reject(new DOMException('aborted', 'AbortError'));
+              });
+            }),
+        );
+
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        const ready = vi.fn();
+        viewer.on('ready', ready);
+
+        let settled = false;
+        const load = viewer.load('pano-a').then(() => {
+          settled = true;
+        });
+        await flush();
+        expect(tileRequests).toHaveLength(FACES.length);
+
+        viewer.dispose();
+        // Resolving (not rejecting) is the deliberate choice: it matches every
+        // other disposed/superseded exit in load(), and a caller that disposed
+        // the viewer is not waiting to be told its load did not finish.
+        await load;
+        expect(settled).toBe(true);
+        expect(tileRequests).toHaveLength(FACES.length);
+        expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
+        expect(ready).not.toHaveBeenCalled();
+        expect((viewer as unknown as { layer: unknown }).layer).toBeUndefined();
+      });
+
+      it('does not fetch, decode or upload after dispose while retrying', async () => {
+        // Transient failures make it worse than a single wasted round: the base
+        // loader sleeps and retries, so the traffic continues for seconds after
+        // dispose() and finally uploads into a destroyed context.
+        let status = 503;
+        stubFetch(() =>
+          Promise.resolve({
+            ok: status === 200,
+            status,
+            blob: () => Promise.resolve({}),
+          }),
+        );
+
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        const load = viewer.load('pano-a');
+        await flush();
+        // One failed attempt per face; each is now inside its retry cooldown.
+        expect(tileRequests).toHaveLength(FACES.length);
+
+        status = 200; // the origin recovers — a retry would now succeed
+        viewer.dispose();
+        await expect(load).resolves.toBeUndefined();
+        await flush();
+
+        expect(tileRequests).toHaveLength(FACES.length);
+        expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
+      });
+    });
+  });
+});

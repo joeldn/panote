@@ -17,6 +17,86 @@ import {
   type Mat4,
 } from './render/projection.js';
 import type { GLRenderer, DrawItem, TileHandle } from './render/gl-renderer.js';
+import {
+  TileHttpError,
+  TileRetryBudget,
+  classifyFailure,
+  isAbortError,
+  sharedTileFailureMonitor,
+  type FailureKind,
+  type TileFailureMonitor,
+} from './tile-retry.js';
+
+/**
+ * Why a single `ensureTile()` call ended. The per-frame path ignores this
+ * entirely (a tile that did not load is simply re-queued next frame); the
+ * base-layer load is the caller that has to act on it.
+ */
+type TileLoadOutcome =
+  | { kind: 'loaded' } // in the cache now — this call, or already there
+  | { kind: 'skipped' } // another call owns it, or the backoff suppressed it
+  | { kind: 'aborted' } // cancelled: panned away, or the layer was disposed
+  | { kind: 'failed'; failure: FailureKind; error: unknown };
+
+/**
+ * A level-0 tile could not be loaded, so the panorama has no low-resolution
+ * base and the load fails. `cause` carries the underlying rejection (a
+ * `TileHttpError` — exported from the package entry point alongside this class,
+ * so the check is an `instanceof` and not a string match — a fetch `TypeError`,
+ * or a decode error) for callers that want to distinguish "the origin is down"
+ * from "this panorama is not published".
+ *
+ * `permanent` is that distinction pre-classified: `true` for a 404/410/401/403
+ * (retrying cannot help — the panorama is not published, or not accessible to
+ * this caller), `false` for everything else (a timeout, a 5xx, a dropped
+ * connection — the origin is unavailable right now). It is derived with the
+ * same `classifyFailure` the retry budget itself uses, so a caller can check
+ * `error.permanent` instead of inspecting or string-matching `cause`.
+ */
+export class BaseTileLoadError extends Error {
+  readonly permanent: boolean;
+
+  constructor(
+    readonly pano: string,
+    readonly face: Face,
+    cause: unknown,
+  ) {
+    const reason = cause instanceof Error ? cause.message : String(cause ?? 'no attempt succeeded');
+    super(`panorama "${pano}": low-resolution base tile for face "${face}" failed (${reason})`, {
+      cause,
+    });
+    this.name = 'BaseTileLoadError';
+    this.permanent = classifyFailure(cause) === 'permanent';
+  }
+}
+
+/**
+ * Wait between base-tile attempts. Injectable through the constructor for the
+ * same reason the failure monitor owns the clock: the tests advance time by
+ * hand rather than sleeping, so no test waits on a real timer.
+ *
+ * The signal cuts the wait short — it is the layer's lifetime (see
+ * `TileLayer.lifetime`), so a disposal is noticed within a microtask instead of
+ * at the end of a cooldown that can be seconds long. It resolves rather than
+ * rejects on abort: the caller re-checks `disposed` immediately afterwards, so
+ * there is nothing an extra rejection path would add.
+ */
+const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 
 interface TileEntry {
   key: string;
@@ -47,9 +127,16 @@ export class TileLayer {
   private maxTiles: number;
   private maxConcurrent: number;
   private disposed = false;
+  // Aborted by dispose(). Only the base loader's retry wait listens to it: the
+  // in-flight fetches are cancelled through their own controllers in `inflight`.
+  private lifetime = new AbortController();
 
-  // Keys whose upload failed (non-abort) — never re-queued.
-  private failed = new Set<string>();
+  // Per-tile retry accounting for this panorama load. Replaces the old
+  // permanent `failed` set: a transiently-failed tile stays re-queueable (so a
+  // pan away and back refills the hole) until it exhausts its attempt budget,
+  // while a 404/410 is still skipped for good. See tile-retry.ts.
+  private retry: TileRetryBudget;
+  private monitor: TileFailureMonitor;
 
   // Reusable scratch buffers — no per-frame allocation.
   private frustum: Frustum | null = null;
@@ -69,15 +156,80 @@ export class TileLayer {
     textureBudgetMB: number,
     private onInvalidate: () => void,
     maxConcurrent = 8,
+    monitor: TileFailureMonitor = sharedTileFailureMonitor(),
+    private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
   ) {
     const tileMB = (manifest.tileSize * manifest.tileSize * 4) / (1024 * 1024);
     this.maxTiles = Math.max(24, Math.floor(textureBudgetMB / tileMB));
     this.maxConcurrent = maxConcurrent;
+    // The monitor owns the clock so per-tile cooldowns and the global backoff
+    // measure time the same way (and are faked together in tests).
+    this.monitor = monitor;
+    this.retry = new TileRetryBudget(() => this.monitor.now());
   }
 
-  /** Load all six level-0 tiles up front for an instant full-coverage preview. */
-  async loadPreview(): Promise<void> {
-    await Promise.all(FACES.map((f) => this.ensureTile(0, f as Face, 0, 0)));
+  /**
+   * Load the low-resolution base layer: the six level-0 tiles, which are
+   * exactly one tile per cube face and therefore a complete, if soft, copy of
+   * the whole panorama.
+   *
+   * Blocking and fatal by design. Once these six are resident every direction
+   * has *some* texture, `selectEvictions()` pins them against LRU eviction, and
+   * `update()` keeps them visible at every level — so a high-resolution tile
+   * that 404s, times out or exhausts its retries degrades to soft detail
+   * instead of leaving a black patch. That guarantee only holds if the base is
+   * actually there, so a panorama that cannot load it is not a panorama that
+   * loaded: this rejects rather than leaving the viewer to discover the hole
+   * one hole at a time.
+   *
+   * Every failure still flows through the shared failure monitor (see
+   * `acquireExempt()`), so cross-panorama outage detection keeps working — the
+   * load just fails regardless of what the backoff would have preferred.
+   */
+  async loadBase(): Promise<void> {
+    // allSettled, not all: a rejection from one face must not leave the other
+    // five rejecting unobserved into an unhandled rejection.
+    const results = await Promise.allSettled(FACES.map((f) => this.loadBaseFace(f as Face)));
+    for (const result of results) {
+      if (result.status === 'rejected') throw result.reason as Error;
+    }
+  }
+
+  /**
+   * One face of the base layer, retried in place. Unlike the per-frame path
+   * there is no next frame to re-queue into, so the wait is taken here — but
+   * the budget and the cooldowns are the same ones every other tile uses, so a
+   * blip on one of six requests costs a second, not the load.
+   */
+  private async loadBaseFace(face: Face): Promise<void> {
+    const key = tileKey(0, face, 0, 0);
+    let cause: unknown;
+    for (;;) {
+      const result = await this.ensureTile(0, face, 0, 0, true);
+      if (result.kind === 'loaded') return;
+      // Disposal (or a newer load superseding this one) tears the layer down
+      // mid-flight. That is not the base layer failing — the caller already
+      // discards this load — so it resolves quietly rather than reporting an
+      // error nobody is waiting for.
+      if (this.disposed) return;
+      // 'skipped'/'aborted' spend no attempt, so retrying would spin: the only
+      // producers are a concurrent load of the same key or a cancellation the
+      // layer did not ask for, and neither resolves by asking again.
+      if (result.kind !== 'failed') break;
+      cause = result.error;
+      // Infinity once the tile is permanent (404/410/401/403) or has spent its
+      // attempts — either way there is nothing left to wait for. A permanent
+      // status therefore fails the load on the first response, without burning
+      // three requests on a URL that cannot start existing.
+      const wait = this.retry.waitMs(key);
+      if (!Number.isFinite(wait)) break;
+      // The wait is cut short by dispose() rather than slept out — otherwise a
+      // torn-down layer wakes up seconds later and issues another round of
+      // fetches against a renderer that no longer has a GL context.
+      if (wait > 0) await this.sleep(wait, this.lifetime.signal);
+      if (this.disposed) return;
+    }
+    throw new BaseTileLoadError(this.manifest.pano, face, cause);
   }
 
   /** Per-frame: pick the target level, cull, ensure visible tiles, evict. */
@@ -87,6 +239,7 @@ export class TileLayer {
     fwd: { x: number; y: number; z: number },
     viewportHeight: number,
   ): void {
+    if (this.disposed) return;
     this.clock++;
     const level = selectLevel(
       fovDeg,
@@ -111,7 +264,7 @@ export class TileLayer {
               // Cached and still wanted — refresh LRU stamp so eviction reflects
               // actual visibility, not upload/insertion order.
               entry.lastUsed = this.clock;
-            } else if (!this.inflight.has(key) && !this.failed.has(key)) {
+            } else if (!this.inflight.has(key) && this.retry.eligible(key)) {
               // tileVisible wrote the unit centre direction into midDir* — reuse
               // it for the load priority (smaller = closer to camera centre).
               const priority =
@@ -144,6 +297,14 @@ export class TileLayer {
 
     // Hide tiles finer than the current target level to prevent stale
     // higher-LOD tiles from drawing on top after a zoom-out.
+    //
+    // The converse is the coarse fallback, and it is why a hole can never show
+    // through: every *coarser* resident tile stays visible, drawList() emits
+    // them all and the renderer paints them low-level-first (sortDrawList in
+    // render/gl-renderer.ts, with depth testing off), so a finer tile that is
+    // absent simply leaves its ancestor's texels on screen. loadBase()
+    // guarantees the level-0 ancestor is resident and selectEvictions() never
+    // evicts it, so that floor always exists.
     for (const entry of this.cache.values()) {
       entry.visible = entry.level <= level;
     }
@@ -164,7 +325,17 @@ export class TileLayer {
   }
 
   private pump(): void {
+    // ensureTile()'s `finally` pumps unconditionally, and dispose() aborts
+    // every in-flight fetch at once — so without this guard a disposal frees
+    // maxConcurrent slots and drains whatever update() last queued into a
+    // fresh round of fetches that are downloaded and decoded only to be
+    // discarded.
+    if (this.disposed) return;
     while (this.inflight.size < this.maxConcurrent && this.queue.length > 0) {
+      // Global backoff: hold the queue intact rather than draining it into
+      // no-op ensureTile calls. update() rebuilds it next frame anyway, and
+      // the one probe the monitor allows is started from here too.
+      if (!this.monitor.canStart()) return;
       const next = this.queue.shift()!;
       if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
       void this.ensureTile(next.level, next.face, next.x, next.y);
@@ -215,15 +386,29 @@ export class TileLayer {
     return intersectsSphere(this.frustum, { cx, cy, cz, r: r * 1.05 });
   }
 
-  private async ensureTile(level: number, face: Face, x: number, y: number): Promise<void> {
+  private async ensureTile(
+    level: number,
+    face: Face,
+    x: number,
+    y: number,
+    exempt = false,
+  ): Promise<TileLoadOutcome> {
+    if (this.disposed) return { kind: 'aborted' };
     const key = tileKey(level, face, x, y);
-    if (this.cache.has(key) || this.inflight.has(key)) return;
+    if (this.cache.has(key)) return { kind: 'loaded' };
+    if (this.inflight.has(key)) return { kind: 'skipped' };
+    // Suppressed by the cross-panorama backoff — not a failure, and no attempt
+    // is spent, so the tile is re-queued unchanged once the window clears.
+    // Base tiles are exempt from suppression but not from reporting; see
+    // TileFailureMonitor.acquireExempt().
+    const permit = exempt ? this.monitor.acquireExempt() : this.monitor.acquire();
+    if (!permit) return { kind: 'skipped' };
     const url = tilePath(this.baseUrl, this.manifest.pano, level, face, x, y, this.manifest.format);
     const controller = new AbortController();
     this.inflight.set(key, controller);
     try {
       const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`tile ${res.status}`);
+      if (!res.ok) throw new TileHttpError(res.status);
       const blob = await res.blob();
       // flipY at decode time to match the previous Image-based orientation.
       const bitmap = await createImageBitmap(blob, {
@@ -231,7 +416,7 @@ export class TileLayer {
       });
       if (this.disposed) {
         bitmap.close();
-        return;
+        return { kind: 'aborted' };
       }
       const geom = buildTileGeometry(face, level, x, y);
       const handle = this.renderer.uploadTile(geom, bitmap);
@@ -243,15 +428,25 @@ export class TileLayer {
         level,
         visible: true,
       });
+      this.retry.recordSuccess(key);
+      this.monitor.succeed(permit);
       this.onInvalidate();
+      return { kind: 'loaded' };
     } catch (err) {
-      // Abort (from AbortController) is expected churn — leave re-queueable.
-      // Any other failure (missing, network, decode) is marked failed so the
-      // per-frame candidate builder never re-queues it; parent level is fallback.
-      if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        this.failed.add(key);
-      }
+      // Abort (from AbortController) is expected churn — leave re-queueable,
+      // spend no attempt and tell the monitor nothing. Everything else is
+      // classified: a permanent status (404/410/401/403) retires the tile for
+      // this load, a transient one costs an attempt and feeds the global
+      // failure monitor. Either way the coarser parent tile stays as fallback.
+      if (isAbortError(err)) return { kind: 'aborted' };
+      const failure = classifyFailure(err);
+      this.retry.recordFailure(key, failure);
+      this.monitor.fail(permit, this.manifest.pano, failure);
+      return { kind: 'failed', failure, error: err };
     } finally {
+      // No-op when succeed()/fail() already settled it; this covers the
+      // abort and disposed-mid-load paths, which must still free the probe.
+      this.monitor.release(permit);
       this.inflight.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
@@ -285,12 +480,20 @@ export class TileLayer {
 
   dispose(): void {
     this.disposed = true;
+    // Cuts short the base loader's retry wait; the fetches themselves are
+    // cancelled through their own controllers just below.
+    this.lifetime.abort();
+    // The queue is what pump() would otherwise drain the moment those aborts
+    // free their concurrency slots.
+    this.queue = [];
+    this.candidates.length = 0;
+    this.desired.clear();
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
     for (const e of this.cache.values()) {
       this.renderer.removeTile(e.handle);
     }
     this.cache.clear();
-    this.failed.clear();
+    this.retry.clear();
   }
 }

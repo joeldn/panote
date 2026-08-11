@@ -97,6 +97,19 @@ describe('makeJwksLoader', () => {
     expect(b).toEqual(keys);
     expect(c).toEqual(keys);
   });
+
+  it('forwards a custom timeoutMs to fetchJwks without disturbing caching', async () => {
+    // makeJwksLoader's 4th param threads through to fetchJwks's AbortSignal
+    // timeout. This only checks the wiring (a real signal reaches fetch) and
+    // that caching still collapses repeat calls to one fetch -- fetchJwks's
+    // own test suite (jwt.test.ts) covers the abort actually firing.
+    const loader = makeJwksLoader('https://issuer/', 1000, 60_000, 250);
+    await loader.get();
+    await loader.get();
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // still served from cache
+    const [, init] = fetchSpy.mock.calls[0] as [string, { signal?: AbortSignal }];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
 });
 
 describe('verifyWithRotation', () => {

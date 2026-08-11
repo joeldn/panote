@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { FACES, type Face, type Manifest, type TileFormat, tilesPerEdge } from '@panote/core';
 import { renderFace, type RgbImage } from './remap.js';
-import { assertPyramidBounds, computeFaceSize, computeMaxLevel } from './pyramid.js';
+import {
+  assertPyramidBounds,
+  computeFaceSize,
+  computeMaxLevel,
+  MAX_INPUT_PIXELS,
+} from './pyramid.js';
 
 export interface BuildOptions {
   src: string;
@@ -34,8 +39,34 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
   if (!/^[A-Za-z0-9_-]+$/.test(opts.pano))
     throw new Error(`pano must match /^[A-Za-z0-9_-]+$/ (got ${opts.pano})`);
 
+  // BuildOptions exposes maxSize/quality/format as public API with defaults,
+  // but only tileSize was actually checked (via assertPyramidBounds below).
+  // Validate the rest here too, up front, so a bad value fails loudly and
+  // fast instead of producing undefined behaviour (a non-integer maxSize
+  // feeding computeFaceSize's Math.log2/pow2 math) or a corrupt manifest
+  // (an out-of-range quality, or a format @panote/core's parseManifest
+  // would reject on read) — the tiler must not be able to emit a pyramid
+  // its own reader would refuse.
+  if (!Number.isFinite(quality) || quality <= 0 || quality > 100)
+    throw new Error(`quality must be a finite number in (0, 100] (got ${quality})`);
+  if (fmt !== 'jpg' && fmt !== 'webp')
+    throw new Error(`format must be 'jpg' or 'webp' (got ${String(fmt)})`);
+  if (opts.maxSize !== undefined && (!Number.isInteger(opts.maxSize) || opts.maxSize <= 0))
+    throw new Error(`maxSize must be a positive integer (got ${opts.maxSize})`);
+
   const meta = await sharp(opts.src).metadata();
   if (!meta.width || !meta.height) throw new Error('source has no dimensions');
+  // Enforced before the raw RGB decode below, not after: MAX_FACE_SIZE (via
+  // computeFaceSize/assertPyramidBounds) only bounds the pyramid's *output*
+  // face size, not this decode. sharp(opts.src).removeAlpha().raw() decodes
+  // the source at its *native* resolution regardless of any output cap, so
+  // decode memory scales with meta.width * meta.height, not with faceSize.
+  // See MAX_INPUT_PIXELS's doc comment in pyramid.ts for why this is a real
+  // check rather than relying on the deployed backend's byte-based cap.
+  if (meta.width * meta.height > MAX_INPUT_PIXELS)
+    throw new Error(
+      `source is ${meta.width}x${meta.height} (${meta.width * meta.height} px), which exceeds the ${MAX_INPUT_PIXELS}px decode cap`,
+    );
 
   const faceSize = computeFaceSize(meta.width, tileSize, opts.maxSize);
   const maxLevel = computeMaxLevel(faceSize, tileSize);

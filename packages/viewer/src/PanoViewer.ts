@@ -8,6 +8,7 @@ import {
   type Mat4,
 } from './render/projection.js';
 import { TileLayer } from './tile-layer.js';
+import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
 import { Emitter } from './emitter.js';
@@ -21,6 +22,14 @@ export class PanoViewer implements ControlHost {
   private emitter = new Emitter<PanoViewerEvents>();
   private controls?: Controls;
   private layer: TileLayer | undefined;
+  // Layers still loading their base. Until a layer's base is resident it is not
+  // assigned to `this.layer`, so without this set dispose() cannot reach it:
+  // its `disposed` flag stays false, every guard inside it is dead code, and
+  // its fetches keep running (and retrying, and uploading) against a renderer
+  // whose WebGL context is already gone. A set, not a field, because load() can
+  // legitimately be in flight more than once — a superseded load is still
+  // holding a layer that has to be torn down.
+  private pendingLayers = new Set<TileLayer>();
   private raf = 0;
   private dirty = true;
   private wasPending = false;
@@ -34,6 +43,7 @@ export class PanoViewer implements ControlHost {
   private renderCbs = new Set<(view: View) => void>();
   private home: View;
   private transitionOverlay: HTMLDivElement | undefined;
+  private resizeObserver: ResizeObserver | undefined;
   // The view-projection matrix for the frame currently being drawn.
   private viewProj: Mat4;
 
@@ -41,15 +51,22 @@ export class PanoViewer implements ControlHost {
     private container: HTMLElement,
     options: ViewerOptions = {},
   ) {
+    const maxPixelRatio = options.maxPixelRatio ?? 2;
     this.opts = {
       baseUrl: options.baseUrl ?? '/tiles/',
       minFov: options.minFov ?? 15,
       maxFov: options.maxFov ?? 80,
       maxHorizontalFov: options.maxHorizontalFov ?? 100,
-      textureBudgetMB: options.textureBudgetMB ?? 128,
+      // Only the default scales with the display: a caller who names a budget
+      // is naming an absolute one, and gets exactly that. See texture-budget.ts
+      // for why the scale is linear in the pixel ratio and capped. Read once,
+      // here, so every panorama this viewer loads shares one budget — a window
+      // dragged to a different-DPR monitor keeps the budget it was built with.
+      textureBudgetMB:
+        options.textureBudgetMB ?? defaultTextureBudgetMB(window.devicePixelRatio, maxPixelRatio),
       damping: options.damping ?? 0.25,
       momentumFriction: options.momentumFriction ?? 0.9,
-      maxPixelRatio: options.maxPixelRatio ?? 2,
+      maxPixelRatio,
       antialias: options.antialias ?? false,
       maxConcurrent: options.maxConcurrent ?? 8,
       transitionMs: options.transitionMs ?? 400,
@@ -67,6 +84,15 @@ export class PanoViewer implements ControlHost {
     this.renderer.resize(container.clientWidth || 1, container.clientHeight || 1);
     this.viewProj = viewProjection(this.view, this.aspect(), this.opts.maxHorizontalFov);
     window.addEventListener('resize', this.onResize);
+    // window's resize event only fires on the browser viewport changing size,
+    // not on the container itself being resized by layout — flex/grid
+    // reflow, a sidebar toggling, display:none → visible, splitter panes.
+    // ResizeObserver catches those too so the canvas doesn't get left at a
+    // stale size/pixel ratio.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(this.onResize);
+      this.resizeObserver.observe(container);
+    }
     this.loop();
   }
 
@@ -105,12 +131,10 @@ export class PanoViewer implements ControlHost {
 
     const res = await fetch(manifestUrl(this.opts.baseUrl, pano));
     if (this.disposed || token !== this.loadToken) return;
+    if (!res.ok) throw new Error(`manifest ${res.status}`);
 
     const manifest = parseManifest(await res.json());
     if (this.disposed || token !== this.loadToken) return;
-
-    this.layer?.dispose();
-    this.layer = undefined;
 
     const layer = new TileLayer(
       this.renderer,
@@ -122,13 +146,41 @@ export class PanoViewer implements ControlHost {
       },
       this.opts.maxConcurrent,
     );
-    await layer.loadPreview();
 
+    // Blocking: the panorama is not loaded until its low-resolution base is.
+    // The six level-0 tiles are one per cube face, so together they are the
+    // whole panorama at its coarsest — with them resident every direction has a
+    // texture, and a high-resolution tile that fails or is missing degrades to
+    // soft detail rather than to a black patch. A partial load would ship that
+    // guarantee as a maybe, so a base that cannot be fetched is fatal here.
+    this.pendingLayers.add(layer);
+    try {
+      await layer.loadBase();
+    } catch (err) {
+      this.pendingLayers.delete(layer);
+      layer.dispose();
+      // A superseded or disposed load is not this caller's failure to hear
+      // about — the load that replaced it owns the outcome.
+      if (this.disposed || token !== this.loadToken) return;
+      throw err;
+    }
+    this.pendingLayers.delete(layer);
+
+    // Disposed under this load: dispose() has already torn the layer down, so
+    // this resolves quietly. Rejecting would be defensible too, but every other
+    // disposed/superseded exit above returns, and a caller that disposed the
+    // viewer is not waiting to be told the load it abandoned did not finish.
     if (this.disposed || token !== this.loadToken) {
       layer.dispose();
       return;
     }
 
+    // The outgoing panorama is only torn down now that the incoming one can
+    // actually be drawn. Disposing it before the base was resident would blank
+    // the viewer for the length of the fetch, and would leave it blank for good
+    // if the fetch failed; this way a rejected load leaves exactly what was on
+    // screen before it was called.
+    this.layer?.dispose();
     this.layer = layer;
     this.home = {
       yaw: this.target.yaw,
@@ -258,7 +310,16 @@ export class PanoViewer implements ControlHost {
     this.viewProj = viewProjection(this.view, aspect, this.opts.maxHorizontalFov);
     this.renderer.setCamera(this.viewProj);
     const fwd = dirFromYawPitch(this.view.yaw, this.view.pitch);
-    this.layer?.update(this.viewProj, vfovDeg, fwd, this.container.clientHeight || 1);
+    // selectLevel()'s math (see packages/core/src/lod.ts) compares texel
+    // density against what is actually rasterised, so it needs the
+    // framebuffer's device-pixel height, not the container's CSS-pixel
+    // clientHeight — the renderer sizes the canvas by devicePixelRatio (see
+    // gl-renderer.ts's resize()), so on any DPR>1 display clientHeight alone
+    // under-counts the real pixel budget and the pyramid picks one level
+    // coarser than the screen can show. this.renderer.canvas.height is the
+    // already-DPR-scaled raster height, so it's used directly here instead
+    // of re-deriving devicePixelRatio.
+    this.layer?.update(this.viewProj, vfovDeg, fwd, this.renderer.canvas.height || 1);
 
     const pending = this.layer?.hasPending() ?? false;
     if (this.wasPending && !pending) this.emitter.emit('tiles-settled', undefined);
@@ -355,7 +416,12 @@ export class PanoViewer implements ControlHost {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.onResize);
+    this.resizeObserver?.disconnect();
     this.controls?.dispose();
+    // Pending layers first: they are the ones with fetches still in flight, and
+    // they must stop before the renderer's GL context is destroyed below.
+    for (const pending of this.pendingLayers) pending.dispose();
+    this.pendingLayers.clear();
     this.layer?.dispose();
     this.hotspots.clear();
     this.renderCbs.clear();
