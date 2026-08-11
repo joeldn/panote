@@ -330,14 +330,12 @@ describe('TileLayer failure handling', () => {
 
   it('leaves an aborted in-flight load fully re-queueable', async () => {
     const layer = makeLayer();
-    let release: (() => void) | undefined;
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init: { signal: AbortSignal }) => {
         requests.push(url);
         return new Promise((_resolve, reject) => {
           init.signal.addEventListener('abort', () => {
-            release = undefined;
             reject(new DOMException('aborted', 'AbortError'));
           });
         });
@@ -345,16 +343,25 @@ describe('TileLayer failure handling', () => {
     );
 
     frame(layer, 0);
-    const started = requests.length;
-    expect(started).toBeGreaterThan(0);
+    // The exact tiles that are about to be aborted — identity, not a count.
+    // A count alone proves nothing here: maxConcurrent (8) is smaller than the
+    // candidate set, so eight brand-new tiles would satisfy it just as well as
+    // the eight that were cancelled.
+    const abortedTiles = [...requests];
+    expect(abortedTiles.length).toBeGreaterThan(0);
     frame(layer, Math.PI); // pans away — update() aborts what is no longer wanted
     await flush();
-    expect(release).toBeUndefined();
 
-    // No attempt spent, no evidence recorded: the tiles come straight back.
+    // No attempt spent, no cooldown started, no evidence recorded: *these*
+    // tiles come straight back. If an abort burned a retry attempt they would
+    // be held off by their per-tile cooldown and the next-best candidates
+    // would be fetched in their place, which is the same count and the wrong
+    // tiles.
     requests = [];
     frame(layer, 0);
-    expect(requests).toHaveLength(started);
+    await flush();
+    expect(new Set(requests)).toEqual(new Set(abortedTiles));
+    expect(requests).toHaveLength(abortedTiles.length);
     expect(monitor.escalationLevel).toBe(0);
     layer.dispose();
   });

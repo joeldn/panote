@@ -41,8 +41,10 @@ type TileLoadOutcome =
 /**
  * A level-0 tile could not be loaded, so the panorama has no low-resolution
  * base and the load fails. `cause` carries the underlying rejection (a
- * `TileHttpError`, a fetch `TypeError`, a decode error) for callers that want
- * to distinguish "the origin is down" from "this panorama is not published".
+ * `TileHttpError` — exported from the package entry point alongside this class,
+ * so the check is an `instanceof` and not a string match — a fetch `TypeError`,
+ * or a decode error) for callers that want to distinguish "the origin is down"
+ * from "this panorama is not published".
  *
  * `permanent` is that distinction pre-classified: `true` for a 404/410/401/403
  * (retrying cannot help — the panorama is not published, or not accessible to
