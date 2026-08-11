@@ -19,7 +19,11 @@ export const authenticate = async (req: Request, env: AuthEnv): Promise<AuthCont
   const testVerify = globalThis.__verifyJwt;
 
   try {
-    if (testVerify) return await testVerify(bearer);
+    // The seam is a production auth backdoor unless it is explicitly opted into.
+    // env.TEST_JWT_SEAM is never present in wrangler.jsonc (it is injected only
+    // via the vitest pool's miniflare bindings), so this condition is always
+    // false outside tests. See the port spec section 0.8.
+    if (env.TEST_JWT_SEAM === 'enabled' && testVerify) return await testVerify(bearer);
     jwks ??= makeJwksLoader(env.OAUTH_ISSUER);
     return await verifyWithRotation(bearer, {
       issuer: env.OAUTH_ISSUER,

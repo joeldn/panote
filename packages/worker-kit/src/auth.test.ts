@@ -5,9 +5,14 @@ import { UnauthorizedError } from './errors.js';
 import { setTestJwtVerifier } from './testing.js';
 import type { AuthEnv } from './env.js';
 
+// TEST_JWT_SEAM: 'enabled' is the opt-in the seam-guard commit added - without
+// it, authenticate() must ignore globalThis.__verifyJwt entirely. Most tests in
+// this file exercise the seam itself, so they opt in here; the dedicated
+// "backdoor" describe block below builds its own env without the flag.
 const env: AuthEnv = {
   OAUTH_ISSUER: 'https://issuer.example/',
   OAUTH_AUDIENCE: 'https://api.example',
+  TEST_JWT_SEAM: 'enabled',
 };
 
 const reqWithAuth = (value?: string): Request =>
@@ -91,5 +96,29 @@ describe('the __verifyJwt seam is read at call time, not at module-import time',
     await expect(authenticate(reqWithAuth('Bearer good'), env)).resolves.toEqual({
       sub: 'auth0|seam-timing',
     });
+  });
+});
+
+// The security-regression test for the backdoor guard - mandatory per port spec
+// section 2.6 ("after commit 12 only"). Without env.TEST_JWT_SEAM === 'enabled',
+// authenticate() must ignore globalThis.__verifyJwt entirely and fall through to
+// real JWKS verification, even when a verifier that WOULD grant access is
+// installed. This is deliberately the same env shape a real deployment has:
+// TEST_JWT_SEAM is never set in any wrangler.jsonc.
+describe('the __verifyJwt seam is inert without env.TEST_JWT_SEAM (backdoor guard)', () => {
+  const envWithoutSeamOptIn: AuthEnv = {
+    OAUTH_ISSUER: 'https://issuer.example/',
+    OAUTH_AUDIENCE: 'https://api.example',
+  };
+
+  it('rejects, attempting real JWKS verification, even though a granting verifier is installed', async () => {
+    setTestJwtVerifier(async () => ({ sub: 'auth0|should-never-be-returned' }));
+    // The issuer above is unreachable in this test environment, so if the guard
+    // is doing its job, this falls through to makeJwksLoader/verifyWithRotation,
+    // that fetch fails, and the failure is mapped to UnauthorizedError - not to
+    // the identity the installed seam would have handed back.
+    const promise = authenticate(reqWithAuth('Bearer good'), envWithoutSeamOptIn);
+    await expect(promise).rejects.toBeInstanceOf(UnauthorizedError);
+    await expect(promise).rejects.toMatchObject({ status: 401 });
   });
 });

@@ -12,6 +12,10 @@ export default defineWorkerTestConfig({
       bindings: {
         R2_ACCESS_KEY_ID: 'test-access-key-id',
         R2_SECRET_ACCESS_KEY: 'test-secret-access-key',
+        // Opt-in for @internal/worker-kit's globalThis.__verifyJwt test seam -
+        // see auth.ts. NEVER set this in wrangler.jsonc; it must stay confined to
+        // the test-only miniflare bindings above.
+        TEST_JWT_SEAM: 'enabled',
       },
     },
   },
