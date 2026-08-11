@@ -1,5 +1,6 @@
 import {
   configKey,
+  decUser,
   panoPrefix,
   SceneConfigSchema,
   TourDocSchema,
@@ -17,7 +18,10 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get('/api/admin/panos', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
-  const panoIds = await listChildren(c.env.BUCKET, userPanosPrefix(sub));
+  // listChildren() returns the raw (encUser-encoded) key segments; decode them
+  // back to what the caller originally passed to PUT /panos/:panoId/config so
+  // the id round-trips rather than coming back double-encoded next time.
+  const panoIds = (await listChildren(c.env.BUCKET, userPanosPrefix(sub))).map(decUser);
   return c.json({ panoIds });
 });
 
