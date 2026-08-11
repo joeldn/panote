@@ -1,0 +1,229 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # Weekly canary. Every version in this repo is pinned exactly and installed
+  # with --frozen-lockfile, so a scheduled run installs byte-identical
+  # dependencies - the point is everything around them that changes without the
+  # lockfile changing: the workerd binary that @cloudflare/vitest-pool-workers
+  # downloads, the runner image, the Node 24 patch release, and the
+  # `wrangler types` output. This is what catches the vitest 4 /
+  # vitest-pool-workers 0.20.3 pairing breaking without anyone opening a PR.
+  schedule:
+    - cron: '17 19 * * 1'
+  workflow_dispatch:
+
+# Supersede in-flight runs for the same PR, but never cancel a run on main - a
+# push to main is the record of whether that commit is good, and a later push
+# must not erase it.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege by default. Only the coverage job widens this, and only to
+# pull-requests: write, for its comment.
+permissions:
+  contents: read
+
+env:
+  # Turbo's cache is bypassed in CI, deliberately. Locally, `pnpm test`
+  # reported stale green results until it was run with --force, which means the
+  # task input hashes do not capture everything the tasks actually read. A CI
+  # run that reports success out of a cache it should have missed is worse than
+  # having no CI, so every task is executed for real on every run. This costs
+  # about a minute; the full gate runs in ~70s of task time locally. Nothing
+  # here configures a remote cache, so the cache would be cold on a fresh
+  # runner for most tasks anyway - the saving being given up is small and the
+  # failure mode being avoided is silent.
+  TURBO_FORCE: true
+  TURBO_TELEMETRY_DISABLED: 1
+  DO_NOT_TRACK: 1
+  # `wrangler types` is the only wrangler command CI runs. No Cloudflare
+  # credentials are used anywhere in this workflow and none are needed;
+  # deployment is Wave 5's job.
+  WRANGLER_SEND_METRICS: false
+  # Keeps actions that still declare the node20 runtime executing on node24 as
+  # GitHub retires node20.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # The documented local gate, in the documented order, in one job. Splitting
+  # it further would mean re-running `pnpm install` and the turbo `^build`
+  # prerequisite once per job for tasks that take seconds each.
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Every workspace's lint script passes --max-warnings 0, so a warn-level
+      # rule (no-console and friends) fails this step exactly like an error.
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      # prettier --check over the whole repo. Markdown is excluded in
+      # .prettierignore on purpose; so are the generated wrangler type files.
+      - name: Format check
+        run: pnpm format:check
+
+  # Generated-artifact drift gate. Five workspaces commit files that a tool
+  # emits: packages/worker-kit/src/worker-configuration.d.ts (the shared
+  # workerd runtime types) and services/*/env.d.ts (per-Worker bindings). They
+  # are committed rather than gitignored so a cold clone type-checks and so
+  # binding changes are visible in review - which only holds if the committed
+  # copy is what the tool actually produces today.
+  generated-types:
+    name: Generated types drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+
+      # No build step: `wrangler types` reads wrangler.jsonc and the source
+      # entrypoint path, it does not compile anything, so it runs against a
+      # bare install. This runs in every workspace defining the script and
+      # skips the rest.
+      #
+      # --if-present is load-bearing: without it, pnpm exits 1 with
+      # ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT when NO workspace defines the script,
+      # which is exactly the state of main until the Workers land. The gate
+      # would then fail on a repo that has nothing to drift.
+      - name: Regenerate Worker types
+        run: pnpm --recursive --if-present run types
+
+      # The checkout is pristine, so anything the regeneration changed - or any
+      # new file it created - is drift between the committed artifact and the
+      # tool. The check is repo-wide rather than a path list so that a new
+      # Worker added later is covered without anyone remembering to edit this.
+      - name: Fail if the committed types drifted
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo '::error::Generated Worker types are out of date. Run "pnpm -r run types" and commit the result.'
+            echo '--- git status --porcelain ---'
+            git status --porcelain
+            echo '--- git diff ---'
+            git --no-pager diff
+            exit 1
+          fi
+          echo 'Committed Worker types match what wrangler types emits.'
+
+  # Runs in parallel with `gate`, not after it. `pnpm test:coverage` is a
+  # superset of `pnpm test` for the Node-side packages (same tests, plus
+  # instrumentation and the per-package thresholds) and identical to it for the
+  # workerd packages, so this job is what enforces the thresholds while `gate`
+  # is what reproduces the documented local command.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+
+      # Fails on its own if any package misses the thresholds declared in its
+      # vitest.config.ts (90/85/90/90 in core, tiler, viewer and worker-kit).
+      - name: Test with coverage
+        run: pnpm test:coverage
+
+      # Built even when the step above failed, so a threshold miss still gets a
+      # table showing which package missed and by how much.
+      - name: Build coverage comment
+        if: ${{ !cancelled() }}
+        run: node .github/scripts/coverage-summary.mjs > coverage-comment.md
+
+      # Skipped for pull requests from forks: those get a read-only
+      # GITHUB_TOKEN, and a 403 on a comment must not be what fails the
+      # coverage job.
+      - name: Post coverage comment
+        if: >-
+          ${{ !cancelled()
+          && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- panote:coverage -->';
+            const body = fs.readFileSync('coverage-comment.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            // Match on the HTML marker the generator emits, not on a heading,
+            // so editing the wording never orphans the existing comment.
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  # Conventional Commits, enforced against commitlint.config.ts. This repo
+  # squash-merges with squash_merge_commit_message: COMMIT_MESSAGES, so every
+  # commit message on the branch is copied into the body of the commit that
+  # lands on main - a bad message is not discarded by the squash, it is
+  # preserved in main's history. The PR title is checked too because it becomes
+  # the squash commit's subject line.
+  commit-messages:
+    name: Commit messages
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 - commitlint walks the base..head range with git log, so
+      # a shallow clone would not contain the commits to lint.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup
+
+      # Not --strict. commitlint.config.ts sets scope-enum to Warning on
+      # purpose; --strict would promote that to a failure and change a
+      # deliberate decision behind its author's back.
+      - name: Lint commit messages on this branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pnpm exec commitlint --from "$BASE_SHA" --to "$HEAD_SHA" --verbose
+
+      # Via an env var, never interpolated into the script body: a PR title is
+      # attacker-controlled text and `${{ }}` inside a run block is a shell
+      # injection.
+      - name: Lint the pull request title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s' "$PR_TITLE" | pnpm exec commitlint --verbose

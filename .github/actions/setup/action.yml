@@ -1,0 +1,33 @@
+name: Setup toolchain
+description: >-
+  Install pnpm, Node and the workspace dependencies. Every version comes from a
+  file that is already the single source of truth in this repo: pnpm from the
+  root package.json "packageManager" field, Node from .nvmrc, dependencies from
+  pnpm-lock.yaml. Nothing here hardcodes a version.
+
+runs:
+  using: composite
+  steps:
+    # No `version:` input on purpose. pnpm/action-setup reads the exact version
+    # out of the root package.json "packageManager" field (pnpm@11.20.0), so CI
+    # and a developer's Corepack shell cannot drift apart. Passing a version
+    # here as well is an error in this action when the two disagree.
+    - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+
+    # Must come after pnpm/action-setup: `cache: pnpm` shells out to
+    # `pnpm store path`, so pnpm has to already be on PATH. The cache is keyed
+    # on pnpm-lock.yaml, which is exactly the input --frozen-lockfile installs
+    # from, so a lockfile change invalidates it and nothing else does.
+    - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      with:
+        node-version-file: .nvmrc
+        cache: pnpm
+
+    # --frozen-lockfile is the install governance gate. If pnpm-lock.yaml does
+    # not agree with every workspace manifest - a catalog entry added without
+    # its consumer, a dependency added without regenerating the lockfile - this
+    # fails instead of silently resolving something new. It also means
+    # catalogMode/savePrefix/minimumReleaseAge cannot be bypassed by CI.
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile
