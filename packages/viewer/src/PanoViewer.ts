@@ -8,6 +8,7 @@ import {
   type Mat4,
 } from './render/projection.js';
 import { TileLayer } from './tile-layer.js';
+import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
 import { Emitter } from './emitter.js';
@@ -50,15 +51,22 @@ export class PanoViewer implements ControlHost {
     private container: HTMLElement,
     options: ViewerOptions = {},
   ) {
+    const maxPixelRatio = options.maxPixelRatio ?? 2;
     this.opts = {
       baseUrl: options.baseUrl ?? '/tiles/',
       minFov: options.minFov ?? 15,
       maxFov: options.maxFov ?? 80,
       maxHorizontalFov: options.maxHorizontalFov ?? 100,
-      textureBudgetMB: options.textureBudgetMB ?? 128,
+      // Only the default scales with the display: a caller who names a budget
+      // is naming an absolute one, and gets exactly that. See texture-budget.ts
+      // for why the scale is linear in the pixel ratio and capped. Read once,
+      // here, so every panorama this viewer loads shares one budget — a window
+      // dragged to a different-DPR monitor keeps the budget it was built with.
+      textureBudgetMB:
+        options.textureBudgetMB ?? defaultTextureBudgetMB(window.devicePixelRatio, maxPixelRatio),
       damping: options.damping ?? 0.25,
       momentumFriction: options.momentumFriction ?? 0.9,
-      maxPixelRatio: options.maxPixelRatio ?? 2,
+      maxPixelRatio,
       antialias: options.antialias ?? false,
       maxConcurrent: options.maxConcurrent ?? 8,
       transitionMs: options.transitionMs ?? 400,

@@ -152,6 +152,93 @@ describe('PanoViewer', () => {
     });
   });
 
+  describe('device-pixel-ratio-aware texture budget', () => {
+    // The other half of the DPR fix. Selecting levels from device pixels means
+    // a DPR-2 display holds four times as many tiles on screen, against a
+    // budget that was calibrated when it held one quarter as many — so the
+    // default budget scales with the ratio too (capped; see texture-budget.ts).
+    // A caller-supplied budget is absolute and is passed through untouched.
+    const manifest = {
+      pano: 'pano-a',
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: [...FACES],
+      quality: 82,
+      format: 'jpg',
+    };
+
+    /** Stub a host whose display reports `dpr`, with every fetch succeeding. */
+    function stubDisplay(dpr: number | undefined): void {
+      vi.stubGlobal('window', {
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        matchMedia: vi.fn(() => ({ matches: false })),
+        ...(dpr === undefined ? {} : { devicePixelRatio: dpr }),
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) =>
+          Promise.resolve(
+            url.endsWith('manifest.json')
+              ? { ok: true, status: 200, json: () => Promise.resolve(manifest) }
+              : { ok: true, status: 200, blob: () => Promise.resolve({}) },
+          ),
+        ),
+      );
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => Promise.resolve({ close: vi.fn() })),
+      );
+    }
+
+    /**
+     * The budget as the tile layer actually received it, in tiles. This
+     * manifest's tileSize is 512, so one tile is 512 * 512 * 4 = 1 MiB and the
+     * tile count equals the budget in MB — the layer having the right number of
+     * them is the only thing the budget is for.
+     */
+    async function loadedMaxTiles(viewer: PanoViewer): Promise<number> {
+      await viewer.load('pano-a');
+      return (viewer as unknown as { layer: { maxTiles: number } }).layer.maxTiles;
+    }
+
+    it('doubles the default budget on a devicePixelRatio-2 display', async () => {
+      stubDisplay(2);
+      const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(256);
+      viewer.dispose();
+    });
+
+    it('leaves the default budget alone when the host reports no pixel ratio', async () => {
+      stubDisplay(undefined);
+      const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(128);
+      viewer.dispose();
+    });
+
+    it('does not scale past the cap on a devicePixelRatio-3 display', async () => {
+      stubDisplay(3);
+      const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(256);
+      viewer.dispose();
+    });
+
+    it('honours an explicit textureBudgetMB exactly, scaling it neither up nor down', async () => {
+      // A caller who names a budget is naming an absolute one: it is not
+      // multiplied by the pixel ratio, and it is not clamped to the cap the
+      // default is subject to.
+      stubDisplay(2);
+      const small = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 64 });
+      expect(await loadedMaxTiles(small)).toBe(64);
+      small.dispose();
+
+      const large = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 512 });
+      expect(await loadedMaxTiles(large)).toBe(512);
+      large.dispose();
+    });
+  });
+
   describe('resize observation', () => {
     it('observes the container with a ResizeObserver and disconnects it on dispose', () => {
       vi.stubGlobal('ResizeObserver', FakeResizeObserver);

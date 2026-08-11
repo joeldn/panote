@@ -11,7 +11,12 @@ export interface ViewerOptions {
   minFov?: number; // default 15 (vertical, degrees)
   maxFov?: number; // default 80 (vertical, degrees)
   maxHorizontalFov?: number; // default 100 — caps horizontal fov so wide screens don't over-stretch
-  textureBudgetMB?: number; // default 128
+  // Resident tile textures, in MB of base-level RGBA. Defaults to 128 on a
+  // devicePixelRatio-1 display and scales linearly with the ratio the viewer
+  // renders at, capped at 2x (256) — a finer display selects a finer pyramid
+  // level and so needs more tiles resident to pan without re-decoding them.
+  // An explicit value is absolute: it is used as given, unscaled and uncapped.
+  textureBudgetMB?: number;
   initialView?: Partial<View>; // fov defaults to 70 (vertical, degrees)
   damping?: number; // 0..1 per-frame camera easing toward target; 1 = instant. default 0.25
   momentumFriction?: number; // 0..1 per-frame decay of release inertia; higher = longer glide. default 0.9
