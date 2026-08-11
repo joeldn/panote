@@ -21,11 +21,15 @@ export function tilePath(
   y: number,
   format: TileFormat = 'jpg',
 ): string {
-  return `${baseUrl}${pano}/${level}/${face}/${x}-${y}.${format}`;
+  // baseUrl is a base URL, not a path segment - it must not be encoded, or a
+  // scheme/host/existing path would be mangled. pano and face are untrusted
+  // path segments and are encoded individually so neither can inject an
+  // extra "/" (or other URL-significant character) into the resulting path.
+  return `${baseUrl}${encodeURIComponent(pano)}/${level}/${encodeURIComponent(face)}/${x}-${y}.${format}`;
 }
 
 export function manifestUrl(baseUrl: string, pano: string): string {
-  return `${baseUrl}${pano}/manifest.json`;
+  return `${baseUrl}${encodeURIComponent(pano)}/manifest.json`;
 }
 
 // These bounds are derived, not provisional guesses — see docs/decisions.md.
@@ -46,6 +50,18 @@ export const ALLOWED_TILE_SIZES = [512, 1024] as const;
 export const MAX_FACE_SIZE = 16384;
 export const MAX_LEVEL_CAP = 5;
 
+// Mirrors the write-time check the tiler enforces on opts.pano (see
+// packages/tiler/src/build.ts, commit 6b8c363). Every legitimate pano is a
+// developer-typed slug or a generated id and already satisfies this, so
+// enforcing it here too is a read-time backstop: it rejects a manifest whose
+// pano diverges from what the tiler would ever have written (e.g. one
+// containing "/" or ".."), before that value is ever interpolated into a
+// tile URL by tilePath()/manifestUrl(). encodeURIComponent below still runs
+// regardless, so a pano that somehow bypassed this (a future relaxation of
+// the pattern) still can't break the URL structure - this is defence in
+// depth, not the only guard.
+const PANO_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 export function parseManifest(raw: unknown): Manifest {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('manifest must be an object');
@@ -58,6 +74,7 @@ export function parseManifest(raw: unknown): Manifest {
   const pano = m.pano;
   if (typeof pano !== 'string' || pano.trim().length === 0)
     throw new Error('manifest.pano must be a non-empty string');
+  if (!PANO_PATTERN.test(pano)) throw new Error('manifest.pano must match /^[A-Za-z0-9_-]+$/');
   const faceSize = num('faceSize');
   const tileSize = num('tileSize');
   const maxLevel = num('maxLevel');
@@ -77,7 +94,16 @@ export function parseManifest(raw: unknown): Manifest {
   if (faceSize !== tileSize * 2 ** maxLevel) {
     throw new Error('manifest.faceSize must equal tileSize * 2^maxLevel');
   }
-  if (!Array.isArray(m.faces) || m.faces.join(',') !== FACES.join(',')) {
+  // Compared element-wise (not via a joined-string comparison) so that a
+  // single-element array like ['px,nx,py,ny,pz,nz'] - which joins to the
+  // exact same string as the real FACES array - is correctly rejected
+  // instead of passing as a false positive.
+  const faces = m.faces;
+  if (
+    !Array.isArray(faces) ||
+    faces.length !== FACES.length ||
+    !FACES.every((face, i) => faces[i] === face)
+  ) {
     throw new Error(`manifest.faces must equal ${FACES.join(',')}`);
   }
   const rawFormat = m.format ?? 'jpg';

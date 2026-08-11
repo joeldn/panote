@@ -19,6 +19,23 @@ describe('manifestUrl', () => {
   });
 });
 
+describe('URL segment encoding', () => {
+  it('encodes a pano containing characters that are unsafe in a URL', () => {
+    expect(tilePath('/tiles/', 'my pano', 2, 'px', 1, 3)).toBe('/tiles/my%20pano/2/px/1-3.jpg');
+    expect(manifestUrl('/tiles/', 'my pano')).toBe('/tiles/my%20pano/manifest.json');
+  });
+
+  it('encodes a face segment containing characters that are unsafe in a URL', () => {
+    expect(tilePath('/tiles/', 'church', 2, 'p x', 1, 3)).toBe('/tiles/church/2/p%20x/1-3.jpg');
+  });
+
+  it('does not encode baseUrl, only the interpolated segments', () => {
+    expect(tilePath('https://cdn.example.com/tiles/', 'church', 0, 'px', 0, 0)).toBe(
+      'https://cdn.example.com/tiles/church/0/px/0-0.jpg',
+    );
+  });
+});
+
 describe('parseManifest', () => {
   const valid = {
     pano: 'church',
@@ -61,6 +78,21 @@ describe('parseManifest', () => {
     expect(() => parseManifest({ ...valid, faces: ['px'] })).toThrow();
   });
 
+  it('rejects a single-element faces array that joins to the same string as the real list', () => {
+    // Regression: the old check compared m.faces.join(',') to FACES.join(','),
+    // so a single-element array containing the pre-joined string passed
+    // validation without matching the FACES array element-wise.
+    expect(() => parseManifest({ ...valid, faces: ['px,nx,py,ny,pz,nz'] })).toThrow(
+      /manifest\.faces/,
+    );
+  });
+
+  it('rejects a faces array with the right values in the wrong order', () => {
+    expect(() => parseManifest({ ...valid, faces: ['nx', 'px', 'py', 'ny', 'pz', 'nz'] })).toThrow(
+      /manifest\.faces/,
+    );
+  });
+
   it('throws for zero tileSize', () => {
     expect(() => parseManifest({ ...valid, tileSize: 0, faceSize: 0 })).toThrow();
   });
@@ -87,6 +119,22 @@ describe('parseManifest', () => {
 
   it('throws for a blank/whitespace-only pano string', () =>
     expect(() => parseManifest({ ...valid, pano: '   ' })).toThrow());
+
+  it('throws for a pano containing a character that would need URL-encoding', () => {
+    // A pano that diverges from the tiler's write-time pattern
+    // (/^[A-Za-z0-9_-]+$/, see packages/tiler/src/build.ts) must be rejected
+    // at read time too, rather than being silently encoded downstream by
+    // tilePath()/manifestUrl().
+    expect(() => parseManifest({ ...valid, pano: 'my pano' })).toThrow(/manifest\.pano/);
+  });
+
+  it('throws for a pano containing a path separator', () => {
+    expect(() => parseManifest({ ...valid, pano: 'a/b' })).toThrow(/manifest\.pano/);
+  });
+
+  it('accepts a pano with underscores and hyphens', () => {
+    expect(() => parseManifest({ ...valid, pano: 'church-tower_2' })).not.toThrow();
+  });
 
   it('rejects a tiny tileSize even though faceSize/maxLevel are internally consistent', () => {
     // tileSize=1 with a small maxLevel drives selectLevel() to a huge grid
