@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "The container entrypoint runs on Node inside the image, not in workerd, so it extends base.json (types: [node]) and EMITS dist/. The Dockerfile runs `node dist/container.js`. r2io.ts is listed in both projects on purpose: it is pure and is shared by the container and the tests. NOTE: container.ts is type-checked ONLY by `build` (tsc -b tsconfig.container.json), never by `typecheck` - the package's tsconfig.json deliberately excludes it because it targets Node, not workerd. Do not wire it into typecheck too.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/container.ts", "src/r2io.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

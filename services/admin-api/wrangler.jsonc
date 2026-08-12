@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Deploys REQUIRE an environment: `wrangler deploy --env dev|production`.
+  // Wrangler does NOT inherit vars/bindings into named environments, so every
+  // binding is repeated under each env block. A bare `wrangler deploy` has none.
+  "name": "panote-admin-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "env": {
+    "dev": {
+      "name": "panote-admin-api-dev",
+      // secrets (per env): none - admin-api uses the native R2 binding, not the S3 API.
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
+      "vars": {
+        "OAUTH_ISSUER": "https://YOUR_DEV_TENANT.auth0.com/",
+        "OAUTH_AUDIENCE": "https://api.panote.dev",
+      },
+    },
+    "production": {
+      "name": "panote-admin-api",
+      // secrets (per env): none - admin-api uses the native R2 binding, not the S3 API.
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
+      "vars": {
+        "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
+        "OAUTH_AUDIENCE": "https://api.panote.io",
+      },
+    },
+  },
+}

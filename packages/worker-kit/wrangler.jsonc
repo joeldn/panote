@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // NOT a deployable Worker. This file exists only so `wrangler types` can
+  // generate workerd runtime types for the R2-binding helpers, now that
+  // @cloudflare/workers-types is gone. It declares no bindings and no main, and
+  // `types` is run with --include-env=false so no Env interface is emitted.
+  // It records the workerd runtime this library targets - keep the
+  // compatibility_date and flags in step with the Workers that consume it.
+  "name": "internal-worker-kit",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+}

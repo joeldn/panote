@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Deploys REQUIRE an environment: `wrangler deploy --env dev|production`.
+  // Wrangler does NOT inherit vars/bindings into named environments, so every
+  // binding is repeated under each env block. A bare `wrangler deploy` has none.
+  "name": "panote-upload-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "env": {
+    "dev": {
+      "name": "panote-upload-api-dev",
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev
+      "vars": {
+        "OAUTH_ISSUER": "https://YOUR_DEV_TENANT.auth0.com/",
+        "OAUTH_AUDIENCE": "https://api.panote.dev",
+        "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "R2_BUCKET": "pano-content-dev",
+      },
+    },
+    "production": {
+      "name": "panote-upload-api",
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production
+      "vars": {
+        "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
+        "OAUTH_AUDIENCE": "https://api.panote.io",
+        "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "R2_BUCKET": "pano-content",
+      },
+    },
+  },
+}

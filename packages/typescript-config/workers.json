@@ -1,11 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "_comment": "Cloudflare Workers config. workerd is not Node: no @types/node here. Wrangler/esbuild does the bundling, so tsc is type-check-only (noEmit). Consuming worker packages must declare @cloudflare/workers-types in their own devDependencies (catalog:) - pnpm's isolated node_modules means a types package declared only here will not resolve from the consumer's typeRoots.",
+  "_comment": "Cloudflare Workers config. workerd is not Node: no @types/node here, and types is [] - a Worker's ambient runtime types come from two committed, generated files listed in its tsconfig include: the workerd runtime surface (identical across every Worker) lives once at @internal/worker-kit/src/worker-configuration.d.ts, and each package generates only its own small env.d.ts (`wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false`). @cloudflare/workers-types is deliberately NOT used: Cloudflare superseded it with `wrangler types`, and the generated types are binding-exact (a DO binding types as DurableObjectNamespace<TheClass> and only vars that exist are declared). Wrangler/esbuild does the bundling, so tsc is type-check-only (noEmit). Test-only pool types (`@cloudflare/vitest-pool-workers/types`) belong in the package's tsconfig.test.json, not here.",
   "extends": "./base.json",
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],
-    "types": ["@cloudflare/workers-types"],
+    "types": [],
 
     "module": "ESNext",
     "moduleResolution": "bundler",

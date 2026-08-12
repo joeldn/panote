@@ -1,0 +1,87 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Deploys REQUIRE an environment: `wrangler deploy --env dev|production`.
+  // Wrangler does NOT inherit vars/bindings into named environments, so every
+  // binding is repeated under each env block. A bare `wrangler deploy` has none.
+  // `main` exports no fetch handler - this Worker is a queue consumer
+  // only, see src/consumer.ts.
+  "name": "panote-tiler-consumer",
+  "main": "src/consumer.ts",
+  "compatibility_date": "2026-01-01",
+  // Genuinely load-bearing here (unlike the other two Workers): @cloudflare/containers
+  // depends on it.
+  "compatibility_flags": ["nodejs_compat"],
+  "env": {
+    "dev": {
+      "name": "panote-tiler-consumer-dev",
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev
+      "durable_objects": {
+        "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
+      },
+      // Container classes are Durable Objects and must be registered via a
+      // migration or `wrangler deploy` is rejected; container DOs require
+      // SQLite-backed storage.
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tiler"] }],
+      // Build context = repo root so the Dockerfile can vendor workspace
+      // deps (@internal/tiler, @internal/contracts). Defaults to the
+      // Dockerfile's own dir otherwise.
+      "containers": [
+        {
+          "class_name": "Tiler",
+          "image": "./Dockerfile",
+          "image_build_context": "../..",
+          // >=4 GiB RAM; source spike showed 2.08 GiB peak at 134 MP.
+          "instance_type": "standard-1",
+          "max_instances": 5,
+        },
+      ],
+      "queues": {
+        "consumers": [
+          {
+            "queue": "pano-uploads-dev",
+            "max_batch_size": 1,
+            "max_retries": 3,
+            "dead_letter_queue": "pano-uploads-dlq-dev",
+          },
+        ],
+      },
+      "vars": {
+        "MAX_ORIGINAL_BYTES": "157286400",
+        "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "R2_BUCKET": "pano-content-dev",
+      },
+    },
+    "production": {
+      "name": "panote-tiler-consumer",
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production
+      "durable_objects": {
+        "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Tiler"] }],
+      "containers": [
+        {
+          "class_name": "Tiler",
+          "image": "./Dockerfile",
+          "image_build_context": "../..",
+          "instance_type": "standard-1",
+          "max_instances": 5,
+        },
+      ],
+      "queues": {
+        "consumers": [
+          {
+            "queue": "pano-uploads",
+            "max_batch_size": 1,
+            "max_retries": 3,
+            "dead_letter_queue": "pano-uploads-dlq",
+          },
+        ],
+      },
+      "vars": {
+        "MAX_ORIGINAL_BYTES": "157286400",
+        "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "R2_BUCKET": "pano-content",
+      },
+    },
+  },
+}

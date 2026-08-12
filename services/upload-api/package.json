@@ -1,0 +1,31 @@
+{
+  "name": "@service/upload-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Presigned R2 upload endpoint for panote, using aws4fetch to sign S3-API PUT URLs",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "echo \"@service/upload-api: nothing to build (wrangler bundles at deploy time)\"",
+    "dev": "wrangler dev --env dev",
+    "deploy": "wrangler deploy --env dev",
+    "types": "wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@internal/contracts": "workspace:*",
+    "@internal/worker-kit": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@internal/typescript-config": "workspace:*",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

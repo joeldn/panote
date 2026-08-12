@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "Emits dist/ (consumers are Workers AND the Node tiler container), but the code targets workerd, so: types: [] keeps Node globals out, and the generated src/worker-configuration.d.ts supplies the workerd runtime types that @cloudflare/workers-types used to. Same reasoning as packages/contracts' tsconfig, one layer stricter about the runtime.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": [],
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

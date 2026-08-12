@@ -19,7 +19,6 @@ catalog:
   # repo history before changing this.
   typescript: 6.0.3
   '@types/node': 26.2.0
-  '@cloudflare/workers-types': 5.20260808.1
 
   # --- Task runner ---
   turbo: 2.10.9
@@ -27,6 +26,17 @@ catalog:
   # --- Testing ---
   vitest: 4.1.10
   '@vitest/coverage-v8': 4.1.10
+
+  # --- Cloudflare Workers ---
+  # @cloudflare/vitest-pool-workers 0.20.x is the vitest-4 line. It dropped the
+  # "/config" entrypoint: use `plugins: [cloudflareTest(opts)]` from the package
+  # root, NOT `defineWorkersConfig`. `isolatedStorage` no longer exists. The pool
+  # depends on wrangler directly, so keep these two versions in lockstep.
+  '@cloudflare/vitest-pool-workers': 0.20.3
+  wrangler: 4.120.0
+  hono: 4.13.1
+  aws4fetch: 1.0.20
+  '@cloudflare/containers': 0.3.7
 
   # --- Runtime libraries ---
   # zod is pinned at 3.x deliberately - see the port spec's zod 3-vs-4 analysis.
