@@ -3,6 +3,7 @@ node_modules
 dist
 **/dist
 build
+**/build
 coverage
 **/coverage
 .turbo
@@ -11,3 +12,4 @@ coverage
 **/.wrangler
 .git
 *.tsbuildinfo
+**/*.tsbuildinfo
