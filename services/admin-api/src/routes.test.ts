@@ -157,6 +157,43 @@ describe('admin panos routes', () => {
     const list = await SELF.fetch('https://x/api/admin/panos', auth);
     expect(((await list.json()) as { panoIds: string[] }).panoIds).toContain(panoId);
   });
+
+  it('round-trips a panoId containing "/" through create and list', async () => {
+    // The 'probe pano|1' case above only exercises characters decodeURI
+    // *also* decodes (space, "|"), so a decUser that silently regressed from
+    // decodeURIComponent to decodeURI would still pass it: decodeURI leaves
+    // %2F (and %3F, %23, ...) encoded, which is exactly the bug M33 in the
+    // review found this suite missing. A panoId containing "/" is the
+    // discriminating case - it must come back with a literal "/", not
+    // "%2F".
+    const panoId = 'slash/probe/1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${encodeURIComponent(panoId)}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Slash probe', hotspots: [] }),
+    });
+    expect(put.status).toBe(200);
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const ids = ((await list.json()) as { panoIds: string[] }).panoIds;
+    expect(ids).toContain(panoId);
+    expect(ids).not.toContain('slash%2Fprobe%2F1');
+  });
+
+  it('lists a legacy raw key that is not valid percent-encoding instead of 500ing', async () => {
+    // Simulates an object already sitting in the shared R2 bucket that this
+    // codebase did not itself write: pano-viewer's crud-worker stores
+    // panoId raw, unencoded (services/shared/src/keys.ts there), so a
+    // panoId containing a stray "%" can reach R2 without ever passing
+    // through encUser. Seed it directly via env.BUCKET - the same
+    // direct-R2 pattern r2-binding.test.ts uses - rather than through the
+    // API, since PUT .../config would encode the id and never produce this
+    // key shape.
+    await env.BUCKET.put('panos/auth0%7Cme/100%bad/config.json', '{}');
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    expect(list.status).toBe(200);
+    const ids = ((await list.json()) as { panoIds: string[] }).panoIds;
+    expect(ids).toContain('100%bad');
+  });
 });
 
 describe('admin tours routes', () => {
