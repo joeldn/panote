@@ -48,9 +48,36 @@ describe('keys', () => {
       });
     });
 
-    it('decUser is the exact inverse of encUser', () => {
-      const raw = 'probe pano|1';
+    // Table-driven over inputs that specifically stress the characters plain
+    // string equality would miss: "/" and "%" (the two that motivated this
+    // encoding in the first place), "+" (meaningful in query strings but not
+    // path segments), unicode/emoji (multi-byte), and the empty string.
+    it.each([
+      '',
+      'a',
+      'probe pano|1',
+      'a/b',
+      '100%',
+      'a%2Fb',
+      'a+b',
+      'auth0|me',
+      'ünïcøde',
+      '日本語',
+      '😀',
+      "~!*()'-._",
+    ])('decUser is the exact inverse of encUser for %j', (raw) => {
       expect(decUser(encUser(raw))).toBe(raw);
     });
+
+    // decUser must be total: a raw (never-encoded) legacy key segment, such
+    // as one written directly to the shared R2 bucket by pano-viewer's
+    // crud-worker, can contain a "%" that is not valid percent-encoding.
+    // decodeURIComponent() throws on that input; decUser must not.
+    it.each(['100%bad', '%', '%zz', '%2', '%E0%A4%A'])(
+      'decUser returns %j unchanged instead of throwing on invalid percent-encoding',
+      (invalid) => {
+        expect(decUser(invalid)).toBe(invalid);
+      },
+    );
   });
 });

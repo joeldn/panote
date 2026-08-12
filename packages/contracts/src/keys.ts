@@ -13,7 +13,27 @@ export const encUser = (sub: string): string => encodeURIComponent(sub);
 // handing it back to anything that will re-encode it - otherwise a
 // caller-supplied id containing a URL-significant character survives one
 // round trip encoded and is double-encoded on the next.
-export const decUser = (s: string): string => decodeURIComponent(s);
+//
+// Deliberately lenient: decodeURIComponent() throws URIError on a segment
+// that is not valid percent-encoding (a bare "%", "%zz", ...). Every key this
+// codebase writes goes through encUser first, so it can never produce such a
+// segment - but the dev/prod wrangler configs point at the same R2 buckets
+// pano-viewer's crud-worker uses, and that service stores panoId raw,
+// unencoded. A pre-existing object from that service whose id happens to
+// contain a stray "%" is exactly the kind of input decodeURIComponent
+// rejects. Letting the throw escape turns one bad row into a 500 for the
+// entire listing; falling back to the raw input keeps that row listable
+// instead, matching the port source, which never threw here. Do not tighten
+// this back into a throw - the round trip through encUser still holds for
+// every id this codebase itself creates, so nothing here weakens that
+// guarantee.
+export const decUser = (s: string): string => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
 
 export const panoPrefix = (u: string, p: string): string => `panos/${encUser(u)}/${encUser(p)}/`;
 export const originalKey = (u: string, p: string): string => `${panoPrefix(u, p)}original`;
