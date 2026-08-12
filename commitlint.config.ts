@@ -18,6 +18,7 @@ const config: UserConfig = {
         // services
         'public-api',
         'admin-api',
+        'upload-api',
         'tiler-consumer',
         // packages
         'viewer',
@@ -26,6 +27,10 @@ const config: UserConfig = {
         'contracts',
         'worker-kit',
         'api-client',
+        // shared config packages
+        'typescript-config',
+        'eslint-config',
+        'vitest-config',
         // repo-level
         'repo',
         'ci',
