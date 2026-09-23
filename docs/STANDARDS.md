@@ -84,7 +84,7 @@ Every workspace's `package.json` name declares two things at a glance: whether o
 | Scope | Meaning | Location | Examples |
 |---|---|---|---|
 | `@panote/*` | May be published to the npm registry as a standalone package | `packages/` | `@panote/viewer`, `@panote/core` |
-| `@internal/*` | Repo-only library — never published, may be imported by any other workspace | `packages/` | `@internal/contracts`, `@internal/worker-kit`, `@internal/api-client`, `@internal/tiler`, `@internal/typescript-config`, `@internal/eslint-config`, `@internal/vitest-config` |
+| `@internal/*` | Repo-only library — never published, may be imported by any other workspace | `packages/` | `@internal/contracts`, `@internal/worker-kit`, `@internal/tiler`, `@internal/typescript-config`, `@internal/eslint-config`, `@internal/vitest-config` |
 | `@service/*` | Deployable Cloudflare Worker | `services/` | `@service/public-api`, `@service/admin-api`, `@service/upload-api`, `@service/tiler-consumer` |
 | `@app/*` | Deployable frontend (Pages SPA) | `apps/` | `@app/website`, `@app/admin`, `@app/demo` |
 
@@ -96,7 +96,7 @@ If a workspace's scope doesn't match its directory, that's a bug — fix the sco
 
 - **One Cloudflare account**, environments separated with Wrangler named environments (`[env.dev]`, `[env.production]`) inside a single `wrangler.jsonc` per Worker
 - `dev` deploys to `panote.dev`, `production` deploys to `panote.io`
-- Every dev-environment resource (KV namespace, R2 bucket, Durable Object class binding, Queue) carries a `-dev` suffix so dev and prod resources never collide in the same account
+- Every dev-environment *resource* (KV namespace, R2 bucket, Queue) carries a `-dev` suffix so dev and prod resources never collide in the same account — e.g. `pano-content-dev`, `pano-uploads-dev`. The Worker script name gets the same treatment (`panote-public-api-dev`). **This does not extend to Durable Object bindings or class names** — a DO binding is a fixed name declared in `wrangler.jsonc` (`STATS` in `services/public-api`, `TILER` in `services/tiler-consumer`) and a DO class is namespaced by the script that declares it, not by a suffix on its own name; the same binding/class name is reused across `dev` and `production` env blocks unchanged.
 - **Gotcha — named environments do not inherit top-level config.** Wrangler does **not** carry top-level `vars`, `r2_buckets`, `durable_objects`, `queues`, or `containers` into an `[env.X]` block. Each named environment is its own complete config; anything you don't repeat under `[env.X]` silently does not exist in that environment. This has bitten us before as a Worker that ran fine locally (using top-level config) and then threw a binding-not-found error the moment it deployed under `--env dev`. Always define every binding under every environment block explicitly — don't rely on top-level values as defaults.
 
 ---
