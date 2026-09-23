@@ -21,8 +21,20 @@
       "dependsOn": ["^build", "build"],
       "outputs": []
     },
+    // typescript-config lints with the root eslint config, so its lint
+    // tasks must wait for eslint-config's build. No package.json dependency
+    // links the two, so turbo won't order this on its own.
+    "@internal/typescript-config#lint": {
+      "dependsOn": ["^build", "build", "@internal/eslint-config#build"],
+      "outputs": []
+    },
     "lint:fix": {
       "dependsOn": ["^build", "build"],
+      "cache": false,
+      "outputs": []
+    },
+    "@internal/typescript-config#lint:fix": {
+      "dependsOn": ["^build", "build", "@internal/eslint-config#build"],
       "cache": false,
       "outputs": []
     },
