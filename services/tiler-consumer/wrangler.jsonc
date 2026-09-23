@@ -14,6 +14,10 @@
   "env": {
     "dev": {
       "name": "panote-tiler-consumer-dev",
+      // No fetch handler or routes to route to, but set for consistency
+      // with the other services' dev/production workers_dev policy.
+      "workers_dev": true,
+      "observability": { "enabled": true },
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev
       "durable_objects": {
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
@@ -42,6 +46,8 @@
             "max_batch_size": 1,
             "max_retries": 3,
             "dead_letter_queue": "pano-uploads-dlq-dev",
+            // max_concurrency matches max_instances
+            "max_concurrency": 5,
           },
         ],
       },
@@ -52,7 +58,10 @@
       },
     },
     "production": {
+      // production is unprovisioned, see docs/deploy.md
       "name": "panote-tiler-consumer",
+      "workers_dev": false,
+      "observability": { "enabled": true },
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production
       "durable_objects": {
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
@@ -74,6 +83,8 @@
             "max_batch_size": 1,
             "max_retries": 3,
             "dead_letter_queue": "pano-uploads-dlq",
+            // max_concurrency matches max_instances
+            "max_concurrency": 5,
           },
         ],
       },
