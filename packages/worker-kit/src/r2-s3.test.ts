@@ -24,15 +24,11 @@ describe('presignPut', () => {
   });
 
   it('signs the accountId/bucket/key endpoint, pinning the key-encoding behaviour', async () => {
-    // Deviation from the port spec's stated expectation, verified empirically
-    // against aws4fetch 1.0.20 + Node 24's URL/Request: the endpoint template is
-    // a plain string substitution (`${base}/${key}`, no encodeURIComponent), and
-    // neither `new URL(...)` nor the `Request` built from it percent-encodes `|`
-    // in a path - `|` is not in the WHATWG URL path percent-encode set, and
-    // aws4fetch only re-encodes the path internally for the *signature*
-    // computation, never on the `Request.url` it returns. So a key containing
-    // `|` comes back with a literal, unencoded `|`, not `%7C`. Pinning the real,
-    // observed behaviour here rather than the spec's assumed one.
+    // `|` isn't in the WHATWG URL path percent-encode set, and aws4fetch
+    // only re-encodes the path for the signature, never on the returned
+    // Request.url - so a key containing `|` comes back literal, not `%7C`.
+    // This client never encodes a key; keys.ts is responsible for keeping
+    // keys URL-safe.
     const client = createR2S3Client(config);
     const url = await client.presignPut('panos/p|1/config.json');
     expect(
