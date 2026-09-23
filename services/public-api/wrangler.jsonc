@@ -10,22 +10,35 @@
   "env": {
     "dev": {
       "name": "panote-public-api-dev",
+      // routes need panote.dev to be an Active zone before this env can deploy
+      // workers_dev gives a second URL for smoke tests
+      "workers_dev": true,
+      "routes": [{ "pattern": "panote.dev/api/tours/*", "zone_name": "panote.dev" }],
+      "observability": { "enabled": true },
       "durable_objects": {
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
       "vars": {
+        // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
+        // only with the real tenant URL, never another fake name.
         "OAUTH_ISSUER": "https://YOUR_DEV_TENANT.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
       },
     },
     "production": {
+      // production is unprovisioned, see docs/deploy.md
       "name": "panote-public-api",
+      "workers_dev": false,
+      "routes": [{ "pattern": "panote.io/api/tours/*", "zone_name": "panote.io" }],
+      "observability": { "enabled": true },
       "durable_objects": {
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
       "vars": {
+        // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
+        // only with the real tenant URL, never another fake name.
         "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.io",
       },
