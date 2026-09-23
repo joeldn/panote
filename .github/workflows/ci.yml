@@ -41,9 +41,9 @@ env:
   TURBO_FORCE: true
   TURBO_TELEMETRY_DISABLED: 1
   DO_NOT_TRACK: 1
-  # `wrangler types` is the only wrangler command CI runs. No Cloudflare
-  # credentials are used anywhere in this workflow and none are needed;
-  # deployment is Wave 5's job.
+  # `wrangler types` and `wrangler deploy --dry-run` (below) are the only
+  # wrangler commands CI runs; neither needs credentials. deploy.yml is
+  # separate and does need them to actually publish.
   WRANGLER_SEND_METRICS: false
   # Keeps actions that still declare the node20 runtime executing on node24 as
   # GitHub retires node20.
@@ -123,6 +123,45 @@ jobs:
             exit 1
           fi
           echo 'Committed Worker types match what wrangler types emits.'
+
+  # Builds each plain-Worker service and dry-runs `wrangler deploy` against
+  # it, catching a broken build or unresolvable workspace import on every PR
+  # instead of only on a real deploy. tiler-consumer is skipped (needs
+  # Docker). Not a required check.
+  deploy-dry-run:
+    name: Deploy dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+
+      # Same build deploy.yml runs before wrangler deploy; the trailing
+      # `...` in each filter pulls in the workspace deps too.
+      - name: Build service dependencies
+        run: >-
+          pnpm exec turbo run build
+          --filter="@service/public-api..."
+          --filter="@service/admin-api..."
+          --filter="@service/upload-api..."
+
+      # Bundles with esbuild and reports bindings without publishing or
+      # needing credentials, catching what a real deploy would catch.
+      - name: Dry-run deploy public-api
+        run: >-
+          pnpm --filter "@service/public-api" exec wrangler deploy
+          --dry-run --env dev --outdir /tmp/deploy-dry-run/public-api
+
+      - name: Dry-run deploy admin-api
+        run: >-
+          pnpm --filter "@service/admin-api" exec wrangler deploy
+          --dry-run --env dev --outdir /tmp/deploy-dry-run/admin-api
+
+      - name: Dry-run deploy upload-api
+        run: >-
+          pnpm --filter "@service/upload-api" exec wrangler deploy
+          --dry-run --env dev --outdir /tmp/deploy-dry-run/upload-api
 
   # Runs in parallel with `gate`, not after it. `pnpm test:coverage` is a
   # superset of `pnpm test` for the Node-side packages (same tests, plus
