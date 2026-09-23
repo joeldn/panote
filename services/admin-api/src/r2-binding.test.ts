@@ -5,8 +5,8 @@
 //
 // Each case uses its own key namespace and creates whatever it asserts on (port
 // spec section 0.7): storage is shared between it() cases in one file but
-// isolated between files, and the isolatedStorage:false option that used to
-// paper over cross-file ordering no longer exists.
+// isolated between files, so cases cannot rely on ordering against another
+// file's writes.
 import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';

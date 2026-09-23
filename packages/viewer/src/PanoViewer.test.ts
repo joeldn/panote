@@ -96,14 +96,10 @@ describe('PanoViewer', () => {
 
   describe('device-pixel-ratio-aware level selection', () => {
     it('passes the renderer canvas device-pixel height to the tile layer, not the CSS clientHeight', () => {
-      // Regression test for the DPR quality bug: selectLevel() (see
-      // packages/core/src/lod.ts, used from tile-layer.ts's update()) needs
-      // the framebuffer's device-pixel height. Before the fix, PanoViewer
-      // passed container.clientHeight (CSS pixels) straight through, so on
-      // any DPR>1 display the pyramid picked one level coarser than the
-      // screen could actually show. FakeGLRenderer.resize() scales by 2x, so
-      // clientHeight=800 (CSS) means canvas.height=1600 (device pixels) —
-      // the update() call must receive 1600, not 800.
+      // update() needs the framebuffer's device-pixel height, not CSS
+      // height, or selectLevel() picks a level coarser than the screen can
+      // show. FakeGLRenderer.resize() scales 2x, so clientHeight=800 must
+      // produce canvas.height=1600 here.
       const container = makeContainer(400, 800);
       const viewer = new PanoViewer(container);
 

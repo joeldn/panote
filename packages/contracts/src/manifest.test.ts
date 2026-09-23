@@ -28,11 +28,8 @@ describe('ManifestSchema', () => {
     expect(() => ManifestSchema.parse(bad)).toThrow();
   });
 
-  // The cases below were previously ACCEPTED by the loose schema
-  // (`faces: z.array(z.string())`, `format: z.string()`, no numeric
-  // constraints) and are now REJECTED, per the tightening documented in the
-  // Manifest reconciliation (see src/manifest.ts). This is a deliberate
-  // behaviour change, not a regression.
+  // These cases pin that ManifestSchema actually enforces every bound
+  // parseManifest documents, not just claims to mirror it.
 
   it('rejects a face value that is not one of the six cube faces', () => {
     expect(() =>
@@ -68,10 +65,7 @@ describe('ManifestSchema', () => {
     expect(() => ManifestSchema.parse({ ...manifest, pano: '' })).toThrow();
   });
 
-  // The cases below close the invariant-drift gap raised in review finding
-  // 3747024517: this schema documented itself as mirroring parseManifest but
-  // enforced none of its bounds or its two structural invariants. Each case
-  // mirrors a check `parseManifest` makes in packages/core/src/manifest.ts.
+  // Mirrors the checks parseManifest makes in packages/core/src/manifest.ts.
 
   describe('invariant parity with parseManifest', () => {
     it('rejects a tileSize outside the allowed set', () => {
@@ -80,7 +74,7 @@ describe('ManifestSchema', () => {
       ).toThrow();
     });
 
-    it('rejects the exact gap the old core bounds left: tileSize 128, maxLevel 7, faceSize 16384', () => {
+    it('rejects tileSize 128 even though faceSize 16384 is within its cap (maxLevel 7 separately exceeds MAX_LEVEL_CAP)', () => {
       expect(() =>
         ManifestSchema.parse({ ...manifest, tileSize: 128, maxLevel: 7, faceSize: 16384 }),
       ).toThrow();

@@ -115,11 +115,9 @@ describe('GLRenderer', () => {
   });
 
   it('releases the WebGL context on dispose via WEBGL_lose_context', () => {
-    // Regression test: dispose() previously deleted buffers/textures/the
-    // program but never released the context slot itself. Browsers cap live
-    // WebGL contexts per page (commonly 8-16); without loseContext(), an app
-    // that creates and destroys several PanoViewer instances (a gallery,
-    // route changes) can exhaust that pool even though GPU memory was freed.
+    // dispose() must call loseContext(), not just free buffers/textures/
+    // program - browsers cap live WebGL contexts per page (commonly 8-16),
+    // and freeing GPU memory alone doesn't release a context slot.
     const { gl, loseContext } = makeFakeGl();
     const { container } = makeFakeDocumentAndContainer(gl);
     const renderer = new GLRenderer(container as unknown as HTMLElement);

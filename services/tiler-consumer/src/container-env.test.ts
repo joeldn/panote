@@ -3,23 +3,12 @@ import { containerEnvVars, type ContainerEnv } from './container-env.js';
 
 /**
  * Covers the contract of `containerEnvVars` itself: which vars are forwarded,
- * which one is optional, and the fail-fast when any is missing. The bug this
- * package shipped was that nothing forwarded R2 credentials to the container
- * process, so it built its S3 client against
- * `https://undefined.r2.cloudflarestorage.com/undefined` and every tile job
- * 500s into the DLQ, silently.
+ * which one is optional, and the fail-fast when any is missing.
  *
- * Be clear about what this file does NOT cover: the wiring that actually
- * ships those vars - `this.envVars = containerEnvVars(env)` in `Tiler`'s
- * constructor - is untested. It is also untestable from here: `Container`'s
- * constructor throws "Containers have not been enabled for this Durable
- * Object class" from `super(ctx, env)`, before that assignment ever runs,
- * whenever `ctx.container` is undefined - which is always, with no container
- * runtime available. Mutation-tested: deleting the assignment from
- * `consumer.ts` leaves every test in this package green. So this suite would
- * NOT on its own have caught the shipped bug, which was the missing wiring
- * and not a wrong helper. Verifying the wiring needs a running container
- * image.
+ * Does not cover the wiring that ships those vars (`Tiler`'s constructor) -
+ * that's untestable here since `Container`'s constructor throws before it
+ * runs, with no container runtime available. Verifying it needs a running
+ * container image.
  */
 describe('containerEnvVars', () => {
   it('forwards all four R2 credential vars verbatim', () => {
