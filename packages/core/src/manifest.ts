@@ -60,7 +60,12 @@ export const MAX_LEVEL_CAP = 5;
 // regardless, so a pano that somehow bypassed this (a future relaxation of
 // the pattern) still can't break the URL structure - this is defence in
 // depth, not the only guard.
-const PANO_PATTERN = /^[A-Za-z0-9_-]+$/;
+//
+// Exported so contracts can validate panoId/tourId with this same charset
+// before they're used verbatim in an R2 key (see keys.ts), and so the
+// tiler's write-time check (build.ts) shares it too - the read and write
+// sides must not drift apart.
+export const PANO_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function parseManifest(raw: unknown): Manifest {
   if (typeof raw !== 'object' || raw === null) {
