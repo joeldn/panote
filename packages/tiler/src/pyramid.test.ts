@@ -94,9 +94,9 @@ describe('assertPyramidBounds', () => {
     expect(() => assertPyramidBounds(1024, 16384, 4)).not.toThrow();
   });
 
-  it('rejects a tileSize outside the allowed set, even one that used to be valid', () => {
-    // The exact gap the old bounds left: tileSize 128 combined with a deep
-    // level reached faceSize 16384 without tripping either old check.
+  it('rejects a tileSize outside the allowed set, checked first and independently of faceSize/maxLevel', () => {
+    // tileSize is checked first, so this fails on tileSize even though
+    // faceSize 16384 and maxLevel 7 would each independently be invalid too.
     expect(() => assertPyramidBounds(128, 16384, 7)).toThrow(/tileSize/);
   });
 

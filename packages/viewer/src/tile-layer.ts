@@ -410,7 +410,8 @@ export class TileLayer {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new TileHttpError(res.status);
       const blob = await res.blob();
-      // flipY at decode time to match the previous Image-based orientation.
+      // flipY here matches WebGL's bottom-left texture origin, so
+      // gl-renderer.ts can leave UNPACK_FLIP_Y_WEBGL off.
       const bitmap = await createImageBitmap(blob, {
         imageOrientation: 'flipY',
       });
