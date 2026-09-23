@@ -1,7 +1,14 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { FACES, type Face, type Manifest, type TileFormat, tilesPerEdge } from '@panote/core';
+import {
+  FACES,
+  PANO_PATTERN,
+  type Face,
+  type Manifest,
+  type TileFormat,
+  tilesPerEdge,
+} from '@panote/core';
 import { renderFace, type RgbImage } from './remap.js';
 import {
   assertPyramidBounds,
@@ -36,8 +43,8 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
   // upload name by a future caller) could write the pyramid outside outDir.
   // Every legitimate pano today (a developer-typed CLI slug, or a
   // server-generated crypto.randomUUID()) matches this charset.
-  if (!/^[A-Za-z0-9_-]+$/.test(opts.pano))
-    throw new Error(`pano must match /^[A-Za-z0-9_-]+$/ (got ${opts.pano})`);
+  if (!PANO_PATTERN.test(opts.pano))
+    throw new Error(`pano must match ${PANO_PATTERN} (got ${opts.pano})`);
 
   // BuildOptions exposes maxSize/quality/format as public API with defaults,
   // but only tileSize was actually checked (via assertPyramidBounds below).
