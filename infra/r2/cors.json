@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["https://panote.dev", "https://panote.io"],
+        "methods": ["GET"],
+        "headers": ["content-type"]
+      },
+      "maxAgeSeconds": 86400
+    },
+    {
+      "allowed": {
+        "origins": ["https://panote.dev", "https://panote.io"],
+        "methods": ["PUT"],
+        "headers": ["content-type"]
+      },
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
