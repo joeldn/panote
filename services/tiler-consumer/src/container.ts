@@ -3,9 +3,9 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { manifestKey, parseOwnerFromKey } from '@internal/contracts';
 import { build } from '@internal/tiler';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
+import { deriveUploadTarget } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
 
 // The Tiler DO (src/consumer.ts) forwards these through `Container.envVars`
@@ -74,8 +74,9 @@ createServer((req, res) => {
     if (tooLarge) return;
     try {
       const { key } = JSON.parse(body) as { key: string };
-      const owner = parseOwnerFromKey(key);
-      if (!owner) throw new Error(`bad key ${key}`);
+      // Validates the key and derives the upload prefix and panoId
+      // (upload-prefix.ts).
+      const { prefix, panoId } = deriveUploadTarget(key);
       const orig = await r2.get(key);
       if (!orig.ok) throw new Error(`download ${key} -> ${orig.status}`);
       const len = Number(orig.headers.get('content-length'));
@@ -83,21 +84,19 @@ createServer((req, res) => {
         throw new Error(`original ${key} too large: ${len} > ${MAX_ORIGINAL_BYTES}`);
       const work = await mkdtemp(join(tmpdir(), 'pano-'));
       try {
-        const src = join(work, 'src');
+        // Written outside build()'s output tree, under a name a valid
+        // panoId can never take ("." is outside PANO_PATTERN's charset).
+        const src = join(work, '.original');
         await writeFile(src, new Uint8Array(await orig.arrayBuffer()));
         await build({
           src,
           outDir: work,
-          pano: owner.panoId,
+          pano: panoId,
           format: 'webp',
           quality: 70,
         });
-        const files = await walk(join(work, owner.panoId));
-        await uploadDir(
-          files,
-          manifestKey(owner.userId, owner.panoId).replace(/manifest\.json$/, ''),
-          put,
-        );
+        const files = await walk(join(work, panoId));
+        await uploadDir(files, prefix, put);
         res.writeHead(200).end('ok');
       } finally {
         await rm(work, { recursive: true, force: true });

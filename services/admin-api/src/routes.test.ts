@@ -142,57 +142,52 @@ describe('admin panos routes', () => {
     expect(ids).toContain(siblingId);
   });
 
-  it('round-trips a panoId that needs percent-encoding through create and list', async () => {
-    // A caller-supplied id containing URL-significant characters must come
-    // back from GET /panos exactly as it was sent to PUT .../config - not
-    // percent-encoded (which a correctly-behaving client would then
-    // double-encode on its next request).
+  it('400s a panoId containing "|" or a space (outside the URL-unreserved charset)', async () => {
+    // panoId is stored raw in the R2 key (packages/contracts/src/keys.ts),
+    // so it must be rejected up front rather than encoded after the fact.
     const panoId = 'probe pano|1';
     const put = await SELF.fetch(`https://x/api/admin/panos/${encodeURIComponent(panoId)}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
       body: JSON.stringify({ panoId, title: 'Probe', hotspots: [] }),
     });
-    expect(put.status).toBe(200);
+    expect(put.status).toBe(400);
     const list = await SELF.fetch('https://x/api/admin/panos', auth);
-    expect(((await list.json()) as { panoIds: string[] }).panoIds).toContain(panoId);
+    expect(((await list.json()) as { panoIds: string[] }).panoIds).not.toContain(panoId);
   });
 
-  it('round-trips a panoId containing "/" through create and list', async () => {
-    // The 'probe pano|1' case above only exercises characters decodeURI
-    // *also* decodes (space, "|"), so a decUser that silently regressed from
-    // decodeURIComponent to decodeURI would still pass it: decodeURI leaves
-    // %2F (and %3F, %23, ...) encoded, which is exactly the bug M33 in the
-    // review found this suite missing. A panoId containing "/" is the
-    // discriminating case - it must come back with a literal "/", not
-    // "%2F".
+  it('400s a panoId containing "/"', async () => {
+    // Unvalidated, "/" would add an extra key segment instead of being part
+    // of the id.
     const panoId = 'slash/probe/1';
     const put = await SELF.fetch(`https://x/api/admin/panos/${encodeURIComponent(panoId)}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
       body: JSON.stringify({ panoId, title: 'Slash probe', hotspots: [] }),
     });
-    expect(put.status).toBe(200);
-    const list = await SELF.fetch('https://x/api/admin/panos', auth);
-    const ids = ((await list.json()) as { panoIds: string[] }).panoIds;
-    expect(ids).toContain(panoId);
-    expect(ids).not.toContain('slash%2Fprobe%2F1');
+    expect(put.status).toBe(400);
   });
 
-  it('lists a legacy raw key that is not valid percent-encoding instead of 500ing', async () => {
-    // Simulates an object already sitting in the shared R2 bucket that this
-    // codebase did not itself write: pano-viewer's crud-worker stores
-    // panoId raw, unencoded (services/shared/src/keys.ts there), so a
-    // panoId containing a stray "%" can reach R2 without ever passing
-    // through encUser. Seed it directly via env.BUCKET - the same
-    // direct-R2 pattern r2-binding.test.ts uses - rather than through the
-    // API, since PUT .../config would encode the id and never produce this
-    // key shape.
-    await env.BUCKET.put('panos/auth0%7Cme/100%bad/config.json', '{}');
+  it('round-trips a panoId containing "_" and "-" (the full URL-unreserved charset) through create and list', async () => {
+    const panoId = 'Valid_Pano-Id-123';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Valid', hotspots: [] }),
+    });
+    expect(put.status).toBe(200);
     const list = await SELF.fetch('https://x/api/admin/panos', auth);
-    expect(list.status).toBe(200);
-    const ids = ((await list.json()) as { panoIds: string[] }).panoIds;
-    expect(ids).toContain('100%bad');
+    expect(((await list.json()) as { panoIds: string[] }).panoIds).toContain(panoId);
+  });
+
+  it('400s DELETE with a panoId outside the URL-unreserved charset', async () => {
+    // DELETE has no body schema, so the route validates the URL param
+    // directly instead of relying on panoPrefix() to throw a 500.
+    const r = await SELF.fetch(`https://x/api/admin/panos/${encodeURIComponent('bad/id')}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(r.status).toBe(400);
   });
 });
 
@@ -237,6 +232,18 @@ describe('admin tours routes', () => {
       headers: auth.headers,
       // Missing the required `title` field.
       body: '{}',
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('400s a PUT tourId outside the URL-unreserved charset', async () => {
+    // tourId is stored raw in tourKey() for the same reason as panoId, so
+    // TourDocSchema rejects it here before it reaches tourKey().
+    const tourId = 'bad/tour|id';
+    const r = await SELF.fetch(`https://x/api/admin/tours/${encodeURIComponent(tourId)}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ title: 'X', scenes: [] }),
     });
     expect(r.status).toBe(400);
   });

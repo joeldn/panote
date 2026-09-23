@@ -1,4 +1,5 @@
 // services/upload-api/src/index.test.ts
+import { encodeId } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -38,7 +39,10 @@ describe('upload-url', () => {
     });
     expect(r.status).toBe(200);
     const j = (await r.json()) as { panoId: string; key: string; url: string };
-    expect(j.key).toMatch(/^panos\/auth0%7Cme\/[0-9a-f-]+\/original$/);
+    // The owner segment is base64url-encoded; panoId is stored raw
+    // (packages/contracts/src/keys.ts).
+    expect(j.key).toBe(`panos/${encodeId('auth0|me')}/${j.panoId}/original`);
+    expect(j.key).toMatch(/^panos\/[A-Za-z0-9_-]+\/[0-9a-f-]+\/original$/);
     expect(j.url).toContain('X-Amz-Signature=');
   });
 

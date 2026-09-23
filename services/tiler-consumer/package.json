@@ -25,6 +25,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@internal/typescript-config": "workspace:*",
+    "@panote/core": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",

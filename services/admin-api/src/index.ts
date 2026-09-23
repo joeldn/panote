@@ -1,6 +1,6 @@
 import {
   configKey,
-  decUser,
+  PANO_PATTERN,
   panoPrefix,
   SceneConfigSchema,
   TourDocSchema,
@@ -18,10 +18,9 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get('/api/admin/panos', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
-  // listChildren() returns the raw (encUser-encoded) key segments; decode them
-  // back to what the caller originally passed to PUT /panos/:panoId/config so
-  // the id round-trips rather than coming back double-encoded next time.
-  const panoIds = (await listChildren(c.env.BUCKET, userPanosPrefix(sub))).map(decUser);
+  // panoId segments are never encoded (unlike the owner segment), so
+  // listChildren() needs no decode step to return what the caller passed in.
+  const panoIds = await listChildren(c.env.BUCKET, userPanosPrefix(sub));
   return c.json({ panoIds });
 });
 
@@ -43,7 +42,13 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
 
 app.delete('/api/admin/panos/:panoId', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
-  await deletePrefix(c.env.BUCKET, panoPrefix(sub, c.req.param('panoId')));
+  const panoId = c.req.param('panoId');
+  // No body schema to validate here, so check panoId directly - otherwise an
+  // invalid id would throw inside panoPrefix() and surface as a 500.
+  if (!PANO_PATTERN.test(panoId)) {
+    return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
+  }
+  await deletePrefix(c.env.BUCKET, panoPrefix(sub, panoId));
   return c.body(null, 204);
 });
 
