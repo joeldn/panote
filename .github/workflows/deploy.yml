@@ -1,0 +1,236 @@
+name: Deploy
+
+# Deploys the four Cloudflare Workers under services/*.
+#
+# Dispatch-only until Wave 5, which adds a workflow_run trigger on CI
+# success after the queue cut-over from pano-tiler-dev to tiler-consumer.
+# Defaults to dev; production is gated to main below. Dev needs the
+# panote.dev Cloudflare zone Active, since each service's `routes` block
+# deploys for dev too. Every deploy step passes --env, since wrangler.jsonc
+# only defines bindings under env blocks. tiler-consumer is a separate job
+# below. See docs/deploy.md.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options:
+          - dev
+          - production
+        default: dev
+
+# One deploy in flight per environment; never cancelled mid-flight, the
+# same reasoning ci.yml applies to pushes on main.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+# Deploy credentials are the CLOUDFLARE_* secret/variable, not GITHUB_TOKEN;
+# nothing here needs more than checkout.
+permissions:
+  contents: read
+
+env:
+  # No Cloudflare deploy telemetry.
+  WRANGLER_SEND_METRICS: false
+  DO_NOT_TRACK: 1
+  # Keeps actions that still declare the node20 runtime executing on node24 as
+  # GitHub retires node20.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # Resolves the dispatch input once and gates production to main here, so
+  # every downstream job agrees on the target and none can bypass the rule.
+  resolve-environment:
+    name: Resolve target environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      environment: ${{ steps.resolve.outputs.environment }}
+    steps:
+      - name: Resolve
+        id: resolve
+        env:
+          DISPATCH_ENVIRONMENT: ${{ inputs.environment }}
+        run: echo "environment=$DISPATCH_ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+      # Fails loudly instead of skipping downstream jobs, since a skipped
+      # job in the Actions UI looks the same as nothing needing to happen.
+      - name: Guard production to main
+        if: ${{ steps.resolve.outputs.environment == 'production' }}
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::production may only be deployed from main (current ref: $REF). Re-run this workflow from the main branch."
+            exit 1
+          fi
+          echo "Deploying production from main - OK."
+
+      # Production is declared but not provisioned yet (see docs/deploy.md).
+      # This variable is the manual confirmation that it's ready, so wrangler
+      # doesn't fail mid-matrix on whichever resource is missing first.
+      - name: Fail unless production is provisioned
+        if: ${{ steps.resolve.outputs.environment == 'production' }}
+        env:
+          PRODUCTION_PROVISIONED: ${{ vars.PRODUCTION_PROVISIONED }}
+        run: |
+          if [ "$PRODUCTION_PROVISIONED" != "true" ]; then
+            echo "::error::production is not provisioned (repository variable PRODUCTION_PROVISIONED is not 'true'). panote.io is not a Cloudflare zone and the production bucket, queues and Auth0 tenant do not exist yet. See docs/deploy.md before enabling a production deploy."
+            exit 1
+          fi
+          echo "PRODUCTION_PROVISIONED is true - proceeding."
+
+      # Only needed for the placeholder check below, so skipped outside
+      # production.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: ${{ steps.resolve.outputs.environment == 'production' }}
+
+      # dev keeps the OAUTH_ISSUER placeholder by design; shipping it to
+      # production would break auth, with every authenticated route
+      # returning 401. One check here covers all four configs,
+      # since tiler-consumer has no OAUTH_ISSUER of its own for a per-job
+      # check to catch. Case-insensitive to match worker-kit's guard.
+      - name: Fail if any production config still has a YOUR_ placeholder
+        if: ${{ steps.resolve.outputs.environment == 'production' }}
+        run: |
+          node <<'EOF'
+          const fs = require("node:fs");
+          const services = ["public-api", "admin-api", "upload-api", "tiler-consumer"];
+          let failed = false;
+          for (const service of services) {
+            const file = `services/${service}/wrangler.jsonc`;
+            const stripped = fs
+              .readFileSync(file, "utf8")
+              .split("\n")
+              .filter((line) => !line.trim().startsWith("//"))
+              .join("\n")
+              .replace(/,(\s*[\]}])/g, "$1");
+            let config;
+            try {
+              config = JSON.parse(stripped);
+            } catch (e) {
+              console.log(`::error::${file}: failed to parse config after stripping comments - ${e.message}`);
+              failed = true;
+              continue;
+            }
+            const envConfig = config.env?.production;
+            if (!envConfig) {
+              console.log(`::error::${file}: no env.production block found.`);
+              failed = true;
+              continue;
+            }
+            const hits = [];
+            const walk = (value, keyPath) => {
+              if (typeof value === "string") {
+                if (/YOUR_/i.test(value)) hits.push(`${keyPath} = "${value}"`);
+              } else if (Array.isArray(value)) {
+                value.forEach((v, i) => walk(v, `${keyPath}[${i}]`));
+              } else if (value && typeof value === "object") {
+                for (const [k, v] of Object.entries(value)) walk(v, `${keyPath}.${k}`);
+              }
+            };
+            walk(envConfig, "env.production");
+            if (hits.length > 0) {
+              for (const hit of hits) {
+                console.log(`::error::${file}: ${hit} still contains a YOUR_ placeholder. Replace it with the real value before deploying production - never with another fake tenant name.`);
+              }
+              failed = true;
+            } else {
+              console.log(`${file}: env.production has no YOUR_ placeholders.`);
+            }
+          }
+          if (failed) process.exit(1);
+          EOF
+
+  # The three plain Workers: `wrangler deploy` bundles with esbuild, no
+  # Docker involved. Build before deploy, because workspace packages like
+  # worker-kit export dist/, and wrangler doesn't build those itself.
+  #
+  # A matrix, not three steps in one job: fail-fast: false keeps one
+  # service's failure from blocking the others, and each gets its own job
+  # entry in the UI.
+  deploy-workers:
+    name: Deploy ${{ matrix.service }} (${{ needs.resolve-environment.outputs.environment }})
+    needs: resolve-environment
+    environment: ${{ needs.resolve-environment.outputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [public-api, admin-api, upload-api]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+
+      # Fails clearly instead of a generic wrangler auth error, and catches
+      # the token being set on the wrong GitHub Environment.
+      - name: Fail if CLOUDFLARE_API_TOKEN is empty
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is empty for the $TARGET_ENVIRONMENT environment. It must be stored as an ENVIRONMENT secret on the '$TARGET_ENVIRONMENT' GitHub Environment (not a repository secret)."
+            exit 1
+          fi
+
+      - name: Build ${{ matrix.service }} and its workspace dependencies
+        run: pnpm exec turbo run build --filter="@service/${{ matrix.service }}..."
+
+      - name: Deploy ${{ matrix.service }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: pnpm --filter "@service/${{ matrix.service }}" exec wrangler deploy --env "$TARGET_ENVIRONMENT"
+
+  # A separate job, not `need`ing deploy-workers, so a failure on either
+  # side can never block or be blocked by the other. Two things here are
+  # unverified against real Cloudflare: the container image (only ever
+  # built on x86_64) and the queue-consumer lifecycle. The dev queue also
+  # still has the old pano-tiler-dev Worker as its consumer, so a dev
+  # deploy here fails to attach until that cut-over lands in Wave 5.
+  #
+  # `wrangler deploy` drives the container build and registry push itself
+  # via CLOUDFLARE_API_TOKEN, using the Docker daemon ubuntu-latest already
+  # has. Slowest deploy by far - full install, a native sharp compile, an
+  # image push - hence the longer timeout.
+  deploy-tiler-consumer:
+    name: Deploy tiler-consumer (${{ needs.resolve-environment.outputs.environment }})
+    needs: resolve-environment
+    environment: ${{ needs.resolve-environment.outputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/setup
+
+      - name: Fail if CLOUDFLARE_API_TOKEN is empty
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is empty for the $TARGET_ENVIRONMENT environment. It must be stored as an ENVIRONMENT secret on the '$TARGET_ENVIRONMENT' GitHub Environment (not a repository secret)."
+            exit 1
+          fi
+
+      - name: Build tiler-consumer and its workspace dependencies
+        run: pnpm exec turbo run build --filter="@service/tiler-consumer..."
+
+      - name: Deploy tiler-consumer
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: pnpm --filter "@service/tiler-consumer" exec wrangler deploy --env "$TARGET_ENVIRONMENT"
+
+# Before this can succeed: CLOUDFLARE_API_TOKEN must be an environment
+# secret on both dev and production (not a repo secret); production needs
+# required reviewers and a main-only deployment branch policy. Full
+# prerequisites, including provisioning: docs/deploy.md.
