@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { authenticate, authenticateOptional } from './auth.js';
 import { UnauthorizedError } from './errors.js';
@@ -120,5 +120,95 @@ describe('the __verifyJwt seam is inert without env.TEST_JWT_SEAM (backdoor guar
     const promise = authenticate(reqWithAuth('Bearer good'), envWithoutSeamOptIn);
     await expect(promise).rejects.toBeInstanceOf(UnauthorizedError);
     await expect(promise).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+// No env here sets TEST_JWT_SEAM, so every case reaches the issuer guard
+// itself. fetch is mocked so "not called" is a precise assertion, not a
+// lucky fast failure.
+describe('OAUTH_ISSUER guard (unconfigured or placeholder issuer)', () => {
+  const GUARD_MESSAGE =
+    'OAUTH_ISSUER is unconfigured or a placeholder - all authenticated requests are rejected';
+
+  const audience = 'https://api.example';
+  const configuredEnv: AuthEnv = {
+    OAUTH_ISSUER: 'https://issuer.example/',
+    OAUTH_AUDIENCE: audience,
+  };
+
+  const unconfiguredCases: Array<[name: string, issuer: string]> = [
+    ['the shipped dev placeholder', 'https://YOUR_DEV_TENANT.auth0.com/'],
+    ['the shipped prod placeholder', 'https://YOUR_PROD_TENANT.auth0.com/'],
+    ['a placeholder-looking issuer regardless of case', 'https://your_tenant.auth0.com/'],
+    ['an empty issuer', ''],
+    ['a non-https issuer', 'http://issuer.example/'],
+    ['a relative (non-absolute) issuer', 'issuer.example'],
+  ];
+
+  for (const [name, issuer] of unconfiguredCases) {
+    describe(name, () => {
+      const env: AuthEnv = { OAUTH_ISSUER: issuer, OAUTH_AUDIENCE: audience };
+
+      it('authenticate() rejects with UnauthorizedError (401) and never calls fetch', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        const promise = authenticate(reqWithAuth('Bearer good'), env);
+        await expect(promise).rejects.toBeInstanceOf(UnauthorizedError);
+        await expect(promise).rejects.toMatchObject({ status: 401 });
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(GUARD_MESSAGE);
+      });
+
+      it('authenticateOptional() with a bearer resolves null (never "authenticated") and never calls fetch', async () => {
+        const fetchSpy = vi.spyOn(globalThis, 'fetch');
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+        await expect(authenticateOptional(reqWithAuth('Bearer good'), env)).resolves.toBeNull();
+        expect(fetchSpy).not.toHaveBeenCalled();
+      });
+    });
+  }
+
+  it('authenticateOptional() with no bearer still resolves null without logging anything (anonymous path unchanged)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const env: AuthEnv = {
+      OAUTH_ISSUER: 'https://YOUR_DEV_TENANT.auth0.com/',
+      OAUTH_AUDIENCE: audience,
+    };
+    await expect(authenticateOptional(reqWithAuth(), env)).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('a valid, configured issuer is never treated as unconfigured: it proceeds to real JWKS verification (fetch IS attempted, no bypass)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('blocked in test'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const promise = authenticate(reqWithAuth('Bearer good'), configuredEnv);
+    await expect(promise).rejects.toBeInstanceOf(UnauthorizedError);
+    // Confirms this hit real JWKS verification, not the guard: fetch runs
+    // and the rejection is logged via the generic warn path, not console.error.
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('emits exactly one console.error per rejected request, even across repeated calls', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const env: AuthEnv = { OAUTH_ISSUER: '', OAUTH_AUDIENCE: audience };
+
+    await expect(authenticate(reqWithAuth('Bearer a'), env)).rejects.toBeInstanceOf(
+      UnauthorizedError,
+    );
+    await expect(authenticate(reqWithAuth('Bearer b'), env)).rejects.toBeInstanceOf(
+      UnauthorizedError,
+    );
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenNthCalledWith(1, GUARD_MESSAGE);
+    expect(errorSpy).toHaveBeenNthCalledWith(2, GUARD_MESSAGE);
   });
 });
