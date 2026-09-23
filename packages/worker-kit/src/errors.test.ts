@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { PreconditionRequiredError, toErrorResponse, UnauthorizedError } from './errors.js';
 
@@ -36,5 +36,20 @@ describe('toErrorResponse', () => {
     const res = toErrorResponse('a string');
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toEqual({ error: 'internal' });
+  });
+
+  it('logs on the 500 path (an unrecognised throw), without changing the response', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const res = toErrorResponse(new Error('missing R2 secret'));
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: 'internal' });
+  });
+
+  it('does not log for an expected 4xx WorkerError', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    toErrorResponse(new UnauthorizedError());
+    toErrorResponse(new PreconditionRequiredError());
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });
