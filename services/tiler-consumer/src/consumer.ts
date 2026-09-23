@@ -1,5 +1,6 @@
 import { Container } from '@cloudflare/containers';
 import { containerEnvVars } from './container-env.js';
+import { deriveUploadTarget } from './upload-prefix.js';
 
 export class Tiler extends Container<Env> {
   override defaultPort = 8080;
@@ -55,14 +56,40 @@ export default {
         continue;
       }
       try {
+        // Acks keys that can never succeed rather than retrying (each retry
+        // starts a 4 GiB container just to 500 on the same rejected key).
+        deriveUploadTarget(key);
+      } catch (e) {
+        console.error(
+          `skip unprocessable key ${key}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        msg.ack();
+        continue;
+      }
+      try {
         const stub = env.TILER.get(env.TILER.idFromName(key));
         const res = await stub.fetch('https://container/tile', {
           method: 'POST',
           body: JSON.stringify({ key }),
         });
-        if (res.ok) msg.ack();
-        else msg.retry();
-      } catch {
+        if (res.ok) {
+          msg.ack();
+        } else {
+          // container.ts puts its error text in the body; log it or a
+          // tiling failure dead-letters with no trace of the cause.
+          let bodyText = '<failed to read response body>';
+          try {
+            bodyText = (await res.text()).slice(0, 500);
+          } catch {
+            // A failed body read must not block the retry below.
+          }
+          console.error(`tile job for ${key} failed: ${res.status} ${bodyText}`);
+          msg.retry();
+        }
+      } catch (e) {
+        // Covers a failed fetch and a DO constructor throw (missing R2
+        // secrets, container-env.ts); e's message never contains a secret.
+        console.error(`tile job failed for ${key}: ${e instanceof Error ? e.message : String(e)}`);
         msg.retry();
       }
     }

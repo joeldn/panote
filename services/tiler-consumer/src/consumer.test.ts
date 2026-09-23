@@ -1,5 +1,5 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import worker from './consumer.js';
 
 /**
@@ -27,17 +27,14 @@ import worker from './consumer.js';
  * a `Response`, and the ONLY ack/retry path these tests exercise is
  * `catch { msg.retry(); }`.
  *
- * What is consequently NOT covered: the `if (res.ok) msg.ack(); else
- * msg.retry();` decision is never evaluated at all - neither "container
- * returns 2xx -> ack" nor "container returns 500 -> retry" from §6.5's case
- * list. Mutation-tested: replacing that statement with a bare `msg.ack();`,
- * flipping it to `if (!res.ok)`, or changing its `else` to `msg.ack()` all
- * leave this suite fully green; only mutating the `catch` arm fails cases
- * here. So the cases below that assert a retry are proving the message got
- * past the action/suffix/size filters and reached the container call - not
- * that any particular container response is handled correctly. Closing this
- * gap needs a running container image, or a non-container Durable Object
- * stood up in a second wrangler env; neither is in scope for this port.
+ * The cases above only prove the message reached the container call, not
+ * that any given container response is handled correctly, since
+ * `stub.fetch()` never resolves without Docker.
+ *
+ * `describe('res.ok handling')` below closes that gap by mocking
+ * `env.TILER.get` so `stub.fetch()` resolves with a response this suite
+ * controls, exercising both branches for real. Whether the real container's
+ * own responses are shaped correctly still needs a running image.
  */
 describe('queue()', () => {
   it('acks a message whose action is not a create action, without calling the container', async () => {
@@ -185,6 +182,60 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([{ msgId: 'msg-container-fails' }]);
   });
 
+  it('logs the failing key and error on the catch path, and still retries the message', async () => {
+    // Also covers a DO constructor throw (missing R2 secrets): it reaches
+    // this same catch block via stub.fetch() rejecting.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const ctx = createExecutionContext();
+    const key = 'panos/u1/logged-failure/original';
+    const batch = createMessageBatch('pano-uploads-dev', [
+      {
+        id: 'msg-logged-failure',
+        timestamp: new Date(),
+        body: { object: { key, size: 10 }, action: 'PutObject' },
+        attempts: 1,
+      },
+    ]);
+    await worker.queue(batch, env, ctx);
+    const result = await getQueueResult(batch, ctx);
+    // Still retries - the logging must not change ack/retry semantics.
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages).toEqual([{ msgId: 'msg-logged-failure' }]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const [message] = errorSpy.mock.calls[0] as [string];
+    expect(message).toContain(key);
+  });
+
+  it('acks and logs a key deriveUploadTarget rejects, without calling the container', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const getSpy = vi.spyOn(env.TILER, 'get');
+    try {
+      const ctx = createExecutionContext();
+      // Passes the action/suffix filters, but the panoId segment has a
+      // space, which deriveUploadTarget rejects (upload-prefix.ts).
+      const key = 'panos/u1/bad panoid/original';
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-unprocessable-key',
+          timestamp: new Date(),
+          body: { object: { key, size: 10 }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+
+      expect(result.explicitAcks).toEqual(['msg-unprocessable-key']);
+      expect(result.retryMessages).toEqual([]);
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [message] = errorSpy.mock.calls[0] as [string];
+      expect(message).toContain(key);
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
+
   it('processes each message in a batch independently (partial ack/retry)', async () => {
     const ctx = createExecutionContext();
     const batch = createMessageBatch('pano-uploads-dev', [
@@ -211,5 +262,74 @@ describe('queue()', () => {
     const result = await getQueueResult(batch, ctx);
     expect(result.explicitAcks).toEqual(['msg-batch-filtered']);
     expect(result.retryMessages).toEqual([{ msgId: 'msg-batch-container' }]);
+  });
+});
+
+/**
+ * Exercises the ack/retry decision directly by swapping `env.TILER.get` for
+ * a fake stub whose `fetch` resolves with a response this suite controls.
+ */
+describe('res.ok handling', () => {
+  it('acks a 2xx container response without logging anything', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(async () => new Response('ok', { status: 200 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    try {
+      const ctx = createExecutionContext();
+      const key = 'panos/u1/ok-response/original';
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-ok-response',
+          timestamp: new Date(),
+          body: { object: { key, size: 10 }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.explicitAcks).toEqual(['msg-ok-response']);
+      expect(result.retryMessages).toEqual([]);
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
+
+  it('logs the key, status, and (truncated) body, and still retries, on a non-ok container response', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const longBody = 'x'.repeat(600);
+    const fakeFetch = vi.fn(async () => new Response(longBody, { status: 500 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    try {
+      const ctx = createExecutionContext();
+      const key = 'panos/u1/bad-response/original';
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-bad-response',
+          timestamp: new Date(),
+          body: { object: { key, size: 10 }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      // Not treated as a permanent failure, so it retries.
+      expect(result.explicitAcks).toEqual([]);
+      expect(result.retryMessages).toEqual([{ msgId: 'msg-bad-response' }]);
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const [message] = errorSpy.mock.calls[0] as [string];
+      expect(message).toContain(key);
+      expect(message).toContain('500');
+      // Truncated to ~500 chars - the full 600-char body must not appear.
+      expect(message).not.toContain(longBody);
+      expect(message).toContain('x'.repeat(500));
+    } finally {
+      getSpy.mockRestore();
+    }
   });
 });
