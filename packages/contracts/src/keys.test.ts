@@ -8,6 +8,9 @@ import {
   panoPrefix,
   encodeId,
   PANO_PATTERN,
+  TILES_ROOT,
+  tilesPrefix,
+  tileVersionPrefix,
 } from './keys.js';
 
 describe('keys', () => {
@@ -75,9 +78,8 @@ describe('keys', () => {
       },
     );
 
-    it('originalKey/manifestKey/configKey all throw on an invalid panoId', () => {
+    it('originalKey/configKey all throw on an invalid panoId', () => {
       expect(() => originalKey('u1', 'a/b')).toThrow(/panoId must match/);
-      expect(() => manifestKey('u1', 'a/b')).toThrow(/panoId must match/);
       expect(() => configKey('u1', 'a/b')).toThrow(/panoId must match/);
     });
 
@@ -85,6 +87,44 @@ describe('keys', () => {
       expect(PANO_PATTERN.test('550e8400-e29b-41d4-a716-446655440000')).toBe(true);
       expect(PANO_PATTERN.test('a/b')).toBe(false);
       expect(PANO_PATTERN.test('')).toBe(false);
+    });
+  });
+
+  // Tiles/manifest are public-CDN-served and carry no owner segment;
+  // panoId alone is the key.
+  describe('tile and manifest keys: owner-free', () => {
+    const panoId = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('TILES_ROOT is the fixed "tiles/" root', () => {
+      expect(TILES_ROOT).toBe('tiles/');
+    });
+
+    it('tilesPrefix builds an owner-free prefix from panoId alone', () => {
+      expect(tilesPrefix(panoId)).toBe(`tiles/${panoId}/`);
+    });
+
+    it('tilesPrefix throws on an invalid panoId', () => {
+      expect(() => tilesPrefix('a/b')).toThrow(/panoId must match/);
+    });
+
+    it('tileVersionPrefix nests the version under tilesPrefix', () => {
+      expect(tileVersionPrefix(panoId, 't1-abc123')).toBe(`tiles/${panoId}/t1-abc123/`);
+    });
+
+    it('tileVersionPrefix throws on an invalid panoId', () => {
+      expect(() => tileVersionPrefix('a/b', 't1-abc123')).toThrow(/panoId must match/);
+    });
+
+    it('tileVersionPrefix throws on an invalid version', () => {
+      expect(() => tileVersionPrefix(panoId, 'v/1')).toThrow(/version must match/);
+    });
+
+    it('manifestKey takes panoId alone and builds an owner-free key', () => {
+      expect(manifestKey(panoId)).toBe(`tiles/${panoId}/manifest.json`);
+    });
+
+    it('manifestKey throws on an invalid panoId', () => {
+      expect(() => manifestKey('a/b')).toThrow(/panoId must match/);
     });
   });
 });
