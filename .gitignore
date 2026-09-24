@@ -29,6 +29,7 @@ coverage/
 # Agent scaffolding
 .claude/
 .superpowers/
+.worktrees/
 
 # OS / editor cruft
 .DS_Store
