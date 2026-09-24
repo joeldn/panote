@@ -1,8 +1,10 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from './build.js';
+import { TILER_OUTPUT_VERSION } from './version.js';
+import type { Manifest } from '@panote/core';
 
 // build.ts hardcodes `channels: 3` on the RgbImage it builds from sharp's raw
 // decode of opts.src, on the assumption that removeAlpha() + raw() always
@@ -222,6 +224,64 @@ describe('build', () => {
       await expect(
         build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', maxSize: 0 }),
       ).rejects.toThrow(/maxSize/);
+    });
+
+    it('rejects a version containing a character outside PANO_PATTERN', async () => {
+      const outDir = await tmp();
+      await expect(
+        build({ src: '/nonexistent/src.png', outDir, pano: 'ok-pano', version: 't1/abc' }),
+      ).rejects.toThrow(/version/);
+    });
+  });
+
+  describe('version stamping', () => {
+    // Runs the full pipeline through the manifest write; sharp stays mocked,
+    // so only renderFace()'s bilinear sampling is real work here.
+    const WIDTH = 2048;
+    const HEIGHT = 1024;
+
+    function mockSuccessfulDecode(): void {
+      metadata.mockResolvedValue({ width: WIDTH, height: HEIGHT });
+      toBuffer.mockResolvedValue({
+        data: Buffer.alloc(WIDTH * HEIGHT * 3),
+        info: { width: WIDTH, height: HEIGHT, channels: 3 },
+      });
+    }
+
+    async function readManifest(outDir: string, pano: string): Promise<Manifest> {
+      const raw = await readFile(join(outDir, pano, 'manifest.json'), 'utf8');
+      return JSON.parse(raw) as Manifest;
+    }
+
+    it('writes version and tilerVersion into the manifest when a version is given', async () => {
+      const outDir = await tmp();
+      mockSuccessfulDecode();
+      await build({
+        src: 'fake-source.png',
+        outDir,
+        pano: 'ok-pano',
+        tileSize: 512,
+        maxSize: 512,
+        version: 't1-abc123',
+      });
+      const manifest = await readManifest(outDir, 'ok-pano');
+      expect(manifest.version).toBe('t1-abc123');
+      expect(manifest.tilerVersion).toBe(TILER_OUTPUT_VERSION);
+    });
+
+    it('omits version and tilerVersion from the manifest when no version is given', async () => {
+      const outDir = await tmp();
+      mockSuccessfulDecode();
+      await build({
+        src: 'fake-source.png',
+        outDir,
+        pano: 'ok-pano-unversioned',
+        tileSize: 512,
+        maxSize: 512,
+      });
+      const manifest = await readManifest(outDir, 'ok-pano-unversioned');
+      expect(manifest.version).toBeUndefined();
+      expect(manifest.tilerVersion).toBeUndefined();
     });
   });
 

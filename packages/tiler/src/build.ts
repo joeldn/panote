@@ -16,6 +16,7 @@ import {
   computeMaxLevel,
   MAX_INPUT_PIXELS,
 } from './pyramid.js';
+import { TILER_OUTPUT_VERSION } from './version.js';
 
 export interface BuildOptions {
   src: string;
@@ -25,6 +26,9 @@ export interface BuildOptions {
   maxSize?: number | undefined; // optional cap on faceSize (for fast dev pyramids)
   quality?: number | undefined; // default 70
   format?: TileFormat | undefined; // default 'webp'
+  // Stamped into the manifest with tilerVersion when given; omitted, the
+  // build writes a pre-versioning manifest, unchanged from today.
+  version?: string | undefined;
   onProgress?: ((msg: string) => void) | undefined;
 }
 
@@ -60,6 +64,10 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     throw new Error(`format must be 'jpg' or 'webp' (got ${String(fmt)})`);
   if (opts.maxSize !== undefined && (!Number.isInteger(opts.maxSize) || opts.maxSize <= 0))
     throw new Error(`maxSize must be a positive integer (got ${opts.maxSize})`);
+  // Validated here too (parseManifest checks it again on read) so a bad
+  // version fails the job loudly instead of producing an unreadable manifest.
+  if (opts.version !== undefined && !PANO_PATTERN.test(opts.version))
+    throw new Error(`version must match ${PANO_PATTERN} (got ${opts.version})`);
 
   const meta = await sharp(opts.src).metadata();
   if (!meta.width || !meta.height) throw new Error('source has no dimensions');
@@ -144,6 +152,9 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     faces: FACES,
     quality,
     format: fmt,
+    ...(opts.version !== undefined
+      ? { version: opts.version, tilerVersion: TILER_OUTPUT_VERSION }
+      : {}),
   };
   await mkdir(panoDir, { recursive: true });
   await writeFile(join(panoDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
