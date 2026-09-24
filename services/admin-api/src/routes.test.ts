@@ -1,8 +1,17 @@
-import { tourKey } from '@internal/contracts';
+import {
+  configKey,
+  manifestKey,
+  originalKey,
+  tileVersionPrefix,
+  tourKey,
+} from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
+
+const MY_SUB = 'auth0|me';
+const OTHER_SUB = 'auth0|other';
 
 // Test seam: authenticate() reads globalThis.__verifyJwt when it is set.
 // Installed here through setTestJwtVerifier - the only sanctioned way to reach
@@ -125,21 +134,115 @@ describe('admin panos routes', () => {
       headers: { ...auth.headers, 'If-Match': '*' },
       body: JSON.stringify({ panoId: siblingId, title: 'Sibling', hotspots: [] }),
     });
+    await env.BUCKET.put(originalKey(MY_SUB, siblingId), 'sibling original bytes');
+    await env.BUCKET.put(tileVersionPrefix(siblingId, 't1-sib') + '0/px/0-0.webp', 'sib tile');
+
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
       body: JSON.stringify({ panoId, title: 'Hall', hotspots: [] }),
     });
+    // Seed the original plus two tile versions and the manifest so the
+    // DELETE has real tile output to prove it actually removes.
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    await env.BUCKET.put(tileVersionPrefix(panoId, 't1-abc') + '0/px/0-0.webp', 'tile v1');
+    await env.BUCKET.put(tileVersionPrefix(panoId, 't1-def') + '0/px/0-0.webp', 'tile v2');
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ pano: panoId }));
+
     const del = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
       method: 'DELETE',
       headers: auth.headers,
     });
     expect(del.status).toBe(204);
     expect(await del.text()).toBe('');
+
     const list = await SELF.fetch('https://x/api/admin/panos', auth);
     const ids = ((await list.json()) as { panoIds: string[] }).panoIds;
     expect(ids).not.toContain(panoId);
     expect(ids).toContain(siblingId);
+
+    expect(await env.BUCKET.get(originalKey(MY_SUB, panoId))).toBeNull();
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+    expect(await env.BUCKET.get(manifestKey(panoId))).toBeNull();
+    expect(await env.BUCKET.get(tileVersionPrefix(panoId, 't1-abc') + '0/px/0-0.webp')).toBeNull();
+    expect(await env.BUCKET.get(tileVersionPrefix(panoId, 't1-def') + '0/px/0-0.webp')).toBeNull();
+
+    // The sibling pano is completely untouched.
+    expect(await env.BUCKET.get(originalKey(MY_SUB, siblingId))).not.toBeNull();
+    expect(await env.BUCKET.get(configKey(MY_SUB, siblingId))).not.toBeNull();
+    expect(
+      await env.BUCKET.get(tileVersionPrefix(siblingId, 't1-sib') + '0/px/0-0.webp'),
+    ).not.toBeNull();
+  });
+
+  it('deletes a config-only pano (no original ever uploaded) and it no longer lists', async () => {
+    const panoId = 'delete-no-original-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'No original', hotspots: [] }),
+    });
+
+    const del = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(del.status).toBe(204);
+
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    expect(((await list.json()) as { panoIds: string[] }).panoIds).not.toContain(panoId);
+  });
+
+  it("204s a user's DELETE of another user's panoId, whose config they merely PUT, removing only their own config and leaving the owner's original and tiles untouched", async () => {
+    const panoId = 'delete-cross-tenant-p1';
+    // User A owns this panoId: uploaded the original and has tiled output.
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'a original bytes');
+    await env.BUCKET.put(tileVersionPrefix(panoId, 't1-abc') + '0/px/0-0.webp', 'a tile');
+
+    // User B PUTs a config under the same panoId (allowed - config is keyed
+    // by (sub, panoId), not exclusive) but never uploaded an original there.
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...authOther.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'B config', hotspots: [] }),
+    });
+
+    const del = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      method: 'DELETE',
+      headers: authOther.headers,
+    });
+    expect(del.status).toBe(204);
+
+    // B's own config (the only thing B ever owned here) is gone.
+    expect(await env.BUCKET.get(configKey(OTHER_SUB, panoId))).toBeNull();
+    // A's original and tiles survive untouched.
+    expect(await env.BUCKET.get(originalKey(MY_SUB, panoId))).not.toBeNull();
+    expect(
+      await env.BUCKET.get(tileVersionPrefix(panoId, 't1-abc') + '0/px/0-0.webp'),
+    ).not.toBeNull();
+  });
+
+  it('a repeat DELETE after a successful delete is still 204 (idempotent)', async () => {
+    const panoId = 'delete-repeat-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Repeat', hotspots: [] }),
+    });
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+
+    const first = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(first.status).toBe(204);
+
+    const second = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(second.status).toBe(204);
   });
 
   it('400s a panoId containing "|" or a space (outside the URL-unreserved charset)', async () => {

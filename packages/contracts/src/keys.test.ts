@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   configKey,
+  deletingKey,
   originalKey,
   manifestKey,
   userPanosPrefix,
@@ -19,6 +20,15 @@ describe('keys', () => {
   });
   it('builds a list prefix', () => {
     expect(userPanosPrefix('auth0|abc')).toBe(`panos/${encodeId('auth0|abc')}/`);
+  });
+
+  // The delete tombstone: same owner-scoped shape as configKey/originalKey,
+  // so a leftover from an interrupted delete still proves ownership.
+  it('builds a deleting (tombstone) key with an encoded owner segment and a verbatim panoId', () => {
+    expect(deletingKey('auth0|abc', 'p1')).toBe(`panos/${encodeId('auth0|abc')}/p1/deleting`);
+  });
+  it('deletingKey throws on an invalid panoId', () => {
+    expect(() => deletingKey('u1', 'a/b')).toThrow(/panoId must match/);
   });
 
   describe('encodeId (owner only)', () => {

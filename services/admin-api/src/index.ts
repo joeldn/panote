@@ -1,7 +1,6 @@
 import {
   configKey,
   PANO_PATTERN,
-  panoPrefix,
   SceneConfigSchema,
   TourDocSchema,
   tourKey,
@@ -9,10 +8,11 @@ import {
 } from '@internal/contracts';
 import { authenticate } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
-import { deletePrefix, listChildren, putJson } from '@internal/worker-kit/r2-binding';
+import { listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono } from 'hono';
 
 import { updateConditional } from './conditional.js';
+import { deletePano } from './delete-pano.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -43,12 +43,11 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
 app.delete('/api/admin/panos/:panoId', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
   const panoId = c.req.param('panoId');
-  // No body schema to validate here, so check panoId directly - otherwise an
-  // invalid id would throw inside panoPrefix() and surface as a 500.
+  // No body schema here, so check panoId directly or it throws a 500 below.
   if (!PANO_PATTERN.test(panoId)) {
     return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
   }
-  await deletePrefix(c.env.BUCKET, panoPrefix(sub, panoId));
+  await deletePano(c.env.BUCKET, sub, panoId);
   return c.body(null, 204);
 });
 

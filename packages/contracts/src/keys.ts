@@ -37,6 +37,9 @@ export const panoPrefix = (u: string, p: string): string =>
   `panos/${encodeId(u)}/${assertValidId(p, 'panoId')}/`;
 export const originalKey = (u: string, p: string): string => `${panoPrefix(u, p)}original`;
 export const configKey = (u: string, p: string): string => `${panoPrefix(u, p)}config.json`;
+// A tombstone left while a delete is in flight, so it's resumable: written
+// first, deleted with the rest of the owner prefix last.
+export const deletingKey = (u: string, p: string): string => `${panoPrefix(u, p)}deleting`;
 export const userPanosPrefix = (u: string): string => `panos/${encodeId(u)}/`;
 export const tourKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/tour.json`;
