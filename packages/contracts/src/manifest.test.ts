@@ -130,4 +130,28 @@ describe('ManifestSchema', () => {
       ).not.toThrow();
     });
   });
+
+  describe('version / tilerVersion', () => {
+    it('accepts a manifest with no version/tilerVersion', () => {
+      expect(() => ManifestSchema.parse(manifest)).not.toThrow();
+    });
+
+    it('accepts a valid version and tilerVersion', () => {
+      const parsed = ManifestSchema.parse({ ...manifest, version: 't1-abc123', tilerVersion: 1 });
+      expect(parsed.version).toBe('t1-abc123');
+      expect(parsed.tilerVersion).toBe(1);
+    });
+
+    it('rejects a version containing a character outside PANO_PATTERN', () => {
+      expect(() => ManifestSchema.parse({ ...manifest, version: 't1/abc123' })).toThrow();
+    });
+
+    it('rejects a non-positive tilerVersion', () => {
+      expect(() => ManifestSchema.parse({ ...manifest, tilerVersion: 0 })).toThrow();
+    });
+
+    it('rejects a non-integer tilerVersion', () => {
+      expect(() => ManifestSchema.parse({ ...manifest, tilerVersion: 1.5 })).toThrow();
+    });
+  });
 });

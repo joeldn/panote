@@ -10,6 +10,10 @@ export interface Manifest {
   faces: readonly Face[];
   quality: number;
   format: TileFormat;
+  // Absent for a pre-versioning manifest; present ones name the tile prefix
+  // segment (tiles/<pano>/<version>/...) and the tiler build that wrote it.
+  version?: string | undefined;
+  tilerVersion?: number | undefined;
 }
 
 export function tilePath(
@@ -20,12 +24,16 @@ export function tilePath(
   x: number,
   y: number,
   format: TileFormat = 'jpg',
+  version?: string,
 ): string {
   // baseUrl is a base URL, not a path segment - it must not be encoded, or a
   // scheme/host/existing path would be mangled. pano and face are untrusted
   // path segments and are encoded individually so neither can inject an
   // extra "/" (or other URL-significant character) into the resulting path.
-  return `${baseUrl}${encodeURIComponent(pano)}/${level}/${encodeURIComponent(face)}/${x}-${y}.${format}`;
+  // version is omitted entirely (not just encoded empty) so an unversioned
+  // manifest produces a URL byte-identical to the pre-versioning layout.
+  const versionSegment = version !== undefined ? `${encodeURIComponent(version)}/` : '';
+  return `${baseUrl}${encodeURIComponent(pano)}/${versionSegment}${level}/${encodeURIComponent(face)}/${x}-${y}.${format}`;
 }
 
 export function manifestUrl(baseUrl: string, pano: string): string {
@@ -116,5 +124,35 @@ export function parseManifest(raw: unknown): Manifest {
     throw new Error(`manifest.format must be 'jpg' or 'webp' (got ${String(rawFormat)})`);
   }
   const format: TileFormat = rawFormat;
-  return { pano, faceSize, tileSize, maxLevel, faces: FACES, quality, format };
+
+  let version: string | undefined;
+  if (m.version !== undefined) {
+    if (typeof m.version !== 'string' || !PANO_PATTERN.test(m.version)) {
+      throw new Error(`manifest.version must match ${PANO_PATTERN}`);
+    }
+    version = m.version;
+  }
+  let tilerVersion: number | undefined;
+  if (m.tilerVersion !== undefined) {
+    if (
+      typeof m.tilerVersion !== 'number' ||
+      !Number.isInteger(m.tilerVersion) ||
+      m.tilerVersion <= 0
+    ) {
+      throw new Error('manifest.tilerVersion must be a positive integer');
+    }
+    tilerVersion = m.tilerVersion;
+  }
+
+  return {
+    pano,
+    faceSize,
+    tileSize,
+    maxLevel,
+    faces: FACES,
+    quality,
+    format,
+    ...(version !== undefined ? { version } : {}),
+    ...(tilerVersion !== undefined ? { tilerVersion } : {}),
+  };
 }
