@@ -89,3 +89,68 @@ describe('get', () => {
     expect(res).toBe(notFound);
   });
 });
+
+describe('head', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends a HEAD request and returns ok/status/etag on success', async () => {
+    const fetchMock = vi.fn(
+      async (_req: Request) => new Response(null, { status: 200, headers: { etag: '"abc123"' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client(config);
+
+    const result = await client.head('panos/u/p1/original');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const request = fetchMock.mock.calls[0]?.[0];
+    expect(request?.method).toBe('HEAD');
+    expect(result).toEqual({ ok: true, status: 200, etag: '"abc123"' });
+  });
+
+  it('returns ok: false and etag: null on a 404, without throwing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    const client = createR2S3Client(config);
+
+    const result = await client.head('panos/missing/original');
+    expect(result).toEqual({ ok: false, status: 404, etag: null });
+  });
+});
+
+describe('deleteObject', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends a signed DELETE request for the key', async () => {
+    const fetchMock = vi.fn(async (_req: Request) => new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client(config);
+
+    await client.deleteObject('tiles/p1/t1-abc/0/px/0-0.webp');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const request = fetchMock.mock.calls[0]?.[0];
+    expect(request?.method).toBe('DELETE');
+    expect(request?.url).toBe(
+      'https://acct123.r2.cloudflarestorage.com/mybucket/tiles/p1/t1-abc/0/px/0-0.webp',
+    );
+  });
+
+  it('throws when the response is not ok, naming the key and status', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('nope', { status: 403 })),
+    );
+    const client = createR2S3Client(config);
+
+    await expect(client.deleteObject('tiles/p1/t1-abc/0/px/0-0.webp')).rejects.toThrow(
+      'R2 DELETE tiles/p1/t1-abc/0/px/0-0.webp -> 403',
+    );
+  });
+});
