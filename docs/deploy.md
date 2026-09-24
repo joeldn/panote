@@ -179,15 +179,27 @@ either env today.
 
 ## GitHub setup
 
-`.github/workflows/deploy.yml` is `workflow_dispatch`-only for **both** environments today —
-there is no push trigger of any kind yet (the workflow's `workflow_dispatch` trigger definition
-is a single `environment` choice input, default `dev`). Every deploy, dev included, is a
-deliberate manual action until the Wave 5 queue cut-over — `dev`'s `tiler-consumer` can't attach
-to `pano-uploads-dev` until the old pano-viewer `pano-tiler-dev` Worker is detached (a queue
-allows exactly one consumer), so an automatic dev deploy would fail on every trigger until then
-(see the `deploy-tiler-consumer` job comment). Wave 5 turns dev auto-deploy on, and per the
-header comment the intent is to gate it on CI success on `main` (`workflow_run`), not a raw
-`push`, so a broken build on `main` can't auto-deploy. `production` is additionally
+`.github/workflows/deploy.yml` has two triggers: `workflow_dispatch` (a single `environment`
+choice input, default `dev`) and `workflow_run`, which fires after every completed run of `CI`
+on `main` (a `workflow_run` trigger only fires from the default branch's copy of a workflow, so
+none of this takes effect until this file itself is merged to `main`). A `workflow_run` event
+only actually deploys when every one of these holds, checked in the `resolve-environment` job's
+gate: `CI` **concluded** `success` (not merely completed); `CI` was triggered by a `push` (so
+its weekly `schedule` run and a manual `workflow_dispatch` run of `CI` itself never deploy); the
+run's head repository is this one (so a fork's `CI` run can never trigger it); and the
+repository variable `DEV_AUTO_DEPLOY` is the literal string `true`. Even then,
+`resolve-environment` re-checks that the commit `CI` ran against is still `main`'s current tip
+(`gh api repos/<owner>/<repo>/commits/main`) — two pushes' `CI` runs can finish out of order, so
+without this check, a `CI` run for an older commit finishing late would redeploy it over a newer
+commit that's already live. If it isn't the tip, the run emits a `::notice::` naming both SHAs
+and skips the deploy jobs rather than failing. A `workflow_run` deploy always targets `dev` — it
+can never resolve to `production` — and deploys the exact commit `CI` verified
+(`github.event.workflow_run.head_sha`), not whatever `main` has moved to since. Until
+`DEV_AUTO_DEPLOY` is set to `true`, every deploy, dev included, stays a deliberate manual
+action — `dev`'s `tiler-consumer` can't attach to `pano-uploads-dev` until the old pano-viewer
+`pano-tiler-dev` Worker is detached (a queue allows exactly one consumer), so an automatic dev
+deploy would fail on every trigger until the queue cut-over below has happened (see the
+`deploy-tiler-consumer` job comment). `production` is additionally
 hard-guarded to `main` — the `resolve-environment` job's "Guard production to main" step fails
 the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main` — hard-stops
 unless the repo variable `PRODUCTION_PROVISIONED` is the literal string `true` (the
@@ -216,6 +228,12 @@ services' placeholders. Before this workflow can succeed:
   actually done. Until then, leave it unset or anything other than `true` — the
   `resolve-environment` job's "Fail unless production is provisioned" step is a hard stop
   otherwise, independent of the main-only guard and the `YOUR_` placeholder check above.
+- `DEV_AUTO_DEPLOY` as a repository variable, set to the literal string `true` **only** after
+  both the first dev deploy checklist below and its queue cut-over step have already succeeded
+  by hand. Until the cut-over, `tiler-consumer` can't attach to `pano-uploads-dev` (the old
+  pano-viewer `pano-tiler-dev` Worker still holds the slot), so an auto-deploy triggered before
+  then would fail on every `CI` success on `main`. Leave it unset or anything other than `true`
+  until both have happened.
 
 ---
 
