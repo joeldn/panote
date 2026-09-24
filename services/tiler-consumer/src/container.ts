@@ -3,8 +3,9 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { build } from '@internal/tiler';
+import { build, TILER_OUTPUT_VERSION } from '@internal/tiler';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
+import { manifestKey, PANO_PATTERN, tileVersionPrefix } from '@internal/contracts';
 import { deriveUploadTarget } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
 
@@ -50,6 +51,26 @@ const walk = async (dir: string, root = dir, acc: Record<string, Uint8Array> = {
   return acc;
 };
 
+// S3 ETags are double-quoted; the quotes are stripped once here so every
+// comparison and the derived version string work on the bare value.
+const stripEtagQuotes = (raw: string | null): string | null =>
+  raw === null ? null : raw.replace(/^"|"$/g, '');
+
+// Continues past a per-key failure so a partial cleanup still removes as
+// much as it can; a failure here dead-letters the job, failed keys logged.
+const deleteKeys = async (keys: string[]): Promise<void> => {
+  const failed: string[] = [];
+  for (const k of keys) {
+    try {
+      await r2.deleteObject(k);
+    } catch (e) {
+      failed.push(k);
+      console.error(`failed to delete ${k}: ${String(e)}`);
+    }
+  }
+  if (failed.length) throw new Error(`cleanup failed to delete: ${failed.join(', ')}`);
+};
+
 createServer((req, res) => {
   // SECURITY BOUNDARY: this port is reachable only through the Tiler
   // Durable Object stub - Cloudflare Containers are not publicly routable -
@@ -74,14 +95,21 @@ createServer((req, res) => {
     if (tooLarge) return;
     try {
       const { key } = JSON.parse(body) as { key: string };
-      // Validates the key and derives the upload prefix and panoId
-      // (upload-prefix.ts).
-      const { prefix, panoId } = deriveUploadTarget(key);
+      // Validates the key and derives panoId; the owner plays no further
+      // part, since tile/manifest output is owner-free.
+      const { panoId } = deriveUploadTarget(key);
       const orig = await r2.get(key);
       if (!orig.ok) throw new Error(`download ${key} -> ${orig.status}`);
       const len = Number(orig.headers.get('content-length'));
       if (len && len > MAX_ORIGINAL_BYTES)
         throw new Error(`original ${key} too large: ${len} > ${MAX_ORIGINAL_BYTES}`);
+      const etag = stripEtagQuotes(orig.headers.get('etag'));
+      if (!etag) throw new Error(`original ${key} has no ETag`);
+      // Deterministic from the tiler build + the exact original tiled, so a
+      // duplicate delivery of the same original lands on the same keys.
+      const version = `t${TILER_OUTPUT_VERSION}-${etag}`;
+      if (!PANO_PATTERN.test(version))
+        throw new Error(`derived tile version must match ${PANO_PATTERN} (got ${version})`);
       const work = await mkdtemp(join(tmpdir(), 'pano-'));
       try {
         // Written outside build()'s output tree, under a name a valid
@@ -94,9 +122,57 @@ createServer((req, res) => {
           pano: panoId,
           format: 'webp',
           quality: 70,
+          version,
         });
         const files = await walk(join(work, panoId));
-        await uploadDir(files, prefix, put);
+        const tilePrefix = tileVersionPrefix(panoId, version);
+        const tileKeysOf = (): string[] =>
+          Object.keys(files)
+            .filter((k) => k !== 'manifest.json')
+            .map((k) => tilePrefix + k);
+
+        await uploadDir(files, tilePrefix, put);
+
+        // A newer upload or a delete can supersede this job before the
+        // manifest swap; skipping it here is success, not a failure to retry.
+        const preHead = await r2.head(key);
+        if (!preHead.ok && preHead.status !== 404) {
+          throw new Error(`pre-swap HEAD ${key} -> ${preHead.status}`);
+        }
+        if (!preHead.ok) {
+          console.warn(`skip manifest for ${key}: original is gone (HEAD ${preHead.status})`);
+          const tileKeys = tileKeysOf();
+          await deleteKeys(tileKeys);
+          console.warn(
+            `deleted ${tileKeys.length} orphaned tile(s) under ${tilePrefix}: original ${key} was deleted mid-job`,
+          );
+        } else if (stripEtagQuotes(preHead.etag) !== etag) {
+          console.warn(
+            `skip manifest for ${key}: original ETag changed (${etag} -> ${String(stripEtagQuotes(preHead.etag))})`,
+          );
+        } else {
+          if (files['manifest.json']) {
+            await put(manifestKey(panoId), files['manifest.json'], 'application/json');
+          }
+          // A DELETE can land between the pre-swap HEAD and the manifest PUT;
+          // this catches it - a retry won't, since r2.get(key) 404s first.
+          const postHead = await r2.head(key);
+          if (!postHead.ok) {
+            if (postHead.status !== 404)
+              throw new Error(`post-PUT HEAD ${key} -> ${postHead.status}`);
+            const orphanKeys = [manifestKey(panoId), ...tileKeysOf()];
+            await deleteKeys(orphanKeys);
+            console.warn(
+              `deleted ${orphanKeys.length} post-PUT orphaned key(s) under ${tilePrefix}: original ${key} was deleted mid-job`,
+            );
+          } else if (stripEtagQuotes(postHead.etag) !== etag) {
+            // A newer original landed after the pre-swap check and may have
+            // had its manifest overwritten - throw so the retry rewrites it.
+            throw new Error(
+              `post-PUT HEAD ${key} ETag changed: ${etag} -> ${String(stripEtagQuotes(postHead.etag))}`,
+            );
+          }
+        }
         res.writeHead(200).end('ok');
       } finally {
         await rm(work, { recursive: true, force: true });
