@@ -123,8 +123,39 @@ configuration set.
 
 ### CDN custom domain (MANUAL)
 
-Not scriptable as part of this runbook by design — do it once per environment in the Cloudflare
-dashboard, under the bucket's Settings → Custom Domains:
+#### Prerequisite: WAF custom rule, before attaching the domain
+
+The bucket also holds `panos/<owner>/<panoId>/original` and `panos/<owner>/<panoId>/config.json`
+— owner-scoped, never meant to be publicly readable. An R2 custom domain serves the *whole*
+bucket with no per-prefix access control, so before attaching `cdn.panote.dev`, create a WAF
+custom rule on the `panote.dev` zone (dashboard: Security → Security rules (custom rules); or the Rulesets
+API, phase `http_request_firewall_custom` — `wrangler` cannot create WAF rules), action **Block**,
+expression:
+
+```
+(http.host eq "cdn.panote.dev" and not (starts_with(http.request.uri.path, "/tiles/") or starts_with(http.request.uri.path, "/pub/") or starts_with(http.request.uri.path, "/slugs/")))
+```
+
+Fail-closed: any future private prefix is blocked by default, since only the three named public
+ones are allowed through. Custom rules run before the cache, so a cached private object can't
+slip out through this domain even if one somehow ended up cached — per Cloudflare's cache docs,
+"A WAF custom rule was triggered to block a request. The response will come from the Cloudflare
+global network before it hits cache." The Free plan allows 5 custom rules; this uses 1. Before
+relying on `starts_with` for this, verify that URL normalization is enabled (Rules → Settings) so
+a path trick like `/tiles/../panos/` can't slip past the check — **UNVERIFIED**, confirm this on
+the zone. Mirror the same rule for `cdn.panote.io` on the `panote.io` zone in production, host
+`cdn.panote.io`, before attaching that domain.
+
+#### Attaching the domain
+
+Do this once per environment, only after the WAF rule above exists. Dashboard: the bucket's
+Settings → Custom Domains. `wrangler r2 bucket domain add` is a scriptable alternative to the
+dashboard:
+
+```bash
+pnpm --filter @service/admin-api exec wrangler r2 bucket domain add pano-content-dev \
+  --domain cdn.panote.dev --zone-id <panote.dev zone id>
+```
 
 - dev: `cdn.panote.dev` → `pano-content-dev`
 - production: `cdn.panote.io` → `pano-content`
@@ -132,7 +163,8 @@ dashboard, under the bucket's Settings → Custom Domains:
 This is what `docs/decisions.md` calls "an R2 custom-domain CDN" for large binary reads (tiles,
 manifests) — cached public reads, zero egress, and it never exposes the raw bucket or `r2.dev`
 URL. **Status: outstanding in both environments** — `pano-content-dev` currently has no custom
-domain (`r2.dev` is disabled on it too, so it isn't reachable any way today).
+domain (`r2.dev` is disabled on it too, so it isn't reachable any way today), and the WAF rule
+above does not exist yet either.
 
 ### Secrets
 
@@ -322,7 +354,10 @@ In order:
    `<pano-uuid>` is the pano id verbatim (only the owner segment is encoded — see
    `docs/decisions.md`), while watching `wrangler tail --env dev` on `tiler-consumer` — the
    R2→queue notification should fire, the consumer should pick up the message, and the container
-   should tile it. If it doesn't, the consumer logs the reason on
+   should tile it. Expect `tiles/<pano-uuid>/manifest.json` plus tiles under
+   `tiles/<pano-uuid>/t1-<etag>/…` to appear — owner-free, not under `panos/`. The viewer must be
+   given `baseUrl` `https://cdn.panote.dev/tiles/` to match (the `PanoViewer` default is `/tiles/`).
+   If it doesn't, the consumer logs the reason on
    both failure paths — a non-`ok` container response (key, status, and the response body
    truncated to 500 chars) and a thrown/rejected `stub.fetch()` (key and error message) — so a
    dead-lettered job's cause should be visible in `wrangler tail` (or observability logs) rather
@@ -333,6 +368,87 @@ In order:
    `deriveUploadTarget` before it ever reaches the container, logs why the key is invalid, and
    acks it immediately — never retried, never dead-lettered, since retrying a key that can never
    succeed would only delay the inevitable and burn the retry budget for nothing.
+
+---
+
+## Re-tiling
+
+A new original uploaded to the same key re-tiles automatically — R2 fires the object-create
+notification on overwrite the same as on first create, so nothing else has to be triggered by
+hand.
+
+After a change to the tiler's output itself (tile layout, encoding, pyramid shape), bump
+`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then
+re-trigger each pano by re-putting its original (verify these flags against
+`wrangler r2 object --help` before running):
+
+```bash
+pnpm --filter @service/admin-api exec wrangler r2 object get pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
+pnpm --filter @service/admin-api exec wrangler r2 object put pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
+```
+
+Both need `--remote`, for the same reason as the end-to-end test above. Re-putting identical
+bytes **without** a version bump yields the same ETag, so the derived version string
+(`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
+rewriting identical keys rather than creating a new one. Old version dirs are left in place after
+a re-tile; cleaning them up is deferred to Wave 6.
+
+## Deleted panos
+
+`admin-api`'s `DELETE /api/admin/panos/:panoId` always returns 204 and is idempotent. Without proof
+of ownership (no original, no tombstone under the caller's own prefix) it only cleans up the
+caller's own owner-scoped prefix (`panos/<owner>/<panoId>/`) and never touches `tiles/<panoId>/` —
+a config-only pano (one whose original was never actually uploaded) still deletes and stays
+deleted, and a repeat DELETE of an already-deleted pano is a no-op 204 rather than a 404. With
+proof, `deletePano` (`services/admin-api/src/delete-pano.ts`) writes a tombstone key first
+(`panos/<owner>/<panoId>/deleting`, skipped if one is already there), deletes the original, sweeps
+`tiles/<panoId>/` once, then deletes the rest of the owner prefix, tombstone included, in one
+prefix delete. Every step before that final delete is safe to redo, so an
+interrupted DELETE (a client disconnect, or a step that throws) is recovered by **re-running
+DELETE**: the leftover tombstone means the pano still lists under `GET /api/admin/panos` (its
+prefix is still non-empty), and DELETE resumes from wherever it stopped.
+
+Tiles are written `public, max-age=31536000, immutable`, so both Cloudflare's edge cache and any
+browser that already fetched one can keep serving it for up to a year after delete — anyone who
+already has a tile URL keeps access to it until a cache purge, full stop. In practice a deleted
+pano's tile URLs can't be *discovered* once the manifest's ~30s cache expires, since a client would
+need a stale manifest it already had cached to read them from. A Cloudflare cache purge by prefix
+or URL is the only way to revoke access sooner; automated purge on delete is deferred.
+
+One sweep of `tiles/<panoId>/` is enough to catch every tile a still-in-flight tiler job writes,
+because every tile/manifest write precedes that job's own last HEAD of the original
+(`services/tiler-consumer/src/container.ts`). If that HEAD lands after `deletePano` has already
+deleted the original, it 404s and the job deletes its own tile keys (and the manifest, if it got
+that far) instead of writing anything more; if it lands before, all of that job's writes already
+precede the delete of the original, and so `deletePano`'s sweep, and R2's strong read-after-write/list-after-write
+consistency (<https://developers.cloudflare.com/r2/reference/consistency/>: an operation's effect
+"is observed globally, immediately, by all clients") guarantees the sweep sees it. The tiler also
+re-HEADs the original once more right after a successful manifest PUT: a 404 there deletes the
+manifest and every tile key that job just wrote (`packages/worker-kit/src/r2-s3.ts`'s
+`deleteObject`); an ETag that instead comes back *different* (a newer original landed and was tiled
+after this job's pre-swap check, so this job's manifest PUT may have overwritten the newer one's)
+makes the job throw and retry instead of cleaning up, so the queue redelivers it, it re-GETs the
+now-current original, and rewrites the correct manifest — closing what used to be a window where a
+superseded job's stale manifest could survive undetected. Any other non-ok status throws so the
+queue retries instead of treating a transient error as gone. If a cleanup step itself can't delete
+one of its own keys, the job throws again — but since the original is already confirmed gone by
+then, a queue retry just fails immediately at `r2.get(key)` (404) rather than re-attempting the
+cleanup, so the job dead-letters with the failed keys logged (`deleteKeys`). Recovery from a
+dead-lettered cleanup is a manual `wrangler r2 object delete pano-content-dev/<key> --remote` per
+key logged in that failure — this applies only to a dead-lettered tiler cleanup, not to an
+interrupted DELETE, which is recovered by re-running DELETE instead.
+
+One edge case neither side catches: a tile PUT whose `fetch` call itself threw (a timeout, a
+dropped connection) but that R2 committed anyway. The job only knows about the failed `fetch`, not
+that the write landed, so it never cleans up after it. A re-run (or still in-flight) DELETE's sweep
+still catches it like any other late write; only if it happens after DELETE has already completed
+and removed the tombstone does a later DELETE take the no-proof path and skip `tiles/<panoId>/`
+entirely, leaving that one narrow case to the same manual per-key delete.
+
+A presigned upload URL stays valid for up to 900 seconds after `upload-api` issues it, and can
+still be used within that window to re-create a deleted pano's original — which re-tiles a pano
+that now has no `config.json`. That isn't a leak of anything new, and the pano can simply be
+deleted again.
 
 ---
 
