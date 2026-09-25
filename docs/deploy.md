@@ -23,16 +23,19 @@ Workers already use, cut over rather than recreated. Worker script names are `pa
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` is `true` in `dev`
 (the `*.workers.dev` URL stays reachable for smoke tests even once routes are live — see the
-DNS section) and `false` in `production`. Every `OAUTH_ISSUER` var ships as a literal
-placeholder (`https://YOUR_DEV_TENANT.auth0.com/` / `https://YOUR_PROD_TENANT.auth0.com/`)
-until an Auth0 tenant exists — `isIssuerConfigured` in `packages/worker-kit/src/auth.ts` rejects
-it before any network call, logging one `console.error` and returning 401. That guard runs
-inside `authenticate()` on every request, but only *after* the bearer-token check: a request with
-no `Authorization` header at all 401s first, before `isIssuerConfigured` ever runs, so it produces
-no log line. Only a request that supplies some bearer token — even a bogus one — reaches the
-issuer guard and produces the `console.error`. Nothing checks it once at startup. See the smoke
-test step below for how to actually see that log line, and `docs/decisions.md` for why the
-placeholder must only ever be replaced by a real tenant URL, never renamed to another fake one.
+DNS section) and `false` in `production`. `dev`'s `OAUTH_ISSUER` now points at the real Auth0
+tenant, `https://panote-dev.au.auth0.com/` (`OAUTH_AUDIENCE` `https://api.panote.dev`), provisioned
+2026-09-25; `production`'s still ships the literal placeholder
+`https://YOUR_PROD_TENANT.auth0.com/` until its own tenant exists — `isIssuerConfigured` in
+`packages/worker-kit/src/auth.ts` rejects an unconfigured or placeholder-shaped issuer before any
+network call, logging one `console.error` and returning 401. That guard runs inside
+`authenticate()` on every request, but only *after* the bearer-token check: a request with no
+`Authorization` header at all 401s first, before `isIssuerConfigured` ever runs, so it produces no
+log line. Only a request that supplies some bearer token — even a bogus one — reaches the issuer
+guard and produces the `console.error`, which now only fires for `production` (and for `dev` if
+its config ever regresses to a placeholder). See the smoke test step below for what `dev` does
+instead, and `docs/decisions.md` for why the placeholder must only ever be replaced by a real
+tenant URL, never renamed to another fake one.
 
 `admin-api` and `upload-api` require a bearer token on every route (`authenticate`);
 `public-api` verifies it when present but never requires it (`authenticateOptional`) — its only
@@ -50,10 +53,12 @@ you're running them from the repo root — `pnpm --filter <pkg> exec <cmd>` runs
 matched package's directory as its cwd (not the repo root), which is why a relative
 `--file` path below is `../../infra/r2/cors.json` rather than `infra/r2/cors.json`.
 
-**Status today: dev is provisioned, production is not.** `pano-content-dev`,
+**Status as of 2026-09-25: dev is fully provisioned, production is not.** `pano-content-dev`,
 `pano-uploads-dev`, and `pano-uploads-dlq-dev` already exist (inherited from pano-viewer's
-provisioning). `pano-content`, `pano-uploads`, and `pano-uploads-dlq` do not — `panote.io` is
-still on Route 53, not Cloudflare, so production provisioning can't start yet (see DNS section).
+provisioning); bucket CORS, the `cdn.panote.dev` custom domain and its WAF rule, the R2 secrets,
+and the Auth0 dev tenant are now in place too (see each subsection below). `pano-content`,
+`pano-uploads`, and `pano-uploads-dlq` do not exist for production — `panote.io` is still on
+Route 53, not Cloudflare, so production provisioning can't start yet (see DNS section).
 
 None of `r2 bucket create` / `queues create` / `r2 bucket notification create` take a
 `--if-not-exists` flag (checked via `--help` against wrangler 4.120). Re-running `create`
@@ -118,8 +123,8 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content \
   --file ../../infra/r2/cors.json
 ```
 
-**Status: outstanding in both environments** — `pano-content-dev` currently has no CORS
-configuration set.
+**Status: set for dev, outstanding for production** — `pano-content-dev`'s CORS ruleset is set
+from `infra/r2/cors.json`; `pano-content` doesn't exist yet.
 
 ### CDN custom domain (MANUAL)
 
@@ -140,11 +145,12 @@ Fail-closed: any future private prefix is blocked by default, since only the thr
 ones are allowed through. Custom rules run before the cache, so a cached private object can't
 slip out through this domain even if one somehow ended up cached — per Cloudflare's cache docs,
 "A WAF custom rule was triggered to block a request. The response will come from the Cloudflare
-global network before it hits cache." The Free plan allows 5 custom rules; this uses 1. Before
-relying on `starts_with` for this, verify that URL normalization is enabled (Rules → Settings) so
-a path trick like `/tiles/../panos/` can't slip past the check — **UNVERIFIED**, confirm this on
-the zone. Mirror the same rule for `cdn.panote.io` on the `panote.io` zone in production, host
-`cdn.panote.io`, before attaching that domain.
+global network before it hits cache." The Free plan allows 5 custom rules; this uses 1. URL
+normalization (Rules → Settings) is enabled on the zone, verified live against `cdn.panote.dev` on
+2026-09-25: `/panos`, `/tours`, and `/` all return `403`; `/tiles`, `/pub`, and `/slugs` pass
+through to R2; and `/tiles/../panos/` also returns `403`, confirming the path-traversal trick can't
+slip past the check. Mirror the same rule for `cdn.panote.io` on the `panote.io` zone in
+production, host `cdn.panote.io`, before attaching that domain.
 
 #### Attaching the domain
 
@@ -162,9 +168,9 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket domain add pano-content
 
 This is what `docs/decisions.md` calls "an R2 custom-domain CDN" for large binary reads (tiles,
 manifests) — cached public reads, zero egress, and it never exposes the raw bucket or `r2.dev`
-URL. **Status: outstanding in both environments** — `pano-content-dev` currently has no custom
-domain (`r2.dev` is disabled on it too, so it isn't reachable any way today), and the WAF rule
-above does not exist yet either.
+URL. **Status: live in dev, outstanding in production** — `cdn.panote.dev` is attached to
+`pano-content-dev` with its WAF rule in front (verified above); `pano-content` doesn't exist yet
+for the production side.
 
 ### Secrets
 
@@ -181,28 +187,20 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put R2_SECRET_ACCESS_
 Repeat with `--env production` once production is provisioned. `admin-api` and `public-api`
 need no secrets — `admin-api` reads R2 through the native binding, not the S3 API; `public-api`
 never touches R2 at all. `wrangler deploy --env <env> --secrets-file <file>` is the alternative
-to interactive `secret put` if scripting this. **Status: outstanding** — no secrets are set in
-either environment yet, so `upload-api` and `tiler-consumer` cannot presign or write to R2 in
-either env today.
+to interactive `secret put` if scripting this. **Status: set for dev, outstanding for
+production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and
+`tiler-consumer`'s dev environments; production has neither yet.
 
 ---
 
 ## DNS / zone setup
 
-- **`panote.dev`** — being moved to Cloudflare now (not this doc's job to execute, tracked
-  separately): add it as a site in the Cloudflare dashboard, copy the two assigned nameservers
-  into Namecheap → Domain → Nameservers → Custom DNS (the domain stays registered at Namecheap),
-  check imported records (MX etc.) before switching, then wait for the zone to go Active.
-  `admin-api`, `public-api`, and `upload-api`'s dev `routes` blocks all target `panote.dev`, and
-  `wrangler deploy` attaches a declared route as part of the deploy itself — it fails outright if
-  the route's zone isn't on the account. **This makes the zone being Active a prerequisite for
-  the first dev deploy, not something `workers_dev: true` lets you work around**: whether a zone
-  that's merely Pending (added but not yet Active) is enough for the route attach to succeed is
-  unverified, so the instruction is to wait for Active before deploying at all. A routes-only
-  hostname additionally needs a proxied DNS record to exist (a placeholder proxied `AAAA @ 100::`
-  until the Wave 6 Pages site is real) — create that before the first deploy too. Once deployed,
-  `workers_dev: true` does still give a second, always-reachable `*.workers.dev` URL for smoke
-  tests, independent of the route.
+- **`panote.dev`** — **live on Cloudflare as of 2026-09-25**: nameservers `jo.ns.cloudflare.com`
+  and `kaiser.ns.cloudflare.com`, zone Active, with the placeholder proxied `AAAA @ 100::` record
+  in place (until the Wave 6 Pages site is real). `admin-api`, `public-api`, and `upload-api`'s
+  dev `routes` blocks all target `panote.dev`, and their first dev deploy (see the checklist
+  below) already succeeded against it. `workers_dev: true` still gives a second, always-reachable
+  `*.workers.dev` URL for smoke tests, independent of the route.
 - **`panote.io`** — currently on AWS Route 53, not Cloudflare. Production is blocked on this
   move happening (same steps as above) before *any* production provisioning — bucket, queues,
   routes, custom domain — can proceed.
@@ -271,6 +269,15 @@ services' placeholders. Before this workflow can succeed:
 
 ## First dev deploy checklist
 
+**Status: steps 1-4 complete as of 2026-09-25** — `public-api`, `admin-api`, and `upload-api` were
+deployed to dev via the Deploy workflow (`.github/workflows/deploy.yml`, `workflow_dispatch`), and
+the smoke tests in step 4 passed. The same workflow run (GitHub Actions run `36113701026`) also ran
+`deploy-tiler-consumer`, which failed as expected at the queue-consumer attach step — `pano-tiler-dev`
+still holds `pano-uploads-dev`'s one consumer slot — but got far enough to create `tiler-consumer`'s
+Worker script and container first. Step 5's queue cut-over is still pending: `tiler-consumer`'s
+script and container exist in dev, but the Worker holds no consumer slot on `pano-uploads-dev` yet.
+The steps below stay as the reference procedure for re-running any of this, not just history.
+
 In order:
 
 1. **DNS prerequisite**: confirm `panote.dev` is an **Active** zone in Cloudflare (see DNS / zone
@@ -302,16 +309,15 @@ In order:
    is Active):
    - `GET /api/tours/x/stats` → `200` (no auth required; hits the `TourStats` Durable Object).
    - `admin-api` and `upload-api`'s own routes (e.g. `GET /api/admin/panos`,
-     `POST /api/upload-url`) → `401` either way, but the log line differs by request: a plain
-     `curl` with no `Authorization` header at all 401s on the bearer-token check, before the
-     issuer guard ever runs, so it logs nothing. Send a dummy bearer instead —
-     `curl -H 'Authorization: Bearer x' ...` — to reach the issuer guard and see the
-     `OAUTH_ISSUER is unconfigured or a placeholder - all authenticated requests are rejected`
-     line in `wrangler tail --env dev` for that service. This is expected until an
-     Auth0 tenant exists — it confirms the guard is rejecting loudly rather than silently
-     falling through. A path neither service declares → `404` (Hono's default for `admin-api`;
-     `upload-api`'s handler checks method + pathname itself and returns 404 explicitly) — don't
-     expect `401` from an unmatched path, only from a real route with no/invalid token.
+     `POST /api/upload-url`) → `401` either way: a plain `curl` with no `Authorization` header at
+     all 401s on the bearer-token check, before the issuer guard ever runs. A dummy bearer instead
+     — `curl -H 'Authorization: Bearer x' ...` — now reaches real JWKS verification against
+     `https://panote-dev.au.auth0.com/` (the issuer guard no longer fires for dev, since its
+     `OAUTH_ISSUER` is a real tenant, not a placeholder) and 401s once that verification fails; see
+     "Known unverified areas" below for what a genuine Auth0-issued token still hasn't exercised. A
+     path neither service declares → `404` (Hono's default for `admin-api`; `upload-api`'s handler
+     checks method + pathname itself and returns 404 explicitly) — don't expect `401` from an
+     unmatched path, only from a real route with no/invalid token.
 5. **Queue cut-over**, only after steps 3-4 pass.
 
    **Pre-cut-over check, first:** confirm `pano-content-dev` still has 0 objects —
@@ -342,9 +348,10 @@ In order:
    Messages published between the `remove` and the new deploy attaching persist in the queue
    (default retention) — nothing is dropped, delivery is just delayed until a consumer exists
    again.
-6. **End-to-end test** — only meaningful once an Auth0 dev tenant exists (a Wave 5
-   prerequisite; `OAUTH_ISSUER` is still a placeholder as of this writing, so every authenticated
-   route 401s and this step cannot run yet):
+6. **End-to-end test** — the Auth0 dev tenant now exists (`https://panote-dev.au.auth0.com/`,
+   verified via its `.well-known/openid-configuration`), so `OAUTH_ISSUER` is no longer a
+   placeholder in dev. This step still can't run to completion until step 5's queue cut-over has
+   happened:
    ```bash
    pnpm --filter @service/admin-api exec wrangler r2 object put pano-content-dev/panos/<owner>/<pano-uuid>/original --file <test-image> --remote
    ```
@@ -494,5 +501,6 @@ first.
 - **The real JWKS success path.** `packages/worker-kit/src/auth.ts`'s tests exercise the
   `globalThis.__verifyJwt` test seam (gated behind `env.TEST_JWT_SEAM === 'enabled'`, never set
   outside Vitest) and the rejection path for a missing/placeholder issuer. No test has ever
-  fetched a real JWKS document or verified a real Auth0-issued token — that path is entirely
-  unverified until a tenant exists and step 6 above can run.
+  fetched a real JWKS document or verified a real Auth0-issued token — the dev tenant now exists
+  (`https://panote-dev.au.auth0.com/`), but this stays unverified until step 6 above can actually
+  run, which needs the queue cut-over first.
