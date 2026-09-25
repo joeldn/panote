@@ -138,11 +138,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: ${{ steps.resolve.outputs.environment == 'production' }}
 
-      # dev keeps the OAUTH_ISSUER placeholder by design; shipping it to
-      # production would break auth, with every authenticated route
-      # returning 401. One check here covers all four configs,
-      # since tiler-consumer has no OAUTH_ISSUER of its own for a per-job
-      # check to catch. Case-insensitive to match worker-kit's guard.
+      # Blocks a leftover YOUR_ placeholder (e.g. OAUTH_ISSUER) from
+      # reaching production, across all four services' configs.
       - name: Fail if any production config still has a YOUR_ placeholder
         if: ${{ steps.resolve.outputs.environment == 'production' }}
         run: |
