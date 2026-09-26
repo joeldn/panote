@@ -1,4 +1,5 @@
 const HALF_PI = Math.PI / 2;
+const TWO_PI = Math.PI * 2;
 
 export function clampPitch(pitch: number): number {
   const limit = HALF_PI - 0.001;
@@ -30,4 +31,17 @@ export function damp(current: number, target: number, factor: number): number {
 /** Pinch zoom factor: ratio of previous to current pointer distance (pinch-in zooms out). */
 export function pinchFactor(prevDist: number, dist: number): number {
   return prevDist / dist;
+}
+
+/** Wrap a radians angle into (−π, π]. */
+export function normalizeAngle(angle: number): number {
+  const wrapped = angle % TWO_PI;
+  if (wrapped > Math.PI) return wrapped - TWO_PI;
+  if (wrapped <= -Math.PI) return wrapped + TWO_PI;
+  return wrapped;
+}
+
+/** Compass heading (radians) of `north` relative to the current `yaw`, wrapped to (−π, π]. */
+export function compassHeading(yaw: number, north: number): number {
+  return normalizeAngle(north - yaw);
 }

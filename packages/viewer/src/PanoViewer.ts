@@ -12,10 +12,25 @@ import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
 import { Emitter } from './emitter.js';
-import { clampPitch, clampFov, damp, anglePerPixel, zoomAnchorDelta } from './camera-math.js';
+import {
+  clampPitch,
+  clampFov,
+  damp,
+  anglePerPixel,
+  zoomAnchorDelta,
+  compassHeading,
+} from './camera-math.js';
 import type { View, ViewerOptions, PanoViewerEvents } from './types.js';
 import { HotspotLayer, type HotspotHandle } from './hotspots.js';
 import { dirFromYawPitch } from './project.js';
+
+const TWO_PI = Math.PI * 2;
+// A stalled/backgrounded tab must not spend its whole absence as one jump on resume.
+const AUTO_ROTATE_MAX_DT_MS = 100;
+
+function now(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 export class PanoViewer implements ControlHost {
   private renderer: GLRenderer;
@@ -35,7 +50,14 @@ export class PanoViewer implements ControlHost {
   private wasPending = false;
   private view: View;
   private target: View;
-  private opts: Required<Omit<ViewerOptions, 'initialView'>>;
+  // north/autoRotate* are runtime-mutable (setNorth/setAutoRotate), so they
+  // live in their own fields below rather than this fixed-at-construction set.
+  private opts: Required<
+    Omit<
+      ViewerOptions,
+      'initialView' | 'north' | 'autoRotate' | 'autoRotateSpeed' | 'autoRotateIdleMs'
+    >
+  >;
   private loadToken = 0;
   private disposed = false;
   private momentum = { yaw: 0, pitch: 0 };
@@ -46,6 +68,17 @@ export class PanoViewer implements ControlHost {
   private resizeObserver: ResizeObserver | undefined;
   // The view-projection matrix for the frame currently being drawn.
   private viewProj: Mat4;
+  private north: number;
+  private autoRotateEnabled: boolean;
+  private autoRotateSpeed: number;
+  private autoRotateIdleMs: number;
+  // Whether auto-rotate is actually turning this frame — false while a
+  // recent interaction's idle timer hasn't elapsed yet.
+  private autoRotateActive: boolean;
+  private autoRotateResumeTimer: ReturnType<typeof setTimeout> | undefined;
+  // Last frame auto-rotate advanced yaw on; undefined whenever it isn't
+  // running, so the frame it (re)starts on applies zero elapsed time.
+  private autoRotateLastFrame: number | undefined;
 
   constructor(
     private container: HTMLElement,
@@ -71,6 +104,12 @@ export class PanoViewer implements ControlHost {
       maxConcurrent: options.maxConcurrent ?? 8,
       transitionMs: options.transitionMs ?? 400,
     };
+    this.north = options.north ?? 0;
+    this.autoRotateSpeed = options.autoRotateSpeed ?? 0.036;
+    this.autoRotateIdleMs = options.autoRotateIdleMs ?? 3000;
+    this.autoRotateEnabled = options.autoRotate ?? false;
+    // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
+    this.autoRotateActive = this.autoRotateEnabled;
     const initialYaw = options.initialView?.yaw ?? 0;
     const initialPitch = options.initialView?.pitch ?? 0;
     const initialFov = options.initialView?.fov ?? Math.min(70, this.opts.maxFov);
@@ -192,10 +231,52 @@ export class PanoViewer implements ControlHost {
     this.controls = new Controls(this.renderer.canvas, this);
     this.dirty = true;
     this.emitter.emit('ready', manifest);
+    this.emitter.emit('scene-change', manifest.pano);
   }
 
   getFovLimits(): { min: number; max: number } {
     return { min: this.opts.minFov, max: this.opts.maxFov };
+  }
+
+  /** Set the compass north offset (radians) for the currently loaded pano. */
+  setNorth(radians: number): void {
+    this.north = radians;
+    this.dirty = true;
+  }
+
+  getNorth(): number {
+    return this.north;
+  }
+
+  /** Current compass heading (radians): north relative to the rendered yaw. */
+  heading(): number {
+    return compassHeading(this.view.yaw, this.north);
+  }
+
+  /** Enable or disable idle auto-rotate at runtime; interaction still pauses it. */
+  setAutoRotate(enabled: boolean): void {
+    this.autoRotateEnabled = enabled;
+    clearTimeout(this.autoRotateResumeTimer);
+    this.autoRotateResumeTimer = undefined;
+    this.autoRotateActive = enabled;
+    this.dirty = true;
+  }
+
+  /** Report that a hotspot UI layer opened a hotspot, for analytics listeners. */
+  reportHotspotOpen(hotspotId: string): void {
+    this.emitter.emit('hotspot-open', hotspotId);
+  }
+
+  // Pause auto-rotate immediately and arm a timer to resume it once the
+  // configured idle window passes with no further interaction.
+  private pauseAutoRotate(): void {
+    if (!this.autoRotateEnabled) return;
+    this.autoRotateActive = false;
+    clearTimeout(this.autoRotateResumeTimer);
+    this.autoRotateResumeTimer = setTimeout(() => {
+      this.autoRotateActive = true;
+      this.dirty = true;
+    }, this.autoRotateIdleMs);
   }
 
   private effectiveVFovDeg(requestedDeg: number): number {
@@ -203,6 +284,7 @@ export class PanoViewer implements ControlHost {
   }
 
   panByPixels(dx: number, dy: number): void {
+    this.pauseAutoRotate();
     const W = this.container.clientWidth || 1;
     const H = this.container.clientHeight || 1;
     const vfov = (this.effectiveVFovDeg(this.view.fov) * Math.PI) / 180;
@@ -217,6 +299,7 @@ export class PanoViewer implements ControlHost {
   }
 
   flick(vx: number, vy: number): void {
+    this.pauseAutoRotate();
     const W = this.container.clientWidth || 1;
     const H = this.container.clientHeight || 1;
     const vfov = (this.effectiveVFovDeg(this.view.fov) * Math.PI) / 180;
@@ -227,11 +310,13 @@ export class PanoViewer implements ControlHost {
   }
 
   stopMomentum(): void {
+    this.pauseAutoRotate();
     this.momentum.yaw = 0;
     this.momentum.pitch = 0;
   }
 
   zoomAt(scaleFactor: number, clientX: number, clientY: number): void {
+    this.pauseAutoRotate();
     const rect = this.renderer.canvas.getBoundingClientRect();
     const W = rect.width || 1;
     const H = rect.height || 1;
@@ -275,6 +360,31 @@ export class PanoViewer implements ControlHost {
 
   private loop = () => {
     this.raf = requestAnimationFrame(this.loop);
+
+    // Applied ahead of the dirty check so idle rotation keeps the loop alive
+    // frame over frame, the same way momentum below sustains itself.
+    if (this.autoRotateEnabled && this.autoRotateActive) {
+      const t = now();
+      // The first frame after (re)starting has no prior timestamp to diff
+      // against, so it advances by zero rather than a stale or huge gap.
+      const dtMs =
+        this.autoRotateLastFrame === undefined
+          ? 0
+          : Math.min(t - this.autoRotateLastFrame, AUTO_ROTATE_MAX_DT_MS);
+      this.autoRotateLastFrame = t;
+      // Yaw stays unbounded (wrapping target across ±π makes damp() swing the long way);
+      // shift both view and target by whole turns only, to keep the float bounded.
+      this.target.yaw += this.autoRotateSpeed * (dtMs / 1000);
+      if (Math.abs(this.target.yaw) > TWO_PI) {
+        const shift = Math.trunc(this.target.yaw / TWO_PI) * TWO_PI;
+        this.target.yaw -= shift;
+        this.view.yaw -= shift;
+      }
+      this.dirty = true;
+    } else {
+      this.autoRotateLastFrame = undefined;
+    }
+
     if (!this.dirty) return;
     this.dirty = false;
 
@@ -415,6 +525,7 @@ export class PanoViewer implements ControlHost {
   dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
+    clearTimeout(this.autoRotateResumeTimer);
     window.removeEventListener('resize', this.onResize);
     this.resizeObserver?.disconnect();
     this.controls?.dispose();
