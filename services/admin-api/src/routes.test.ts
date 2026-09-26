@@ -893,12 +893,25 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
     });
   });
 
-  it('400s a config PUT with an out-of-range north', async () => {
-    const panoId = 'b1-config-bad-north-p1';
+  it('wraps a finite out-of-range north instead of 400ing (the viewer produces such values)', async () => {
+    const panoId = 'b1-config-wrap-north-p1';
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'Hall', north: Math.PI + 0.1, hotspots: [] }),
+      body: JSON.stringify({ panoId, title: 'Hall', north: 3.2, hotspots: [] }),
+    });
+    expect(put.status).toBe(200);
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const body = (await get.json()) as { config: { north?: number } };
+    expect(body.config.north).toBeCloseTo(3.2 - 2 * Math.PI);
+  });
+
+  it('400s a config PUT with a null north (JSON has no NaN/Infinity literal, so this is the closest wire form)', async () => {
+    const panoId = 'b1-config-nonfinite-north-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', north: null, hotspots: [] }),
     });
     expect(put.status).toBe(400);
     expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();

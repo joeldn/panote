@@ -4,18 +4,34 @@ import { PANO_PATTERN } from './keys.js';
 
 // Angles stay in radians (matching the viewer, packages/viewer/src/types.ts),
 // not the prototype's normalised 0..1 (decided, docs/wave6-plan.md D12).
-const YAW_MIN = -Math.PI;
-const YAW_MAX = Math.PI;
+//
+// yaw is canonicalized, not bounded: the viewer's yaw is deliberately
+// unbounded (PanoViewer.ts getView:350, panByPixels:292, momentum:392,
+// setNorth:242), so a value outside (-π, π] is a normal thing to save, not
+// invalid input. Only non-finite input (NaN, ±Infinity) is rejected.
 const PITCH_MIN = -Math.PI / 2;
 const PITCH_MAX = Math.PI / 2;
-// Degrees, matching the viewer's default minFov/maxFov (PanoViewer.ts:57-58).
+// Degrees, matching the viewer's default minFov/maxFov (PanoViewer.ts:90-91).
 const FOV_MIN = 15;
 const FOV_MAX = 80;
-const yawField = () => z.number().min(YAW_MIN).max(YAW_MAX);
+
+// Copied from packages/viewer/src/camera-math.ts (not imported - contracts
+// has no runtime dependency on @panote/viewer). Wraps into (-π, π].
+const normalizeAngle = (a: number): number => {
+  const TWO_PI = Math.PI * 2;
+  const wrapped = a % TWO_PI;
+  if (wrapped > Math.PI) return wrapped - TWO_PI;
+  if (wrapped <= -Math.PI) return wrapped + TWO_PI;
+  return wrapped;
+};
+
+// finite() rejects NaN/±Infinity; transform (not preprocess - zod 3's
+// preprocess would widen the input type to unknown) then canonicalizes.
+const angle = () => z.number().finite().transform(normalizeAngle);
 const pitchField = () => z.number().min(PITCH_MIN).max(PITCH_MAX);
 
 export const ViewSchema = z.object({
-  yaw: yawField(),
+  yaw: angle(),
   pitch: pitchField(),
   fov: z.number().min(FOV_MIN).max(FOV_MAX),
 });
@@ -48,7 +64,7 @@ export const HotspotSchema = z
   .object({
     id: z.string().min(1),
     type: z.enum(['info', 'link']),
-    yaw: yawField(),
+    yaw: angle(),
     pitch: pitchField(),
     title: z.string().min(1),
     body: z.string().max(MAX_HOTSPOT_BODY_LENGTH).optional(),
@@ -74,9 +90,9 @@ export const SceneConfigSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   initialView: ViewSchema.optional(),
-  // Compass north offset, radians - same range as yaw (D12; viewer's
-  // ViewerOptions.north, packages/viewer/src/types.ts).
-  north: z.number().min(YAW_MIN).max(YAW_MAX).optional(),
+  // Compass north offset, radians - same canonicalization as yaw (D12;
+  // viewer's ViewerOptions.north, packages/viewer/src/types.ts).
+  north: angle().optional(),
   hotspots: z.array(HotspotSchema).max(MAX_HOTSPOTS).default([]),
 });
 export type SceneConfig = z.infer<typeof SceneConfigSchema>;

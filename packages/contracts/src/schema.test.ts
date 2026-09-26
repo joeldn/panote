@@ -66,7 +66,19 @@ describe('SceneConfigSchema', () => {
     expect(r.north).toBe(1.2);
   });
 
-  it.each([Math.PI + 0.01, -Math.PI - 0.01])('rejects a north offset %j outside [-π, π]', (n) => {
+  // The viewer's yaw is deliberately unbounded (PanoViewer.ts pan/momentum/
+  // setNorth), so a finite north outside (-π, π] is wrapped, not rejected.
+  it('wraps a north offset outside (-π, π] instead of rejecting it', () => {
+    const r = SceneConfigSchema.parse({
+      panoId: 'p1',
+      title: 'Hall',
+      hotspots: [],
+      north: 3.2,
+    });
+    expect(r.north).toBeCloseTo(3.2 - 2 * Math.PI);
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a non-finite north %j', (n) => {
     expect(() =>
       SceneConfigSchema.parse({ panoId: 'p1', title: 'Hall', hotspots: [], north: n }),
     ).toThrow();
@@ -102,12 +114,26 @@ describe('ViewSchema bounds (radians for yaw/pitch, degrees for fov)', () => {
   });
 
   it.each([
-    { yaw: Math.PI + 0.01, pitch: 0, fov: 60 },
     { yaw: 0, pitch: Math.PI / 2 + 0.01, fov: 60 },
     { yaw: 0, pitch: 0, fov: 14 },
     { yaw: 0, pitch: 0, fov: 81 },
   ])('rejects an out-of-bounds view %j', (view) => {
     expect(() => ViewSchema.parse(view)).toThrow();
+  });
+
+  // yaw is canonicalized (wrapped), not bounded - see the schema.ts comment
+  // above ViewSchema for why the viewer's own yaw is unbounded.
+  it.each([
+    [3.2, 3.2 - 2 * Math.PI],
+    [-7, -7 + 2 * Math.PI],
+    [-Math.PI, Math.PI],
+  ])('wraps a yaw of %j to %j instead of rejecting it', (yaw, expected) => {
+    const r = ViewSchema.parse({ yaw, pitch: 0, fov: 60 });
+    expect(r.yaw).toBeCloseTo(expected);
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a non-finite yaw %j', (yaw) => {
+    expect(() => ViewSchema.parse({ yaw, pitch: 0, fov: 60 })).toThrow();
   });
 });
 
@@ -299,7 +325,12 @@ describe('HotspotSchema icon/size/media/body', () => {
     ).not.toThrow();
   });
 
-  it.each([Math.PI + 0.01, -Math.PI - 0.01])('rejects a yaw %j outside [-π, π]', (yaw) => {
+  it('wraps a hotspot yaw outside (-π, π] instead of rejecting it', () => {
+    const r = HotspotSchema.parse({ ...base, yaw: 3.2 });
+    expect(r.yaw).toBeCloseTo(3.2 - 2 * Math.PI);
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a non-finite hotspot yaw %j', (yaw) => {
     expect(() => HotspotSchema.parse({ ...base, yaw })).toThrow();
   });
 
