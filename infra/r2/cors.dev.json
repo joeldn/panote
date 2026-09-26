@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "https://panote.dev",
+          "https://panote.io",
+          "http://localhost:5173",
+          "http://localhost:5174"
+        ],
+        "methods": ["GET"],
+        "headers": ["content-type"]
+      },
+      "maxAgeSeconds": 86400
+    },
+    {
+      "allowed": {
+        "origins": [
+          "https://panote.dev",
+          "https://panote.io",
+          "http://localhost:5173",
+          "http://localhost:5174"
+        ],
+        "methods": ["PUT"],
+        "headers": ["content-type"]
+      },
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
