@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { manifestKey, tileVersionPrefix } from '@internal/contracts';
+import { manifestKey, tileFailedKeyFromOriginalKey, tileVersionPrefix } from '@internal/contracts';
 
 /**
  * Exercises container.ts's actual `/tile` handler, not just the
@@ -374,15 +374,32 @@ describe('post-PUT re-check after a successful manifest write', () => {
     expect(r2DeleteMock).toHaveBeenCalledWith(`${prefix}0/px/0-0.webp`);
   });
 
-  it('deletes nothing when the post-PUT HEAD still matches (no DELETE happened)', async () => {
+  it('deletes only the tile-failed marker when the post-PUT HEAD still matches (no DELETE happened)', async () => {
     const panoId = 'p-post-ok';
+    const key = `panos/abc/${panoId}/original`;
     setupManifestWritten(panoId);
     r2HeadMock.mockResolvedValue({ ok: true, status: 200, etag: '"abc123"' });
 
-    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+    const res = await postTile(JSON.stringify({ key }));
 
     expect(res.status).toBe(200);
-    expect(r2DeleteMock).not.toHaveBeenCalled();
+    expect(r2DeleteMock).toHaveBeenCalledTimes(1);
+    expect(r2DeleteMock).toHaveBeenCalledWith(tileFailedKeyFromOriginalKey(key));
+  });
+
+  it('clearing the marker never throws even if the delete itself fails - the job still 200s', async () => {
+    const panoId = 'p-marker-clear-fails';
+    const key = `panos/abc/${panoId}/original`;
+    setupManifestWritten(panoId);
+    r2HeadMock.mockResolvedValue({ ok: true, status: 200, etag: '"abc123"' });
+    r2DeleteMock.mockRejectedValue(new Error('marker delete boom'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await postTile(JSON.stringify({ key }));
+
+    expect(res.status).toBe(200);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(key));
+    warnSpy.mockRestore();
   });
 
   it('500s and deletes nothing when the post-PUT HEAD finds a different ETag - a newer original landed mid-job', async () => {

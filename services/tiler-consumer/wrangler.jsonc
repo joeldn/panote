@@ -39,6 +39,9 @@
           "max_instances": 5,
         },
       ],
+      // BUCKET (unit B4): tile-failed marker read/write. Native binding, same
+      // bucket the S3 client (container.ts) reaches via R2_ACCOUNT_ID/R2_BUCKET.
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       "queues": {
         "consumers": [
           {
@@ -48,6 +51,14 @@
             "dead_letter_queue": "pano-uploads-dlq-dev",
             // max_concurrency matches max_instances
             "max_concurrency": 5,
+          },
+          // unit B4: the same Worker also consumes its own DLQ, branching on
+          // batch.queue - terminal, so no dead_letter_queue of its own.
+          {
+            "queue": "pano-uploads-dlq-dev",
+            "max_batch_size": 10,
+            "max_retries": 3,
+            "max_concurrency": 1,
           },
         ],
       },
@@ -76,6 +87,7 @@
           "max_instances": 5,
         },
       ],
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       "queues": {
         "consumers": [
           {
@@ -85,6 +97,12 @@
             "dead_letter_queue": "pano-uploads-dlq",
             // max_concurrency matches max_instances
             "max_concurrency": 5,
+          },
+          {
+            "queue": "pano-uploads-dlq",
+            "max_batch_size": 10,
+            "max_retries": 3,
+            "max_concurrency": 1,
           },
         ],
       },
