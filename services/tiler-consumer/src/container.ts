@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { build, TILER_OUTPUT_VERSION } from '@internal/tiler';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
-import { manifestKey, PANO_PATTERN, tileVersionPrefix } from '@internal/contracts';
+import {
+  manifestKey,
+  PANO_PATTERN,
+  tileFailedKeyFromOriginalKey,
+  tileVersionPrefix,
+} from '@internal/contracts';
 import { deriveUploadTarget } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
 
@@ -171,6 +176,12 @@ createServer((req, res) => {
             throw new Error(
               `post-PUT HEAD ${key} ETag changed: ${etag} -> ${String(stripEtagQuotes(postHead.etag))}`,
             );
+          } else if (files['manifest.json']) {
+            // Successful manifest swap (unit B4): clear any earlier marker.
+            // Best-effort - a delete failure must not fail this job.
+            await r2.deleteObject(tileFailedKeyFromOriginalKey(key)).catch((e: unknown) => {
+              console.warn(`failed to clear tile-failed marker for ${key}: ${String(e)}`);
+            });
           }
         }
         res.writeHead(200).end('ok');
