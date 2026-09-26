@@ -1,3 +1,12 @@
+/**
+ * Shared httpMetadata for every JSON object this app writes via the native
+ * R2 binding - one source of truth so putJson and guardedPut can't drift.
+ */
+export const JSON_HTTP_METADATA: R2HTTPMetadata = {
+  contentType: 'application/json',
+  cacheControl: 'public, max-age=30',
+};
+
 export const getJson = async <T>(
   bucket: R2Bucket,
   key: string,
@@ -24,10 +33,7 @@ export const putJson = async (
 ): Promise<{ ok: true; etag: string } | { ok: false; conflict: true }> => {
   const res = await bucket.put(key, JSON.stringify(value), {
     ...(onlyIf ? { onlyIf } : {}),
-    httpMetadata: {
-      contentType: 'application/json',
-      cacheControl: 'public, max-age=30',
-    },
+    httpMetadata: JSON_HTTP_METADATA,
   });
   if (!res) return { ok: false, conflict: true };
   return { ok: true, etag: res.etag };

@@ -50,10 +50,14 @@ export const TourSceneSchema = z.object({
 });
 export type TourScene = z.infer<typeof TourSceneSchema>;
 
+// Bounds a tour's own R2 read/write cost (e.g. admin-api's ?include=configs
+// scene fan-out); also used as a defensive cap on the read side.
+export const MAX_TOUR_SCENES = 100;
+
 // tourId is used verbatim in tourKey(), same reason as panoId above.
 export const TourDocSchema = z.object({
   tourId: z.string().regex(PANO_PATTERN, `tourId must match ${PANO_PATTERN}`),
   title: z.string().min(1),
-  scenes: z.array(TourSceneSchema).default([]),
+  scenes: z.array(TourSceneSchema).max(MAX_TOUR_SCENES).default([]),
 });
 export type TourDoc = z.infer<typeof TourDocSchema>;
