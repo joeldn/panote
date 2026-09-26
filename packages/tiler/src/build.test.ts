@@ -253,6 +253,8 @@ describe('build', () => {
       return JSON.parse(raw) as Manifest;
     }
 
+    // Real face rendering across 6 faces, not just mocked I/O, so this can
+    // exceed vitest's 5s default under load; give it more room.
     it('writes version and tilerVersion into the manifest when a version is given', async () => {
       const outDir = await tmp();
       mockSuccessfulDecode();
@@ -267,8 +269,9 @@ describe('build', () => {
       const manifest = await readManifest(outDir, 'ok-pano');
       expect(manifest.version).toBe('t1-abc123');
       expect(manifest.tilerVersion).toBe(TILER_OUTPUT_VERSION);
-    });
+    }, 20_000);
 
+    // Same real rendering pipeline as above; same timeout treatment.
     it('omits version and tilerVersion from the manifest when no version is given', async () => {
       const outDir = await tmp();
       mockSuccessfulDecode();
@@ -282,7 +285,7 @@ describe('build', () => {
       const manifest = await readManifest(outDir, 'ok-pano-unversioned');
       expect(manifest.version).toBeUndefined();
       expect(manifest.tilerVersion).toBeUndefined();
-    });
+    }, 20_000);
   });
 
   describe('build channel-count guard', () => {
