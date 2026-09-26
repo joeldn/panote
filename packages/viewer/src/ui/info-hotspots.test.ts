@@ -72,10 +72,11 @@ function installFakeDocument(): { created: FakeElement[] } {
 }
 
 /** Build a viewer stub carrying just the surface mountInfoHotspots touches. */
-function makeViewerStub(container: FakeElement): PanoViewer {
+function makeViewerStub(container: FakeElement, reportHotspotOpen = vi.fn()): PanoViewer {
   return {
     el: container,
     addHotspot: () => ({ remove: () => {}, update: () => {} }),
+    reportHotspotOpen,
   } as unknown as PanoViewer;
 }
 
@@ -127,5 +128,26 @@ describe('mountInfoHotspots', () => {
     } as InfoHotspotData);
     expect(bodyEl.innerHTML).not.toContain('onerror');
     expect(bodyEl.innerHTML).toBe('<p>safe body</p>');
+  });
+
+  it('reports hotspot-open with the hotspot id when opened', () => {
+    const container = new FakeElement('div');
+    const reportHotspotOpen = vi.fn();
+    const viewer = makeViewerStub(container, reportHotspotOpen);
+    mountInfoHotspots(viewer, [{ yaw: 0, pitch: 0, title: 'Spot', id: 'spot-1' }]);
+    const btn = created.find((e) => e.tagName === 'button' && e.title === 'Spot');
+    btn?.onclick?.();
+    expect(reportHotspotOpen).toHaveBeenCalledTimes(1);
+    expect(reportHotspotOpen).toHaveBeenCalledWith('spot-1');
+  });
+
+  it('does not report hotspot-open for a hotspot with no id', () => {
+    const container = new FakeElement('div');
+    const reportHotspotOpen = vi.fn();
+    const viewer = makeViewerStub(container, reportHotspotOpen);
+    mountInfoHotspots(viewer, [{ yaw: 0, pitch: 0, title: 'Spot' }]);
+    const btn = created.find((e) => e.tagName === 'button' && e.title === 'Spot');
+    btn?.onclick?.();
+    expect(reportHotspotOpen).not.toHaveBeenCalled();
   });
 });

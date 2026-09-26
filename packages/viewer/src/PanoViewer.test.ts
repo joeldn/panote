@@ -362,6 +362,19 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('emits scene-change with the loaded panoId alongside ready', async () => {
+      stubFetch(() => Promise.resolve(tileBody));
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const sceneChange = vi.fn();
+      viewer.on('scene-change', sceneChange);
+
+      await viewer.load('pano-a');
+
+      expect(sceneChange).toHaveBeenCalledTimes(1);
+      expect(sceneChange).toHaveBeenCalledWith('pano-a');
+      viewer.dispose();
+    });
+
     it('rejects when a base tile is permanently missing', async () => {
       stubFetch((url) =>
         url === baseTileUrl('py')
@@ -480,6 +493,178 @@ describe('PanoViewer', () => {
         expect(tileRequests).toHaveLength(FACES.length);
         expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('compass north offset and heading', () => {
+    it('defaults to north=0 and heading tracking the initial yaw', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: 0.4 },
+      });
+      expect(viewer.getNorth()).toBe(0);
+      expect(viewer.heading()).toBeCloseTo(-0.4, 10);
+    });
+
+    it('setNorth updates getNorth and heading immediately', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: 0.4 },
+      });
+      viewer.setNorth(1.2);
+      expect(viewer.getNorth()).toBe(1.2);
+      expect(viewer.heading()).toBeCloseTo(0.8, 10);
+    });
+  });
+
+  describe('auto-rotate', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      // Fake timers auto-invoke requestAnimationFrame as time advances below;
+      // restub it inert so these tests drive the loop only via tick() calls.
+      vi.stubGlobal(
+        'requestAnimationFrame',
+        vi.fn(() => 1),
+      );
+      vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Force the loop out of its "nothing changed" early return and run one tick. */
+    function tick(viewer: PanoViewer): void {
+      (viewer as unknown as { dirty: boolean }).dirty = true;
+      (viewer as unknown as { loop: () => void }).loop();
+    }
+
+    function yawOf(viewer: PanoViewer): number {
+      return (viewer as unknown as { view: { yaw: number } }).view.yaw;
+    }
+
+    it('does not rotate when disabled', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const before = yawOf(viewer);
+      vi.advanceTimersByTime(50);
+      tick(viewer);
+      expect(yawOf(viewer)).toBeCloseTo(before, 10);
+    });
+
+    it('rotates the view forward once real time elapses between frames', () => {
+      // damping: 1 snaps view straight to target, so a tick's delta is exactly
+      // autoRotateSpeed times the elapsed seconds, with no easing to account for.
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        autoRotate: true,
+        autoRotateSpeed: 1,
+        damping: 1,
+      });
+      const before = yawOf(viewer);
+      vi.advanceTimersByTime(50); // well under the stalled-frame clamp
+      tick(viewer);
+      expect(yawOf(viewer)).toBeCloseTo(before + 0.05, 10);
+    });
+
+    it('pauses on interaction and resumes only after the idle window elapses', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        autoRotate: true,
+        autoRotateSpeed: 1,
+        autoRotateIdleMs: 1000,
+        damping: 1,
+      });
+      viewer.stopMomentum(); // stands in for a real interaction's gesture start
+      const paused = yawOf(viewer);
+
+      vi.advanceTimersByTime(999);
+      tick(viewer);
+      expect(yawOf(viewer)).toBeCloseTo(paused, 10);
+
+      vi.advanceTimersByTime(1); // the idle timer fires here, reactivating rotation
+      tick(viewer); // first frame back only re-establishes the timing baseline
+      expect(yawOf(viewer)).toBeCloseTo(paused, 10);
+
+      vi.advanceTimersByTime(50);
+      tick(viewer);
+      expect(yawOf(viewer)).toBeCloseTo(paused + 0.05, 10);
+    });
+
+    it('setAutoRotate(false) cancels a pending resume and stops rotation', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        autoRotate: true,
+        autoRotateSpeed: 1,
+        autoRotateIdleMs: 1000,
+        damping: 1,
+      });
+      viewer.stopMomentum();
+      viewer.setAutoRotate(false);
+      const before = yawOf(viewer);
+
+      vi.advanceTimersByTime(1000);
+      tick(viewer);
+      expect(yawOf(viewer)).toBeCloseTo(before, 10);
+    });
+
+    it('setAutoRotate(true) enables rotation immediately, with no idle wait', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        autoRotateSpeed: 1,
+        autoRotateIdleMs: 5000, // much longer than the delay used below
+        damping: 1,
+      });
+      viewer.setAutoRotate(true);
+      tick(viewer); // establishes the timing baseline
+      const before = yawOf(viewer);
+
+      vi.advanceTimersByTime(50); // far short of autoRotateIdleMs
+      tick(viewer);
+      expect(yawOf(viewer)).toBeCloseTo(before + 0.05, 10);
+    });
+
+    it('does not wrap target.yaw across the ±π seam into a near-2π jump', () => {
+      // Regression: normalizing target.yaw used to wrap +π to −π, which
+      // damp() then eased view.yaw the long way around — almost a full turn.
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: Math.PI - 0.05 },
+        autoRotate: true,
+        autoRotateSpeed: 1,
+        damping: 1,
+      });
+      let prev = yawOf(viewer);
+      for (let i = 0; i < 5; i++) {
+        vi.advanceTimersByTime(20); // small, well under the stall clamp
+        tick(viewer);
+        const next = yawOf(viewer);
+        expect(next).toBeGreaterThan(prev);
+        expect(next - prev).toBeLessThan(0.1);
+        prev = next;
+      }
+      // Keeps climbing past π instead of snapping back down near −π.
+      expect(prev).toBeGreaterThan(Math.PI);
+    });
+
+    it('keeps target.yaw bounded via whole-turn shifts, without changing the rendered view', () => {
+      const start = Math.PI * 1.9; // just under the 2π shift threshold
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: start },
+        autoRotate: true,
+        autoRotateSpeed: 5, // one clamped 100ms tick crosses the threshold
+        damping: 1,
+      });
+      vi.advanceTimersByTime(200); // clamped to the 100ms stall cap => 0.5 rad
+      tick(viewer);
+      // Shifting target and view by the same whole 2π leaves the rendered
+      // angle exactly what an unshifted (start + 0.5) would be, just wrapped.
+      expect(yawOf(viewer)).toBeCloseTo(start + 0.5 - Math.PI * 2, 10);
+      expect(Math.abs(yawOf(viewer))).toBeLessThan(Math.PI * 2);
+    });
+  });
+
+  describe('hotspot-open reporting', () => {
+    it('emits hotspot-open with the reported id', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const hotspotOpen = vi.fn();
+      viewer.on('hotspot-open', hotspotOpen);
+
+      viewer.reportHotspotOpen('spot-1');
+
+      expect(hotspotOpen).toHaveBeenCalledTimes(1);
+      expect(hotspotOpen).toHaveBeenCalledWith('spot-1');
     });
   });
 });

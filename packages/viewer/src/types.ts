@@ -24,10 +24,16 @@ export interface ViewerOptions {
   antialias?: boolean; // default false
   maxConcurrent?: number; // max simultaneous tile requests (default 8)
   transitionMs?: number; // crossfade duration in ms (default 400)
+  north?: number; // radians offset defining compass north for the loaded pano; default 0
+  autoRotate?: boolean; // slowly pan when idle; default false
+  autoRotateSpeed?: number; // radians of yaw per second while rotating; default 0.036 (~1 turn/3min)
+  autoRotateIdleMs?: number; // interaction-free time before auto-rotate (re)starts; default 3000
 }
 
 export type PanoViewerEvents = {
   ready: Manifest;
   'tiles-settled': undefined;
   loading: string;
+  'scene-change': string; // panoId, emitted whenever a load() completes
+  'hotspot-open': string; // hotspotId, reported by a hotspot UI layer
 };

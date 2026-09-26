@@ -10,6 +10,8 @@ export interface InfoHotspotData {
   body?: string;
   /** Optional short caption shown under the title. */
   subtitle?: string;
+  /** Stable id reported via the viewer's `hotspot-open` event when set. */
+  id?: string;
 }
 
 export interface InfoHotspotsHandle {
@@ -180,7 +182,10 @@ export function mountInfoHotspots(
 
   for (const spot of spots) {
     const { wrap, btn } = makeMarker(spot.title);
-    btn.onclick = () => panel.open(spot);
+    btn.onclick = () => {
+      panel.open(spot);
+      if (spot.id) viewer.reportHotspotOpen(spot.id);
+    };
     const handle = viewer.addHotspot(wrap, {
       yaw: spot.yaw,
       pitch: spot.pitch,
