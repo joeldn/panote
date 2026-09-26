@@ -403,7 +403,16 @@ export class TileLayer {
     // TileFailureMonitor.acquireExempt().
     const permit = exempt ? this.monitor.acquireExempt() : this.monitor.acquire();
     if (!permit) return { kind: 'skipped' };
-    const url = tilePath(this.baseUrl, this.manifest.pano, level, face, x, y, this.manifest.format);
+    const url = tilePath(
+      this.baseUrl,
+      this.manifest.pano,
+      level,
+      face,
+      x,
+      y,
+      this.manifest.format,
+      this.manifest.version,
+    );
     const controller = new AbortController();
     this.inflight.set(key, controller);
     try {

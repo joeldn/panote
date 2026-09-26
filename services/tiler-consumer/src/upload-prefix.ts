@@ -13,8 +13,6 @@ const NOTIFICATION_KEY_RE = /^panos\/([^/]+)\/([^/]+)\/original$/;
 const OWNER_CHARSET_RE = /^[A-Za-z0-9_-]+$/;
 
 export interface UploadTarget {
-  /** The R2 key prefix every tile and manifest.json must be uploaded under. */
-  readonly prefix: string;
   /** The panoId segment, verbatim - what the tiler build()'s `pano` option must be. */
   readonly panoId: string;
 }
@@ -23,9 +21,8 @@ export interface UploadTarget {
  * Derives the tile upload target from the R2 object-create notification key
  * the queue consumer forwards to the container.
  *
- * Takes the prefix byte-for-byte from the key and never decodes or
- * re-encodes it, so uploads land under exactly the prefix the original was
- * written under. See key-contract.test.ts.
+ * The owner segment is validated but not returned - tile/manifest output
+ * is owner-free, keyed by panoId alone.
  */
 export const deriveUploadTarget = (key: string): UploadTarget => {
   const match = NOTIFICATION_KEY_RE.exec(key);
@@ -46,5 +43,5 @@ export const deriveUploadTarget = (key: string): UploadTarget => {
       `tiler notification key panoId segment must match ${PANO_PATTERN} (got ${JSON.stringify(panoId)})`,
     );
   }
-  return { prefix: `panos/${owner}/${panoId}/`, panoId };
+  return { panoId };
 };

@@ -20,9 +20,7 @@
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
       "vars": {
-        // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
-        // only with the real tenant URL, never another fake name.
-        "OAUTH_ISSUER": "https://YOUR_DEV_TENANT.auth0.com/",
+        "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
       },
     },

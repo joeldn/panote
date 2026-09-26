@@ -2,37 +2,34 @@ import { describe, expect, it, vi } from 'vitest';
 import { uploadDir } from './r2io.js';
 
 describe('uploadDir', () => {
-  it('uploads manifest.json LAST', async () => {
+  it('uploads every tile under tilePrefix, in file order', async () => {
     const order: string[] = [];
     const put = vi.fn(async (key: string) => {
       order.push(key);
     });
+    await uploadDir(
+      {
+        '0/px/0-0.webp': new Uint8Array(),
+        '0/nx/0-0.webp': new Uint8Array(),
+      },
+      'tiles/p1/v1/',
+      put,
+    );
+    expect(order).toEqual(['tiles/p1/v1/0/px/0-0.webp', 'tiles/p1/v1/0/nx/0-0.webp']);
+  });
+
+  it('never uploads manifest.json, even when present in files - the manifest is handled by the caller', async () => {
+    const put = vi.fn(async () => {});
     await uploadDir(
       {
         '0/px/0-0.webp': new Uint8Array(),
         'manifest.json': new Uint8Array(),
-        '0/nx/0-0.webp': new Uint8Array(),
       },
-      'panos/u/p1/',
+      'tiles/p2/v1/',
       put,
     );
-    expect(order[order.length - 1]).toBe('panos/u/p1/manifest.json');
-  });
-
-  it('skips manifest.json entirely when absent', async () => {
-    const order: string[] = [];
-    const put = vi.fn(async (key: string) => {
-      order.push(key);
-    });
-    await uploadDir(
-      {
-        '0/px/0-0.webp': new Uint8Array(),
-        '0/nx/0-0.webp': new Uint8Array(),
-      },
-      'panos/u/p2/',
-      put,
-    );
-    expect(order).toEqual(['panos/u/p2/0/px/0-0.webp', 'panos/u/p2/0/nx/0-0.webp']);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(put).toHaveBeenCalledWith('tiles/p2/v1/0/px/0-0.webp', expect.anything(), 'image/webp');
   });
 
   it('picks content-type by extension: .json, .webp, and other', async () => {
@@ -44,15 +41,15 @@ describe('uploadDir', () => {
       {
         'level0/0-0.webp': new Uint8Array(),
         'other.bin': new Uint8Array(),
-        'manifest.json': new Uint8Array(),
+        'sub/data.json': new Uint8Array(),
       },
-      'panos/u/p3/',
+      'tiles/p3/v1/',
       put,
     );
     expect(calls).toEqual([
-      { key: 'panos/u/p3/level0/0-0.webp', contentType: 'image/webp' },
-      { key: 'panos/u/p3/other.bin', contentType: 'application/octet-stream' },
-      { key: 'panos/u/p3/manifest.json', contentType: 'application/json' },
+      { key: 'tiles/p3/v1/level0/0-0.webp', contentType: 'image/webp' },
+      { key: 'tiles/p3/v1/other.bin', contentType: 'application/octet-stream' },
+      { key: 'tiles/p3/v1/sub/data.json', contentType: 'application/json' },
     ]);
   });
 });

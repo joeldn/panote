@@ -36,6 +36,24 @@ describe('URL segment encoding', () => {
   });
 });
 
+describe('tilePath version segment', () => {
+  it('omits the version segment when absent, producing a byte-identical URL to today', () => {
+    expect(tilePath('/tiles/', 'church', 2, 'px', 1, 3)).toBe('/tiles/church/2/px/1-3.jpg');
+  });
+
+  it('inserts the version between pano and level when present', () => {
+    expect(tilePath('/tiles/', 'church', 2, 'px', 1, 3, 'jpg', 't1-abc123')).toBe(
+      '/tiles/church/t1-abc123/2/px/1-3.jpg',
+    );
+  });
+
+  it('encodes the version segment like pano and face', () => {
+    expect(tilePath('/tiles/', 'church', 0, 'px', 0, 0, 'jpg', 'v 1')).toBe(
+      '/tiles/church/v%201/0/px/0-0.jpg',
+    );
+  });
+});
+
 describe('parseManifest', () => {
   const valid = {
     pano: 'church',
@@ -188,5 +206,41 @@ describe('parseManifest', () => {
     expect(() =>
       parseManifest({ ...valid, tileSize: 1024, maxLevel: 4, faceSize: 1024 * 2 ** 4 }),
     ).not.toThrow();
+  });
+
+  describe('version / tilerVersion', () => {
+    it('returns a manifest with no version/tilerVersion when both are absent', () => {
+      const m = parseManifest(valid);
+      expect(m.version).toBeUndefined();
+      expect(m.tilerVersion).toBeUndefined();
+    });
+
+    it('accepts a valid version and tilerVersion', () => {
+      const m = parseManifest({ ...valid, version: 't1-abc123', tilerVersion: 1 });
+      expect(m.version).toBe('t1-abc123');
+      expect(m.tilerVersion).toBe(1);
+    });
+
+    it('rejects a version containing a character outside PANO_PATTERN', () => {
+      expect(() => parseManifest({ ...valid, version: 't1/abc123' })).toThrow(/manifest\.version/);
+    });
+
+    it('rejects a non-string version', () => {
+      expect(() => parseManifest({ ...valid, version: 42 })).toThrow(/manifest\.version/);
+    });
+
+    it('rejects a zero tilerVersion', () => {
+      expect(() => parseManifest({ ...valid, tilerVersion: 0 })).toThrow(/manifest\.tilerVersion/);
+    });
+
+    it('rejects a non-integer tilerVersion', () => {
+      expect(() => parseManifest({ ...valid, tilerVersion: 1.5 })).toThrow(
+        /manifest\.tilerVersion/,
+      );
+    });
+
+    it('rejects a negative tilerVersion', () => {
+      expect(() => parseManifest({ ...valid, tilerVersion: -1 })).toThrow(/manifest\.tilerVersion/);
+    });
   });
 });

@@ -1,45 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { originalKey, userPanosPrefix } from '@internal/contracts';
+import { manifestKey, originalKey, tileVersionPrefix } from '@internal/contracts';
 import { manifestUrl, tilePath } from '@panote/core';
 import { deriveUploadTarget } from './upload-prefix.js';
 
-// Pins the contract between the tiler container's uploads (container.ts, via
-// deriveUploadTarget()) and the viewer's read-side URL builders
-// (@panote/core's tilePath()/manifestUrl()). The two only agree if panoId is
-// carried verbatim through keys.ts and the container derives its prefix
-// byte-for-byte from the notification key's owner segment (upload-prefix.ts).
-//
-// Fed `originalKey(sub, pano)` below - the exact key the notification
-// carries - so this pins the container's real derivation, not just
-// keys.ts's own builders.
-describe('tiler container upload key vs. viewer read URL', () => {
-  const sub = 'auth0|me'; // contains "|", same case the R2 parity test uses
+// Pins that the container's uploads and the viewer's read URLs agree under
+// the owner-free 'tiles/' layout, with panoId carried verbatim.
+describe('tiler container upload key vs. viewer read URL (owner-free)', () => {
   const pano = '550e8400-e29b-41d4-a716-446655440000'; // a UUID, as crypto.randomUUID() produces
+  const version = 't1-abc123';
 
-  it('the manifest key the container uploads to equals userPanosPrefix(sub) + the viewer manifest URL path', () => {
-    const notificationKey = originalKey(sub, pano);
-    const { prefix } = deriveUploadTarget(notificationKey);
-    const uploadedManifestKey = `${prefix}manifest.json`;
+  it('the manifest key the container uploads to equals the viewer manifest URL under baseUrl "tiles/"', () => {
+    const notificationKey = originalKey('auth0|me', pano);
+    const { panoId } = deriveUploadTarget(notificationKey);
+    const uploadedManifestKey = manifestKey(panoId);
 
-    const requestedManifestPath = manifestUrl(userPanosPrefix(sub), pano);
+    const requestedManifestPath = manifestUrl('tiles/', pano);
 
     expect(requestedManifestPath).toBe(uploadedManifestKey);
   });
 
-  it('a tile key the container uploads to equals userPanosPrefix(sub) + the viewer tile URL path', () => {
-    // Relative path matches what walk(join(work, panoId)) reports for one tile.
+  it('a versioned tile key the container uploads to equals the viewer versioned tile URL under baseUrl "tiles/"', () => {
     const level = 0;
     const face = 'px';
     const x = 0;
     const y = 0;
     const format = 'webp';
     const relativeFilePath = `${level}/${face}/${x}-${y}.${format}`;
-    const notificationKey = originalKey(sub, pano);
-    const { prefix } = deriveUploadTarget(notificationKey);
-    const uploadedTileKey = prefix + relativeFilePath;
+    const notificationKey = originalKey('auth0|me', pano);
+    const { panoId } = deriveUploadTarget(notificationKey);
+    const uploadedTileKey = tileVersionPrefix(panoId, version) + relativeFilePath;
 
-    const requestedTilePath = tilePath(userPanosPrefix(sub), pano, level, face, x, y, format);
+    const requestedTilePath = tilePath('tiles/', pano, level, face, x, y, format, version);
 
     expect(requestedTilePath).toBe(uploadedTileKey);
+  });
+
+  it('two different owner subs with the same panoId produce identical output keys', () => {
+    const keyA = deriveUploadTarget(originalKey('auth0|me', pano));
+    const keyB = deriveUploadTarget(originalKey('google-oauth2|123', pano));
+
+    expect(manifestKey(keyA.panoId)).toBe(manifestKey(keyB.panoId));
+    expect(tileVersionPrefix(keyA.panoId, version)).toBe(tileVersionPrefix(keyB.panoId, version));
   });
 });

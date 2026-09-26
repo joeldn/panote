@@ -663,3 +663,89 @@ describe('TileLayer failure handling', () => {
     });
   });
 });
+
+describe('manifest version', () => {
+  let clock: number;
+  let monitor: TileFailureMonitor;
+  let renderer: FakeRenderer;
+  let requests: string[];
+  let sleeps: number[];
+
+  beforeEach(() => {
+    clock = 1_000_000;
+    monitor = new TileFailureMonitor({ now: () => clock, baseDelayMs: BACKOFF_MS });
+    renderer = new FakeRenderer();
+    requests = [];
+    sleeps = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        requests.push(url);
+        return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) });
+      }),
+    );
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(() => Promise.resolve({ close: vi.fn() })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function makeLayerWithManifest(manifest: Manifest, textureBudgetMB = 128): TileLayer {
+    return new TileLayer(
+      renderer as unknown as GLRenderer,
+      manifest,
+      '/tiles/',
+      textureBudgetMB,
+      () => {},
+      8,
+      monitor,
+      (ms: number) => {
+        sleeps.push(ms);
+        clock += ms;
+        return Promise.resolve();
+      },
+    );
+  }
+
+  it('requests unversioned tile URLs when the manifest has no version', async () => {
+    const manifest: Manifest = {
+      pano: 'pano-a',
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: FACES,
+      quality: 82,
+      format: 'jpg',
+    };
+    const layer = makeLayerWithManifest(manifest);
+    await layer.loadBase();
+
+    for (const face of FACES) {
+      expect(requests).toContain(`/tiles/pano-a/0/${face}/0-0.jpg`);
+    }
+  });
+
+  it('requests tile URLs under the manifest version when present', async () => {
+    const manifest: Manifest = {
+      pano: 'pano-a',
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: FACES,
+      quality: 82,
+      format: 'jpg',
+      version: 't1-abc123',
+    };
+    const layer = makeLayerWithManifest(manifest);
+    await layer.loadBase();
+
+    for (const face of FACES) {
+      expect(requests).toContain(`/tiles/pano-a/t1-abc123/0/${face}/0-0.jpg`);
+      expect(requests).not.toContain(`/tiles/pano-a/0/${face}/0-0.jpg`);
+    }
+  });
+});

@@ -2,20 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { deriveUploadTarget } from './upload-prefix.js';
 
 describe('deriveUploadTarget', () => {
-  it('returns the exact prefix and panoId for a valid key', () => {
-    expect(deriveUploadTarget('panos/ae-_vTXvv70/p1/original')).toEqual({
-      prefix: 'panos/ae-_vTXvv70/p1/',
-      panoId: 'p1',
-    });
+  it('returns the panoId for a valid key', () => {
+    expect(deriveUploadTarget('panos/ae-_vTXvv70/p1/original')).toEqual({ panoId: 'p1' });
   });
 
-  // "abc123" is charset-valid but not something encodeId would actually
-  // produce - pins that it still passes through unchanged either way.
-  it('preserves an owner segment that is charset-valid but not encodeId-produced, unchanged', () => {
-    expect(deriveUploadTarget('panos/abc123/p1/original')).toEqual({
-      prefix: 'panos/abc123/p1/',
-      panoId: 'p1',
-    });
+  // "abc123" is charset-valid but not encodeId-produced; the owner segment
+  // is validated but not returned.
+  it('accepts an owner segment that is charset-valid but not encodeId-produced', () => {
+    expect(deriveUploadTarget('panos/abc123/p1/original')).toEqual({ panoId: 'p1' });
   });
 
   it.each([

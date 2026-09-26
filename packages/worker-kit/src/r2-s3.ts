@@ -7,6 +7,13 @@ export interface R2S3Config {
   readonly secretAccessKey: string;
 }
 
+export interface R2HeadResult {
+  readonly ok: boolean;
+  readonly status: number;
+  /** Raw header value (still double-quoted, as S3 sends it), or null when absent/not ok. */
+  readonly etag: string | null;
+}
+
 export interface R2S3Client {
   /** Presigned PUT URL. Requires the S3 API - the native R2 binding cannot presign. */
   presignPut(key: string, opts?: { expiresInSeconds?: number | undefined }): Promise<string>;
@@ -18,6 +25,10 @@ export interface R2S3Client {
     body: Uint8Array | string,
     opts: { contentType: string; cacheControl?: string | undefined },
   ): Promise<void>;
+  /** Signed HEAD. Never throws on a non-2xx - the caller checks `ok`. */
+  head(key: string): Promise<R2HeadResult>;
+  /** Signed DELETE. Throws on a non-2xx response. */
+  deleteObject(key: string): Promise<void>;
 }
 
 const DEFAULT_PRESIGN_EXPIRY_SECONDS = 900;
@@ -44,6 +55,16 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
 
     async get(key) {
       return aws.fetch(`${base}/${key}`);
+    },
+
+    async head(key) {
+      const res = await aws.fetch(`${base}/${key}`, { method: 'HEAD' });
+      return { ok: res.ok, status: res.status, etag: res.ok ? res.headers.get('etag') : null };
+    },
+
+    async deleteObject(key) {
+      const res = await aws.fetch(`${base}/${key}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`R2 DELETE ${key} -> ${res.status}`);
     },
 
     async put(key, body, opts) {

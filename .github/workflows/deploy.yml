@@ -2,13 +2,13 @@ name: Deploy
 
 # Deploys the four Cloudflare Workers under services/*.
 #
-# Dispatch-only until Wave 5, which adds a workflow_run trigger on CI
-# success after the queue cut-over from pano-tiler-dev to tiler-consumer.
-# Defaults to dev; production is gated to main below. Dev needs the
-# panote.dev Cloudflare zone Active, since each service's `routes` block
-# deploys for dev too. Every deploy step passes --env, since wrangler.jsonc
-# only defines bindings under env blocks. tiler-consumer is a separate job
-# below. See docs/deploy.md.
+# Two triggers: workflow_dispatch (choose the environment) and workflow_run
+# after CI succeeds on main, which always targets dev and only runs when
+# DEV_AUTO_DEPLOY is 'true' - see resolve-environment's gate. Production
+# is additionally gated to main below. Dev needs the panote.dev Cloudflare
+# zone Active, since each service's `routes` block deploys for dev too.
+# Every deploy step passes --env, since wrangler.jsonc only defines
+# bindings under env blocks. tiler-consumer is a separate job below.
 on:
   workflow_dispatch:
     inputs:
@@ -19,11 +19,28 @@ on:
           - dev
           - production
         default: dev
+  # `branches` matches the triggering run's head branch NAME only - a fork
+  # PR named main would match; resolve-environment's `if` gates it out.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 # One deploy in flight per environment; never cancelled mid-flight, the
 # same reasoning ci.yml applies to pushes on main.
+# GitHub cancels the older *pending* run per group, so a run this gate skips
+# needs its own group - must mirror resolve-environment's `if` below.
 concurrency:
-  group: deploy-${{ inputs.environment }}
+  group: >-
+    ${{
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.DEV_AUTO_DEPLOY == 'true'))
+      && format('deploy-{0}', inputs.environment || 'dev')
+      || format('deploy-skipped-{0}', github.run_id)
+    }}
   cancel-in-progress: false
 
 # Deploy credentials are the CLOUDFLARE_* secret/variable, not GITHUB_TOKEN;
@@ -46,14 +63,48 @@ jobs:
     name: Resolve target environment
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Gates workflow_run to a same-repo push CI success opted into via
+    # DEV_AUTO_DEPLOY; must mirror concurrency.group's condition above.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      vars.DEV_AUTO_DEPLOY == 'true')
     outputs:
       environment: ${{ steps.resolve.outputs.environment }}
+      proceed: ${{ steps.tip-check.outputs.proceed || 'true' }}
     steps:
       - name: Resolve
         id: resolve
         env:
           DISPATCH_ENVIRONMENT: ${{ inputs.environment }}
-        run: echo "environment=$DISPATCH_ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # workflow_run always targets dev; inputs.environment is empty on
+          # that event, so this must not fall through to `||`.
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
+          else
+            echo "environment=$DISPATCH_ENVIRONMENT" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Two main pushes' CI runs can finish out of order; skip if a newer
+      # commit already landed, so this can't redeploy older code over it.
+      - name: Check this is main's current tip
+        id: tip-check
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          TIP_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$HEAD_SHA" = "$TIP_SHA" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping deploy: CI ran for $HEAD_SHA, but main's tip is now $TIP_SHA - that commit's own CI run will deploy instead."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Fails loudly instead of skipping downstream jobs, since a skipped
       # job in the Actions UI looks the same as nothing needing to happen.
@@ -87,11 +138,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: ${{ steps.resolve.outputs.environment == 'production' }}
 
-      # dev keeps the OAUTH_ISSUER placeholder by design; shipping it to
-      # production would break auth, with every authenticated route
-      # returning 401. One check here covers all four configs,
-      # since tiler-consumer has no OAUTH_ISSUER of its own for a per-job
-      # check to catch. Case-insensitive to match worker-kit's guard.
+      # Blocks a leftover YOUR_ placeholder (e.g. OAUTH_ISSUER) from
+      # reaching production, across all four services' configs.
       - name: Fail if any production config still has a YOUR_ placeholder
         if: ${{ steps.resolve.outputs.environment == 'production' }}
         run: |
@@ -154,6 +202,7 @@ jobs:
   deploy-workers:
     name: Deploy ${{ matrix.service }} (${{ needs.resolve-environment.outputs.environment }})
     needs: resolve-environment
+    if: needs.resolve-environment.outputs.proceed == 'true'
     environment: ${{ needs.resolve-environment.outputs.environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -163,6 +212,9 @@ jobs:
         service: [public-api, admin-api, upload-api]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Deploys the commit CI verified; falls back to github.sha on dispatch.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: ./.github/actions/setup
 
@@ -202,11 +254,15 @@ jobs:
   deploy-tiler-consumer:
     name: Deploy tiler-consumer (${{ needs.resolve-environment.outputs.environment }})
     needs: resolve-environment
+    if: needs.resolve-environment.outputs.proceed == 'true'
     environment: ${{ needs.resolve-environment.outputs.environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Deploys the commit CI verified; falls back to github.sha on dispatch.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: ./.github/actions/setup
 
