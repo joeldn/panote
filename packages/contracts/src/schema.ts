@@ -56,6 +56,10 @@ export type View = z.infer<typeof ViewSchema>;
 // before, and pub bundles multiply per-scene/per-hotspot storage cost.
 export const MAX_HOTSPOTS = 200;
 export const MAX_HOTSPOT_BODY_LENGTH = 20_000;
+// Shared by scene/hotspot/tour titles - the same kind of short display field.
+export const MAX_TITLE_LENGTH = 200;
+export const MAX_SCENE_DESCRIPTION_LENGTH = 2000;
+export const MAX_HOTSPOT_ID_LENGTH = 64;
 
 // Font Awesome icon name, as rendered by the editor's icon picker.
 const ICON_PATTERN = /^[a-z0-9-]{1,40}$/;
@@ -88,11 +92,11 @@ export type HotspotMedia = z.infer<typeof HotspotMediaSchema>;
 // (see SceneConfigSchema below), so it's restricted to PANO_PATTERN too.
 export const HotspotSchema = z
   .object({
-    id: z.string().min(1),
+    id: z.string().min(1).max(MAX_HOTSPOT_ID_LENGTH),
     type: z.enum(['info', 'link']),
     yaw: angle(),
     pitch: pitchField(),
-    title: z.string().min(1),
+    title: z.string().min(1).max(MAX_TITLE_LENGTH),
     body: z.string().max(MAX_HOTSPOT_BODY_LENGTH).optional(),
     icon: z.string().regex(ICON_PATTERN, `icon must match ${ICON_PATTERN}`).optional(),
     size: z.number().min(0.5).max(3).optional(),
@@ -113,8 +117,8 @@ export type Hotspot = z.infer<typeof HotspotSchema>;
 // schema boundary is what makes that verbatim use safe.
 export const SceneConfigSchema = z.object({
   panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`),
-  title: z.string().min(1),
-  description: z.string().optional(),
+  title: z.string().min(1).max(MAX_TITLE_LENGTH),
+  description: z.string().max(MAX_SCENE_DESCRIPTION_LENGTH).optional(),
   initialView: ViewSchema.optional(),
   // Compass north offset, radians - same canonicalization as yaw (D12;
   // viewer's ViewerOptions.north, packages/viewer/src/types.ts).
@@ -148,9 +152,10 @@ export type TourSettings = z.infer<typeof TourSettingsSchema>;
 // tourId is used verbatim in tourKey(), same reason as panoId above.
 export const TourDocSchema = z.object({
   tourId: z.string().regex(PANO_PATTERN, `tourId must match ${PANO_PATTERN}`),
-  title: z.string().min(1),
+  title: z.string().min(1).max(MAX_TITLE_LENGTH),
   scenes: z.array(TourSceneSchema).max(MAX_TOUR_SCENES).default([]),
   // Entry scene (design README:113-114); same pattern as TourSceneSchema.panoId.
+  // Consumers fall back to scenes[0] when startPanoId isn't in scenes.
   startPanoId: z.string().regex(PANO_PATTERN, `startPanoId must match ${PANO_PATTERN}`).optional(),
   settings: TourSettingsSchema.optional(),
 });

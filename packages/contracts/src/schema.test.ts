@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   HotspotSchema,
   MAX_HOTSPOT_BODY_LENGTH,
+  MAX_HOTSPOT_ID_LENGTH,
   MAX_HOTSPOTS,
+  MAX_SCENE_DESCRIPTION_LENGTH,
+  MAX_TITLE_LENGTH,
   MAX_TOUR_SCENES,
   SceneConfigSchema,
   TourDocSchema,
@@ -104,6 +107,38 @@ describe('SceneConfigSchema', () => {
       title: 'Info',
     }));
     expect(() => SceneConfigSchema.parse({ panoId: 'p1', title: 'Hall', hotspots })).not.toThrow();
+  });
+
+  it(`rejects a title longer than MAX_TITLE_LENGTH (${MAX_TITLE_LENGTH})`, () => {
+    expect(() =>
+      SceneConfigSchema.parse({ panoId: 'p1', title: 'x'.repeat(MAX_TITLE_LENGTH + 1) }),
+    ).toThrow();
+  });
+
+  it('accepts a title exactly MAX_TITLE_LENGTH long', () => {
+    expect(() =>
+      SceneConfigSchema.parse({ panoId: 'p1', title: 'x'.repeat(MAX_TITLE_LENGTH) }),
+    ).not.toThrow();
+  });
+
+  it(`rejects a description longer than MAX_SCENE_DESCRIPTION_LENGTH (${MAX_SCENE_DESCRIPTION_LENGTH})`, () => {
+    expect(() =>
+      SceneConfigSchema.parse({
+        panoId: 'p1',
+        title: 'Hall',
+        description: 'x'.repeat(MAX_SCENE_DESCRIPTION_LENGTH + 1),
+      }),
+    ).toThrow();
+  });
+
+  it('accepts a description exactly MAX_SCENE_DESCRIPTION_LENGTH long', () => {
+    expect(() =>
+      SceneConfigSchema.parse({
+        panoId: 'p1',
+        title: 'Hall',
+        description: 'x'.repeat(MAX_SCENE_DESCRIPTION_LENGTH),
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -227,6 +262,18 @@ describe('TourDocSchema', () => {
   it(`rejects more than MAX_TOUR_SCENES (${MAX_TOUR_SCENES}) scenes (unchanged cap)`, () => {
     const scenes = Array.from({ length: MAX_TOUR_SCENES + 1 }, (_, i) => ({ panoId: `s${i}` }));
     expect(() => TourDocSchema.parse({ tourId: 't1', title: 'WWII', scenes })).toThrow();
+  });
+
+  it(`rejects a title longer than MAX_TITLE_LENGTH (${MAX_TITLE_LENGTH})`, () => {
+    expect(() =>
+      TourDocSchema.parse({ tourId: 't1', title: 'x'.repeat(MAX_TITLE_LENGTH + 1), scenes: [] }),
+    ).toThrow();
+  });
+
+  it('accepts a title exactly MAX_TITLE_LENGTH long', () => {
+    expect(() =>
+      TourDocSchema.parse({ tourId: 't1', title: 'x'.repeat(MAX_TITLE_LENGTH), scenes: [] }),
+    ).not.toThrow();
   });
 });
 
@@ -387,5 +434,36 @@ describe('HotspotSchema icon/size/media/body', () => {
 
   it.each([NaN, Infinity, -Infinity])('rejects a non-finite hotspot pitch %j', (pitch) => {
     expect(() => HotspotSchema.parse({ ...base, pitch })).toThrow();
+  });
+
+  it(`rejects a title longer than MAX_TITLE_LENGTH (${MAX_TITLE_LENGTH})`, () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, title: 'x'.repeat(MAX_TITLE_LENGTH + 1) }),
+    ).toThrow();
+  });
+
+  it('accepts a title exactly MAX_TITLE_LENGTH long', () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, title: 'x'.repeat(MAX_TITLE_LENGTH) }),
+    ).not.toThrow();
+  });
+
+  it(`rejects an id longer than MAX_HOTSPOT_ID_LENGTH (${MAX_HOTSPOT_ID_LENGTH})`, () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, id: 'x'.repeat(MAX_HOTSPOT_ID_LENGTH + 1) }),
+    ).toThrow();
+  });
+
+  it('accepts an id exactly MAX_HOTSPOT_ID_LENGTH long', () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, id: 'x'.repeat(MAX_HOTSPOT_ID_LENGTH) }),
+    ).not.toThrow();
+  });
+
+  it('rejects a media url longer than MAX_MEDIA_URL_LENGTH', () => {
+    const overlong = `https://example.com/${'a'.repeat(2048)}.jpg`;
+    expect(() =>
+      HotspotSchema.parse({ ...base, media: { kind: 'image', url: overlong } }),
+    ).toThrow();
   });
 });
