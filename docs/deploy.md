@@ -23,7 +23,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` / `panote.io/api/tours/*` | `STATS` — Durable Object, class `TourStats` | none |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` | none (native R2 binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` is `true` in `dev`
 (the `*.workers.dev` URL stays reachable for smoke tests even once routes are live — see the
@@ -539,6 +539,117 @@ deleted again.
 
 ---
 
+## Tiling failure marker and alerting (unit B4)
+
+- **Marker key:** `panos/<owner>/<panoId>/tile-failed`, body `{ reason, at, originalEtag }` — same
+  owner-scoped shape as `configKey`/`deletingKey` (`packages/contracts/src/keys.ts`'s `tileFailedKey`,
+  for a caller with the raw owner sub, and `tileFailedKeyFromOriginalKey`, for the consumer, which
+  only has the already-encoded owner segment from the R2 notification key and must not re-encode
+  it). `reason` is one of `'dlq' | 'oversize' | 'unprocessable-key'`. `originalEtag` is the R2
+  `etag` (bare, native-binding form) of the original the failure was about — the read side (A2)
+  must treat a marker whose `originalEtag` doesn't match the *current* original's etag as stale
+  and ignore it (a later, different upload superseded the failed one). `reason` and `originalEtag`
+  are also written as R2 `customMetadata` on the same object (review fix, 2026-09-26), so A2's list
+  endpoint can read both off `bucket.list({ include: ['customMetadata'] })` with no extra GET — the
+  same pattern the plan already uses for config/tour summaries (section 3.1).
+- **Written by** `services/tiler-consumer/src/consumer.ts` on three permanent-failure paths: a
+  dead-lettered message (the Worker now also consumes `pano-uploads-dlq[-dev]` itself, branching on
+  `batch.queue` against an exact set of the two real DLQ names, not a substring test), an oversized
+  original, and a key `deriveUploadTarget` rejects. A charset-invalid key (bad owner or panoId) now
+  gets no marker at all — `tileFailedKeyFromOriginalKey` validates both segments and the write is
+  skipped with a log line, rather than writing a marker keyed on a junk panoId.
+- **Resurrection guard (review fix, 2026-09-26).** Before writing, the consumer HEADs the original
+  at `bucket.head(<notification key>)`; the write is skipped (logged) if the original no longer
+  exists, or if its etag differs from the R2 event's `object.eTag` (a newer upload already
+  superseded the one that failed — a missing `eTag` is treated as unproven and also skipped,
+  since Cloudflare's create-event notifications always carry one). This closes a race where a pano
+  is deleted (`deletePano` sweeps `panos/<owner>/<panoId>/`) while its tiling job is still retrying:
+  without the guard, the DLQ consumer's later marker write would recreate that exact prefix and make
+  the pano list again under `GET /api/admin/panos`'s delimiter listing — a ghost pano. A second HEAD
+  right after the write catches the narrower race where the original is deleted *between* the
+  pre-write HEAD and the PUT; if so, the just-written marker is deleted again immediately.
+- **Same-etag race (review fix, 2026-09-26) — narrowed on the write side, not closed.** Attempt A of
+  etag E keeps retrying while a duplicate delivery or identical-bytes re-upload (attempt B, same etag)
+  succeeds and clears any marker; if A then exhausts its retries and dead-letters, its marker write
+  would otherwise resurrect a `failed` status for a pano that just tiled successfully. Before writing,
+  the consumer also GETs `tiles/<panoId>/manifest.json` and skips (logged) if `manifest.version`
+  equals `t${TILER_OUTPUT_VERSION}-<etag>` exactly (the format `services/tiler-consumer/src/container.ts`
+  derives, `TILER_OUTPUT_VERSION` imported from a new `@internal/tiler/version` subpath export so the
+  two never drift) — a full-string compare is fine here, unlike A2's read side (plan `tiling` rule),
+  because both attempts racing over one failed upload necessarily run the same deployed tiler code.
+  This check is best-effort and fail-open: a failure to read the manifest logs and falls through to
+  writing the marker anyway, and there's a small remaining window between this GET and the marker's
+  own PUT where attempt B's manifest write could land in between, unobserved — so a stale marker can
+  still get written. It's harmless when it does: A2's `ready`-checked-first order reads the manifest
+  (matching only the etag captured from its `version`, so it stays correct across a `TILER_OUTPUT_VERSION`
+  bump) before the marker, so a pano whose manifest already matches its current original reports
+  `ready` regardless of what a stale marker says.
+- **Every R2 call in the marker path is wrapped (review fix, 2026-09-26).** The pre-write HEAD, the
+  manifest race check, the write itself, and the post-write HEAD each catch their own errors: a
+  pre-write HEAD failure skips the write and logs (same as "original doesn't exist" — an R2 error here
+  must not be read as proof the original is fine), the manifest check failure logs and proceeds to
+  write anyway, and a post-write HEAD failure only logs (the marker, once written, is left in place —
+  there's nothing safe to undo without knowing whether the original is actually still there). None of
+  these can throw out of `writeFailureMarker` and change the caller's ack/retry decision.
+- **Cleared by** `services/tiler-consumer/src/container.ts` on the next successful manifest swap (a
+  best-effort `deleteObject`, logged on failure, never thrown).
+- **Read side (unit A2, not part of this PR):** `admin-api`'s planned `tiling: 'failed'` status
+  checks this key's existence *and* that its `originalEtag` still matches the current original —
+  see the plan doc's updated A2 rule. This PR only writes/clears the marker.
+- **New binding:** `tiler-consumer` gets a native `BUCKET` R2 binding (`wrangler.jsonc`), alongside
+  the existing S3-API credentials the container process already uses to reach the same bucket —
+  two separate paths to `pano-content-dev`/`pano-content`, matching the rest of the plan.
+- **New queue consumer.** The same Worker script now also consumes `pano-uploads-dlq[-dev]` (a
+  second `queues.consumers` entry, `max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no
+  `dead_letter_queue` of its own — a dead-lettered message is always acked, never retried further).
+  **Before deploying, check whether the DLQ already has a consumer and a backlog** — unlike
+  `pano-uploads[-dev]`, whose one existing consumer (pano-viewer's, then this repo's) is documented
+  above, nobody has verified `pano-uploads-dlq[-dev]`'s consumer state; it was inherited from
+  pano-viewer along with the bucket and main queue (see the top of this doc), so it may already have
+  pano-viewer's own consumer attached, or a backlog of messages pano-viewer dead-lettered under the
+  *old, percent-encoded* owner scheme (see the pre-cut-over check in the first dev deploy checklist
+  above) rather than the current base64url one:
+  ```bash
+  pnpm --filter @service/tiler-consumer exec wrangler queues info pano-uploads-dlq-dev
+  ```
+  If a consumer is already attached, remove it first the same way the `pano-uploads-dev` cut-over
+  did. If there's a backlog, inspect it before deploying — only `tileFailedKeyFromOriginalKey` runs
+  on the DLQ path (`deriveUploadTarget` is never called there; it's only used by the main-queue
+  handler), and it rejects an old-scheme key outright (logged, acked, no marker), so old messages
+  are harmless but won't tell you anything useful about *current* failures. **Status: not yet
+  deployed or checked.**
+- **Alerting — manual step, mechanism unverified.** The plan calls for "a Cloudflare notification or
+  observability alert on DLQ-consumer error logs." A previous version of this doc named a specific
+  dashboard path (Notifications → a "Workers" alert type on error-level logs); that path could not be
+  confirmed against current Cloudflare docs and is likely wrong or renamed — **do not follow it
+  as written**. Candidate mechanisms, none yet evaluated against the current product:
+  - A Workers Observability alert, if the account's Observability product exposes one on log level —
+    check the dashboard's Observability section for this Worker directly.
+  - A **Tail Worker** (`tail_consumers` in `wrangler.jsonc`) attached to `panote-tiler-consumer[-dev]`,
+    which receives every `console.error`/`console.warn` call and can forward matches anywhere (a
+    webhook, another queue, email via a binding).
+  - An **OTLP/Logpush export** to a third-party observability tool with its own alerting (Cloudflare
+    Logpush → e.g. Grafana/Datadog/Honeycomb), if one is already in use elsewhere.
+  Nothing in this repo can create any of these, and none has been created by hand; this is tracked as
+  outstanding, unverified work, the same way the Cache Rule / Auth0 SPA app / API tokens are tracked
+  as outstanding one-time provisioning above.
+- **Still unexercised live.** This PR adds the marker-write code and its unit tests (mocked/miniflare
+  R2, no real Cloudflare Queues); it does not change the fact recorded in "Known unverified areas"
+  below that an actual retry-to-DLQ delivery has never been observed against real Cloudflare.
+- **Multipart etag format unverified — and the app itself never triggers it.** The same-etag race
+  check above compares against `t${TILER_OUTPUT_VERSION}-<etag>`, and a multipart upload's S3-style
+  etag itself contains a `-N` suffix (part count) — `container.ts` already handles a hyphen in the
+  etag (`derives the version from a multipart GET ETag containing a hyphen`, unit-tested), but that
+  test constructs the etag by hand. `upload-api`'s `presignPut` (`packages/worker-kit/src/r2-s3.ts`)
+  only ever presigns a single `PutObject`; the browser's `XMLHttpRequest PUT` against that URL is
+  therefore never multipart, no matter the file size, so this path is never exercised by the app as
+  built. Multipart only happens through an out-of-band writer that chooses to split the upload itself
+  — an S3 multipart client (`CreateMultipartUpload`/`UploadPart`/`CompleteMultipartUpload`) against the
+  same bucket, or `wrangler r2 object put --remote` with a large enough file. Verify the real `eTag`
+  format deliberately, with one of those two, rather than waiting to see it from ordinary use.
+
+---
+
 ## Production status
 
 **Unprovisioned.** None of the following exist yet: `pano-content`, `pano-uploads`,
@@ -584,7 +695,9 @@ resource happens to be missing for whichever service deploys first.
   `panote-tiler-consumer-dev` with no messages in flight (the bucket was empty at the time), so
   behavior for a message in flight during the swap is untested. The end-to-end run's message
   afterward flowed through the queue to the Tiler DO and container without retry. Behavior under
-  an actual retry or DLQ path (a failing tile job) has not been exercised and stays unverified.
+  an actual retry or DLQ path (a failing tile job) has not been exercised and stays unverified —
+  unit B4 (see "Tiling failure marker and alerting" above) adds the DLQ-consumer code and its unit
+  tests, but not a live DLQ delivery.
 - **The real JWKS success path — now verified.** `packages/worker-kit/src/auth.ts`'s tests still
   only exercise the `globalThis.__verifyJwt` test seam and the rejection path for a
   missing/placeholder issuer, but the 2026-09-26 end-to-end run fetched a real JWKS document from
