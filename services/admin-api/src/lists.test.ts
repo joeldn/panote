@@ -1,8 +1,10 @@
+import { tourKey, userToursPrefix } from '@internal/contracts';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   computeTilingStatus,
   configCustomMetadata,
+  listTourSummaries,
   paginateIds,
   parseListLimit,
   resolvePanoTitle,
@@ -209,23 +211,30 @@ describe('tourCustomMetadata / configCustomMetadata', () => {
 });
 
 describe('parseListLimit', () => {
-  it('defaults to 50 when absent, zero, negative or not a number', () => {
-    expect(parseListLimit(undefined)).toBe(50);
-    expect(parseListLimit('0')).toBe(50);
-    expect(parseListLimit('-5')).toBe(50);
-    expect(parseListLimit('not-a-number')).toBe(50);
+  it('defaults to 50 when absent', () => {
+    expect(parseListLimit(undefined)).toEqual({ ok: true, limit: 50 });
   });
 
-  it('caps at 100', () => {
-    expect(parseListLimit('500')).toBe(100);
+  it('rejects zero, negative, fractional and non-numeric values (review fix)', () => {
+    expect(parseListLimit('0')).toEqual({ ok: false });
+    expect(parseListLimit('-5')).toEqual({ ok: false });
+    expect(parseListLimit('0.5')).toEqual({ ok: false });
+    expect(parseListLimit('12.9')).toEqual({ ok: false });
+    expect(parseListLimit('not-a-number')).toEqual({ ok: false });
   });
 
-  it('truncates a fractional value', () => {
-    expect(parseListLimit('12.9')).toBe(12);
+  it('rejects a value over MAX_LIST_LIMIT rather than silently clamping it (review fix)', () => {
+    expect(parseListLimit('500')).toEqual({ ok: false });
+    expect(parseListLimit('101')).toEqual({ ok: false });
+  });
+
+  it('accepts the boundary values 1 and 100', () => {
+    expect(parseListLimit('1')).toEqual({ ok: true, limit: 1 });
+    expect(parseListLimit('100')).toEqual({ ok: true, limit: 100 });
   });
 
   it('passes a valid in-range value through', () => {
-    expect(parseListLimit('7')).toBe(7);
+    expect(parseListLimit('7')).toEqual({ ok: true, limit: 7 });
   });
 });
 
@@ -248,7 +257,205 @@ describe('paginateIds', () => {
     expect(paginateIds(sorted, undefined, 10)).toEqual({ page: sorted, cursor: null });
   });
 
-  it('restarts from the top for a stale/unknown cursor rather than erroring', () => {
-    expect(paginateIds(sorted, 'not-a-real-id', 2)).toEqual({ page: ['a', 'b'], cursor: 'b' });
+  it('review fix: a true keyset resumes after a since-deleted cursor rather than restarting or looping', () => {
+    // "c" was deleted since the previous page; the keyset still resumes
+    // correctly at the first id greater than it ("d"), not from the top.
+    const withoutC = ['a', 'b', 'd', 'e'];
+    expect(paginateIds(withoutC, 'c', 2)).toEqual({ page: ['d', 'e'], cursor: null });
+  });
+
+  it('review fix: a cursor at or past the end returns an empty page and a null cursor, not a restart', () => {
+    expect(paginateIds(sorted, 'e', 2)).toEqual({ page: [], cursor: null });
+    expect(paginateIds(sorted, 'z', 2)).toEqual({ page: [], cursor: null });
+  });
+
+  it('a cursor before every id returns the first page', () => {
+    expect(paginateIds(sorted, '0', 2)).toEqual({ page: ['a', 'b'], cursor: 'b' });
+  });
+});
+
+describe('title truncation for R2 customMetadata (review fix)', () => {
+  it('truncates a tour title over 256 UTF-16 units when writing customMetadata', () => {
+    const hugeTitle = 'x'.repeat(9000);
+    const meta = tourCustomMetadata({ tourId: 't1', title: hugeTitle, scenes: [] });
+    expect(meta.title?.length).toBe(256);
+    expect(meta.title).toBe('x'.repeat(256));
+  });
+
+  it('truncates a pano config title over 256 UTF-16 units when writing customMetadata', () => {
+    const hugeTitle = 'y'.repeat(9000);
+    const meta = configCustomMetadata({ panoId: 'p1', title: hugeTitle, hotspots: [] });
+    expect(meta.title?.length).toBe(256);
+  });
+
+  it('leaves a short title untouched', () => {
+    expect(tourCustomMetadata({ tourId: 't1', title: 'Short', scenes: [] }).title).toBe('Short');
+  });
+});
+
+/** A minimal in-memory R2Bucket fake: enough of list()'s prefix/cursor/
+ * startAfter/limit semantics (key-sorted, `truncated`/`cursor` reported the
+ * way R2 does) plus get()/put() to unit-test listTourSummaries in isolation,
+ * including its own internal multi-fetch pagination loop. */
+type FakeRecord = {
+  value: string;
+  customMetadata: Record<string, string> | undefined;
+  etag: string;
+  uploaded: Date;
+};
+type FakeObject = {
+  key: string;
+  etag: string;
+  uploaded: Date;
+  customMetadata: Record<string, string> | undefined;
+};
+
+class FakeR2Bucket {
+  private readonly store = new Map<string, FakeRecord>();
+  getCalls = 0;
+
+  put(key: string, value: string, customMetadata?: Record<string, string>): void {
+    this.store.set(key, { value, customMetadata, etag: `etag-${key}`, uploaded: new Date() });
+  }
+
+  async get(key: string): Promise<{ json: <T>() => Promise<T>; etag: string } | null> {
+    this.getCalls += 1;
+    const rec = this.store.get(key);
+    if (!rec) return null;
+    return { json: async <T>() => JSON.parse(rec.value) as T, etag: rec.etag };
+  }
+
+  async list(options: {
+    prefix?: string;
+    cursor?: string;
+    startAfter?: string;
+    limit?: number;
+  }): Promise<{ objects: FakeObject[]; truncated: boolean; cursor?: string }> {
+    const prefix = options.prefix ?? '';
+    let keys = [...this.store.keys()].filter((k) => k.startsWith(prefix)).sort();
+    const after = options.cursor ?? options.startAfter;
+    if (after !== undefined) keys = keys.filter((k) => k > after);
+    const limit = options.limit ?? keys.length;
+    const page = keys.slice(0, limit);
+    const truncated = keys.length > limit;
+    const objects: FakeObject[] = page.map((key) => {
+      const rec = this.store.get(key) as FakeRecord;
+      return { key, etag: rec.etag, uploaded: rec.uploaded, customMetadata: rec.customMetadata };
+    });
+    return truncated
+      ? { objects, truncated: true, cursor: page[page.length - 1] as string }
+      : { objects, truncated: false };
+  }
+}
+
+const seedTour = (
+  bucket: FakeR2Bucket,
+  sub: string,
+  tourId: string,
+  fields: { title: string; sceneCount: number; coverPanoId: string },
+  publish?: { slug: string; visibility: 'public' | 'unlisted' },
+): void => {
+  bucket.put(tourKey(sub, tourId), JSON.stringify({ tourId, title: fields.title, scenes: [] }), {
+    title: fields.title,
+    sceneCount: String(fields.sceneCount),
+    coverPanoId: fields.coverPanoId,
+  });
+  if (publish) {
+    bucket.put(`${userToursPrefix(sub)}${tourId}/publish.json`, JSON.stringify(publish), {
+      slug: publish.slug,
+      visibility: publish.visibility,
+    });
+  }
+};
+
+describe('listTourSummaries (review fixes: tourId keyset pagination, no per-item GET)', () => {
+  const SUB = 'auth0|list-tours-fixture';
+
+  it('review fix: no bucket.get is called across pages when every tour has customMetadata', async () => {
+    const bucket = new FakeR2Bucket();
+    for (const tourId of ['t1', 't2', 't3']) {
+      seedTour(bucket, SUB, tourId, { title: `Tour ${tourId}`, sceneCount: 1, coverPanoId: 'p1' });
+    }
+    const page1 = await listTourSummaries(bucket as never, SUB, undefined, 10);
+    expect(page1.tours.map((t) => t.tourId).sort()).toEqual(['t1', 't2', 't3']);
+    expect(bucket.getCalls).toBe(0);
+  });
+
+  it('review fix: walks every page at limit=1 with publish.json present, visiting each tour exactly once', async () => {
+    const bucket = new FakeR2Bucket();
+    seedTour(
+      bucket,
+      SUB,
+      't1',
+      { title: 'Tour t1', sceneCount: 1, coverPanoId: 'p1' },
+      {
+        slug: 's1',
+        visibility: 'public',
+      },
+    );
+    seedTour(
+      bucket,
+      SUB,
+      't2',
+      { title: 'Tour t2', sceneCount: 1, coverPanoId: 'p1' },
+      {
+        slug: 's2',
+        visibility: 'unlisted',
+      },
+    );
+    seedTour(bucket, SUB, 't3', { title: 'Tour t3', sceneCount: 1, coverPanoId: 'p1' });
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const result = await listTourSummaries(bucket as never, SUB, cursor, 1);
+      expect(result.tours.length).toBeLessThanOrEqual(1);
+      seen.push(...result.tours.map((t) => t.tourId));
+      if (result.cursor === null) break;
+      cursor = result.cursor;
+    }
+    expect(seen.sort()).toEqual(['t1', 't2', 't3']);
+    expect(new Set(seen).size).toBe(3);
+  });
+
+  it('review fix: walks every page at limit=2 with publish.json present, visiting each tour exactly once', async () => {
+    const bucket = new FakeR2Bucket();
+    for (const tourId of ['t1', 't2', 't3']) {
+      seedTour(
+        bucket,
+        SUB,
+        tourId,
+        { title: `Tour ${tourId}`, sceneCount: 1, coverPanoId: 'p1' },
+        { slug: `slug-${tourId}`, visibility: 'public' },
+      );
+    }
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    for (let page = 0; page < 10; page++) {
+      const result = await listTourSummaries(bucket as never, SUB, cursor, 2);
+      pages += 1;
+      seen.push(...result.tours.map((t) => t.tourId));
+      if (result.cursor === null) break;
+      cursor = result.cursor;
+    }
+    expect(pages).toBe(2);
+    expect(seen.sort()).toEqual(['t1', 't2', 't3']);
+  });
+
+  it("review fix: a tour's publish summary is not split off by a page boundary", async () => {
+    const bucket = new FakeR2Bucket();
+    seedTour(
+      bucket,
+      SUB,
+      't1',
+      { title: 'Tour t1', sceneCount: 1, coverPanoId: 'p1' },
+      {
+        slug: 'linked',
+        visibility: 'public',
+      },
+    );
+    const { tours } = await listTourSummaries(bucket as never, SUB, undefined, 1);
+    expect(tours[0]?.publish).toEqual({ slug: 'linked', visibility: 'public' });
   });
 });

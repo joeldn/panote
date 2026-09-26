@@ -1,6 +1,7 @@
 import {
   configKey,
   deletingKey,
+  encodeId,
   manifestKey,
   MAX_TOUR_SCENES,
   originalKey,
@@ -1396,5 +1397,208 @@ describe('DELETE /api/admin/tours/:tourId (unit A2)', () => {
     });
 
     expect(await env.BUCKET.get(originalKey(OTHER_SUB, panoId))).not.toBeNull();
+  });
+});
+
+describe('review fix: manifest is not returned without ownership proof', () => {
+  it('?status=1, the full GET and the list all return manifest: null for a panoId the caller never owned', async () => {
+    const panoId = 'owner-leak-p1';
+    // B owns and fully tiles this pano.
+    const put = await env.BUCKET.put(originalKey(OTHER_SUB, panoId), 'their original bytes');
+    const version = `t1-${put?.etag}`;
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256 }),
+    );
+
+    // A queries the same panoId under their own (empty) prefix.
+    const status = await SELF.fetch(`https://x/api/admin/panos/${panoId}?status=1`, auth);
+    expect(status.status).toBe(200);
+    const statusBody = (await status.json()) as { status: { manifest: unknown; tiling: string } };
+    expect(statusBody.status.manifest).toBeNull();
+    expect(statusBody.status.tiling).toBe('none');
+
+    const full = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    // A has no config either, so this is the tombstone-aware 404 - but the
+    // point is it must never carry B's manifest/tiling data in any form.
+    expect(full.status).toBe(404);
+
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const listBody = (await list.json()) as {
+      panos: Array<{ panoId: string; manifest: unknown; tiling: string }>;
+    };
+    // A never uploaded/configured this panoId, so it must not even list for A.
+    expect(listBody.panos.find((p) => p.panoId === panoId)).toBeUndefined();
+  });
+
+  it("the full 200 GET never carries another owner's manifest even when the caller has their own config for the same panoId", async () => {
+    const panoId = 'owner-leak-shared-id-p1';
+    const put = await env.BUCKET.put(originalKey(OTHER_SUB, panoId), 'their original bytes');
+    const version = `t1-${put?.etag}`;
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256 }),
+    );
+    // A has a config under the same panoId but never uploaded an original -
+    // proves the manifest gate is originalObj, not merely "some object exists".
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Mine, no original', hotspots: [] }),
+    });
+
+    const full = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(full.status).toBe(200);
+    const body = (await full.json()) as { status: { manifest: unknown; tiling: string } };
+    expect(body.status.manifest).toBeNull();
+    expect(body.status.tiling).toBe('none');
+  });
+});
+
+describe('review fix: title truncation for R2 customMetadata (8192-byte limit, error 10012)', () => {
+  const hugeTitle = (ch: string) => ch.repeat(9000);
+
+  it('a 9000-char tour POST title still 200s, and the list shows the truncated title', async () => {
+    const title = hugeTitle('a');
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title, scenes: [] }),
+    });
+    expect(create.status).toBe(201);
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const list = await SELF.fetch('https://x/api/admin/tours', auth);
+    const body = (await list.json()) as { tours: Array<{ tourId: string; title: string }> };
+    const entry = body.tours.find((t) => t.tourId === tourId);
+    expect(entry?.title.length).toBe(256);
+    expect(entry?.title).toBe(title.slice(0, 256));
+
+    // The direct GET still returns the full, untruncated title from the doc.
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    const getBody = (await get.json()) as { tour: { title: string } };
+    expect(getBody.tour.title.length).toBe(9000);
+  });
+
+  it('a 9000-char tour PUT title still 200s, and the list shows the truncated title', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Short', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    const title = hugeTitle('b');
+    const update = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ title, scenes: [] }),
+    });
+    expect(update.status).toBe(200);
+
+    const list = await SELF.fetch('https://x/api/admin/tours', auth);
+    const body = (await list.json()) as { tours: Array<{ tourId: string; title: string }> };
+    expect(body.tours.find((t) => t.tourId === tourId)?.title.length).toBe(256);
+  });
+
+  it('a 9000-char pano config PUT title still 200s, and the list shows the truncated title', async () => {
+    const panoId = 'huge-title-config-p1';
+    const title = hugeTitle('c');
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title, hotspots: [] }),
+    });
+    expect(put.status).toBe(200);
+
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; title: string | null }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.title?.length).toBe(256);
+
+    // The direct GET still returns the full, untruncated title from the doc.
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const getBody = (await get.json()) as { config: { title: string } };
+    expect(getBody.config.title.length).toBe(9000);
+  });
+});
+
+describe('review fix: ?limit and ?cursor validation on both list routes', () => {
+  it('400s a non-integer, zero, negative or over-max ?limit on GET /api/admin/tours', async () => {
+    for (const limit of ['0.5', '0', '-1', '101', 'abc']) {
+      const r = await SELF.fetch(`https://x/api/admin/tours?limit=${limit}`, auth);
+      expect(r.status).toBe(400);
+    }
+  });
+
+  it('400s a non-integer, zero, negative or over-max ?limit on GET /api/admin/panos', async () => {
+    for (const limit of ['0.5', '0', '-1', '101', 'abc']) {
+      const r = await SELF.fetch(`https://x/api/admin/panos?limit=${limit}`, auth);
+      expect(r.status).toBe(400);
+    }
+  });
+
+  it('accepts the boundary limits 1 and 100 on both list routes', async () => {
+    const toursMin = await SELF.fetch('https://x/api/admin/tours?limit=1', auth);
+    const toursMax = await SELF.fetch('https://x/api/admin/tours?limit=100', auth);
+    const panosMin = await SELF.fetch('https://x/api/admin/panos?limit=1', auth);
+    const panosMax = await SELF.fetch('https://x/api/admin/panos?limit=100', auth);
+    expect([toursMin.status, toursMax.status, panosMin.status, panosMax.status]).toEqual([
+      200, 200, 200, 200,
+    ]);
+  });
+
+  it('400s a cursor outside the URL-unreserved charset on GET /api/admin/tours', async () => {
+    const r = await SELF.fetch(
+      `https://x/api/admin/tours?cursor=${encodeURIComponent('bad/cursor|1')}`,
+      auth,
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it('400s a cursor outside the URL-unreserved charset on GET /api/admin/panos', async () => {
+    const r = await SELF.fetch(
+      `https://x/api/admin/panos?cursor=${encodeURIComponent('bad/cursor|1')}`,
+      auth,
+    );
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('review fix: tours list page boundary never splits a tour from its publish.json', () => {
+  it('limit=1 across two tours, one with a publish.json sidecar, visits each tour exactly once', async () => {
+    const createA = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Boundary A', scenes: [] }),
+    });
+    const { tourId: tourIdA } = (await createA.json()) as { tourId: string };
+    const createB = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Boundary B', scenes: [] }),
+    });
+    const { tourId: tourIdB } = (await createB.json()) as { tourId: string };
+    // Hand-written, forward-compat with unit B2's future publish.json writer.
+    await env.BUCKET.put(
+      `tours/${encodeId(MY_SUB)}/${tourIdA}/publish.json`,
+      JSON.stringify({ slug: 'boundary-a', visibility: 'public' }),
+      { customMetadata: { slug: 'boundary-a', visibility: 'public' } },
+    );
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const url = cursor
+        ? `https://x/api/admin/tours?limit=1&cursor=${encodeURIComponent(cursor)}`
+        : 'https://x/api/admin/tours?limit=1';
+      const r = await SELF.fetch(url, auth);
+      const body = (await r.json()) as { tours: Array<{ tourId: string }>; cursor: string | null };
+      expect(body.tours.length).toBeLessThanOrEqual(1);
+      seen.push(...body.tours.map((t) => t.tourId));
+      if (body.cursor === null) break;
+      cursor = body.cursor;
+    }
+    expect(seen).toContain(tourIdA);
+    expect(seen).toContain(tourIdB);
+    expect(new Set(seen).size).toBe(seen.length);
   });
 });
