@@ -4,6 +4,7 @@ import {
   manifestKey,
   MAX_TOUR_SCENES,
   originalKey,
+  tileFailedKey,
   tileVersionPrefix,
   tourKey,
 } from '@internal/contracts';
@@ -848,5 +849,552 @@ describe('PUT /api/admin/tours/:tourId write guards', () => {
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'not found' });
     expect(await env.BUCKET.get(tourKey(MY_SUB, 'never-posted-t1'))).toBeNull();
+  });
+});
+
+describe('customMetadata writes (unit A2)', () => {
+  it('a config PUT stamps customMetadata.title', async () => {
+    const panoId = 'meta-config-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Metadata Hall', hotspots: [] }),
+    });
+    const head = await env.BUCKET.head(configKey(MY_SUB, panoId));
+    expect(head?.customMetadata).toEqual({ title: 'Metadata Hall' });
+  });
+
+  it('a tour POST stamps title/sceneCount/coverPanoId, and a PUT keeps it current', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Meta Tour', scenes: [{ panoId: 'meta-p1' }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    const headAfterCreate = await env.BUCKET.head(tourKey(MY_SUB, tourId));
+    expect(headAfterCreate?.customMetadata).toEqual({
+      title: 'Meta Tour',
+      sceneCount: '1',
+      coverPanoId: 'meta-p1',
+    });
+
+    await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        title: 'Meta Tour Updated',
+        scenes: [{ panoId: 'meta-p2' }, { panoId: 'meta-p3' }],
+      }),
+    });
+    const headAfterUpdate = await env.BUCKET.head(tourKey(MY_SUB, tourId));
+    expect(headAfterUpdate?.customMetadata).toEqual({
+      title: 'Meta Tour Updated',
+      sceneCount: '2',
+      coverPanoId: 'meta-p2',
+    });
+  });
+
+  it('a tour with no scenes stamps an empty coverPanoId', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'No Scenes', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    const head = await env.BUCKET.head(tourKey(MY_SUB, tourId));
+    expect(head?.customMetadata).toEqual({ title: 'No Scenes', sceneCount: '0', coverPanoId: '' });
+  });
+});
+
+describe('GET /api/admin/tours', () => {
+  it('rejects an unauthenticated list', async () => {
+    const r = await SELF.fetch('https://x/api/admin/tours');
+    expect(r.status).toBe(401);
+  });
+
+  it('lists a created tour with title/sceneCount/coverPanoId/updatedAt/etag and publish: null', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'List Me', scenes: [{ panoId: 'list-cover-p1' }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const list = await SELF.fetch('https://x/api/admin/tours', auth);
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      tours: Array<{
+        tourId: string;
+        title: string;
+        sceneCount: number;
+        coverPanoId: string | null;
+        updatedAt: string;
+        etag: string;
+        publish: unknown;
+      }>;
+      cursor: string | null;
+    };
+    const entry = body.tours.find((t) => t.tourId === tourId);
+    expect(entry).toEqual({
+      tourId,
+      title: 'List Me',
+      sceneCount: 1,
+      coverPanoId: 'list-cover-p1',
+      updatedAt: expect.any(String),
+      etag: expect.any(String),
+      publish: null,
+    });
+    expect(new Date(entry?.updatedAt ?? '').toString()).not.toBe('Invalid Date');
+  });
+
+  it("does not list another owner's tours", async () => {
+    await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: authOther.headers,
+      body: JSON.stringify({ title: 'Theirs Only', scenes: [] }),
+    });
+    const list = await SELF.fetch('https://x/api/admin/tours', auth);
+    const body = (await list.json()) as { tours: Array<{ title: string }> };
+    expect(body.tours.some((t) => t.title === 'Theirs Only')).toBe(false);
+  });
+
+  it('a legacy tour written with no customMetadata still lists, via the getJson fallback', async () => {
+    const tourId = 'legacy-tour-t1';
+    await env.BUCKET.put(
+      tourKey(MY_SUB, tourId),
+      JSON.stringify({ tourId, title: 'Legacy Tour', scenes: [{ panoId: 'legacy-cover-p1' }] }),
+    );
+    const list = await SELF.fetch('https://x/api/admin/tours', auth);
+    const body = (await list.json()) as {
+      tours: Array<{
+        tourId: string;
+        title: string;
+        sceneCount: number;
+        coverPanoId: string | null;
+      }>;
+    };
+    const entry = body.tours.find((t) => t.tourId === tourId);
+    expect(entry).toEqual({
+      tourId,
+      title: 'Legacy Tour',
+      sceneCount: 1,
+      coverPanoId: 'legacy-cover-p1',
+      updatedAt: expect.any(String),
+      etag: expect.any(String),
+      publish: null,
+    });
+  });
+
+  it('honours ?limit and returns a cursor that resumes to the remaining page', async () => {
+    const owner = { headers: { Authorization: 'Bearer good' } };
+    const titles = ['Page A', 'Page B', 'Page C'];
+    for (const title of titles) {
+      await SELF.fetch('https://x/api/admin/tours', {
+        method: 'POST',
+        headers: owner.headers,
+        body: JSON.stringify({ title, scenes: [] }),
+      });
+    }
+    // Every prior test in this describe block also created tours under the
+    // same owner, so this counts total-so-far rather than assuming exactly 3.
+    const all = await SELF.fetch('https://x/api/admin/tours?limit=100', auth);
+    const totalCount = ((await all.json()) as { tours: unknown[] }).tours.length;
+
+    const first = await SELF.fetch('https://x/api/admin/tours?limit=1', auth);
+    const firstBody = (await first.json()) as { tours: unknown[]; cursor: string | null };
+    expect(firstBody.tours.length).toBe(1);
+    expect(firstBody.cursor).not.toBeNull();
+
+    const rest = await SELF.fetch(
+      `https://x/api/admin/tours?limit=${totalCount}&cursor=${encodeURIComponent(firstBody.cursor ?? '')}`,
+      auth,
+    );
+    const restBody = (await rest.json()) as { tours: unknown[]; cursor: string | null };
+    expect(restBody.tours.length).toBe(totalCount - 1);
+  });
+});
+
+describe('GET /api/admin/panos summaries (unit A2)', () => {
+  it('panoIds stays the full unpaginated list alongside the new panos summaries', async () => {
+    const panoId = 'summary-panoids-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Summary', hotspots: [] }),
+    });
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as {
+      panoIds: string[];
+      panos: Array<{ panoId: string }>;
+      cursor: string | null;
+    };
+    expect(body.panoIds).toContain(panoId);
+    expect(body.panos.some((p) => p.panoId === panoId)).toBe(true);
+  });
+
+  it('summarizes a config-only pano: hasConfig, no original, tiling none', async () => {
+    const panoId = 'summary-config-only-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Config Only', hotspots: [] }),
+    });
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as {
+      panos: Array<{
+        panoId: string;
+        title: string | null;
+        hasConfig: boolean;
+        hasOriginal: boolean;
+        deleting: boolean;
+        tiling: string;
+        manifest: unknown;
+      }>;
+    };
+    const entry = body.panos.find((p) => p.panoId === panoId);
+    expect(entry).toEqual({
+      panoId,
+      title: 'Config Only',
+      hasConfig: true,
+      hasOriginal: false,
+      deleting: false,
+      tiling: 'none',
+      manifest: null,
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('summarizes an uploaded-but-untiled original as pending, with a null title', async () => {
+    const panoId = 'summary-pending-p1';
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as {
+      panos: Array<{ panoId: string; title: string | null; hasOriginal: boolean; tiling: string }>;
+    };
+    const entry = body.panos.find((p) => p.panoId === panoId);
+    expect(entry?.title).toBeNull();
+    expect(entry?.hasOriginal).toBe(true);
+    expect(entry?.tiling).toBe('pending');
+  });
+
+  it('summarizes a ready pano: manifest version etag capture matches the original etag', async () => {
+    const panoId = 'summary-ready-p1';
+    const put = await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const version = `t1-${put?.etag}`;
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256 }),
+    );
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as {
+      panos: Array<{
+        panoId: string;
+        tiling: string;
+        manifest: { version: string; format: string; tileSize: number } | null;
+      }>;
+    };
+    const entry = body.panos.find((p) => p.panoId === panoId);
+    expect(entry?.tiling).toBe('ready');
+    expect(entry?.manifest).toEqual({ version, format: 'webp', tileSize: 256 });
+  });
+
+  it('summarizes a replaced original whose old manifest no longer matches as pending, not ready', async () => {
+    const panoId = 'summary-replaced-p1';
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version: 't1-stale-etag', format: 'webp', tileSize: 256 }),
+    );
+    // The current original has a different (real) etag than the stale manifest.
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'new original bytes');
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; tiling: string }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.tiling).toBe('pending');
+  });
+
+  it('summarizes a tile-failed marker matching the current original etag as failed', async () => {
+    const panoId = 'summary-failed-p1';
+    const put = await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    await env.BUCKET.put(tileFailedKey(MY_SUB, panoId), JSON.stringify({ reason: 'dlq' }), {
+      customMetadata: { reason: 'dlq', originalEtag: put?.etag ?? '' },
+    });
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; tiling: string }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.tiling).toBe('failed');
+  });
+
+  it('a stale tile-failed marker (superseded by a newer upload) is pending, not failed', async () => {
+    const panoId = 'summary-stale-failed-p1';
+    await env.BUCKET.put(tileFailedKey(MY_SUB, panoId), JSON.stringify({ reason: 'dlq' }), {
+      customMetadata: { reason: 'dlq', originalEtag: 'an-old-etag' },
+    });
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'a newer original');
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; tiling: string }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.tiling).toBe('pending');
+  });
+
+  it('review fix: a same-etag race between a ready manifest and a stale failed marker resolves to ready', async () => {
+    const panoId = 'summary-race-p1';
+    const put = await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const version = `t1-${put?.etag}`;
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256 }),
+    );
+    await env.BUCKET.put(tileFailedKey(MY_SUB, panoId), JSON.stringify({ reason: 'dlq' }), {
+      customMetadata: { reason: 'dlq', originalEtag: put?.etag ?? '' },
+    });
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; tiling: string }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.tiling).toBe('ready');
+  });
+
+  it('a tombstoned pano summarizes as deleting: true', async () => {
+    const panoId = 'summary-tombstone-p1';
+    await env.BUCKET.put(deletingKey(MY_SUB, panoId), '');
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; deleting: boolean }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.deleting).toBe(true);
+  });
+
+  it('a legacy config with no customMetadata still resolves a title via the getJson fallback', async () => {
+    const panoId = 'summary-legacy-title-p1';
+    await env.BUCKET.put(
+      configKey(MY_SUB, panoId),
+      JSON.stringify({ panoId, title: 'Legacy Title', hotspots: [] }),
+    );
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as { panos: Array<{ panoId: string; title: string | null }> };
+    expect(body.panos.find((p) => p.panoId === panoId)?.title).toBe('Legacy Title');
+  });
+
+  it('honours ?limit and a cursor over the sorted panoId keyset', async () => {
+    const a = 'summary-cursor-a-p1';
+    const b = 'summary-cursor-b-p1';
+    for (const panoId of [a, b]) {
+      await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+        method: 'PUT',
+        headers: { ...auth.headers, 'If-Match': '*' },
+        body: JSON.stringify({ panoId, title: panoId, hotspots: [] }),
+      });
+    }
+    const first = await SELF.fetch(
+      `https://x/api/admin/panos?limit=1&cursor=${encodeURIComponent(a)}`,
+      auth,
+    );
+    const body = (await first.json()) as { panos: Array<{ panoId: string }> };
+    // Cursor semantics: resumes strictly after the given id in sorted order.
+    expect(body.panos[0]?.panoId).toBe(b);
+  });
+});
+
+describe('GET /api/admin/panos/:panoId status (unit A2)', () => {
+  it('the normal 200 response includes a status object alongside config/etag', async () => {
+    const panoId = 'status-normal-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Status Normal', hotspots: [] }),
+    });
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const body = (await get.json()) as {
+      config: { title: string };
+      etag: string;
+      status: { hasConfig: boolean; hasOriginal: boolean; deleting: boolean; tiling: string };
+    };
+    expect(body.status).toEqual({
+      hasConfig: true,
+      hasOriginal: false,
+      deleting: false,
+      tiling: 'none',
+      manifest: null,
+      updatedAt: expect.any(String),
+    });
+  });
+
+  it('?status=1 returns only {status}, with no config or etag key, for a config-less fresh upload', async () => {
+    const panoId = 'status-only-fresh-upload-p1';
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}?status=1`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as Record<string, unknown>;
+    expect(Object.keys(body)).toEqual(['status']);
+    expect(
+      (body.status as { hasOriginal: boolean; hasConfig: boolean; tiling: string }).hasOriginal,
+    ).toBe(true);
+    expect((body.status as { hasConfig: boolean }).hasConfig).toBe(false);
+    expect((body.status as { tiling: string }).tiling).toBe('pending');
+  });
+
+  it('?status=1 200s (not 404) for a panoId with nothing at all', async () => {
+    const get = await SELF.fetch('https://x/api/admin/panos/status-only-nothing-p1?status=1', auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { status: { tiling: string } };
+    expect(body.status.tiling).toBe('none');
+  });
+
+  it('?status=1 rejects an unauthenticated request', async () => {
+    const r = await SELF.fetch('https://x/api/admin/panos/status-unauth-p1?status=1');
+    expect(r.status).toBe(401);
+  });
+
+  it('?status=1 400s a panoId outside the URL-unreserved charset', async () => {
+    const r = await SELF.fetch(
+      `https://x/api/admin/panos/${encodeURIComponent('bad/id')}?status=1`,
+      auth,
+    );
+    expect(r.status).toBe(400);
+  });
+});
+
+describe('DELETE /api/admin/tours/:tourId (unit A2)', () => {
+  it('rejects an unauthenticated delete', async () => {
+    const r = await SELF.fetch('https://x/api/admin/tours/unauth-delete-t1', { method: 'DELETE' });
+    expect(r.status).toBe(401);
+  });
+
+  it('400s a tourId outside the URL-unreserved charset', async () => {
+    const r = await SELF.fetch(`https://x/api/admin/tours/${encodeURIComponent('bad/tour|id')}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('is idempotent 204 for a tourId that was never created', async () => {
+    const r = await SELF.fetch('https://x/api/admin/tours/never-created-delete-t1', {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(r.status).toBe(204);
+  });
+
+  it('deletes the tour document; a repeat DELETE is still 204', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Delete Me', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const first = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(first.status).toBe(204);
+    expect(await env.BUCKET.get(tourKey(MY_SUB, tourId))).toBeNull();
+
+    const second = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(second.status).toBe(204);
+  });
+
+  it("204s a caller's DELETE of a tourId only another owner has, without touching that owner's tour", async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: authOther.headers,
+      body: JSON.stringify({ title: 'Not Yours', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const del = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(del.status).toBe(204);
+    expect(await env.BUCKET.get(tourKey(OTHER_SUB, tourId))).not.toBeNull();
+  });
+
+  it('deleting a tour also deletes a pano it alone references (original, config and tiles)', async () => {
+    const panoId = 'delete-tour-orphan-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Orphan', hotspots: [] }),
+    });
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    await env.BUCKET.put(tileVersionPrefix(panoId, 't1-orphan') + '0/px/0-0.webp', 'tile');
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Orphan Owner', scenes: [{ panoId }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const del = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(del.status).toBe(204);
+
+    expect(await env.BUCKET.get(originalKey(MY_SUB, panoId))).toBeNull();
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+    expect(
+      await env.BUCKET.get(tileVersionPrefix(panoId, 't1-orphan') + '0/px/0-0.webp'),
+    ).toBeNull();
+  });
+
+  it('Q5: deleting one tour leaves a pano shared with another tour of the same owner untouched', async () => {
+    const sharedPano = 'delete-tour-shared-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${sharedPano}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId: sharedPano, title: 'Shared', hotspots: [] }),
+    });
+    await env.BUCKET.put(originalKey(MY_SUB, sharedPano), 'shared original bytes');
+
+    const createA = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Tour A', scenes: [{ panoId: sharedPano }] }),
+    });
+    const { tourId: tourIdA } = (await createA.json()) as { tourId: string };
+    const createB = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Tour B', scenes: [{ panoId: sharedPano }] }),
+    });
+    const { tourId: tourIdB } = (await createB.json()) as { tourId: string };
+
+    const delA = await SELF.fetch(`https://x/api/admin/tours/${tourIdA}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(delA.status).toBe(204);
+
+    // Tour A is gone, but the pano it shared with Tour B survives.
+    expect(await env.BUCKET.get(tourKey(MY_SUB, tourIdA))).toBeNull();
+    expect(await env.BUCKET.get(originalKey(MY_SUB, sharedPano))).not.toBeNull();
+    expect(await env.BUCKET.get(configKey(MY_SUB, sharedPano))).not.toBeNull();
+    expect(await env.BUCKET.get(tourKey(MY_SUB, tourIdB))).not.toBeNull();
+
+    // Now delete Tour B too: with no other tour referencing it, the shared
+    // pano is finally cleaned up.
+    const delB = await SELF.fetch(`https://x/api/admin/tours/${tourIdB}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+    expect(delB.status).toBe(204);
+    expect(await env.BUCKET.get(originalKey(MY_SUB, sharedPano))).toBeNull();
+  });
+
+  it('a delete tour fan-out does not touch a same-panoId pano owned by a different owner', async () => {
+    const panoId = 'delete-tour-cross-owner-p1';
+    await env.BUCKET.put(originalKey(OTHER_SUB, panoId), 'their original bytes');
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Mine', scenes: [{ panoId }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: auth.headers,
+    });
+
+    expect(await env.BUCKET.get(originalKey(OTHER_SUB, panoId))).not.toBeNull();
   });
 });
