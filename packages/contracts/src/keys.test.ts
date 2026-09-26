@@ -12,6 +12,9 @@ import {
   TILES_ROOT,
   tilesPrefix,
   tileVersionPrefix,
+  tileFailedKey,
+  tileFailedKeyFromOriginalKey,
+  panoIdFromOriginalKey,
 } from './keys.js';
 
 describe('keys', () => {
@@ -135,6 +138,69 @@ describe('keys', () => {
 
     it('manifestKey throws on an invalid panoId', () => {
       expect(() => manifestKey('a/b')).toThrow(/panoId must match/);
+    });
+  });
+
+  // The DLQ consumer only has the already-encoded owner segment, not the raw
+  // sub - tileFailedKeyFromOriginalKey must land on the same key as tileFailedKey.
+  describe('tile-failed marker key (unit B4)', () => {
+    it('builds a marker key with an encoded owner segment and a verbatim panoId', () => {
+      expect(tileFailedKey('auth0|abc', 'p1')).toBe(
+        `panos/${encodeId('auth0|abc')}/p1/tile-failed`,
+      );
+    });
+
+    it('tileFailedKey throws on an invalid panoId', () => {
+      expect(() => tileFailedKey('u1', 'a/b')).toThrow(/panoId must match/);
+    });
+
+    it('tileFailedKeyFromOriginalKey derives the sibling marker key from a notification key, owner segment untouched', () => {
+      expect(tileFailedKeyFromOriginalKey('panos/ae-_vTXvv70/p1/original')).toBe(
+        'panos/ae-_vTXvv70/p1/tile-failed',
+      );
+    });
+
+    it('agrees with tileFailedKey for the same owner/panoId (via originalKey, the real notification-key shape)', () => {
+      const owner = 'auth0|me';
+      const panoId = '550e8400-e29b-41d4-a716-446655440000';
+      expect(tileFailedKeyFromOriginalKey(originalKey(owner, panoId))).toBe(
+        tileFailedKey(owner, panoId),
+      );
+    });
+
+    // Charset-invalid keys must not get a marker (review fix) - cheap to
+    // validate here the same way deriveUploadTarget does upstream.
+    it('throws on an owner segment with an invalid charset', () => {
+      expect(() => tileFailedKeyFromOriginalKey('panos/own%25er/p1/original')).toThrow(
+        /owner segment/,
+      );
+    });
+
+    it('throws on a panoId segment with an invalid charset', () => {
+      expect(() => tileFailedKeyFromOriginalKey('panos/owner/bad panoid/original')).toThrow(
+        /panoId segment/,
+      );
+    });
+
+    it.each([
+      ['too few segments', 'panos/owner/original'],
+      ['too many segments', 'panos/owner/p1/extra/original'],
+      ['missing the panos/ prefix', 'tours/owner/p1/original'],
+      ['missing the /original suffix', 'panos/owner/p1/config.json'],
+    ])('throws on %s - nowhere valid to hang a marker', (_label, key) => {
+      expect(() => tileFailedKeyFromOriginalKey(key)).toThrow();
+    });
+
+    // panoIdFromOriginalKey (unit B4's manifest race check) shares the same
+    // parse/validation as tileFailedKeyFromOriginalKey - just the panoId.
+    it('panoIdFromOriginalKey returns the panoId segment alone', () => {
+      expect(panoIdFromOriginalKey('panos/ae-_vTXvv70/p1/original')).toBe('p1');
+    });
+
+    it('panoIdFromOriginalKey throws the same way as tileFailedKeyFromOriginalKey', () => {
+      expect(() => panoIdFromOriginalKey('panos/owner/bad panoid/original')).toThrow(
+        /panoId segment/,
+      );
     });
   });
 });
