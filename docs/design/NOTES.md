@@ -26,17 +26,22 @@ the code wins:
 1. **Routes.** Admin routes are under `/api/admin/*`, not the brief's flat
    `/api/panos/*` (see `docs/decisions.md`). `/api/tours/*` stats/view/like
    paths are unchanged.
-2. **CDN reads.** Tiles are owner-free at `tiles/<panoId>/manifest.json`,
-   with versioned tile dirs `tiles/<panoId>/t<ver>-<etag>/` (see
-   `docs/decisions.md`), served from `cdn.panote.dev` in dev. The CDN only
-   serves `/tiles/`, `/pub/`, `/slugs/` — a WAF rule blocks everything else,
-   including the brief's `panos/<owner>/...` shape. Share links / slugs
-   (`/s/<slug>` in the design) are planned via published copies under `pub/`
-   and `slugs/<slug>.json` in Wave 6 — no backend for either exists yet.
-3. **Read base URL.** The prototype hardcodes `panote.io`. It must be
-   per-environment config (dev has no `cdn.panote.dev` domain live in the
-   prototype's assumptions, though it is live in the real dev environment —
-   see `docs/deploy.md`).
+2. **CDN reads.** The brief has the editor/viewer fetch `manifest.json`,
+   `config.json`, and `tour.json` all straight from the CDN as `GET
+   {cdn}/{key}` — no owner segment, no separate get-config/tour API. Tiles
+   and the manifest do work that way: owner-free at `tiles/<panoId>/…`, not
+   `{cdn}/{panoId}/…` (see `docs/decisions.md`). `config.json`/`tour.json`
+   don't — they live under the private `panos/<owner>/<panoId>/config.json`
+   and `tours/<owner>/<tourId>/tour.json` prefixes
+   (`packages/contracts/src/keys.ts`), which the CDN's WAF blocks (it only
+   serves `/tiles/`, `/pub/`, `/slugs/`). So the owner's editor/dashboard
+   can't read its own config/tour straight from the CDN the way the brief
+   assumes — that's why the deferred admin-api `GET` routes are needed.
+   Public reads of a tour/config are planned via Wave 6's published `pub/`
+   copies and `slugs/<slug>.json` — neither exists yet.
+3. **Read base URL.** The prototype hardcodes `panote.io`; the read base URL
+   must be per-environment config. The brief's note that dev has no
+   `cdn.panote.dev` is out of date — it's live in dev (see `docs/deploy.md`).
 
 ## Where the design leads the API (net-new work, not mistakes)
 
