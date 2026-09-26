@@ -26,28 +26,40 @@ const referencedPanoIds = async (
   return referenced;
 };
 
-/**
- * Q5: deletes the tour, plus any of its own panos that no *other* tour of
- * the same owner still references (a pano shared with another tour is left
- * untouched). Idempotent: a tourId that doesn't exist is a no-op.
- *
- * Deletes tour.json LAST, after the pano fan-out - a deliberate reorder from
- * the plan's listed step order (written for the full B2 pipeline this unit
- * doesn't include): a crash-then-retry needs `own` to recompute which panos
- * still need deleting, which a tour.json deleted first would prevent.
- */
-export const deleteTour = async (bucket: R2Bucket, sub: string, tourId: string): Promise<void> => {
-  const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
-  if (!own) return;
-  const referenced = await referencedPanoIds(bucket, sub, tourId);
-  const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
-  for (let i = 0; i < ownPanoIds.length; i += REFERENCE_CONCURRENCY) {
-    const batch = ownPanoIds.slice(i, i + REFERENCE_CONCURRENCY);
+const deleteUnreferenced = async (
+  bucket: R2Bucket,
+  sub: string,
+  panoIds: readonly string[],
+  referenced: Set<string>,
+): Promise<string[]> => {
+  const stillReferenced: string[] = [];
+  for (let i = 0; i < panoIds.length; i += REFERENCE_CONCURRENCY) {
+    const batch = panoIds.slice(i, i + REFERENCE_CONCURRENCY);
     await Promise.all(
       batch.map(async (panoId) => {
-        if (!referenced.has(panoId)) await deletePano(bucket, sub, panoId);
+        if (referenced.has(panoId)) stillReferenced.push(panoId);
+        else await deletePano(bucket, sub, panoId);
       }),
     );
   }
+  return stillReferenced;
+};
+
+// Q5: deletes the tour and any of its panos no other tour of the owner still
+// references (idempotent). tour.json is deleted last so a crash/retry can resume.
+export const deleteTour = async (bucket: R2Bucket, sub: string, tourId: string): Promise<void> => {
+  // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
+  const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
+  if (!own) return;
+  const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
+
+  const referenced = await referencedPanoIds(bucket, sub, tourId);
+  const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced);
   await bucket.delete(tourKey(sub, tourId));
+
+  // Recheck after this tour.json is gone: catches the common 2-tour race
+  // (see PR body); a rarer 3+-way overlap can still leak storage, not safety.
+  if (deferred.length === 0) return;
+  const referencedAfter = await referencedPanoIds(bucket, sub, tourId);
+  await deleteUnreferenced(bucket, sub, deferred, referencedAfter);
 };
