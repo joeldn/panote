@@ -347,6 +347,7 @@ class FakeR2Bucket {
     cursor?: string;
     startAfter?: string;
     limit?: number;
+    include?: string[];
   }): Promise<{ objects: FakeObject[]; truncated: boolean; cursor?: string }> {
     const prefix = options.prefix ?? '';
     let keys = [...this.store.keys()].filter((k) => k.startsWith(prefix)).sort();
@@ -355,9 +356,17 @@ class FakeR2Bucket {
     const limit = options.limit ?? keys.length;
     const page = keys.slice(0, limit);
     const truncated = keys.length > limit;
+    // Mirrors real R2: customMetadata is only present when explicitly asked
+    // for, so a caller that forgets `include` is caught by a test, not silently fine.
+    const wantsMetadata = options.include?.includes('customMetadata') ?? false;
     const objects: FakeObject[] = page.map((key) => {
       const rec = this.store.get(key) as FakeRecord;
-      return { key, etag: rec.etag, uploaded: rec.uploaded, customMetadata: rec.customMetadata };
+      return {
+        key,
+        etag: rec.etag,
+        uploaded: rec.uploaded,
+        customMetadata: wantsMetadata ? rec.customMetadata : undefined,
+      };
     });
     return truncated
       ? { objects, truncated: true, cursor: page[page.length - 1] as string }
