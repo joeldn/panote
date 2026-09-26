@@ -85,9 +85,8 @@ export type PanosListOk = z.infer<typeof PanosListOkSchema>;
 export const PanoStatusSchema = PanoSummarySchema.omit({ panoId: true, title: true });
 export type PanoStatus = z.infer<typeof PanoStatusSchema>;
 
-// A separate schema from PanoConfigOkSchema (not an .extend of it reused
-// elsewhere) - TourConfigEntrySchema still uses the bare {config, etag}
-// shape for ?include=configs, which this must not affect.
+// A separate schema from PanoConfigOkSchema: TourConfigEntrySchema still
+// uses the bare {config, etag} shape for ?include=configs, unaffected here.
 export const PanoWithStatusOkSchema = PanoConfigOkSchema.extend({ status: PanoStatusSchema });
 export type PanoWithStatusOk = z.infer<typeof PanoWithStatusOkSchema>;
 
