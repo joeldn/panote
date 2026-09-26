@@ -2,6 +2,7 @@ import {
   configKey,
   manifestKey,
   panoPrefix,
+  tourKey,
   userToursPrefix,
   type PanoManifestSummary,
   type PanoSummary,
@@ -82,42 +83,58 @@ const toPublishSummary = (
   return { slug: meta.slug, visibility: meta.visibility };
 };
 
+// R2 customMetadata is capped at 8192 bytes (error 10012 past that) and B1
+// doesn't cap title length; truncate rather than fail the save (full title stays in the doc).
+const METADATA_TITLE_MAX_UNITS = 256;
+const truncateForMetadata = (title: string): string => title.slice(0, METADATA_TITLE_MAX_UNITS);
+
 export const tourCustomMetadata = (tour: TourDoc): Record<string, string> => ({
-  title: tour.title,
+  title: truncateForMetadata(tour.title),
   sceneCount: String(tour.scenes.length),
   coverPanoId: tour.scenes[0]?.panoId ?? '',
 });
 
 export const configCustomMetadata = (config: SceneConfig): Record<string, string> => ({
-  title: config.title,
+  title: truncateForMetadata(config.title),
 });
 
 export const DEFAULT_LIST_LIMIT = 50;
 export const MAX_LIST_LIMIT = 100;
 
-export const parseListLimit = (raw: string | undefined): number => {
+export type ParsedLimit = { ok: true; limit: number } | { ok: false };
+
+// Absent keeps the default; anything present must be an integer in
+// [1, MAX_LIST_LIMIT] or the route 400s rather than silently clamping/guessing.
+export const parseListLimit = (raw: string | undefined): ParsedLimit => {
+  if (raw === undefined) return { ok: true, limit: DEFAULT_LIST_LIMIT };
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIST_LIMIT;
-  return Math.min(Math.trunc(n), MAX_LIST_LIMIT);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_LIST_LIMIT) return { ok: false };
+  return { ok: true, limit: n };
 };
 
-// Keyset pagination over an already-fully-listed, sorted id array. A
-// stale/unknown cursor (indexOf -1) restarts from the top rather than 400ing.
+// True keyset pagination: resumes from the first id strictly greater than
+// the cursor, so a since-deleted cursor pano can't restart or loop the list.
 export const paginateIds = (
   sorted: readonly string[],
   cursor: string | undefined,
   limit: number,
 ): { page: string[]; cursor: string | null } => {
-  const startIndex = cursor !== undefined ? Math.max(sorted.indexOf(cursor) + 1, 0) : 0;
-  const page = sorted.slice(startIndex, startIndex + limit);
-  const hasMore = startIndex + page.length < sorted.length;
+  if (cursor !== undefined) {
+    const startIndex = sorted.findIndex((id) => id > cursor);
+    if (startIndex === -1) return { page: [], cursor: null };
+    const page = sorted.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + page.length < sorted.length;
+    return { page, cursor: hasMore ? (page[page.length - 1] ?? null) : null };
+  }
+  const page = sorted.slice(0, limit);
+  const hasMore = page.length < sorted.length;
   return { page, cursor: hasMore ? (page[page.length - 1] ?? null) : null };
 };
 
 const filenameAfter = (key: string, prefix: string): string => key.slice(prefix.length);
 
-// Reads the one prefix list() the plan budgets for readiness, plus the one
-// manifest get() - no other read per pano when customMetadata is present.
+// Reads the one prefix list() the plan budgets for readiness, plus (only
+// with ownership proof) the manifest get() - no other read when metadata is present.
 export const summarizePano = async (
   bucket: R2Bucket,
   sub: string,
@@ -137,7 +154,9 @@ export const summarizePano = async (
     else if (rest === 'tile-failed') tileFailedObj = obj;
   }
 
-  const manifestObj = await bucket.get(manifestKey(panoId));
+  // Security: the manifest key is owner-free, so it's only read with proof
+  // of ownership (originalObj) - else any caller could probe another owner's tiling state.
+  const manifestObj = originalObj ? await bucket.get(manifestKey(panoId)) : null;
   const manifestBody = manifestObj
     ? await manifestObj.json<{ version?: string; format?: string; tileSize?: number }>()
     : null;
@@ -197,7 +216,9 @@ export const listPanoSummaries = async (
   return { panos, cursor: nextCursor };
 };
 
-// Groups tour.json + publish.json by tourId from one list() call (per the
+type TourGroup = { tourObj?: R2Object; publishObj?: R2Object };
+
+// Groups tour.json + publish.json by tourId from list() batches (per the
 // plan); publish.json is unwritten until B2, so publish is null until then.
 export const listTourSummaries = async (
   bucket: R2Bucket,
@@ -206,42 +227,64 @@ export const listTourSummaries = async (
   limit: number,
 ): Promise<{ tours: TourSummary[]; cursor: string | null }> => {
   const prefix = userToursPrefix(sub);
-  const listed = await bucket.list({
-    prefix,
-    include: ['customMetadata'],
-    limit,
-    ...(cursor ? { cursor } : {}),
-  });
-  const byTour = new Map<string, { tourObj?: R2Object; publishObj?: R2Object }>();
-  for (const obj of listed.objects) {
-    const rest = filenameAfter(obj.key, prefix);
-    const slash = rest.indexOf('/');
-    if (slash < 0) continue;
-    const tourId = rest.slice(0, slash);
-    const filename = rest.slice(slash + 1);
-    const entry = byTour.get(tourId) ?? {};
-    if (filename === 'tour.json') entry.tourObj = obj;
-    else if (filename === 'publish.json') entry.publishObj = obj;
-    byTour.set(tourId, entry);
+  const groups = new Map<string, TourGroup>();
+  const orderedTourIds: string[] = [];
+  let completeCount = 0;
+  let r2Cursor: string | undefined;
+  const startAfter = cursor !== undefined ? tourKey(sub, cursor) : undefined;
+  let isFirstFetch = true;
+
+  // Keyset over tourIds, not raw R2 objects, so a page never splits a tour's
+  // tour.json from its publish.json; fetches one extra tour as a next-page lookahead.
+  while (completeCount <= limit) {
+    const batchSize = (limit + 1) * 2;
+    const listed = await bucket.list({
+      prefix,
+      include: ['customMetadata'],
+      limit: batchSize,
+      ...(isFirstFetch && startAfter ? { startAfter } : {}),
+      ...(!isFirstFetch && r2Cursor ? { cursor: r2Cursor } : {}),
+    });
+    isFirstFetch = false;
+    for (const obj of listed.objects) {
+      const rest = filenameAfter(obj.key, prefix);
+      const slash = rest.indexOf('/');
+      if (slash < 0) continue;
+      const tourId = rest.slice(0, slash);
+      const filename = rest.slice(slash + 1);
+      if (!groups.has(tourId)) orderedTourIds.push(tourId);
+      const entry = groups.get(tourId) ?? {};
+      if (filename === 'tour.json') {
+        entry.tourObj = obj;
+        completeCount += 1;
+      } else if (filename === 'publish.json') {
+        entry.publishObj = obj;
+      }
+      groups.set(tourId, entry);
+    }
+    if (!listed.truncated) break;
+    r2Cursor = listed.cursor;
   }
 
+  const completeTourIds = orderedTourIds.filter((id) => groups.get(id)?.tourObj);
+  const hasMore = completeTourIds.length > limit;
+  const pageTourIds = completeTourIds.slice(0, limit);
+
   const tours: TourSummary[] = [];
-  for (const [tourId, { tourObj, publishObj }] of byTour) {
-    // An orphaned publish.json with no tour.json shouldn't exist; skip it
-    // defensively rather than surface a half-formed summary.
-    if (!tourObj) continue;
+  for (const tourId of pageTourIds) {
+    const group = groups.get(tourId) as { tourObj: R2Object; publishObj?: R2Object };
     const fields = await resolveTourFields(
-      tourObj.customMetadata,
-      async () => (await getJson<TourDoc>(bucket, tourObj.key))?.value ?? null,
+      group.tourObj.customMetadata,
+      async () => (await getJson<TourDoc>(bucket, group.tourObj.key))?.value ?? null,
     );
-    const publish = toPublishSummary(publishObj?.customMetadata);
+    const publish = toPublishSummary(group.publishObj?.customMetadata);
     tours.push({
       tourId,
       ...fields,
-      updatedAt: tourObj.uploaded.toISOString(),
-      etag: tourObj.etag,
+      updatedAt: group.tourObj.uploaded.toISOString(),
+      etag: group.tourObj.etag,
       publish,
     });
   }
-  return { tours, cursor: listed.truncated ? listed.cursor : null };
+  return { tours, cursor: hasMore ? (pageTourIds[pageTourIds.length - 1] ?? null) : null };
 };

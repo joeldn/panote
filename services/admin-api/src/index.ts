@@ -24,6 +24,7 @@ import {
   configCustomMetadata,
   listPanoSummaries,
   listTourSummaries,
+  MAX_LIST_LIMIT,
   parseListLimit,
   summarizePano,
   tourCustomMetadata,
@@ -32,6 +33,20 @@ import {
 // Every owner GET's Cache-Control, on both the 200/304 body and the
 // 400/404 error bodies - none of this is CDN/edge-cacheable.
 const NO_STORE = 'private, no-store';
+
+// Shared ?cursor/?limit validation for both list routes: a cursor is an
+// opaque id, so it's checked the same way a path param id would be.
+const parseListQuery = (c: {
+  req: { query: (n: string) => string | undefined };
+}): { cursor: string | undefined; limit: number } | { error: string } => {
+  const cursor = c.req.query('cursor');
+  if (cursor !== undefined && !PANO_PATTERN.test(cursor)) {
+    return { error: `cursor must match ${PANO_PATTERN}` };
+  }
+  const limit = parseListLimit(c.req.query('limit'));
+  if (!limit.ok) return { error: `limit must be an integer between 1 and ${MAX_LIST_LIMIT}` };
+  return { cursor, limit: limit.limit };
+};
 
 const setEtagAndNoStore = (c: { header: (n: string, v: string) => void }, etag: string): void => {
   c.header('ETag', `"${etag}"`);
@@ -83,18 +98,22 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get('/api/admin/panos', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
+  const query = parseListQuery(c);
+  if ('error' in query) {
+    c.header('Cache-Control', NO_STORE);
+    return c.json({ error: query.error }, 400);
+  }
   // panoId segments are never encoded (unlike the owner segment), so
   // listChildren() needs no decode step to return what the caller passed in.
   const panoIds = await listChildren(c.env.BUCKET, userPanosPrefix(sub));
   // panoIds stays the full, unpaginated list for compatibility; cursor/limit
   // only bound how many of them get the more expensive per-pano summary.
-  const limit = parseListLimit(c.req.query('limit'));
   const { panos, cursor } = await listPanoSummaries(
     c.env.BUCKET,
     sub,
     panoIds,
-    c.req.query('cursor'),
-    limit,
+    query.cursor,
+    query.limit,
   );
   return c.json({ panoIds, panos, cursor });
 });
@@ -190,13 +209,12 @@ app.post('/api/admin/tours', async (c) => {
 
 app.get('/api/admin/tours', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
-  const limit = parseListLimit(c.req.query('limit'));
-  const { tours, cursor } = await listTourSummaries(
-    c.env.BUCKET,
-    sub,
-    c.req.query('cursor'),
-    limit,
-  );
+  const query = parseListQuery(c);
+  if ('error' in query) {
+    c.header('Cache-Control', NO_STORE);
+    return c.json({ error: query.error }, 400);
+  }
+  const { tours, cursor } = await listTourSummaries(c.env.BUCKET, sub, query.cursor, query.limit);
   return c.json({ tours, cursor });
 });
 
