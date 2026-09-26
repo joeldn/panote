@@ -224,12 +224,12 @@ without this check, a `CI` run for an older commit finishing late would redeploy
 commit that's already live. If it isn't the tip, the run emits a `::notice::` naming both SHAs
 and skips the deploy jobs rather than failing. A `workflow_run` deploy always targets `dev` — it
 can never resolve to `production` — and deploys the exact commit `CI` verified
-(`github.event.workflow_run.head_sha`), not whatever `main` has moved to since. Until
-`DEV_AUTO_DEPLOY` is set to `true`, every deploy, dev included, stays a deliberate manual
-action — `dev`'s `tiler-consumer` can't attach to `pano-uploads-dev` until the old pano-viewer
-`pano-tiler-dev` Worker is detached (a queue allows exactly one consumer), so an automatic dev
-deploy would fail on every trigger until the queue cut-over below has happened (see the
-`deploy-tiler-consumer` job comment). `production` is additionally
+(`github.event.workflow_run.head_sha`), not whatever `main` has moved to since. Before the queue
+cut-over below, `dev`'s `tiler-consumer` couldn't attach to `pano-uploads-dev` while the old
+pano-viewer `pano-tiler-dev` Worker still held the slot (a queue allows exactly one consumer), so
+an automatic dev deploy would have failed on every trigger (see the `deploy-tiler-consumer` job
+comment) — that's why every deploy, dev included, stayed a deliberate manual action until then.
+`production` is additionally
 hard-guarded to `main` — the `resolve-environment` job's "Guard production to main" step fails
 the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main` — hard-stops
 unless the repo variable `PRODUCTION_PROVISIONED` is the literal string `true` (the
@@ -258,25 +258,36 @@ services' placeholders. Before this workflow can succeed:
   actually done. Until then, leave it unset or anything other than `true` — the
   `resolve-environment` job's "Fail unless production is provisioned" step is a hard stop
   otherwise, independent of the main-only guard and the `YOUR_` placeholder check above.
-- `DEV_AUTO_DEPLOY` as a repository variable, set to the literal string `true` **only** after
-  both the first dev deploy checklist below and its queue cut-over step have already succeeded
-  by hand. Until the cut-over, `tiler-consumer` can't attach to `pano-uploads-dev` (the old
-  pano-viewer `pano-tiler-dev` Worker still holds the slot), so an auto-deploy triggered before
-  then would fail on every `CI` success on `main`. Leave it unset or anything other than `true`
-  until both have happened.
+- `DEV_AUTO_DEPLOY` as a repository variable, set to the literal string `true` only once both
+  the first dev deploy checklist below and its queue cut-over step have succeeded by hand — done
+  on 2026-09-26, so `DEV_AUTO_DEPLOY` is now `true` and dev deploys automatically after `CI`
+  succeeds on `main`. Before that, `tiler-consumer` couldn't attach to `pano-uploads-dev` (the
+  old pano-viewer `pano-tiler-dev` Worker held the slot), so an auto-deploy triggered before the
+  cut-over would have failed on every `CI` success on `main`.
 
 ---
 
 ## First dev deploy checklist
 
-**Status: steps 1-4 complete as of 2026-09-25** — `public-api`, `admin-api`, and `upload-api` were
-deployed to dev via the Deploy workflow (`.github/workflows/deploy.yml`, `workflow_dispatch`), and
-the smoke tests in step 4 passed. The same workflow run (GitHub Actions run `36113701026`) also ran
-`deploy-tiler-consumer`, which failed as expected at the queue-consumer attach step — `pano-tiler-dev`
-still holds `pano-uploads-dev`'s one consumer slot — but got far enough to create `tiler-consumer`'s
-Worker script and container first. Step 5's queue cut-over is still pending: `tiler-consumer`'s
-script and container exist in dev, but the Worker holds no consumer slot on `pano-uploads-dev` yet.
-The steps below stay as the reference procedure for re-running any of this, not just history.
+**Status: all six steps complete in dev as of 2026-09-26.** Steps 1-4 completed on 2026-09-25 —
+`public-api`, `admin-api`, and `upload-api` were deployed to dev via the Deploy workflow
+(`.github/workflows/deploy.yml`, `workflow_dispatch`), and the smoke tests in step 4 passed. That
+same workflow run (GitHub Actions run `36113701026`) also ran `deploy-tiler-consumer`, which failed
+as expected at the queue-consumer attach step — `pano-tiler-dev` still held `pano-uploads-dev`'s one
+consumer slot — but got far enough to create `tiler-consumer`'s Worker script and container first.
+
+Step 5's queue cut-over ran on 2026-09-26 at ~03:35 UTC: `pano-tiler-dev` was removed as
+`pano-uploads-dev`'s consumer, then Deploy workflow run `36215364076` (`workflow_dispatch`, `dev`)
+redeployed all four Workers from `main` — every job green, `tiler-consumer` included.
+`pano-uploads-dev`'s consumer is now `worker:panote-tiler-consumer-dev`. The R2→queue notification
+rule (prefix `panos/`, suffix `/original` → `pano-uploads-dev`) needed no change. The step 4
+smoke tests were re-run against the redeploy: public stats `200`; `admin-api`/`upload-api` with
+`Authorization: Bearer x` → `401`, logging `auth rejected: malformed jwt` with no placeholder-issuer
+line (confirming dev's real JWKS path runs, not the placeholder-issuer guard).
+
+Step 6's end-to-end test ran immediately after, ~03:43-03:48 UTC, using an Auth0 M2M test token
+from the `panote-dev` tenant — see the step 6 status note below for the full result. The steps
+below stay as the reference procedure for re-running any of this, not just history.
 
 In order:
 
@@ -314,7 +325,7 @@ In order:
      — `curl -H 'Authorization: Bearer x' ...` — now reaches real JWKS verification against
      `https://panote-dev.au.auth0.com/` (the issuer guard no longer fires for dev, since its
      `OAUTH_ISSUER` is a real tenant, not a placeholder) and 401s once that verification fails; see
-     "Known unverified areas" below for what a genuine Auth0-issued token still hasn't exercised. A
+     step 6 below for the genuine-token path (verified end-to-end on 2026-09-26). A
      path neither service declares → `404` (Hono's default for `admin-api`; `upload-api`'s handler
      checks method + pathname itself and returns 404 explicitly) — don't expect `401` from an
      unmatched path, only from a real route with no/invalid token.
@@ -324,6 +335,13 @@ In order:
    ```bash
    pnpm --filter @service/admin-api exec wrangler r2 bucket info pano-content-dev
    ```
+   **Caveat (found 2026-09-26):** `object_count` in this command's output lags badly — it showed
+   `0` while the bucket in fact held 32 objects (written during the end-to-end test below). Don't
+   rely on it to decide the count is actually 0; wrangler 4.120 can't list bucket objects without
+   S3 credentials, so probe specific keys instead with
+   `wrangler r2 object get <bucket>/<key> --remote` (against the `panos/` keys you expect might
+   exist) before trusting an empty result from this check.
+
    A read-only probe of this same command on 2026-09-23 reported 0 objects: pano-viewer's live
    Workers share this bucket, but their upload route authenticates against the same placeholder
    Auth0 issuer as panote (no tenant exists for either), so it has always returned 401 and cannot
@@ -348,6 +366,12 @@ In order:
    Messages published between the `remove` and the new deploy attaching persist in the queue
    (default retention) — nothing is dropped, delivery is just delayed until a consumer exists
    again.
+
+   **Status: done, 2026-09-26 ~03:35 UTC.** `wrangler queues consumer remove pano-uploads-dev
+   pano-tiler-dev` ran, then Deploy workflow run `36215364076` (`workflow_dispatch`, `dev`)
+   redeployed all four Workers from `main` — all jobs green, and `pano-uploads-dev`'s consumer is
+   now `worker:panote-tiler-consumer-dev`. The R2 notification rule (prefix `panos/`, suffix
+   `/original` → `pano-uploads-dev`) needed no change.
 6. **End-to-end test** — the Auth0 dev tenant now exists (`https://panote-dev.au.auth0.com/`,
    verified via its `.well-known/openid-configuration`), so `OAUTH_ISSUER` is no longer a
    placeholder in dev. This step still can't run to completion until step 5's queue cut-over has
@@ -375,6 +399,21 @@ In order:
    `deriveUploadTarget` before it ever reaches the container, logs why the key is invalid, and
    acks it immediately — never retried, never dead-lettered, since retrying a key that can never
    succeed would only delay the inevitable and burn the retry budget for nothing.
+
+   **Status: done, 2026-09-26 ~03:43-03:48 UTC.** Run against the real upload flow (an Auth0 M2M
+   test token from the `panote-dev` tenant driving `admin-api`/`upload-api`, not the manual
+   `wrangler r2 object put` above) rather than a synthetic key write, so it exercised
+   `upload-api`'s presign path too: `GET /api/admin/panos` → `200` (first real JWKS success);
+   `POST /api/upload-url` → presign; `PUT` of a 4096x2048 JPEG to the presigned URL → `200`; the
+   R2→queue notification fired, the Tiler Durable Object picked it up, and the container tiled it;
+   the manifest appeared on the CDN ~54s after the PUT (that includes the container's cold start;
+   the Durable Object's own wall time was ~48s). The manifest's `version` was `t1-<etag>`; 30
+   tiles (6 faces × (1 base + 4 level-1)), `maxLevel` 1, 512px webp, served from `cdn.panote.dev`
+   with `cache-control: public, max-age=31536000, immutable`. The original itself, fetched via the
+   CDN, returned `403` (the WAF rule). `DELETE /api/admin/panos/:panoId` → `204`; original,
+   tombstone, manifest, and all tiles were gone at origin afterward; the list came back empty; a
+   second `DELETE` of the same pano also returned `204`. See "Known limitations" below for what
+   this run surfaced that still needs follow-up.
 
 ---
 
@@ -482,25 +521,54 @@ first.
 
 ## Known unverified areas
 
-- **The container on real Cloudflare.** `services/tiler-consumer/Dockerfile`'s STATUS note
-  (2026-08-12): the image builds and runs correctly under Docker 29.4.0 on an x86_64 host — a
-  real `sharp` decode/resize/encode round trip against an S3-compatible endpoint produced
-  correct tiles and manifests at multiple zoom levels. The Queue-consumer-to-container
-  `@cloudflare/containers` Durable Object lifecycle has never run against a real Cloudflare
-  account.
+- **The container on real Cloudflare — now verified.** `services/tiler-consumer/Dockerfile`'s
+  STATUS note (2026-08-12) covered only a Docker-on-x86_64 `sharp` round trip. The Wave 5
+  end-to-end run (2026-09-26, see the first dev deploy checklist above) exercised the actual
+  Queue-consumer-to-container `@cloudflare/containers` Durable Object lifecycle against real
+  Cloudflare: the queue message reached the Tiler DO, the container tiled a real upload, and the
+  manifest landed on the CDN.
 - **arm64-host builds.** The Dockerfile pins `--platform=linux/amd64` on both stages because the
   only host it's been built on is x86_64; an arm64 host (e.g. Apple Silicon) build path is
-  untested.
-- **The real R2 S3 path.** `packages/worker-kit/src/r2-s3.ts`'s tests (`r2-s3.test.ts`) check
-  URL shape and signature presence only — no test signs a request against, or reads/writes,
-  real R2. `upload-api`'s presigned PUT and the tiler container's S3 writes are unverified
-  end-to-end.
-- **Queue / Durable Object lifecycle** generally — the dev queue and DO namespaces have never
-  had a panote Worker attached to them (see the cut-over step above); behavior under the actual
-  consumer swap, retry, and DLQ path is unverified.
-- **The real JWKS success path.** `packages/worker-kit/src/auth.ts`'s tests exercise the
-  `globalThis.__verifyJwt` test seam (gated behind `env.TEST_JWT_SEAM === 'enabled'`, never set
-  outside Vitest) and the rejection path for a missing/placeholder issuer. No test has ever
-  fetched a real JWKS document or verified a real Auth0-issued token — the dev tenant now exists
-  (`https://panote-dev.au.auth0.com/`), but this stays unverified until step 6 above can actually
-  run, which needs the queue cut-over first.
+  untested. Unaffected by the 2026-09-26 end-to-end run — that ran the already-built dev image.
+- **The real R2 S3 path — now verified.** `packages/worker-kit/src/r2-s3.ts`'s tests
+  (`r2-s3.test.ts`) still only check URL shape and signature presence, but the 2026-09-26
+  end-to-end run exercised the real path both ends: `upload-api`'s presigned PUT (a 4096x2048
+  JPEG, `200`) and the tiler container's S3 writes (tiles and manifest landing in
+  `pano-content-dev`) both worked end-to-end.
+- **Queue / Durable Object lifecycle — consumer swap and normal delivery now verified.** The
+  2026-09-26 cut-over removed the old pano-viewer consumer and attached
+  `panote-tiler-consumer-dev` with no dropped messages, and the end-to-end run's message flowed
+  through the queue to the Tiler DO and container without retry. Behavior under an actual retry
+  or DLQ path (a failing tile job) has not been exercised and stays unverified.
+- **The real JWKS success path — now verified.** `packages/worker-kit/src/auth.ts`'s tests still
+  only exercise the `globalThis.__verifyJwt` test seam and the rejection path for a
+  missing/placeholder issuer, but the 2026-09-26 end-to-end run fetched a real JWKS document from
+  `https://panote-dev.au.auth0.com/` and verified a real Auth0-issued M2M token on
+  `GET /api/admin/panos` (`200`).
+
+---
+
+## Known limitations
+
+Found during the 2026-09-26 end-to-end run (see the first dev deploy checklist above), now that
+the container, queue, JWKS, and S3 paths are actually exercised rather than theoretical:
+
+- **Deleted tiles already in the CDN edge cache keep serving.** A tile that Cloudflare's edge had
+  already cached kept returning `200` (`cf-cache-status: HIT`) after its pano was deleted, because
+  tiles are `public, max-age=31536000, immutable` and nothing purges the edge cache on delete (see
+  "Deleted panos" above for the existing note on this). True revocation needs a Cloudflare cache
+  purge by URL or prefix — deferred to Wave 6 / ops.
+- **The presigned upload PUT doesn't pin content-type.** `upload-api`'s presign signs only `host`
+  (`SignedHeaders=host`), so a PUT can upload any content-type the caller likes, not just images.
+  Wave 6 hardening item, alongside presign size limits.
+- **A tile 404 from the CDN is edge-cached for 4h** (`text/html`, `max-age=14400`). Low risk in
+  practice since the viewer only requests tiles after the manifest exists, but worth knowing if a
+  tile is ever requested before its manifest is written.
+- **`manifest.json` isn't edge-cached.** It comes back `cf-cache-status: DYNAMIC` — Cloudflare
+  doesn't cache `.json` by default — so its `cache-control: max-age=30` has no effect at the edge;
+  every manifest fetch hits R2 directly. Correct behavior, just not what the `max-age` might
+  suggest.
+- **`wrangler r2 bucket info`'s `object_count` lags badly** — it reported `0` while the bucket
+  held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
+  above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
+  can't list bucket objects without S3 credentials.
