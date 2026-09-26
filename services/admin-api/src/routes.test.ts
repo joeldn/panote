@@ -5,6 +5,7 @@ import {
   MAX_HOTSPOTS,
   MAX_TOUR_SCENES,
   originalKey,
+  PanoConfigOkSchema,
   tileVersionPrefix,
   tourKey,
 } from '@internal/contracts';
@@ -963,7 +964,7 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
     expect(body.config.north).toBeUndefined();
   });
 
-  it('a legacy doc with out-of-range fov/yaw/pitch GETs 200 with canonical values, and PUT-round-trips them unchanged', async () => {
+  it('a legacy doc with out-of-range fov/yaw/pitch GETs 200; PanoConfigOkSchema (what web-kit validates the response with) canonicalizes it; PUTting the canonical values round-trips them', async () => {
     const panoId = 'b1-legacy-canonical-p1';
     await putJson(
       env.BUCKET,
@@ -976,26 +977,29 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
       },
       { etagDoesNotMatch: '*' },
     );
+    // admin-api's GET does not parse the stored doc (that's the point: it's
+    // not this route's job) - canonicalization happens where the response
+    // is consumed, via PanoConfigOkSchema (packages/contracts/src/api.test.ts
+    // proves this schema canonicalizes on its own).
     const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
     expect(get.status).toBe(200);
-    const got = (await get.json()) as {
-      etag: string;
-      config: { initialView?: { fov: number }; hotspots: { yaw: number; pitch: number }[] };
-    };
-    expect(got.config.initialView?.fov).toBe(80);
-    expect(got.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
-    expect(got.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
+    const canonical = PanoConfigOkSchema.parse(await get.json());
+    expect(canonical.config.initialView?.fov).toBe(80);
+    expect(canonical.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
+    expect(canonical.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
 
-    // Saving the already-canonical GET body back through PUT round-trips
-    // the same values (idempotent canonicalization).
+    // Saving the canonical values through PUT (admin-api's write path
+    // already parses with SceneConfigSchema) round-trips them unchanged.
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
-      headers: { ...auth.headers, 'If-Match': got.etag },
-      body: JSON.stringify(got.config),
+      headers: { ...auth.headers, 'If-Match': canonical.etag },
+      body: JSON.stringify(canonical.config),
     });
     expect(put.status).toBe(200);
     const reget = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
-    const rebody = (await reget.json()) as typeof got;
+    const rebody = (await reget.json()) as {
+      config: { initialView?: { fov: number }; hotspots: { yaw: number; pitch: number }[] };
+    };
     expect(rebody.config.initialView?.fov).toBe(80);
     expect(rebody.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
     expect(rebody.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
