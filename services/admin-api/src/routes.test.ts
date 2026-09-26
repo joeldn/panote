@@ -1,6 +1,8 @@
 import {
   configKey,
+  deletingKey,
   manifestKey,
+  MAX_TOUR_SCENES,
   originalKey,
   tileVersionPrefix,
   tourKey,
@@ -102,8 +104,68 @@ describe('admin panos routes', () => {
     expect(stale.status).toBe(412);
   });
 
+  it('a bare quote in If-Match 412s (guaranteed mismatch), not a 500', async () => {
+    const panoId = 'bad-quote-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Seed', hotspots: [] }),
+    });
+    const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '"' },
+      body: JSON.stringify({ panoId, title: 'X', hotspots: [] }),
+    });
+    expect(r.status).toBe(412);
+    expect(await r.json()).toEqual({ error: 'conflict' });
+    // No put was attempted: the seeded config is untouched.
+    const stored = await getJson<{ title: string }>(env.BUCKET, configKey(MY_SUB, panoId));
+    expect(stored?.value.title).toBe('Seed');
+  });
+
+  it('an "x*y" If-Match 412s rather than doing an unconditional overwrite', async () => {
+    const panoId = 'star-in-tag-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Seed', hotspots: [] }),
+    });
+    const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': 'x*y' },
+      body: JSON.stringify({ panoId, title: 'X', hotspots: [] }),
+    });
+    expect(r.status).toBe(412);
+  });
+
+  it('400s a multi-tag If-Match', async () => {
+    const panoId = 'multi-tag-if-match-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Seed', hotspots: [] }),
+    });
+    const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '"a", "b"' },
+      body: JSON.stringify({ panoId, title: 'X', hotspots: [] }),
+    });
+    expect(r.status).toBe(400);
+  });
+
   it('428s when a mutating update omits If-Match', async () => {
     const panoId = 'missing-if-match-p1';
+    const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers },
+      body: JSON.stringify({ panoId, title: 'X', hotspots: [] }),
+    });
+    expect(r.status).toBe(428);
+  });
+
+  it('still 428s with a missing If-Match even while a delete tombstone exists', async () => {
+    const panoId = 'missing-if-match-tombstone-p1';
+    await env.BUCKET.put(deletingKey(MY_SUB, panoId), '');
     const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers },
@@ -329,6 +391,15 @@ describe('admin tours routes', () => {
     expect(r.status).toBe(401);
   });
 
+  it('still 428s a tour update with a missing If-Match even for a never-created tourId', async () => {
+    const r = await SELF.fetch('https://x/api/admin/tours/missing-if-match-t1', {
+      method: 'PUT',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'X', scenes: [] }),
+    });
+    expect(r.status).toBe(428);
+  });
+
   it('400s on a tour body that fails TourDocSchema', async () => {
     const r = await SELF.fetch('https://x/api/admin/tours', {
       method: 'POST',
@@ -349,6 +420,30 @@ describe('admin tours routes', () => {
       body: JSON.stringify({ title: 'X', scenes: [] }),
     });
     expect(r.status).toBe(400);
+  });
+
+  it('400s a tour body with more scenes than MAX_TOUR_SCENES', async () => {
+    const scenes = Array.from({ length: MAX_TOUR_SCENES + 1 }, (_, i) => ({
+      panoId: `cap-scene-${i}`,
+    }));
+    const r = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Too Many Scenes', scenes }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('accepts a tour body with exactly MAX_TOUR_SCENES scenes', async () => {
+    const scenes = Array.from({ length: MAX_TOUR_SCENES }, (_, i) => ({
+      panoId: `at-cap-scene-${i}`,
+    }));
+    const r = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'At Cap', scenes }),
+    });
+    expect(r.status).toBe(201);
   });
 
   it('stores two tours under independent keys', async () => {
@@ -379,5 +474,379 @@ describe('admin tours routes', () => {
     const storedB = await getJson<{ title: string }>(env.BUCKET, tourKey('auth0|me', tourIdB));
     expect(storedA?.value.title).toBe('Tour A');
     expect(storedB?.value.title).toBe('Tour B');
+  });
+});
+
+describe('GET /api/admin/panos/:panoId', () => {
+  it('reads its own config with a quoted ETag header matching the PUT-returned etag', async () => {
+    const panoId = 'get-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots: [] }),
+    });
+    const { etag: putEtag } = (await put.json()) as { etag: string };
+
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    expect(get.headers.get('ETag')).toBe(`"${putEtag}"`);
+    expect(get.headers.get('Cache-Control')).toBe('private, no-store');
+    const body = (await get.json()) as { config: { title: string }; etag: string };
+    expect(body.config.title).toBe('Hall');
+    expect(body.etag).toBe(putEtag);
+  });
+
+  it('304s on a matching If-None-Match and 200s on a stale one', async () => {
+    const panoId = 'get-etag-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots: [] }),
+    });
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const etag = get.headers.get('ETag');
+    expect(etag).not.toBeNull();
+
+    const notModified = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      headers: { ...auth.headers, 'If-None-Match': etag ?? '' },
+    });
+    expect(notModified.status).toBe(304);
+    expect(await notModified.text()).toBe('');
+
+    const stale = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      headers: { ...auth.headers, 'If-None-Match': '"nonsense"' },
+    });
+    expect(stale.status).toBe(200);
+  });
+
+  it('304s on a weak (W/) etag and on a comma-separated list containing it', async () => {
+    const panoId = 'get-weak-etag-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots: [] }),
+    });
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const etag = get.headers.get('ETag');
+
+    const weak = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      headers: { ...auth.headers, 'If-None-Match': `W/${etag}` },
+    });
+    expect(weak.status).toBe(304);
+    expect(weak.headers.get('ETag')).toBe(etag);
+
+    const list = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      headers: { ...auth.headers, 'If-None-Match': `"other-tag", ${etag}` },
+    });
+    expect(list.status).toBe(304);
+  });
+
+  it('a bare quote in If-None-Match is treated as no match (200), not a 500', async () => {
+    const panoId = 'get-bad-quote-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots: [] }),
+    });
+    const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      headers: { ...auth.headers, 'If-None-Match': '"' },
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('an "x*y" If-None-Match is a literal mismatching tag, not a wildcard match', async () => {
+    const panoId = 'get-star-in-tag-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots: [] }),
+    });
+    const r = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
+      headers: { ...auth.headers, 'If-None-Match': 'x*y' },
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('round-trips a GET etag into a following PUT (If-Match) that succeeds', async () => {
+    const panoId = 'get-roundtrip-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'V1', hotspots: [] }),
+    });
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const { etag } = (await get.json()) as { etag: string };
+
+    const update = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': etag },
+      body: JSON.stringify({ panoId, title: 'V2', hotspots: [] }),
+    });
+    expect(update.status).toBe(200);
+
+    // The etag from the GET before this update is now stale.
+    const stalePut = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': etag },
+      body: JSON.stringify({ panoId, title: 'V3', hotspots: [] }),
+    });
+    expect(stalePut.status).toBe(412);
+  });
+
+  it("404s a cross-owner GET instead of exposing the other owner's pano", async () => {
+    const panoId = 'get-cross-tenant-p1';
+    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...authOther.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Theirs', hotspots: [] }),
+    });
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(404);
+    expect(await get.json()).toEqual({
+      error: 'config not found',
+      deleting: false,
+      hasOriginal: false,
+    });
+  });
+
+  it('404s with {deleting: true} while a delete tombstone exists', async () => {
+    const panoId = 'get-tombstone-p1';
+    await env.BUCKET.put(deletingKey(MY_SUB, panoId), '');
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(404);
+    expect(await get.json()).toEqual({
+      error: 'config not found',
+      deleting: true,
+      hasOriginal: false,
+    });
+  });
+
+  it('404s with {hasOriginal: true} for an uploaded original whose config was never written', async () => {
+    const panoId = 'get-original-only-p1';
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(404);
+    expect(await get.json()).toEqual({
+      error: 'config not found',
+      deleting: false,
+      hasOriginal: true,
+    });
+  });
+
+  it('404s a panoId with no config, no original and no tombstone, still no-store', async () => {
+    const get = await SELF.fetch('https://x/api/admin/panos/get-nothing-p1', auth);
+    expect(get.status).toBe(404);
+    expect(get.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(await get.json()).toEqual({
+      error: 'config not found',
+      deleting: false,
+      hasOriginal: false,
+    });
+  });
+
+  it('400s a GET with a panoId outside the URL-unreserved charset, still no-store', async () => {
+    const r = await SELF.fetch(`https://x/api/admin/panos/${encodeURIComponent('bad/id')}`, auth);
+    expect(r.status).toBe(400);
+    expect(r.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('rejects an unauthenticated GET', async () => {
+    const r = await SELF.fetch('https://x/api/admin/panos/get-unauth-p1');
+    expect(r.status).toBe(401);
+  });
+
+  it('409s a config PUT while a delete tombstone exists', async () => {
+    const panoId = 'put-tombstone-p1';
+    await env.BUCKET.put(deletingKey(MY_SUB, panoId), '');
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Resurrected', hotspots: [] }),
+    });
+    expect(put.status).toBe(409);
+    expect(await put.json()).toEqual({ error: 'pano is being deleted' });
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+  });
+});
+
+describe('GET /api/admin/tours/:tourId', () => {
+  it('reads its own tour with a quoted ETag header and no-store Cache-Control', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Get Tour', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    expect(get.status).toBe(200);
+    expect(get.headers.get('ETag')).toMatch(/^".+"$/);
+    expect(get.headers.get('Cache-Control')).toBe('private, no-store');
+    const body = (await get.json()) as { tour: { title: string }; etag: string };
+    expect(body.tour.title).toBe('Get Tour');
+  });
+
+  it('304s on a matching If-None-Match, with the ETag header set and an empty body', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Etag Tour', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    const etag = get.headers.get('ETag');
+
+    const notModified = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      headers: { ...auth.headers, 'If-None-Match': etag ?? '' },
+    });
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('ETag')).toBe(etag);
+    expect(await notModified.text()).toBe('');
+  });
+
+  it("404s a cross-owner GET instead of exposing the other owner's tour", async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: authOther.headers,
+      body: JSON.stringify({ title: 'Theirs', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    expect(get.status).toBe(404);
+    expect(get.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(await get.json()).toEqual({ error: 'not found' });
+  });
+
+  it('404s a tourId that was never created', async () => {
+    const get = await SELF.fetch('https://x/api/admin/tours/never-created-t1', auth);
+    expect(get.status).toBe(404);
+  });
+
+  it('400s a GET with a tourId outside the URL-unreserved charset, still no-store', async () => {
+    const r = await SELF.fetch(
+      `https://x/api/admin/tours/${encodeURIComponent('bad/tour|id')}`,
+      auth,
+    );
+    expect(r.status).toBe(400);
+    expect(r.headers.get('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('rejects an unauthenticated GET', async () => {
+    const r = await SELF.fetch('https://x/api/admin/tours/get-unauth-t1');
+    expect(r.status).toBe(401);
+  });
+
+  it('?include=configs resolves each scene config, tombstone- and original-aware', async () => {
+    const readyPano = 'include-ready-p1';
+    const tombstonePano = 'include-tombstone-p1';
+    const originalOnlyPano = 'include-original-p1';
+
+    const putConfig = await SELF.fetch(`https://x/api/admin/panos/${readyPano}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId: readyPano, title: 'Ready', hotspots: [] }),
+    });
+    const { etag: readyEtag } = (await putConfig.json()) as { etag: string };
+    await env.BUCKET.put(deletingKey(MY_SUB, tombstonePano), '');
+    await env.BUCKET.put(originalKey(MY_SUB, originalOnlyPano), 'original bytes');
+
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({
+        title: 'Include Configs',
+        scenes: [{ panoId: readyPano }, { panoId: tombstonePano }, { panoId: originalOnlyPano }],
+      }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}?include=configs`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { configs: Record<string, unknown> };
+    expect(body.configs[readyPano]).toEqual({
+      config: { panoId: readyPano, title: 'Ready', hotspots: [] },
+      etag: readyEtag,
+    });
+    expect(body.configs[tombstonePano]).toEqual({
+      missing: true,
+      deleting: true,
+      hasOriginal: false,
+    });
+    expect(body.configs[originalOnlyPano]).toEqual({
+      missing: true,
+      deleting: false,
+      hasOriginal: true,
+    });
+  });
+
+  it('omits configs when ?include is absent', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'No Include', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    const body = (await get.json()) as Record<string, unknown>;
+    expect(body.configs).toBeUndefined();
+  });
+
+  it("?include=configs never leaks another owner's config for a foreign scene panoId", async () => {
+    const foreignPano = 'include-foreign-owner-p1';
+    // The other owner really does have a config and an original here, so
+    // this proves the response reflects the caller's own empty prefix.
+    await SELF.fetch(`https://x/api/admin/panos/${foreignPano}/config`, {
+      method: 'PUT',
+      headers: { ...authOther.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId: foreignPano, title: 'Theirs', hotspots: [] }),
+    });
+    await env.BUCKET.put(originalKey(OTHER_SUB, foreignPano), 'their original bytes');
+
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Foreign Scene', scenes: [{ panoId: foreignPano }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}?include=configs`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { configs: Record<string, unknown> };
+    expect(body.configs[foreignPano]).toEqual({
+      missing: true,
+      deleting: false,
+      hasOriginal: false,
+    });
+  });
+
+  it('caps ?include=configs scene fetches at MAX_TOUR_SCENES even for a hand-written oversized tour', async () => {
+    const tourId = 'oversized-scenes-t1';
+    const scenes = Array.from({ length: MAX_TOUR_SCENES + 20 }, (_, i) => ({
+      panoId: `oversized-scene-${i}`,
+    }));
+    // Written directly, bypassing TourDocSchema's cap, to prove the read
+    // path guards itself rather than trusting the write-side cap alone.
+    await env.BUCKET.put(
+      tourKey(MY_SUB, tourId),
+      JSON.stringify({ tourId, title: 'Oversized', scenes }),
+    );
+
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}?include=configs`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { configs: Record<string, unknown> };
+    expect(Object.keys(body.configs).length).toBe(MAX_TOUR_SCENES);
+  });
+});
+
+describe('PUT /api/admin/tours/:tourId write guards', () => {
+  it('404s a PUT to a tourId that was never created via POST, even with If-Match: *', async () => {
+    const r = await SELF.fetch('https://x/api/admin/tours/never-posted-t1', {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ title: 'Ghost', scenes: [] }),
+    });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: 'not found' });
+    expect(await env.BUCKET.get(tourKey(MY_SUB, 'never-posted-t1'))).toBeNull();
   });
 });
