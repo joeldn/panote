@@ -83,10 +83,20 @@ const toPublishSummary = (
   return { slug: meta.slug, visibility: meta.visibility };
 };
 
-// R2 customMetadata is capped at 8192 bytes (error 10012 past that) and B1
-// doesn't cap title length; truncate rather than fail the save (full title stays in the doc).
+// R2 customMetadata is capped at 8192 bytes (error 10012 past that); B1
+// doesn't cap title length. Cap is in UTF-16 units (String#length's unit).
 const METADATA_TITLE_MAX_UNITS = 256;
-const truncateForMetadata = (title: string): string => title.slice(0, METADATA_TITLE_MAX_UNITS);
+const HIGH_SURROGATE_MIN = 0xd800;
+const HIGH_SURROGATE_MAX = 0xdbff;
+
+const truncateForMetadata = (title: string): string => {
+  const sliced = title.slice(0, METADATA_TITLE_MAX_UNITS);
+  const lastCode = sliced.charCodeAt(sliced.length - 1);
+  // A lone trailing high surrogate means the slice split a surrogate pair
+  // (e.g. an emoji) in half; drop it rather than emit invalid UTF-16.
+  const splitSurrogate = lastCode >= HIGH_SURROGATE_MIN && lastCode <= HIGH_SURROGATE_MAX;
+  return splitSurrogate ? sliced.slice(0, -1) : sliced;
+};
 
 export const tourCustomMetadata = (tour: TourDoc): Record<string, string> => ({
   title: truncateForMetadata(tour.title),

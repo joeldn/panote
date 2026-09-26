@@ -291,6 +291,23 @@ describe('title truncation for R2 customMetadata (review fix)', () => {
   it('leaves a short title untouched', () => {
     expect(tourCustomMetadata({ tourId: 't1', title: 'Short', scenes: [] }).title).toBe('Short');
   });
+
+  it('review fix: drops a trailing lone high surrogate rather than splitting a surrogate pair', () => {
+    const emoji = '\u{1F600}'; // 2 UTF-16 units; unit 255 lands on its high surrogate
+    const title = 'a'.repeat(255) + emoji + 'a'.repeat(50);
+    const meta = tourCustomMetadata({ tourId: 't1', title, scenes: [] });
+    expect(meta.title).toBe('a'.repeat(255));
+    expect(meta.title?.length).toBe(255);
+    expect(/[\uD800-\uDBFF]$/.test(meta.title ?? '')).toBe(false);
+  });
+
+  it('does not drop a surrogate pair that lands exactly on the boundary', () => {
+    const emoji = '\u{1F600}';
+    const title = 'a'.repeat(254) + emoji; // exactly 256 units, pair fully included
+    const meta = tourCustomMetadata({ tourId: 't1', title, scenes: [] });
+    expect(meta.title).toBe(title);
+    expect(meta.title?.length).toBe(256);
+  });
 });
 
 /** A minimal in-memory R2Bucket fake: enough of list()'s prefix/cursor/
