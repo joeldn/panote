@@ -537,9 +537,10 @@ first.
   `pano-content-dev`) both worked end-to-end.
 - **Queue / Durable Object lifecycle — consumer swap and normal delivery now verified.** The
   2026-09-26 cut-over removed the old pano-viewer consumer and attached
-  `panote-tiler-consumer-dev` with no dropped messages, and the end-to-end run's message flowed
-  through the queue to the Tiler DO and container without retry. Behavior under an actual retry
-  or DLQ path (a failing tile job) has not been exercised and stays unverified.
+  `panote-tiler-consumer-dev` with no messages in flight (the bucket was empty at the time), so
+  behavior for a message in flight during the swap is untested. The end-to-end run's message
+  afterward flowed through the queue to the Tiler DO and container without retry. Behavior under
+  an actual retry or DLQ path (a failing tile job) has not been exercised and stays unverified.
 - **The real JWKS success path — now verified.** `packages/worker-kit/src/auth.ts`'s tests still
   only exercise the `globalThis.__verifyJwt` test seam and the rejection path for a
   missing/placeholder issuer, but the 2026-09-26 end-to-end run fetched a real JWKS document from
