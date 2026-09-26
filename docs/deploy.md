@@ -65,8 +65,9 @@ and the Auth0 dev tenant are now in place too (see each subsection below). `pano
 53 to Cloudflare on 2026-09-26 (see DNS section), which clears the one blocker that kept
 production provisioning from starting at all — but none of the steps below have actually been
 run against production yet, and production is still unprovisioned for other reasons too (no
-production Auth0 tenant, no reviewer approval configured on the `production` GitHub Environment
-— see Production status below).
+production Auth0 tenant, no `PRODUCTION_PROVISIONED` repository variable — see Production status
+below). The `production` GitHub Environment itself already exists, with a required reviewer and a
+main-only branch policy, and holds `CLOUDFLARE_API_TOKEN`.
 
 None of `r2 bucket create` / `queues create` / `r2 bucket notification create` take a
 `--if-not-exists` flag (checked via `--help` against wrangler 4.120). Re-running `create`
@@ -219,16 +220,21 @@ production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-ap
   zone — an Amazon-only CAA record would block Cloudflare from issuing its own certificate for
   the zone. This move clears the DNS blocker on production provisioning (see Production status
   below); production remains otherwise unprovisioned.
-- The old Route 53 hosted zone for `panote.io` (in the panote AWS management account) still
-  exists as a fallback. Deleting it is pending, via the legacy Pulumi `management` stack in the
-  archived `pano-viewer` repo (`legacy/aws-pulumi`, `src/dns`).
+- The old Route 53 hosted zone for `panote.io` (in the panote AWS management account) was deleted
+  on 2026-09-26, via a targeted `pulumi destroy` of the zone and its three records in the legacy
+  Pulumi `management` stack (archived `pano-viewer` repo, `legacy/aws-pulumi`). The rest of the
+  panote AWS organization — management/dev/prod/log-archive accounts, SCPs, CloudTrail, budgets,
+  GitHub OIDC roles — is kept on purpose. That stack's code still wires in `deployDns()`, so a
+  future `pulumi up` of `management` would recreate the zone unless that wiring is removed first
+  (noted locally in that checkout's `SUPERSEDED.md`, since the repo is archived).
 
 ### Email
 
 `*@panote.io` mail now goes through Cloudflare Email Routing: a single catch-all rule forwards
 every address to the owner's personal inbox (not recorded here). Records: MX
 `route1/2/3.mx.cloudflare.net`, SPF `v=spf1 include:_spf.mx.cloudflare.net ~all`, DKIM at
-`cf2024-1._domainkey`. This replaces ImprovMX, a third-party forwarder, which is being removed.
+`cf2024-1._domainkey`. This replaces ImprovMX, a third-party forwarder: `panote.io` was deleted
+from ImprovMX on 2026-09-26.
 The catch-all is load-bearing, not cosmetic: the AWS organization's root-user emails
 (`aws-root@panote.io`, plus-addressed `aws-root+dev@`/`+prod@`/`+logarchive@`), the
 billing/security/ops contact addresses, and the Cloudflare account login itself are all
@@ -545,9 +551,11 @@ production provisioning below is still outstanding. Every `production` env block
 `wrangler.jsonc` is deliberately declared-but-unprovisioned — the config exists so Wave 5
 doesn't have to reverse-engineer it, but none of it is live. Before a production deploy can
 succeed: run every "outstanding" step in One-time provisioning above with `production` in place
-of `dev`, provision the production Auth0 tenant, get the `production` GitHub Environment's
-reviewer approval configured, and — only once all of that is actually done — set the repository
-variable `PRODUCTION_PROVISIONED` to the literal string `true`. `deploy.yml`'s
+of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, and —
+only once all of that is actually done — set the repository variable `PRODUCTION_PROVISIONED` to
+the literal string `true`. The `production` GitHub Environment itself is already provisioned (a
+required reviewer, a main-only branch policy, and `CLOUDFLARE_API_TOKEN` — see GitHub setup
+above); it's the resources and config underneath it that are missing. `deploy.yml`'s
 `resolve-environment` job hard-stops any production deploy until that variable is `true` (see
 GitHub setup above); it exists because nothing downstream can otherwise tell "provisioned" from
 "not provisioned" on its own — `wrangler deploy` would just fail mid-matrix against whichever
