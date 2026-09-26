@@ -2,12 +2,13 @@ import {
   configKey,
   deletingKey,
   manifestKey,
+  MAX_HOTSPOTS,
   MAX_TOUR_SCENES,
   originalKey,
   tileVersionPrefix,
   tourKey,
 } from '@internal/contracts';
-import { getJson } from '@internal/worker-kit/r2-binding';
+import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -848,5 +849,174 @@ describe('PUT /api/admin/tours/:tourId write guards', () => {
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'not found' });
     expect(await env.BUCKET.get(tourKey(MY_SUB, 'never-posted-t1'))).toBeNull();
+  });
+});
+
+// Unit B1: additive schema fields (north, point icon/size/media, tour
+// startPanoId/settings) round-trip through the existing PUT/GET routes,
+// and a pre-Wave-6 stored doc with none of them still parses.
+describe('B1 schema extensions round-trip through PUT/GET', () => {
+  it('round-trips north and a hotspot with icon/size/media through config PUT then GET', async () => {
+    const panoId = 'b1-config-p1';
+    const body = {
+      panoId,
+      title: 'Hall',
+      north: 1.2,
+      hotspots: [
+        {
+          id: 'h1',
+          type: 'info',
+          yaw: 0.1,
+          pitch: -0.1,
+          title: 'Statue',
+          icon: 'map-pin',
+          size: 1.5,
+          media: { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+        },
+      ],
+    };
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify(body),
+    });
+    expect(put.status).toBe(200);
+
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    const got = (await get.json()) as { config: typeof body };
+    expect(got.config.north).toBe(1.2);
+    expect(got.config.hotspots[0]).toMatchObject({
+      icon: 'map-pin',
+      size: 1.5,
+      media: { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+    });
+  });
+
+  it('400s a config PUT with an out-of-range north', async () => {
+    const panoId = 'b1-config-bad-north-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', north: Math.PI + 0.1, hotspots: [] }),
+    });
+    expect(put.status).toBe(400);
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+  });
+
+  it('400s a config PUT with more than MAX_HOTSPOTS hotspots', async () => {
+    const panoId = 'b1-config-too-many-hotspots-p1';
+    const hotspots = Array.from({ length: MAX_HOTSPOTS + 1 }, (_, i) => ({
+      id: `h${i}`,
+      type: 'info',
+      yaw: 0,
+      pitch: 0,
+      title: 'Info',
+    }));
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots }),
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('400s a config PUT with an invalid icon name', async () => {
+    const panoId = 'b1-config-bad-icon-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        panoId,
+        title: 'Hall',
+        hotspots: [{ id: 'h1', type: 'info', yaw: 0, pitch: 0, title: 'Info', icon: 'Bad_Icon' }],
+      }),
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('a pre-Wave-6 stored config (written straight to R2, no new fields) still GETs 200', async () => {
+    const panoId = 'b1-legacy-config-p1';
+    // Bypasses the schema on purpose, to simulate a doc stored before B1.
+    await putJson(
+      env.BUCKET,
+      configKey(MY_SUB, panoId),
+      { panoId, title: 'Legacy Hall', hotspots: [] },
+      { etagDoesNotMatch: '*' },
+    );
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { config: { title: string; north?: number } };
+    expect(body.config.title).toBe('Legacy Hall');
+    expect(body.config.north).toBeUndefined();
+  });
+
+  it('round-trips startPanoId and settings through tour PUT then GET', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'B1 Tour', scenes: [{ panoId: 'b1-scene-1' }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const update = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        title: 'B1 Tour',
+        scenes: [{ panoId: 'b1-scene-1' }],
+        startPanoId: 'b1-scene-1',
+        settings: { controls: 'top', showMap: true, showCompass: true, autoRotate: false },
+      }),
+    });
+    expect(update.status).toBe(200);
+
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    expect(get.status).toBe(200);
+    const got = (await get.json()) as {
+      tour: { startPanoId?: string; settings?: { controls: string } };
+    };
+    expect(got.tour.startPanoId).toBe('b1-scene-1');
+    expect(got.tour.settings).toEqual({
+      controls: 'top',
+      showMap: true,
+      showCompass: true,
+      autoRotate: false,
+    });
+  });
+
+  it('400s a tour PUT with an invalid settings.controls value', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'B1 Bad Settings', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const update = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        title: 'B1 Bad Settings',
+        scenes: [],
+        settings: { controls: 'left', showMap: true, showCompass: true, autoRotate: false },
+      }),
+    });
+    expect(update.status).toBe(400);
+  });
+
+  it('a pre-Wave-6 stored tour (written straight to R2, no new fields) still GETs 200', async () => {
+    const tourId = 'b1-legacy-tour-t1';
+    await putJson(
+      env.BUCKET,
+      tourKey(MY_SUB, tourId),
+      { tourId, title: 'Legacy Tour', scenes: [] },
+      { etagDoesNotMatch: '*' },
+    );
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { tour: { title: string; settings?: unknown } };
+    expect(body.tour.title).toBe('Legacy Tour');
+    expect(body.tour.settings).toBeUndefined();
   });
 });
