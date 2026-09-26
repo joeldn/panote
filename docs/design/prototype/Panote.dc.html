@@ -1,0 +1,1950 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..700&family=Figtree:wght@300..700&family=Hanken+Grotesk:wght@300..700&family=Schibsted+Grotesk:wght@400..700&family=Spectral:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-thumb{background:rgba(26,24,21,.22);border-radius:9px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(26,24,21,.4);background-clip:content-box}
+@keyframes pn-pulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.55)}70%{box-shadow:0 0 0 13px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}
+@keyframes pn-shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pn-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes pn-fadeup{from{transform:translateY(12px)}to{transform:none}}
+@keyframes pn-spin{to{transform:rotate(360deg)}}
+@keyframes pn-indet{0%{left:-42%}100%{left:100%}}
+:root{--accent:#b5483a;--ink:#1a1815;--depth:#2f8fb3;--fdisp:'Schibsted Grotesk',system-ui,sans-serif;--fbody:'Schibsted Grotesk',system-ui,sans-serif;--fmono:'Spline Sans Mono',ui-monospace,monospace;--cbg:rgba(255,255,255,.9);--cbf:blur(12px);--mbg:rgba(250,248,244,.62)}
+.pn-fade{animation:pn-fadeup .7s cubic-bezier(.2,.7,.2,1) both}
+@keyframes pn-ring{0%{transform:scale(.7);opacity:.7}70%{transform:scale(1.45);opacity:0}100%{opacity:0}}
+.pn-ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(255,255,255,.6);animation:pn-ring 2.6s ease-out infinite;pointer-events:none}
+.pn-rte{font:400 14px/1.6 var(--fbody);color:#1a1815;outline:none;overflow-y:auto;max-height:200px}
+.pn-rte:empty:before{content:attr(data-ph);color:rgba(26,24,21,.4)}
+.pn-rte:focus:empty:before{content:attr(data-ph);color:rgba(26,24,21,.3)}
+.pn-rte h1,.pn-rte h2,.pn-rte h3{font-weight:600;margin:9px 0 4px;line-height:1.2}
+.pn-rte h1{font-size:18px}.pn-rte h2{font-size:16px}.pn-rte h3{font-size:15px}
+.pn-rte p,.pn-rte div{margin:6px 0}
+.pn-rte ul{margin:6px 0;padding-left:20px}.pn-rte li{margin:2px 0}
+.pn-rte a{color:var(--accent);text-decoration:underline}
+.pn-rte strong,.pn-rte b{font-weight:700}.pn-rte em,.pn-rte i{font-style:italic}
+.pn-rte img,.pn-rte audio,.pn-rte video{max-width:100%}
+.pn-embed{display:flex;align-items:center;gap:9px;padding:9px 12px;margin:8px 0;border:1px solid rgba(26,24,21,.14);border-radius:9px;background:rgba(26,24,21,.04);font:500 12.5px var(--fbody);color:rgba(26,24,21,.7);user-select:none}
+.pn-embed i{color:var(--accent);font-size:13px}
+</style>
+</helmet>
+<div ref="{{ rootRef }}" style="position:relative;width:100%;min-height:100vh;background:#faf8f4;color:#1a1815;font-family:var(--fbody),system-ui,sans-serif;--accent:#b5483a;--ink:#1a1815;--depth:#2f8fb3;--fdisp:'Schibsted Grotesk',system-ui,sans-serif;--fbody:'Schibsted Grotesk',system-ui,sans-serif;--fmono:'Spline Sans Mono',ui-monospace,monospace;--cbg:var(--cbg);--cbf:blur(12px);--mbg:var(--mbg);overflow-x:hidden">
+
+  <!-- ============ PANO ENGINE (fixed, behind everything) ============ -->
+  <div ref="{{ viewportRef }}" onPointerDown="{{ onDown }}" onPointerMove="{{ onMove }}" onPointerUp="{{ onUp }}" onPointerLeave="{{ onUp }}" onDoubleClick="{{ onDouble }}" style="{{ viewportStyle }}">
+    <div ref="{{ worldRef }}" style="position:absolute;left:0;top:0;width:2400px;height:1400px;transform-origin:0 0;--hue:208;--inv:1;will-change:transform">
+      <sc-for list="{{ tiles }}" as="tile" hint-placeholder-count="3">
+        <div style="{{ tile.style }}">
+          <div style="position:absolute;inset:0;background:linear-gradient(180deg, hsl(var(--hue) 40% 26%) 0%, hsl(var(--hue) 36% 41%) 37%, hsl(var(--hue) 28% 58%) 48.5%, hsl(calc(var(--hue) + 10) 24% 33%) 51%, hsl(calc(var(--hue) + 10) 26% 17%) 100%)"></div>
+          <div style="position:absolute;inset:0;background:repeating-linear-gradient(90deg, transparent 0 199px, rgba(255,255,255,.045) 199px 203px), repeating-linear-gradient(90deg, transparent 0 599px, rgba(0,0,0,.05) 599px 603px)"></div>
+          <div style="position:absolute;left:0;right:0;top:51%;bottom:0;background:repeating-linear-gradient(0deg, transparent 0 78px, rgba(0,0,0,.06) 78px 80px)"></div>
+          <sc-if value="{{ sceneImg }}" hint-placeholder-val="{{ false }}">
+            <div style="{{ sceneImgStyle }}"></div>
+          </sc-if>
+          <sc-for list="{{ visiblePoints }}" as="p" hint-placeholder-count="2">
+            <div style="{{ p.style }}">
+              <div onClick="{{ p.onClick }}" onPointerDown="{{ stop }}" style="position:absolute;left:0;top:0;transform:translate(-50%,-50%) scale(calc(var(--inv) * var(--d)));cursor:pointer">
+                <div style="width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.96);border:1px solid rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 5px rgba(0,0,0,.45),0 4px 14px rgba(0,0,0,.3);animation:pn-pulse 3s infinite">
+                  <i class="{{ p.iconCls }}" style="font-size:13px;color:var(--accent);line-height:1"></i>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-for>
+      <!-- ghost placing marker -->
+      <div ref="{{ ghostRef }}" style="position:absolute;left:0;top:0;display:none;pointer-events:none;z-index:5">
+        <div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%) scale(calc(var(--inv) * var(--d)))">
+          <div style="width:34px;height:34px;border-radius:50%;border:2px dashed var(--accent);background:rgba(255,255,255,.5);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center">
+            <i class="fa-solid fa-plus" style="font-size:13px;color:var(--accent)"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- vignette + transition flash -->
+    <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(120% 90% at 50% 42%, transparent 55%, rgba(8,7,5,.42) 100%)"></div>
+    <div ref="{{ flashRef }}" style="position:absolute;inset:0;pointer-events:none;background:#0c0a08;opacity:0;transition:opacity .26s ease"></div>
+  </div>
+
+  <!-- ============ MARKETING SITE ============ -->
+  <sc-if value="{{ isLanding }}" hint-placeholder-val="{{ true }}">
+  <div style="position:relative;z-index:2">
+
+    <!-- nav -->
+    <nav style="{{ navStyle }}">
+      <div onClick="{{ scrollTop }}" style="display:flex;align-items:center;gap:11px;cursor:pointer">
+        <div style="width:30px;height:30px;color:#1a1815">{{ logoMark }}</div>
+        <div style="font:500 22px var(--fbody);letter-spacing:-.02em">panote</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:30px">
+        <sc-if value="{{ showNavLinks }}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{ navLinks }}" as="l" hint-placeholder-count="4">
+          <div onClick="{{ l.onClick }}" style="font:500 14.5px var(--fbody);color:rgba(26,24,21,.7);cursor:pointer;letter-spacing:.01em" style-hover="color:#1a1815">{{ l.label }}</div>
+        </sc-for>
+        </sc-if>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <sc-if value="{{ authed }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ goDashboard }}" style="font:500 14.5px var(--fbody);color:rgba(26,24,21,.7);cursor:pointer" style-hover="color:#1a1815">My tours</div>
+          <div style="position:relative">
+            <div onClick="{{ toggleAcctMenu }}" style="width:38px;height:38px;border-radius:50%;background:#1a1815;color:#faf8f4;display:flex;align-items:center;justify-content:center;font:600 15px var(--fbody);cursor:pointer" title="{{ user.name }}">{{ user.initial }}</div>
+            <sc-if value="{{ acctMenuOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;right:0;top:48px;z-index:50;width:230px;background:#fff;border:1px solid rgba(26,24,21,.1);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.2);padding:7px;text-align:left">
+                <div style="padding:10px 11px 11px;border-bottom:1px solid rgba(26,24,21,.08);margin-bottom:6px">
+                  <div style="font:600 14px var(--fbody);color:#1a1815">{{ user.name }}</div>
+                  <div style="font:400 12px var(--fmono);color:rgba(26,24,21,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ user.email }}</div>
+                </div>
+                <div onClick="{{ goDashboard }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font:500 14px var(--fbody)" style-hover="background:rgba(26,24,21,.05)"><i class="fa-solid fa-layer-group" style="font-size:13px;color:rgba(26,24,21,.5);width:16px"></i>My tours</div>
+                <div style="height:1px;background:rgba(26,24,21,.08);margin:6px 4px"></div>
+                <div onClick="{{ signOut }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font:500 14px var(--fbody);color:#b5483a" style-hover="background:rgba(181,72,58,.07)"><i class="fa-solid fa-arrow-right-from-bracket" style="font-size:13px;width:16px"></i>Sign out</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+        <sc-if value="{{ signedOut }}" hint-placeholder-val="{{ true }}">
+          <div onClick="{{ openSignIn }}" style="font:500 14.5px var(--fbody);color:rgba(26,24,21,.7);cursor:pointer" style-hover="color:#1a1815">Sign in</div>
+        </sc-if>
+        <div onClick="{{ goUpload }}" style="font:500 14px var(--fbody);color:#faf8f4;background:#1a1815;padding:10px 18px;border-radius:999px;cursor:pointer;letter-spacing:.01em" style-hover="background:#000">Upload a pano</div>
+      </div>
+    </nav>
+
+    <!-- hero (transparent over pano) -->
+    <section style="position:relative;height:100vh;min-height:620px;pointer-events:none;display:flex;flex-direction:column;justify-content:flex-end">
+      <div style="position:absolute;left:0;right:0;bottom:0;height:60%;background:linear-gradient(180deg,transparent,rgba(250,248,244,.0) 30%,rgba(250,248,244,.86) 88%,#faf8f4);pointer-events:none"></div>
+      <div style="position:relative;max-width:1180px;margin:0 auto;width:100%;padding:0 30px 64px;pointer-events:none">
+        <div style="display:inline-flex;align-items:center;gap:8px;font:500 12px var(--fmono);letter-spacing:.06em;text-transform:uppercase;color:#fff;background:rgba(20,18,14,.4);backdrop-filter:blur(6px);padding:7px 13px;border-radius:999px;margin-bottom:22px;pointer-events:auto">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>live · drag to look around
+        </div>
+        <h1 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(44px,6.6vw,92px);line-height:.98;letter-spacing:-.015em;margin:0;color:#1a1815;max-width:15ch;text-shadow:0 2px 30px rgba(250,248,244,.5)">Your 360° tours. Full resolution. <span style="font-style:italic;color:var(--accent)">Free.</span></h1>
+        <p style="font:400 19px/1.5 var(--fbody);color:rgba(26,24,21,.82);max-width:50ch;margin:22px 0 30px">Upload a panorama, link your scenes, add hotspots, share a link. Unlimited tours, no watermark, no paywall.</p>
+        <div style="display:flex;align-items:center;gap:16px;pointer-events:auto;flex-wrap:wrap">
+          <div onClick="{{ goUpload }}" onDrop="{{ onDrop }}" onDragOver="{{ onDragOver }}" style="display:flex;align-items:center;gap:13px;background:#1a1815;color:#faf8f4;padding:15px 22px;border-radius:14px;cursor:pointer;box-shadow:0 12px 34px rgba(0,0,0,.22)" style-hover="background:#000">
+            <div style="width:22px;height:22px;border-radius:6px;border:1.5px dashed rgba(250,248,244,.6);display:flex;align-items:center;justify-content:center;font-size:14px">↑</div>
+            <div><div style="font:600 15px var(--fbody)">Upload your first tour</div><div style="font:400 12.5px var(--fbody);color:rgba(250,248,244,.6)">free — no sign-up, live in seconds</div></div>
+          </div>
+          <div onClick="{{ goViewerDemo }}" style="font:500 15px var(--fbody);color:#1a1815;cursor:pointer;display:flex;align-items:center;gap:7px" style-hover="gap:11px">See a live tour <span>→</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- solid content over pano -->
+    <div style="position:relative;background:#faf8f4;pointer-events:auto">
+
+      <!-- value pillars -->
+      <section style="max-width:1180px;margin:0 auto;padding:104px 30px 70px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:30px;flex-wrap:wrap;margin-bottom:46px">
+          <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(32px,4.4vw,54px);line-height:1;margin:0;letter-spacing:-.015em;max-width:18ch">Hosted ease, without the free-tier catches.</h2>
+          <div style="font:400 13px var(--fmono);color:rgba(26,24,21,.45);max-width:32ch;letter-spacing:.02em">Free hosts cap your resolution and stamp a watermark on your work. Panote doesn't.</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px">
+          <sc-for list="{{ pillars }}" as="p" hint-placeholder-count="4">
+            <div style="background:#fff;border:1px solid rgba(26,24,21,.09);border-radius:16px;padding:26px 22px 24px">
+              <div style="width:42px;height:42px;border-radius:11px;background:color-mix(in srgb, var(--accent) 12%, transparent);display:flex;align-items:center;justify-content:center;margin-bottom:20px"><i class="{{ p.icon }}" style="font-size:17px;color:var(--accent)"></i></div>
+              <div style="font:500 11px var(--fmono);letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:9px">{{ p.tag }}</div>
+              <div style="font:600 18px var(--fbody);letter-spacing:-.01em;margin-bottom:9px">{{ p.title }}</div>
+              <div style="font:400 14px/1.55 var(--fbody);color:rgba(26,24,21,.62)">{{ p.body }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- how it works -->
+      <section id="how" style="max-width:1180px;margin:0 auto;padding:84px 30px 70px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:30px;flex-wrap:wrap;margin-bottom:54px">
+          <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(34px,4.5vw,56px);line-height:1;margin:0;letter-spacing:-.015em">From one photo to a place,<br><span style="font-style:italic;color:rgba(26,24,21,.5)">in four moves.</span></h2>
+          <div style="font:400 13px var(--fmono);color:rgba(26,24,21,.45);max-width:30ch;letter-spacing:.02em">No rig, no stitching software, no plug-ins. Just the photo your 360 camera already made.</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:26px">
+          <sc-for list="{{ steps }}" as="s" hint-placeholder-count="4">
+            <div style="border-top:1.5px solid rgba(26,24,21,.14);padding-top:20px">
+              <div style="font:500 13px var(--fmono);color:var(--accent);margin-bottom:34px">{{ s.num }}</div>
+              <div style="font:600 19px var(--fbody);margin-bottom:10px;letter-spacing:-.01em">{{ s.title }}</div>
+              <div style="font:400 14.5px/1.55 var(--fbody);color:rgba(26,24,21,.62)">{{ s.body }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- feature list -->
+      <section id="features" style="background:#f1ede4;border-top:1px solid rgba(26,24,21,.07);border-bottom:1px solid rgba(26,24,21,.07)">
+        <div style="max-width:1180px;margin:0 auto;padding:90px 30px">
+          <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(30px,4vw,48px);line-height:1;margin:0 0 44px;letter-spacing:-.015em">Everything a tour needs. <span style="font-style:italic;color:rgba(26,24,21,.5)">Nothing it doesn't.</span></h2>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:rgba(26,24,21,.09);border:1px solid rgba(26,24,21,.09);border-radius:16px;overflow:hidden">
+            <sc-for list="{{ features }}" as="ft" hint-placeholder-count="6">
+              <div style="background:#faf8f4;padding:30px 26px">
+                <i class="{{ ft.icon }}" style="font-size:19px;color:var(--accent);margin-bottom:18px;display:block"></i>
+                <div style="font:600 16.5px var(--fbody);letter-spacing:-.01em;margin-bottom:8px">{{ ft.title }}</div>
+                <div style="font:400 14px/1.55 var(--fbody);color:rgba(26,24,21,.6)">{{ ft.body }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+
+      <!-- comparison table (anchor moment) -->
+      <section style="max-width:1040px;margin:0 auto;padding:100px 30px 90px">
+        <div style="text-align:center;margin-bottom:48px">
+          <div style="font:500 12px var(--fmono);letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:14px">Panote vs. the typical free tier</div>
+          <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(32px,4.4vw,54px);line-height:1.02;margin:0;letter-spacing:-.015em">Same idea. <span style="font-style:italic;color:rgba(26,24,21,.5)">None of the gates.</span></h2>
+        </div>
+        <div style="border:1px solid rgba(26,24,21,.12);border-radius:18px;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.07)">
+          <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;background:#1a1815;color:#faf8f4">
+            <div style="padding:20px 24px;font:500 13px var(--fmono);color:rgba(244,241,234,.55)">Feature</div>
+            <div style="padding:20px 22px;font:600 15px var(--fbody);display:flex;align-items:center;gap:8px"><span style="width:18px;height:18px;color:#faf8f4">{{ logoMark }}</span>Panote</div>
+            <div style="padding:20px 22px;font:500 14px var(--fbody);color:rgba(244,241,234,.6)">Typical free host</div>
+          </div>
+          <sc-for list="{{ compareRows }}" as="r" hint-placeholder-count="6">
+            <div style="{{ r.rowStyle }}">
+              <div style="padding:17px 24px;font:500 14.5px var(--fbody);color:rgba(26,24,21,.78)">{{ r.label }}</div>
+              <div style="padding:17px 22px;font:600 14.5px var(--fbody);color:var(--accent);display:flex;align-items:center;gap:8px;background:color-mix(in srgb, var(--accent) 5%, transparent)"><i class="fa-solid fa-check" style="font-size:12px"></i>{{ r.panote }}</div>
+              <div style="padding:17px 22px;font:400 14.5px var(--fbody);color:rgba(26,24,21,.5)">{{ r.others }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- how is this free? (dark anchor) -->
+      <section id="free" style="background:#1a1815;color:#faf8f4;position:relative;overflow:hidden">
+        <div style="position:absolute;inset:0;background:radial-gradient(70% 90% at 18% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%);pointer-events:none"></div>
+        <div style="position:relative;max-width:1040px;margin:0 auto;padding:96px 30px">
+          <div style="display:grid;grid-template-columns:0.85fr 1.15fr;gap:54px;align-items:start">
+            <div>
+              <div style="font:500 12px var(--fmono);letter-spacing:.08em;text-transform:uppercase;color:color-mix(in srgb, var(--accent) 75%, #faf8f4);margin-bottom:16px">The honest part</div>
+              <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(34px,4.6vw,60px);line-height:1;margin:0;letter-spacing:-.015em">How is this<br>actually free?</h2>
+            </div>
+            <div>
+              <p style="font:400 18px/1.65 var(--fbody);color:rgba(244,241,234,.82);margin:0 0 26px">Free 360 hosts have shut down before, so it's fair to be skeptical. Here's the straight answer.</p>
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <sc-for list="{{ freeReasons }}" as="fr" hint-placeholder-count="4">
+                  <div style="display:flex;gap:14px;align-items:flex-start">
+                    <div style="width:30px;height:30px;border-radius:9px;background:rgba(250,248,244,.08);display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px"><i class="{{ fr.icon }}" style="font-size:13px;color:color-mix(in srgb, var(--accent) 70%, #faf8f4)"></i></div>
+                    <div style="font:400 15.5px/1.55 var(--fbody);color:rgba(244,241,234,.78)">{{ fr.text }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="margin-top:30px;padding:18px 20px;border:1px solid rgba(250,248,244,.16);border-radius:13px;font:400 15px/1.55 var(--fbody);color:rgba(244,241,234,.9)">Your tours stay live at full resolution, with no watermark and no upsell — for as long as you want them up.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- use cases -->
+      <section style="max-width:1180px;margin:0 auto;padding:100px 30px 70px">
+        <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(30px,4vw,48px);line-height:1;margin:0 0 44px;letter-spacing:-.015em">Built for anyone with a space to show.</h2>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:18px">
+          <sc-for list="{{ useCases }}" as="u" hint-placeholder-count="5">
+            <div style="border-radius:14px;overflow:hidden;border:1px solid rgba(26,24,21,.09)">
+              <div style="aspect-ratio:3/4;background:{{ u.tint }};position:relative;display:flex;align-items:flex-end">
+                <div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%,rgba(20,18,14,.62))"></div>
+                <div style="position:relative;padding:16px">
+                  <i class="{{ u.icon }}" style="font-size:16px;color:#fff;margin-bottom:10px;display:block;opacity:.9"></i>
+                  <div style="font:600 15px var(--fbody);color:#fff;letter-spacing:-.01em;line-height:1.15">{{ u.title }}</div>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- showcase featured tour -->
+      <section id="showcase" style="max-width:1180px;margin:0 auto;padding:60px 30px 80px">
+        <div style="position:relative;border-radius:22px;overflow:hidden;background:#1a1815;min-height:460px;display:flex;align-items:flex-end">
+          <div style="position:absolute;inset:0;background:linear-gradient(135deg,#2c2418,#6a4a30 55%,#b07a3e)"></div>
+          <div style="position:absolute;inset:0;background-image:repeating-linear-gradient(90deg,transparent 0 70px,rgba(255,255,255,.05) 70px 71px);pointer-events:none"></div>
+          <div style="position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%,rgba(20,18,14,.78))"></div>
+          <div style="position:absolute;top:24px;left:24px;display:inline-flex;align-items:center;gap:8px;font:500 11px var(--fmono);letter-spacing:.06em;text-transform:uppercase;color:#fff;background:rgba(20,18,14,.4);backdrop-filter:blur(6px);padding:7px 12px;border-radius:999px"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>Featured tour</div>
+          <div style="position:relative;padding:clamp(30px,5vw,56px);width:100%;display:flex;align-items:flex-end;justify-content:space-between;gap:30px;flex-wrap:wrap">
+            <div style="max-width:30ch">
+              <h3 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(28px,3.6vw,46px);line-height:1.02;margin:0 0 12px;color:#fff;letter-spacing:-.015em">St Lawrence Jewry</h3>
+              <p style="font:400 15.5px/1.55 var(--fbody);color:rgba(255,255,255,.8);margin:0">A Wren church in the City of London. 4 linked panoramas, 19 hotspots, full-resolution zoom into the ceiling plasterwork.</p>
+            </div>
+            <div onClick="{{ goViewerDemo }}" style="display:inline-flex;align-items:center;gap:11px;background:#faf8f4;color:#1a1815;padding:15px 26px;border-radius:13px;cursor:pointer;font:600 15px var(--fbody);flex:none" style-hover="filter:brightness(1.04)">Walk through it <span>→</span></div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:24px">
+          <sc-for list="{{ gallery }}" as="g" hint-placeholder-count="3">
+            <div onClick="{{ goViewerDemo }}" style="cursor:pointer">
+              <div style="position:relative;aspect-ratio:4/3;border-radius:12px;overflow:hidden;background:#e7e1d6">
+                <div style="position:absolute;inset:0;background:{{ g.tint }}"></div>
+                <div style="position:absolute;left:12px;bottom:12px;display:flex;gap:6px;align-items:center;background:var(--cbg);padding:5px 10px;border-radius:999px;font:500 12px var(--fbody);color:#1a1815"><span style="width:5px;height:5px;border-radius:50%;background:var(--accent)"></span>{{ g.points }} hotspots</div>
+              </div>
+              <div style="margin-top:12px;font:600 16px var(--fbody);letter-spacing:-.01em">{{ g.name }}</div>
+              <div style="font:400 13px var(--fmono);color:rgba(26,24,21,.45);margin-top:2px">{{ g.place }} · {{ g.views }} views</div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <!-- FAQ -->
+      <section id="faq" style="background:#f1ede4;border-top:1px solid rgba(26,24,21,.07)">
+        <div style="max-width:880px;margin:0 auto;padding:96px 30px">
+          <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(32px,4.4vw,54px);line-height:1;margin:0 0 44px;letter-spacing:-.015em;text-align:center">Questions, answered straight.</h2>
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <sc-for list="{{ faqs }}" as="q" hint-placeholder-count="5">
+              <div onClick="{{ q.onClick }}" style="background:#faf8f4;border:1px solid rgba(26,24,21,.1);border-radius:14px;padding:22px 24px;cursor:pointer">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:16px">
+                  <div style="font:600 17px var(--fbody);letter-spacing:-.01em">{{ q.q }}</div>
+                  <div style="{{ q.iconStyle }}"><i class="fa-solid fa-plus" style="font-size:12px;color:var(--accent)"></i></div>
+                </div>
+                <div style="{{ q.answerStyle }}">{{ q.a }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </section>
+
+      <!-- final CTA -->
+      <section style="max-width:1180px;margin:0 auto;padding:96px 30px 100px">
+        <div style="background:#1a1815;border-radius:22px;padding:clamp(40px,7vw,84px);text-align:center;color:#faf8f4;position:relative;overflow:hidden">
+          <div style="position:absolute;inset:0;background:radial-gradient(80% 120% at 50% -20%, color-mix(in srgb, var(--accent) 32%, transparent), transparent 60%)"></div>
+          <div style="position:relative">
+            <h2 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(36px,5.5vw,68px);line-height:1;margin:0 0 18px;letter-spacing:-.015em">Your tour. Full resolution. Free.</h2>
+            <p style="font:400 18px var(--fbody);color:rgba(244,241,234,.7);margin:0 auto 30px;max-width:44ch">Upload a panorama and get a link people can step inside. No watermark, no paywall, no sign-up.</p>
+            <div onClick="{{ goUpload }}" style="display:inline-flex;align-items:center;gap:11px;background:var(--accent);color:#fff;padding:16px 30px;border-radius:14px;cursor:pointer;font:600 16px var(--fbody)" style-hover="filter:brightness(1.06)">Upload your first tour — free <span>→</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- footer -->
+      <footer style="border-top:1px solid rgba(26,24,21,.12)">
+        <div style="max-width:1180px;margin:0 auto;padding:54px 30px 46px;display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:30px">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+              <div style="width:24px;height:24px;color:#1a1815">{{ logoMark }}</div>
+              <div style="font:500 18px var(--fbody);letter-spacing:-.02em">panote.io</div>
+            </div>
+            <div style="font:400 14px/1.6 var(--fbody);color:rgba(26,24,21,.55);max-width:30ch">Free, full-resolution 360° tours. No watermark, no lock-in.</div>
+          </div>
+          <div>
+            <div style="font:500 12px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.4);margin-bottom:14px">Product</div>
+            <div style="display:flex;flex-direction:column;gap:10px;font:500 14px var(--fbody);color:rgba(26,24,21,.66)">
+              <span style-hover="color:#1a1815;cursor:pointer">Features</span><span style-hover="color:#1a1815;cursor:pointer">Showcase</span><span style-hover="color:#1a1815;cursor:pointer">Embed</span>
+            </div>
+          </div>
+          <div>
+            <div style="font:500 12px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.4);margin-bottom:14px">Resources</div>
+            <div style="display:flex;flex-direction:column;gap:10px;font:500 14px var(--fbody);color:rgba(26,24,21,.66)">
+              <span style-hover="color:#1a1815;cursor:pointer">Docs</span><span style-hover="color:#1a1815;cursor:pointer">Camera guide</span><span style-hover="color:#1a1815;cursor:pointer">Embedding</span>
+            </div>
+          </div>
+          <div>
+            <div style="font:500 12px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.4);margin-bottom:14px">Contact</div>
+            <div style="display:flex;flex-direction:column;gap:10px;font:500 14px var(--fbody);color:rgba(26,24,21,.66)">
+              <span style-hover="color:#1a1815;cursor:pointer">hello@panote.io</span><span style-hover="color:#1a1815;cursor:pointer">Status</span>
+            </div>
+          </div>
+        </div>
+        <div style="max-width:1180px;margin:0 auto;padding:0 30px 40px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;border-top:1px solid rgba(26,24,21,.08);padding-top:24px">
+          <div style="font:400 13px var(--fmono);color:rgba(26,24,21,.4)">© 2026 Panote · Free, unlimited, no watermark</div>
+          <div style="display:flex;gap:22px;font:400 13px var(--fmono);color:rgba(26,24,21,.4)">
+            <span style-hover="color:#1a1815;cursor:pointer">Privacy</span><span style-hover="color:#1a1815;cursor:pointer">Terms</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ DASHBOARD / MY TOURS ============ -->
+  <sc-if value="{{ isDash }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:20;background:#faf8f4;overflow-y:auto">
+    <nav style="position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:15px 30px;background:rgba(250,248,244,.86);backdrop-filter:blur(12px);border-bottom:1px solid rgba(26,24,21,.08)">
+      <div onClick="{{ goLanding }}" style="display:flex;align-items:center;gap:11px;cursor:pointer">
+        <div style="width:30px;height:30px;color:#1a1815">{{ logoMark }}</div>
+        <div style="font:500 22px var(--fbody);letter-spacing:-.02em">panote</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div style="position:relative">
+          <div onClick="{{ toggleAcctMenu }}" style="width:38px;height:38px;border-radius:50%;background:#1a1815;color:#faf8f4;display:flex;align-items:center;justify-content:center;font:600 15px var(--fbody);cursor:pointer">{{ user.initial }}</div>
+          <sc-if value="{{ acctMenuOpen }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;right:0;top:48px;z-index:50;width:230px;background:#fff;border:1px solid rgba(26,24,21,.1);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.2);padding:7px;text-align:left">
+              <div style="padding:10px 11px 11px;border-bottom:1px solid rgba(26,24,21,.08);margin-bottom:6px">
+                <div style="font:600 14px var(--fbody);color:#1a1815">{{ user.name }}</div>
+                <div style="font:400 12px var(--fmono);color:rgba(26,24,21,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ user.email }}</div>
+              </div>
+              <div onClick="{{ goLanding }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font:500 14px var(--fbody)" style-hover="background:rgba(26,24,21,.05)"><i class="fa-solid fa-house" style="font-size:13px;color:rgba(26,24,21,.5);width:16px"></i>Home page</div>
+              <div style="height:1px;background:rgba(26,24,21,.08);margin:6px 4px"></div>
+              <div onClick="{{ signOut }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font:500 14px var(--fbody);color:#b5483a" style-hover="background:rgba(181,72,58,.07)"><i class="fa-solid fa-arrow-right-from-bracket" style="font-size:13px;width:16px"></i>Sign out</div>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </nav>
+
+    <div style="max-width:1120px;margin:0 auto;padding:48px 30px 80px">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:30px">
+        <div>
+          <div style="font:500 12px var(--fmono);letter-spacing:.06em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:10px">Your tours</div>
+          <h1 style="font-family:var(--fdisp);font-weight:400;font-size:clamp(34px,5vw,52px);line-height:1;margin:0;letter-spacing:-.015em">Welcome back, {{ user.name }}.</h1>
+        </div>
+        <div onClick="{{ newTourFromDash }}" style="display:flex;align-items:center;gap:10px;background:#1a1815;color:#faf8f4;padding:13px 20px;border-radius:13px;cursor:pointer;font:600 15px var(--fbody)" style-hover="background:#000"><i class="fa-solid fa-plus" style="font-size:13px"></i>New tour</div>
+      </div>
+
+      <div style="display:flex;gap:32px;margin-bottom:38px;padding:18px 22px;background:#fff;border:1px solid rgba(26,24,21,.09);border-radius:16px;width:max-content;max-width:100%;flex-wrap:wrap">
+        <div><div style="font-family:var(--fdisp);font-size:30px;line-height:1">{{ dashTotals.tours }}</div><div style="font:400 12.5px var(--fbody);color:rgba(26,24,21,.5);margin-top:2px">tours</div></div>
+        <div style="width:1px;background:rgba(26,24,21,.1)"></div>
+        <div><div style="font-family:var(--fdisp);font-size:30px;line-height:1">{{ dashTotals.panos }}</div><div style="font:400 12.5px var(--fbody);color:rgba(26,24,21,.5);margin-top:2px">panos</div></div>
+        <div style="width:1px;background:rgba(26,24,21,.1)"></div>
+        <div><div style="font-family:var(--fdisp);font-size:30px;line-height:1">{{ dashTotals.views }}</div><div style="font:400 12.5px var(--fbody);color:rgba(26,24,21,.5);margin-top:2px">total views</div></div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:22px">
+        <sc-for list="{{ tourCards }}" as="t" hint-placeholder-count="4">
+          <div onClick="{{ t.onOpen }}" style="background:#fff;border:1px solid rgba(26,24,21,.09);border-radius:16px;overflow:hidden;cursor:pointer;transition:box-shadow .15s,transform .15s" style-hover="box-shadow:0 14px 40px rgba(0,0,0,.12);transform:translateY(-2px)">
+            <div style="{{ t.coverStyle }}">
+              <div style="{{ t.coverScrim }}"></div>
+              <div onClick="{{ t.onVis }}" style="position:absolute;top:11px;left:11px;display:flex;align-items:center;gap:6px;background:rgba(20,18,14,.5);backdrop-filter:blur(6px);color:#fff;padding:5px 10px;border-radius:999px;font:600 11px var(--fbody);cursor:pointer" title="Click to change visibility"><i class="{{ t.visIcon }}" style="font-size:10px"></i>{{ t.visLabel }}</div>
+              <sc-if value="{{ t.current }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;top:11px;right:11px;background:var(--accent);color:#fff;padding:4px 9px;border-radius:999px;font:600 10px var(--fmono);letter-spacing:.04em">EDITING</div></sc-if>
+              <div style="position:absolute;bottom:10px;right:11px;display:flex;align-items:center;gap:5px;background:rgba(20,18,14,.42);backdrop-filter:blur(4px);color:rgba(255,255,255,.92);padding:4px 8px;border-radius:7px;font:600 10px var(--fmono);letter-spacing:.03em"><i class="fa-solid fa-panorama" style="font-size:10px"></i>360°</div>
+            </div>
+            <div style="padding:15px 16px 16px">
+              <div style="font:600 17px var(--fbody);letter-spacing:-.01em;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.title }}</div>
+              <div style="font:400 12.5px var(--fmono);color:rgba(26,24,21,.5)">{{ t.panos }} · {{ t.views }}</div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:13px;border-top:1px solid rgba(26,24,21,.08)">
+                <div style="font:400 11.5px var(--fbody);color:rgba(26,24,21,.4)">Updated {{ t.updated }}</div>
+                <div style="display:flex;align-items:center;gap:3px">
+                  <div onClick="{{ t.onDup }}" style="width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:rgba(26,24,21,.55)" style-hover="background:rgba(26,24,21,.07);color:#1a1815" title="Duplicate"><i class="fa-solid fa-clone" style="font-size:13px"></i></div>
+                  <div onClick="{{ t.onDel }}" style="width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:rgba(26,24,21,.55)" style-hover="background:rgba(181,72,58,.1);color:#b5483a" title="Delete"><i class="fa-solid fa-trash-can" style="font-size:13px"></i></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ UPLOAD OVERLAY ============ -->
+  <sc-if value="{{ isUpload }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:50;background:rgba(20,18,14,.55);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:24px">
+    <div class="pn-fade" style="width:100%;max-width:560px;background:#faf8f4;border-radius:20px;padding:38px;box-shadow:0 40px 100px rgba(0,0,0,.4)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:26px"><div style="width:26px;height:26px;color:#1a1815">{{ logoMark }}</div><div style="font:500 19px var(--fbody);letter-spacing:-.02em">New pano</div></div>
+      <label onDrop="{{ onDrop }}" onDragOver="{{ onDragOver }}" style="display:block;border:2px dashed rgba(26,24,21,.22);border-radius:16px;padding:48px 24px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s" style-hover="border-color:var(--accent);background:color-mix(in srgb, var(--accent) 8%, transparent)">
+        <input type="file" accept="image/*" onChange="{{ onFile }}" style="display:none">
+        <div style="width:52px;height:52px;border-radius:14px;background:#1a1815;color:#faf8f4;display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 18px">↑</div>
+        <div style="font:600 18px var(--fbody);margin-bottom:6px">Drop an equirectangular photo</div>
+        <div style="font:400 14px var(--fbody);color:rgba(26,24,21,.55);margin-bottom:4px">or click to browse · JPG, PNG, up to 200MP</div>
+        <div style="font:400 12px var(--fmono);color:rgba(26,24,21,.4)">2:1 ratio works best</div>
+      </label>
+      <div onClick="{{ goLanding }}" style="text-align:center;margin-top:22px;font:500 14px var(--fbody);color:rgba(26,24,21,.5);cursor:pointer" style-hover="color:#1a1815">Cancel</div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ EDITOR / VIEWER CHROME (over pano) ============ -->
+  <sc-if value="{{ isApp }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:30;pointer-events:none">
+    <div style="position:absolute;top:0;left:0;right:0;height:116px;background:linear-gradient(180deg,rgba(0,0,0,.2),rgba(0,0,0,0));pointer-events:none"></div>
+    <div style="position:absolute;bottom:0;left:0;right:0;height:160px;background:linear-gradient(0deg,rgba(0,0,0,.22),rgba(0,0,0,0));pointer-events:none"></div>
+
+    <!-- top bar -->
+    <div style="position:absolute;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:14px;pointer-events:none">
+      <div style="display:flex;align-items:center;gap:12px;pointer-events:auto">
+        <div onClick="{{ goLanding }}" style="display:flex;align-items:center;justify-content:center;width:40px;height:40px;cursor:pointer;filter:drop-shadow(0 2px 6px rgba(0,0,0,.35))"><div style="width:30px;height:30px;color:#1a1815">{{ logoMark }}</div></div>
+        <div style="display:flex;align-items:center;gap:8px;background:var(--cbg);backdrop-filter:var(--cbf);padding:7px 13px;border-radius:11px;box-shadow:0 2px 10px rgba(0,0,0,.12)">
+          <sc-if value="{{ showGroup }}" hint-placeholder-val="{{ true }}">
+            <sc-if value="{{ groupInput }}" hint-placeholder-val="{{ false }}">
+              <input value="{{ titleInputValue }}" onInput="{{ onTitleInput }}" onBlur="{{ stopEditTitle }}" onKeyDown="{{ onTitleKey }}" placeholder="{{ titlePh }}" style="background:transparent;border:none;border-bottom:1.5px solid var(--accent);outline:none;padding:0 0 1px;font:500 12.5px var(--fbody);color:#1a1815;width:118px">
+            </sc-if>
+            <sc-if value="{{ groupText }}" hint-placeholder-val="{{ true }}">
+              <div onClick="{{ startEditTitle }}" style="font:500 12.5px var(--fbody);color:rgba(26,24,21,.5);cursor:pointer;white-space:nowrap" style-hover="color:#1a1815" title="Rename group">{{ title }}</div>
+            </sc-if>
+            <span style="font:400 15px var(--fbody);color:rgba(26,24,21,.28);line-height:1">›</span>
+          </sc-if>
+          <sc-if value="{{ panoInput }}" hint-placeholder-val="{{ false }}">
+            <input value="{{ sceneInputValue }}" onInput="{{ onSceneNameInput }}" onBlur="{{ stopEditScene }}" onKeyDown="{{ onSceneKey }}" placeholder="{{ scenePh }}" style="background:transparent;border:none;border-bottom:1.5px solid var(--accent);outline:none;padding:0 0 1px;font:700 14.5px var(--fbody);color:#1a1815;width:130px">
+          </sc-if>
+          <sc-if value="{{ panoText }}" hint-placeholder-val="{{ true }}">
+            <div onClick="{{ startEditScene }}" style="display:flex;align-items:center;gap:7px;cursor:pointer" title="Rename pano"><span style="font:700 14.5px var(--fbody);color:#1a1815;white-space:nowrap">{{ sceneName }}</span><sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}"><i class="fa-solid fa-pencil" style="font-size:10px;color:rgba(26,24,21,.35)"></i></sc-if></div>
+          </sc-if>
+        </div>
+        <sc-if value="{{ isViewer }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:7px;background:var(--cbg);backdrop-filter:var(--cbf);padding:9px 13px;border-radius:11px;box-shadow:0 2px 10px rgba(0,0,0,.12);color:rgba(26,24,21,.7)" title="Views"><i class="fa-solid fa-chart-line" style="font-size:12px;color:var(--accent)"></i><span style="font:600 13px var(--fmono)">{{ curViews }}</span></div>
+        </sc-if>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;pointer-events:auto">
+        <sc-if value="{{ showLangCtl }}" hint-placeholder-val="{{ false }}">
+          <div style="position:relative">
+            <div onClick="{{ toggleLangMenu }}" style="{{ langPillStyle }}" title="Language"><i class="fa-solid fa-globe" style="font-size:13px;color:var(--accent)"></i>{{ curLangShort }}</div>
+            <sc-if value="{{ langMenuOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;right:0;top:46px;z-index:6;background:#fff;border:1px solid rgba(26,24,21,.1);border-radius:12px;box-shadow:0 16px 40px rgba(0,0,0,.2);padding:6px;width:208px;max-height:300px;overflow-y:auto">
+                <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+                  <div style="font:500 10px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.4);padding:5px 9px 7px">Editing language</div>
+                  <sc-for list="{{ langList }}" as="lg" hint-placeholder-count="3">
+                    <div onClick="{{ lg.onClick }}" style="{{ lg.rowStyle }}"><span style="{{ lg.dotStyle }}"></span><span style="flex:1">{{ lg.label }}</span><sc-if value="{{ lg.isActive }}" hint-placeholder-val="{{ false }}"><i class="fa-solid fa-check" style="font-size:11px;color:var(--accent)"></i></sc-if><sc-if value="{{ lg.removable }}" hint-placeholder-val="{{ false }}"><span onClick="{{ lg.onRemove }}" style="opacity:.45;font-size:14px;line-height:1;padding:0 2px" style-hover="opacity:1">×</span></sc-if></div>
+                  </sc-for>
+                  <div style="height:1px;background:rgba(26,24,21,.08);margin:5px 4px"></div>
+                  <div onClick="{{ toggleLangAdd }}" style="display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:8px;cursor:pointer;font:500 13px var(--fbody);color:var(--accent)" style-hover="background:rgba(26,24,21,.05)"><i class="fa-solid fa-plus" style="font-size:10px"></i>Add a language</div>
+                  <sc-if value="{{ langAddOpen }}" hint-placeholder-val="{{ false }}">
+                    <div style="max-height:150px;overflow-y:auto;margin-top:2px">
+                      <sc-for list="{{ addableLangs }}" as="al" hint-placeholder-count="6">
+                        <div onClick="{{ al.onClick }}" style="padding:7px 9px 7px 26px;border-radius:8px;font:500 13px var(--fbody);cursor:pointer;display:flex;align-items:center;gap:9px" style-hover="background:rgba(26,24,21,.05)"><span style="font:600 10px var(--fmono);color:rgba(26,24,21,.4);width:22px">{{ al.short }}</span>{{ al.label }}</div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </sc-if>
+                <sc-if value="{{ isViewer }}" hint-placeholder-val="{{ false }}">
+                  <sc-for list="{{ viewerLangs }}" as="vl" hint-placeholder-count="3">
+                    <div onClick="{{ vl.onClick }}" style="{{ vl.rowStyle }}"><span style="font:600 10px var(--fmono);color:rgba(26,24,21,.4);width:22px">{{ vl.short }}</span>{{ vl.label }}</div>
+                  </sc-for>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+        <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ openTourCfg }}" style="background:var(--cbg);backdrop-filter:var(--cbf);width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.12)" style-hover="background:#fff" title="Tour settings"><i class="fa-solid fa-sliders" style="font-size:15px;color:#1a1815"></i></div>
+        </sc-if>
+        <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ openInsights }}" style="background:var(--cbg);backdrop-filter:var(--cbf);padding:10px 16px;border-radius:11px;font:500 14px var(--fbody);cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.12)" style-hover="background:#fff">Insights</div>
+        </sc-if>
+        <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ goViewer }}" style="background:var(--cbg);backdrop-filter:var(--cbf);padding:10px 16px;border-radius:11px;font:500 14px var(--fbody);cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.12)" style-hover="background:#fff">Preview</div>
+        </sc-if>
+        <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ save }}" style="{{ saveBtnStyle }}" title="Save all changes"><sc-if value="{{ dirty }}" hint-placeholder-val="{{ false }}"><i class="fa-solid fa-cloud-arrow-up" style="font-size:13px"></i></sc-if><sc-if value="{{ savedClean }}" hint-placeholder-val="{{ true }}"><i class="fa-solid fa-circle-check" style="font-size:12px;color:#1f8a5b"></i></sc-if>{{ saveLabel }}</div>
+        </sc-if>
+        <sc-if value="{{ isViewer }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ goEditor }}" style="background:var(--cbg);backdrop-filter:var(--cbf);padding:10px 16px;border-radius:11px;font:500 14px var(--fbody);cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.12)" style-hover="background:#fff">Edit</div>
+        </sc-if>
+        <div onClick="{{ openShare }}" style="{{ shareBtnStyle }}" style-hover="filter:brightness(1.07)" title="Share">{{ shareBtnInner }}</div>
+      </div>
+    </div>
+
+    <!-- EDITOR left panel -->
+    <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ editorPanelStyle }}">
+      <div style="background:var(--cbg);backdrop-filter:var(--cbf);border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.16);overflow:hidden;display:flex;flex-direction:column;min-height:0;flex:1">
+        <!-- points header -->
+        <div style="padding:16px 16px 12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(26,24,21,.08)">
+          <div style="font:600 14px var(--fbody)">Points <span style="font:400 12px var(--fmono);color:rgba(26,24,21,.45)">{{ pointCount }}</span></div>
+          <div onClick="{{ startPlacing }}" style="{{ placeBtnStyle }}">{{ placeBtnLabel }}</div>
+        </div>
+        <div style="overflow-y:auto;flex:1;padding:8px">
+          <sc-for list="{{ visiblePoints }}" as="p" hint-placeholder-count="2">
+            <div onClick="{{ p.onEdit }}" style="{{ p.rowStyle }}">
+              <div style="width:24px;height:24px;border-radius:7px;background:color-mix(in srgb, var(--accent) 14%, transparent);display:flex;align-items:center;justify-content:center;flex:none"><i class="{{ p.iconCls }}" style="font-size:11px;color:var(--accent)"></i></div>
+              <div style="flex:1;min-width:0;font:500 13.5px var(--fbody);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.rowTitle }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noPoints }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:26px 16px;text-align:center;font:400 13px/1.5 var(--fbody);color:rgba(26,24,21,.45)">No points yet.<br>Hit <b style="color:#1a1815">+ Add point</b>, click in the scene to drop one, then drag to set its size.</div>
+          </sc-if>
+        </div>
+        <!-- config -->
+        <div style="border-top:1px solid rgba(26,24,21,.08);padding:15px 16px">
+          <div style="font:600 10px var(--fmono);letter-spacing:.08em;text-transform:uppercase;color:rgba(26,24,21,.4);margin-bottom:14px">Config</div>
+          <div style="display:flex;align-items:center;gap:11px;margin-bottom:15px">
+            <div style="width:30px;height:30px;border-radius:9px;background:rgba(26,24,21,.06);display:flex;align-items:center;justify-content:center;flex:none"><i class="fa-solid fa-eye" style="font-size:12px;color:rgba(26,24,21,.55)"></i></div>
+            <div style="flex:1;min-width:0">
+              <div style="font:600 13.5px var(--fbody);color:#1a1815">Starting view</div>
+              <div style="font:400 11.5px var(--fbody);color:rgba(26,24,21,.45)">First look · {{ startLabel }}</div>
+            </div>
+            <div onClick="{{ setStartHere }}" style="display:inline-flex;align-items:center;gap:5px;font:600 11.5px var(--fbody);color:var(--accent);cursor:pointer;padding:6px 11px;border:1px solid color-mix(in srgb, var(--accent) 35%, transparent);border-radius:8px;flex:none" style-hover="background:color-mix(in srgb, var(--accent) 10%, transparent)" title="Use current view"><i class="fa-solid fa-location-crosshairs" style="font-size:10px"></i>Set</div>
+          </div>
+          <div style="height:1px;background:rgba(26,24,21,.08);margin:15px 0"></div>
+          <div style="display:flex;align-items:center;gap:11px">
+            <div style="width:30px;height:30px;border-radius:9px;background:rgba(26,24,21,.06);display:flex;align-items:center;justify-content:center;flex:none"><i class="fa-solid fa-compass" style="font-size:13px;color:rgba(26,24,21,.55)"></i></div>
+            <div style="flex:1;min-width:0">
+              <div style="font:600 13.5px var(--fbody);color:#1a1815">North</div>
+              <div style="font:400 11.5px var(--fbody);color:rgba(26,24,21,.45)"><sc-if value="{{ hasNorth }}" hint-placeholder-val="{{ true }}">Aligned to {{ northLabel }}</sc-if><sc-if value="{{ compassDisabled }}" hint-placeholder-val="{{ false }}">Not set yet</sc-if></div>
+            </div>
+            <div onClick="{{ setNorthHere }}" style="display:inline-flex;align-items:center;gap:5px;font:600 11.5px var(--fbody);color:var(--accent);cursor:pointer;padding:6px 11px;border:1px solid color-mix(in srgb, var(--accent) 35%, transparent);border-radius:8px;flex:none" style-hover="background:color-mix(in srgb, var(--accent) 10%, transparent)" title="Use current heading"><i class="fa-solid fa-location-crosshairs" style="font-size:10px"></i>Set</div>
+          </div>
+        </div>
+      </div>
+      <!-- TOUR: panos + their arrows, combined -->
+      <sc-if value="{{ showTour }}" hint-placeholder-val="{{ true }}">
+      <div style="background:var(--cbg);backdrop-filter:var(--cbf);border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.16);overflow:hidden;display:flex;flex-direction:column;min-height:0;max-height:340px">
+        <div style="padding:14px 14px 11px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(26,24,21,.08)">
+          <div style="font:600 14px var(--fbody)">Tour <span style="font:400 12px var(--fmono);color:rgba(26,24,21,.45)">· {{ sceneCount }} panos</span></div>
+          <div onClick="{{ goUpload }}" style="font:600 12.5px var(--fbody);padding:7px 12px;border-radius:9px;cursor:pointer;background:var(--accent);color:#faf8f4" style-hover="filter:brightness(1.06)">+ Add pano</div>
+        </div>
+        <div style="padding:9px 11px 5px;font:400 11px/1.45 var(--fbody);color:rgba(26,24,21,.45)">Click a pano to edit it. Connections point <b style="color:#1a1815;font-weight:600">from</b> the open pano — <b style="color:#1a1815;font-weight:600">Aim here</b> or drag them on the floor.</div>
+        <div style="overflow-y:auto;flex:1;padding:6px 11px 11px;display:flex;flex-direction:column;gap:7px">
+          <sc-for list="{{ tourRows }}" as="tr" hint-placeholder-count="3">
+            <div style="{{ tr.rowStyle }}">
+              <div onClick="{{ tr.onSwitch }}" style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                <div style="{{ tr.thumbStyle }}">
+                  <div onClick="{{ tr.onDetach }}" style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;border-radius:50%;background:#1a1815;color:#fff;font-size:10px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4)" style-hover="background:var(--accent)" title="Detach from tour">×</div>
+                  <div onClick="{{ tr.onSetEntry }}" style="{{ tr.entryStyle }}" title="{{ tr.entryTip }}"><i class="fa-solid fa-star" style="font-size:8px"></i></div>
+                </div>
+                <div style="flex:1;min-width:0;font:600 13.5px var(--fbody);color:#1a1815;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ tr.name }}</div>
+                <div onClick="{{ tr.onReplace }}" style="width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:rgba(26,24,21,.4);flex:none" style-hover="background:rgba(26,24,21,.07);color:#1a1815" title="Replace photo"><i class="fa-solid fa-camera-rotate" style="font-size:12px"></i></div>
+                <sc-if value="{{ tr.showCurrentTag }}" hint-placeholder-val="{{ false }}">
+                  <span style="font:600 10px var(--fmono);letter-spacing:.04em;text-transform:uppercase;color:var(--accent);flex:none">current</span>
+                </sc-if>
+                <sc-if value="{{ tr.showAdd }}" hint-placeholder-val="{{ false }}">
+                  <i class="fa-solid fa-chevron-right" style="font-size:10px;color:rgba(26,24,21,.3);flex:none"></i>
+                </sc-if>
+              </div>
+              <sc-if value="{{ tr.showLinked }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:5px">
+                  <div style="display:inline-flex;align-items:center;gap:5px;flex:1;min-width:0;font:400 11px var(--fmono);color:rgba(26,24,21,.5)"><i class="fa-solid fa-diamond-turn-right" style="font-size:11px;color:var(--accent)"></i>connection · {{ tr.bearing }}</div>
+                  <div onClick="{{ tr.onLeft }}" style="width:23px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid rgba(26,24,21,.14);cursor:pointer;font-size:13px;color:rgba(26,24,21,.6)" style-hover="background:rgba(26,24,21,.05)" title="Nudge left">‹</div>
+                  <div onClick="{{ tr.onRight }}" style="width:23px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:7px;border:1px solid rgba(26,24,21,.14);cursor:pointer;font-size:13px;color:rgba(26,24,21,.6)" style-hover="background:rgba(26,24,21,.05)" title="Nudge right">›</div>
+                  <div onClick="{{ tr.onAim }}" style="display:inline-flex;align-items:center;gap:5px;font:600 11.5px var(--fbody);color:var(--accent);cursor:pointer;padding:5px 9px;border:1px solid color-mix(in srgb, var(--accent) 35%, transparent);border-radius:8px" style-hover="background:color-mix(in srgb, var(--accent) 10%, transparent)" title="Aim where you're looking"><i class="fa-solid fa-location-crosshairs" style="font-size:10px"></i>Aim</div>
+                  <div onClick="{{ tr.onUnlink }}" style="width:23px;height:25px;display:flex;align-items:center;justify-content:center;border-radius:7px;cursor:pointer;font-size:15px;color:rgba(26,24,21,.4)" style-hover="background:color-mix(in srgb, #b5483a 12%, transparent);color:#b5483a" title="Remove connection">×</div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ tr.showAdd }}" hint-placeholder-val="{{ false }}">
+                <div onClick="{{ tr.onAddLink }}" style="display:flex;align-items:center;justify-content:center;gap:7px;padding:7px;border-radius:8px;border:1px dashed rgba(26,24,21,.2);cursor:pointer;font:600 11.5px var(--fbody);color:rgba(26,24,21,.6)" style-hover="border-color:var(--accent);color:var(--accent)"><i class="fa-solid fa-plus" style="font-size:10px"></i>Add connection to here</div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- standalone pano: not in a tour yet -->
+      <sc-if value="{{ standalone }}" hint-placeholder-val="{{ false }}">
+      <div style="background:var(--cbg);backdrop-filter:var(--cbf);border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.16);padding:13px">
+        <div style="display:flex;align-items:center;gap:11px;margin-bottom:12px">
+          <div style="{{ standaloneThumbStyle }}"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font:600 13px var(--fbody);color:#1a1815">Standalone pano</div>
+            <div style="font:400 11.5px/1.4 var(--fbody);color:rgba(26,24,21,.5)">Shareable on its own. Add it to a tour to link scenes.</div>
+          </div>
+        </div>
+        <div onClick="{{ toggleTourMenu }}" style="display:flex;align-items:center;justify-content:center;gap:8px;background:var(--accent);color:#fff;border-radius:11px;padding:11px;cursor:pointer;font:600 13.5px var(--fbody)" style-hover="filter:brightness(1.06)"><i class="fa-solid fa-diagram-project" style="font-size:12px"></i>Add to a tour</div>
+        <sc-if value="{{ tourMenuOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:11px;border-top:1px solid rgba(26,24,21,.08);padding-top:12px">
+            <div style="display:flex;align-items:center;gap:8px;background:rgba(26,24,21,.05);border-radius:9px;padding:9px 11px">
+              <i class="fa-solid fa-magnifying-glass" style="font-size:11px;color:rgba(26,24,21,.4)"></i>
+              <input value="{{ tourQuery }}" onInput="{{ onNewTourName }}" onKeyDown="{{ onTourKey }}" placeholder="Search a tour, or type a new name…" style="border:none;background:transparent;outline:none;font:500 13px var(--fbody);flex:1;min-width:0;color:#1a1815">
+            </div>
+            <div style="display:flex;flex-direction:column;gap:2px;margin-top:8px;max-height:176px;overflow-y:auto">
+              <sc-if value="{{ showCreateRow }}" hint-placeholder-val="{{ false }}">
+                <div onClick="{{ createTour }}" style="display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:8px;cursor:pointer;font:600 13px var(--fbody);color:var(--accent)" style-hover="background:color-mix(in srgb, var(--accent) 8%, transparent)"><i class="fa-solid fa-plus" style="font-size:11px"></i>Create “{{ tourQuery }}”</div>
+              </sc-if>
+              <sc-for list="{{ existingToursList }}" as="et" hint-placeholder-count="3">
+                <div onClick="{{ et.onClick }}" style="display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-radius:8px;cursor:pointer;font:500 13px var(--fbody);color:#1a1815" style-hover="background:rgba(26,24,21,.05)"><span style="display:flex;align-items:center;gap:9px"><i class="fa-solid fa-layer-group" style="font-size:11px;color:rgba(26,24,21,.4)"></i>{{ et.name }}</span><i class="fa-solid fa-plus" style="font-size:10px;color:var(--accent)"></i></div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <!-- placing hint -->
+    <sc-if value="{{ placing }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;top:74px;left:50%;transform:translateX(-50%);pointer-events:none;background:#1a1815;color:#faf8f4;padding:9px 16px;border-radius:999px;font:500 13px var(--fbody);display:flex;align-items:center;gap:9px;box-shadow:0 6px 20px rgba(0,0,0,.25)"><span style="width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pn-pulse 2s infinite"></span>Click to drop · hold &amp; drag up or down to size</div>
+    </sc-if>
+
+    <!-- nav arrows: screen-anchored, rotate toward target pano -->
+    <div ref="{{ navArrowsRef }}" style="position:absolute;inset:0;pointer-events:none">
+      <sc-for list="{{ navArrows }}" as="a" hint-placeholder-count="2">
+        <div onClick="{{ a.onClick }}" onPointerDown="{{ a.onAimDown }}" data-yaw="{{ a.yaw }}" style="position:absolute;top:74%;left:50%;pointer-events:auto;cursor:pointer;transition:filter .15s;filter:drop-shadow(0 4px 9px rgba(0,0,0,.55))" style-hover="filter:drop-shadow(0 7px 15px rgba(0,0,0,.72)) brightness(1.12)">
+          <div style="position:relative;width:64px;height:64px">
+            <div class="pn-ring"></div>
+            <svg width="64" height="64" viewBox="0 0 66 66" fill="none" style="position:relative;display:block">
+              <circle cx="33" cy="33" r="29" fill="rgba(16,14,11,.34)"></circle>
+              <circle cx="33" cy="33" r="29" stroke="rgba(255,255,255,.5)" stroke-width="1.5"></circle>
+              <path d="M19 36 L33 22 L47 36" stroke="rgba(0,0,0,.4)" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="M19 36 L33 22 L47 36" stroke="#ffffff" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path d="M23 47 L33 37 L43 47" stroke="rgba(255,255,255,.6)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- pano controls (cluster or side, set by 'controls' prop) -->
+    <div style="{{ controlsWrapStyle }}">
+      <sc-for list="{{ controlButtons }}" as="b" hint-placeholder-count="4">
+        <div onClick="{{ b.onClick }}" style="{{ b.style }}" title="{{ b.title }}">{{ b.el }}</div>
+      </sc-for>
+    </div>
+
+    <!-- minimap (viewer) — collapsible, closed by default -->
+    <sc-if value="{{ mapOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="pn-fade" style="{{ mapPanelStyle }}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px">
+        <div style="font:500 11px var(--fmono);color:rgba(26,24,21,.5);letter-spacing:.03em;text-transform:uppercase">Tour map</div>
+        <div onClick="{{ toggleMap }}" style="font-size:16px;line-height:1;color:rgba(26,24,21,.4);cursor:pointer" style-hover="color:#1a1815">×</div>
+      </div>
+      <div style="position:relative;height:108px;border-radius:9px;overflow:hidden;border:1px solid rgba(26,24,21,.07);background:radial-gradient(120% 90% at 50% 30%, #f3f0e9, #e2ddd2)">
+        <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none"><polyline points="{{ mapLine }}" fill="none" stroke="rgba(26,24,21,.3)" stroke-width="1.4" stroke-dasharray="3 3" stroke-linecap="round" vector-effect="non-scaling-stroke"></polyline></svg>
+        <div ref="{{ mapDirRef }}" style="{{ mapDirStyle }}">
+          <svg width="46" height="46" viewBox="0 0 46 46" style="display:block">
+            <defs><linearGradient id="pnfov" x1="0" y1="23" x2="0" y2="3" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="var(--accent)" stop-opacity="0.55"></stop><stop offset="1" stop-color="var(--accent)" stop-opacity="0.04"></stop></linearGradient></defs>
+            <path d="M23 23 L8 3 L38 3 Z" fill="url(#pnfov)"></path>
+          </svg>
+        </div>
+        <sc-for list="{{ mapNodes }}" as="m" hint-placeholder-count="3">
+          <div onClick="{{ m.onClick }}" style="{{ m.style }}"></div>
+        </sc-for>
+      </div>
+    </div>
+    </sc-if>
+    <sc-if value="{{ mapClosed }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ toggleMap }}" style="{{ mapChipStyle }}" style-hover="background:rgba(255,255,255,.97)">
+        <div style="display:grid;grid-template-columns:repeat(2,4px);grid-template-rows:repeat(2,4px);gap:2px"><div style="width:4px;height:4px;border-radius:1px;background:var(--accent)"></div><div style="width:4px;height:4px;border-radius:1px;background:rgba(26,24,21,.3)"></div><div style="width:4px;height:4px;border-radius:1px;background:rgba(26,24,21,.3)"></div><div style="width:4px;height:4px;border-radius:1px;background:rgba(26,24,21,.3)"></div></div>
+        <div style="font:500 12px var(--fbody);color:rgba(26,24,21,.7)">Map</div>
+      </div>
+    </sc-if>
+
+    <!-- compass -->
+    <sc-if value="{{ showCompass }}" hint-placeholder-val="{{ false }}">
+      <div ref="{{ compassRef }}" style="position:absolute;top:74px;right:18px;width:46px;height:46px;border-radius:50%;background:var(--cbg);backdrop-filter:var(--cbf);pointer-events:none;box-shadow:0 2px 10px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center">
+        <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:15px solid var(--accent)"></div>
+        <div style="position:absolute;bottom:5px;font:600 8px var(--fbody);color:rgba(26,24,21,.4)">N</div>
+      </div>
+    </sc-if>
+
+  </div>
+  </sc-if>
+
+
+  <!-- ============ POINT EDITOR POPOVER ============ -->
+  <sc-if value="{{ hasActivePoint }}" hint-placeholder-val="{{ false }}">
+  <div style="{{ modalOverlayStyle }}">
+    <div class="pn-fade" style="{{ modalCardStyle }}">
+      <div style="padding:18px 22px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(26,24,21,.1)">
+        <div style="font:600 16px var(--fbody)">Edit point</div>
+        <div onClick="{{ toggleSize }}" style="display:flex;align-items:center;gap:6px;font:500 12px var(--fmono);color:var(--depth);cursor:pointer;padding:5px 10px;border-radius:8px;background:color-mix(in srgb, var(--depth) 10%, transparent)" style-hover="background:color-mix(in srgb, var(--depth) 18%, transparent)" title="Adjust size"><i class="fa-solid fa-up-right-and-down-left-from-center" style="font-size:10px"></i>Size {{ depthLabel }}×<i class="fa-solid fa-chevron-down" style="font-size:8px;opacity:.6"></i></div>
+      </div>
+      <div style="padding:22px">
+        <div style="font:500 12px var(--fbody);color:rgba(26,24,21,.6);margin-bottom:7px">Title</div>
+        <input value="{{ draftTitle }}" onInput="{{ onDraftTitle }}" placeholder="{{ titleFieldPh }}" style="width:100%;padding:11px 13px;border:1px solid rgba(26,24,21,.16);border-radius:10px;font:500 15px var(--fbody);outline:none;margin-bottom:18px" style-focus="border-color:var(--accent)">
+        <div style="font:500 12px var(--fbody);color:rgba(26,24,21,.6);margin-bottom:8px">Icon</div>
+        <div onClick="{{ toggleIconPicker }}" style="display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid rgba(26,24,21,.16);border-radius:10px;cursor:pointer;margin-bottom:{{ iconPickerMb }}" style-hover="border-color:var(--accent)">
+          <div style="width:30px;height:30px;border-radius:8px;background:color-mix(in srgb, var(--accent) 12%, transparent);display:flex;align-items:center;justify-content:center"><i class="{{ currentIconCls }}" style="font-size:14px;color:var(--accent)"></i></div>
+          <div style="flex:1;font:500 13.5px var(--fbody);color:rgba(26,24,21,.7)">Choose an icon</div>
+          <i class="{{ iconChevron }}" style="font-size:11px;color:rgba(26,24,21,.4)"></i>
+        </div>
+        <sc-if value="{{ iconPickerOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px solid rgba(26,24,21,.12);border-radius:10px;padding:10px;margin-bottom:18px">
+            <div style="display:flex;align-items:center;gap:8px;background:rgba(26,24,21,.05);border-radius:8px;padding:7px 11px;margin-bottom:9px">
+              <i class="fa-solid fa-magnifying-glass" style="font-size:11px;color:rgba(26,24,21,.4)"></i>
+              <input value="{{ iconQuery }}" onInput="{{ onIconQuery }}" placeholder="Search icons…" style="border:none;background:transparent;outline:none;font:500 13px var(--fbody);flex:1;color:#1a1815">
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:5px;max-height:148px;overflow-y:auto">
+              <sc-for list="{{ iconChoices }}" as="ic" hint-placeholder-count="30">
+                <div onClick="{{ ic.onClick }}" style="{{ ic.style }}"><i class="{{ ic.cls }}" style="font-size:12px"></i></div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ noIcons }}" hint-placeholder-val="{{ false }}"><div style="text-align:center;padding:14px;font:400 12px var(--fbody);color:rgba(26,24,21,.4)">No icons match “{{ iconQuery }}”.</div></sc-if>
+          </div>
+        </sc-if>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font:500 12px var(--fbody);color:rgba(26,24,21,.6)">Description</div>
+          <div style="display:flex;align-items:center;gap:3px;background:rgba(26,24,21,.05);border-radius:9px;padding:3px">
+            <div onMouseDown="{{ rteBold }}" style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;font:700 14px var(--fbody)" style-hover="background:#fff" title="Bold">B</div>
+            <div onMouseDown="{{ rteItalic }}" style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;font:italic 600 14px var(--fbody)" style-hover="background:#fff" title="Italic">i</div>
+            <div onMouseDown="{{ rteH }}" style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer;font:700 12px var(--fbody)" style-hover="background:#fff" title="Heading">H</div>
+            <div onMouseDown="{{ rteUl }}" style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer" style-hover="background:#fff" title="Bullet list"><i class="fa-solid fa-list-ul" style="font-size:11px"></i></div>
+            <div onMouseDown="{{ rteLink }}" style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer" style-hover="background:#fff" title="Link"><i class="fa-solid fa-link" style="font-size:11px"></i></div>
+            <div style="width:1px;height:16px;background:rgba(26,24,21,.12);margin:0 1px"></div>
+            <div onClick="{{ toggleMedia }}" style="{{ mediaBtnStyle }}" style-hover="background:#fff" title="Embed image, audio, video or YouTube (link only — not hosted)"><i class="fa-solid fa-photo-film" style="font-size:11px;color:var(--accent)"></i></div>
+          </div>
+        </div>
+        <div ref="{{ mdRef }}" contentEditable="true" data-ph="{{ mdFieldPh }}" class="pn-rte" style="min-height:104px;padding:12px 14px;border:1px solid rgba(26,24,21,.16);border-radius:10px;background:#fff" style-focus="border-color:var(--accent)"></div>
+        <sc-if value="{{ mediaOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:9px;border:1px solid rgba(26,24,21,.14);border-radius:10px;padding:11px">
+            <sc-if value="{{ mediaTypeChooser }}" hint-placeholder-val="{{ true }}">
+              <div style="font:500 11px var(--fmono);color:rgba(26,24,21,.45);margin-bottom:9px">What are you adding? We only link to it — never host it.</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <sc-for list="{{ mediaTypes }}" as="mt" hint-placeholder-count="5">
+                  <div onClick="{{ mt.onClick }}" style="display:flex;align-items:center;gap:7px;padding:8px 12px;border:1px solid rgba(26,24,21,.14);border-radius:9px;cursor:pointer;font:500 13px var(--fbody)" style-hover="border-color:var(--accent);background:color-mix(in srgb, var(--accent) 7%, transparent)"><i class="{{ mt.ic }}" style="font-size:12px;color:var(--accent)"></i>{{ mt.label }}</div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ mediaTypeChosen }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:9px;margin-bottom:9px">
+                <div onClick="{{ backMediaType }}" style="cursor:pointer;color:rgba(26,24,21,.5);display:flex;align-items:center" style-hover="color:#1a1815"><i class="fa-solid fa-chevron-left" style="font-size:11px"></i></div>
+                <div style="font:600 13px var(--fbody)">{{ mediaTypeLabel }}</div>
+                <div style="font:400 11px var(--fmono);color:rgba(26,24,21,.4)">· {{ mediaEmbedNote }}</div>
+              </div>
+              <sc-if value="{{ mediaIsLink }}" hint-placeholder-val="{{ false }}">
+                <input value="{{ mediaLabel }}" onInput="{{ onMediaLabel }}" placeholder="Link text (optional)" style="width:100%;padding:9px 12px;border:1px solid rgba(26,24,21,.16);border-radius:9px;font:500 13px var(--fbody);outline:none;margin-bottom:7px" style-focus="border-color:var(--accent)">
+              </sc-if>
+              <div style="display:flex;gap:8px">
+                <input value="{{ mediaUrl }}" onInput="{{ onMediaUrl }}" onKeyDown="{{ onMediaKey }}" placeholder="{{ mediaPh }}" style="flex:1;min-width:0;padding:9px 12px;border:1px solid var(--accent);border-radius:9px;font:500 13px var(--fbody);outline:none">
+                <div onClick="{{ insertMedia }}" style="padding:9px 16px;border-radius:9px;background:#1a1815;color:#faf8f4;font:600 13px var(--fbody);cursor:pointer;display:flex;align-items:center" style-hover="background:#000">Insert</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+        <div style="font:400 10.5px var(--fmono);color:rgba(26,24,21,.4);margin-top:7px">Type freely · select text and use the toolbar to format · saved as Markdown</div>
+      </div>
+      <div style="padding:16px 22px;display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(26,24,21,.1)">
+        <div style="display:flex;align-items:center;gap:4px">
+          <div onClick="{{ deletePoint }}" style="display:inline-flex;align-items:center;gap:6px;font:500 13.5px var(--fbody);color:#b5483a;cursor:pointer;padding:7px 10px;border-radius:8px" style-hover="background:rgba(181,72,58,.08)"><i class="fa-solid fa-trash-can" style="font-size:12px"></i>Delete</div>
+          <div onClick="{{ repositionPoint }}" style="display:inline-flex;align-items:center;gap:6px;font:500 13.5px var(--fbody);color:rgba(26,24,21,.65);cursor:pointer;padding:7px 10px;border-radius:8px" style-hover="background:rgba(26,24,21,.06);color:#1a1815" title="Move this point in the scene"><i class="fa-solid fa-arrows-up-down-left-right" style="font-size:12px"></i>Move</div>
+          <div onClick="{{ duplicatePoint }}" style="display:inline-flex;align-items:center;gap:6px;font:500 13.5px var(--fbody);color:rgba(26,24,21,.65);cursor:pointer;padding:7px 10px;border-radius:8px" style-hover="background:rgba(26,24,21,.06);color:#1a1815" title="Duplicate this point"><i class="fa-solid fa-clone" style="font-size:12px"></i>Duplicate</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <div onClick="{{ cancelPoint }}" style="font:500 14px var(--fbody);padding:10px 16px;border-radius:10px;cursor:pointer;color:rgba(26,24,21,.7)" style-hover="background:rgba(26,24,21,.06)">Cancel</div>
+          <div onClick="{{ savePoint }}" style="font:600 14px var(--fbody);padding:10px 20px;border-radius:10px;background:#1a1815;color:#faf8f4;cursor:pointer" style-hover="background:#000">Save</div>t</div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ sizeOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ toggleSize }}" style="position:fixed;inset:0;z-index:61;pointer-events:auto;cursor:pointer" title="Click anywhere to finish"></div>
+      <div style="position:fixed;top:74px;left:50%;transform:translateX(-50%);z-index:62;background:#fff;border-radius:13px;box-shadow:0 16px 44px rgba(0,0,0,.3);padding:12px 16px;display:flex;align-items:center;gap:13px;pointer-events:auto;width:min(390px,92vw)">
+        <i class="fa-solid fa-up-right-and-down-left-from-center" style="font-size:12px;color:var(--depth)"></i>
+        <span style="font:500 12px var(--fbody);color:rgba(26,24,21,.6);white-space:nowrap">Size</span>
+        <input type="range" min="0.3" max="2.6" step="0.05" value="{{ draftDepth }}" onInput="{{ onDepth }}" style="flex:1;min-width:0;accent-color:var(--accent)">
+        <span style="font:600 12px var(--fmono);color:var(--depth);width:46px;text-align:right">{{ depthLabel }}×</span>
+        <div onClick="{{ toggleSize }}" style="font:600 12.5px var(--fbody);color:#fff;background:#1a1815;padding:7px 15px;border-radius:9px;cursor:pointer" style-hover="background:#000">Done</div>
+      </div>
+    </sc-if>
+  </div>
+  </sc-if>
+  <sc-if value="{{ hasViewerPoint }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeViewerPoint }}" style="position:fixed;inset:0;z-index:55;pointer-events:auto">
+    <div onClick="{{ stop }}" class="pn-fade" style="position:absolute;right:18px;top:74px;bottom:auto;width:340px;max-height:72vh;overflow-y:auto;background:rgba(255,255,255,.97);backdrop-filter:var(--cbf);border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="padding:18px 20px 14px;border-bottom:1px solid rgba(26,24,21,.08);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+        <div style="display:flex;align-items:flex-start;gap:11px">
+          <div style="width:30px;height:30px;border-radius:8px;background:color-mix(in srgb, var(--accent) 14%, transparent);display:flex;align-items:center;justify-content:center;flex:none;margin-top:2px"><i class="{{ viewerIconCls }}" style="color:var(--accent);font-size:14px"></i></div>
+          <div style="font-family:var(--fdisp);font-size:23px;line-height:1.18">{{ viewerTitle }}</div>
+        </div>
+        <div onClick="{{ closeViewerPoint }}" style="font-size:20px;color:rgba(26,24,21,.4);cursor:pointer;line-height:1" style-hover="color:#1a1815">×</div>
+      </div>
+      <div style="padding:16px 20px 20px;font:400 14.5px/1.6 var(--fbody);color:rgba(26,24,21,.82)">{{ viewerBody }}</div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ PROCESSING CHIP ============ -->
+  <sc-if value="{{ showProc }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;right:18px;bottom:22px;z-index:45;width:262px;background:rgba(20,18,14,.92);backdrop-filter:var(--cbf);border-radius:14px;padding:15px 16px;color:#f4f1ea;box-shadow:0 10px 34px rgba(0,0,0,.3);pointer-events:auto">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px">
+      <sc-if value="{{ procReady }}" hint-placeholder-val="{{ false }}"><div style="width:16px;height:16px;border-radius:50%;background:#5fae6e;display:flex;align-items:center;justify-content:center;font-size:10px;color:#0c0a08">✓</div></sc-if>
+      <sc-if value="{{ procBusy }}" hint-placeholder-val="{{ true }}"><div style="width:15px;height:15px;border:2px solid rgba(244,241,234,.25);border-top-color:var(--accent);border-radius:50%;animation:pn-spin .8s linear infinite"></div></sc-if>
+      <div style="font:600 13.5px var(--fbody)">{{ procTitle }}</div>
+    </div>
+    <sc-if value="{{ procUploading }}" hint-placeholder-val="{{ true }}">
+      <div style="font:400 11px var(--fmono);color:rgba(244,241,234,.55);display:flex;justify-content:space-between;margin-bottom:5px"><span>Upload</span><span>{{ procPct }}</span></div>
+      <div style="height:4px;background:rgba(244,241,234,.13);border-radius:99px;overflow:hidden"><div style="{{ tilingBarStyle }}"></div></div>
+    </sc-if>
+    <sc-if value="{{ procProcessing }}" hint-placeholder-val="{{ false }}">
+      <div style="font:400 11px var(--fmono);color:rgba(244,241,234,.55);display:flex;justify-content:space-between;margin-bottom:5px"><span>Tiling</span><span>Working…</span></div>
+      <div style="position:relative;height:4px;background:rgba(244,241,234,.13);border-radius:99px;overflow:hidden"><div style="{{ indetBarStyle }}"></div></div>
+    </sc-if>
+    <sc-if value="{{ procReady }}" hint-placeholder-val="{{ false }}">
+      <div style="font:400 11px var(--fmono);color:rgba(244,241,234,.55);display:flex;justify-content:space-between;margin-bottom:5px"><span>Upload</span><span>Done</span></div>
+      <div style="height:4px;background:rgba(244,241,234,.13);border-radius:99px;overflow:hidden"><div style="{{ tilingBarStyle }}"></div></div>
+    </sc-if>
+    <div style="font:400 10.5px var(--fmono);color:rgba(244,241,234,.4);margin-top:11px">{{ procNote }}</div>
+  </div>
+  </sc-if>
+
+  <!-- ============ SHARE SHEET ============ -->
+  <sc-if value="{{ showShare }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeShare }}" style="position:fixed;inset:0;z-index:65;background:rgba(20,18,14,.5);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:auto">
+    <div onClick="{{ stop }}" class="pn-fade" style="width:100%;max-width:440px;background:#faf8f4;border-radius:20px;box-shadow:0 40px 100px rgba(0,0,0,.4);overflow:hidden">
+      <div style="padding:22px 24px;border-bottom:1px solid rgba(26,24,21,.1);display:flex;align-items:center;justify-content:space-between">
+        <div style="font:600 17px var(--fbody)">Share this tour</div>
+        <div onClick="{{ closeShare }}" style="font-size:22px;color:rgba(26,24,21,.4);cursor:pointer;line-height:1" style-hover="color:#1a1815">×</div>
+      </div>
+      <div style="padding:22px 24px">
+        <div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-radius:11px;background:color-mix(in srgb, var(--accent) 7%, #fff);border:1px solid color-mix(in srgb, var(--accent) 22%, transparent);margin-bottom:20px">
+          <i class="{{ curVisIcon }}" style="font-size:13px;color:{{ curVisColor }}"></i>
+          <div style="flex:1;font:500 13px var(--fbody);color:#1a1815">This tour is <b>{{ curVisLabel }}</b></div>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:18px;background:rgba(26,24,21,.05);padding:4px;border-radius:11px">
+          <div onClick="{{ onTabLink }}" style="{{ tabLinkStyle }}">Link</div>
+          <div onClick="{{ onTabPrivacy }}" style="{{ tabPrivacyStyle }}">Privacy</div>
+          <div onClick="{{ onTabEmbed }}" style="{{ tabEmbedStyle }}">Embed</div>
+        </div>
+
+        <sc-if value="{{ shareTabLink }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;gap:14px;margin-bottom:22px">
+            <sc-for list="{{ socials }}" as="s" hint-placeholder-count="4">
+              <div onClick="{{ s.onClick }}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;cursor:pointer">
+                <div style="{{ s.iconStyle }}">{{ s.glyph }}</div>
+                <div style="font:500 12px var(--fbody);color:rgba(26,24,21,.65)">{{ s.label }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="font:500 12px var(--fbody);color:rgba(26,24,21,.6);margin-bottom:7px">Link</div>
+          <div style="display:flex;gap:8px">
+            <div style="flex:1;padding:11px 13px;background:rgba(26,24,21,.05);border-radius:10px;font:400 13px var(--fmono);color:rgba(26,24,21,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ shareUrl }}</div>
+            <div onClick="{{ copyLink }}" style="padding:11px 17px;background:#1a1815;color:#faf8f4;border-radius:10px;font:500 13px var(--fbody);cursor:pointer;white-space:nowrap" style-hover="background:#000">{{ copyLabel }}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:9px">
+            <span style="font:400 12px var(--fbody);color:rgba(26,24,21,.45)">Custom link:</span>
+            <sc-if value="{{ editingSlug }}" hint-placeholder-val="{{ false }}">
+              <span style="font:400 12px var(--fmono);color:rgba(26,24,21,.45)">panote.io/s/</span>
+              <input value="{{ slugDraft }}" onInput="{{ onSlugInput }}" onKeyDown="{{ onSlugKey }}" onBlur="{{ saveSlug }}" autofocus style="flex:1;min-width:0;background:transparent;border:none;border-bottom:1.5px solid var(--accent);outline:none;font:400 12px var(--fmono);color:#1a1815;padding:0 0 2px">
+              <div onClick="{{ saveSlug }}" style="font:600 12px var(--fbody);color:var(--accent);cursor:pointer">Save</div>
+            </sc-if>
+            <sc-if value="{{ slugText }}" hint-placeholder-val="{{ true }}">
+              <span onClick="{{ startEditSlug }}" style="font:500 12px var(--fmono);color:#1a1815;cursor:pointer;display:inline-flex;align-items:center;gap:5px" style-hover="color:var(--accent)">/{{ slug }} <i class="fa-solid fa-pencil" style="font-size:9px;color:rgba(26,24,21,.4)"></i></span>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ shareTabPrivacy }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:9px;margin-bottom:18px">
+            <sc-for list="{{ shareVisOpts }}" as="v" hint-placeholder-count="2">
+              <div onClick="{{ v.onClick }}" style="{{ v.rowStyle }}">
+                <div style="{{ v.iconWrap }}"><i class="{{ v.icon }}" style="font-size:13px"></i></div>
+                <div style="flex:1"><div style="font:600 14px var(--fbody);color:#1a1815">{{ v.label }}</div><div style="font:400 12px/1.45 var(--fbody);color:rgba(26,24,21,.55);margin-top:2px">{{ v.desc }}</div></div>
+                <sc-if value="{{ v.active }}" hint-placeholder-val="{{ false }}"><i class="fa-solid fa-circle-check" style="font-size:16px;color:var(--accent);margin-top:3px"></i></sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ shareTabEmbed }}" hint-placeholder-val="{{ false }}">
+          <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:8px">What to embed</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:16px">
+            <sc-for list="{{ embedScopeOpts }}" as="o" hint-placeholder-count="2">
+              <div onClick="{{ o.onClick }}" style="{{ o.style }}"><div style="font:600 13px var(--fbody)">{{ o.label }}</div><div style="font:400 11.5px/1.35 var(--fbody);opacity:.62;margin-top:2px">{{ o.desc }}</div></div>
+            </sc-for>
+          </div>
+          <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:8px">Height</div>
+          <div style="display:flex;gap:7px;margin-bottom:16px">
+            <sc-for list="{{ embedSizeOpts }}" as="o" hint-placeholder-count="3">
+              <div onClick="{{ o.onClick }}" style="{{ o.style }}">{{ o.label }}</div>
+            </sc-for>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45)">Embed code</div>
+            <div onClick="{{ copyEmbed }}" style="{{ embedCopyStyle }}">{{ embedCopyLabel }}</div>
+          </div>
+          <div style="padding:12px 13px;background:#14130f;border-radius:10px;font:400 12px/1.55 var(--fmono);color:#9fd0e0;white-space:pre-wrap;word-break:break-all">{{ embedCode }}</div>
+          <div style="height:1px;background:rgba(26,24,21,.09);margin:18px 0 15px"></div>
+          <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:11px">How to add it</div>
+          <div style="display:flex;flex-direction:column;gap:11px">
+            <sc-for list="{{ embedSteps }}" as="s" hint-placeholder-count="3">
+              <div style="display:flex;gap:11px;align-items:flex-start">
+                <div style="flex:none;width:19px;height:19px;border-radius:50%;background:rgba(26,24,21,.08);color:rgba(26,24,21,.6);font:600 11px var(--fmono);display:flex;align-items:center;justify-content:center;margin-top:1px">{{ s.n }}</div>
+                <div style="flex:1"><div style="font:600 13px var(--fbody);color:#1a1815">{{ s.title }}</div><div style="font:400 12.5px/1.5 var(--fbody);color:rgba(26,24,21,.58);margin-top:2px">{{ s.body }}</div></div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:9px;align-items:flex-start;margin-top:16px;padding:11px 12px;border-radius:11px;background:rgba(26,24,21,.045)">
+            <i class="fa-solid fa-circle-info" style="font-size:12px;color:rgba(26,24,21,.4);margin-top:2px"></i>
+            <div style="font:400 12px/1.5 var(--fbody);color:rgba(26,24,21,.55)">The embed is responsive and full-resolution, with no watermark. It picks up your tour settings — controls, map and compass — exactly as you set them.</div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ TOUR SETTINGS ============ -->
+  <sc-if value="{{ tourCfgOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeTourCfg }}" style="position:fixed;inset:0;z-index:64"></div>
+  <div class="pn-fade" style="position:absolute;top:72px;right:18px;z-index:65;width:300px;background:var(--cbg);backdrop-filter:var(--cbf);border-radius:16px;box-shadow:0 18px 50px rgba(0,0,0,.26);padding:18px;pointer-events:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div style="font-family:var(--fdisp);font-size:18px;color:#1a1815">Tour settings</div>
+      <div onClick="{{ closeTourCfg }}" style="font-size:18px;color:rgba(26,24,21,.4);cursor:pointer;line-height:1" style-hover="color:#1a1815">×</div>
+    </div>
+    <div style="font:400 11px var(--fmono);color:rgba(26,24,21,.42);margin:2px 0 16px">Applies to every pano in this tour</div>
+
+    <div style="font:600 11px var(--fmono);letter-spacing:.04em;text-transform:uppercase;color:rgba(26,24,21,.5);margin-bottom:8px">Controls position</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+      <sc-for list="{{ ctrlPosOpts }}" as="o" hint-placeholder-count="2">
+        <div onClick="{{ o.onClick }}" style="{{ o.style }}">{{ o.label }}</div>
+      </sc-for>
+    </div>
+
+    <div style="height:1px;background:rgba(26,24,21,.08);margin:16px 0 14px"></div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div><div style="font:600 13.5px var(--fbody);color:#1a1815">Auto-rotate</div><div style="font:400 11.5px var(--fbody);color:rgba(26,24,21,.5);margin-top:1px">Slowly pans when idle</div></div>
+      <div onClick="{{ toggleAuto }}" style="{{ tourAutoToggleStyle }}"><div style="{{ tourAutoKnobStyle }}"></div></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div><div style="font:600 13.5px var(--fbody);color:#1a1815">Compass</div><div style="font:400 11.5px var(--fbody);color:rgba(26,24,21,.5);margin-top:1px">Needs a north set per pano</div></div>
+      <div onClick="{{ toggleTourCompass }}" style="{{ tourCompassToggleStyle }}"><div style="{{ tourCompassKnobStyle }}"></div></div>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between">
+      <div><div style="font:600 13.5px var(--fbody);color:#1a1815">Tour map</div><div style="font:400 11.5px var(--fbody);color:rgba(26,24,21,.5);margin-top:1px">Mini-map, bottom-left corner</div></div>
+      <div onClick="{{ toggleTourMap }}" style="{{ tourMapToggleStyle }}"><div style="{{ tourMapKnobStyle }}"></div></div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ OWNER INSIGHTS ============ -->
+  <sc-if value="{{ insightsOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeInsights }}" style="position:fixed;inset:0;z-index:66;background:rgba(20,18,14,.5);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:auto">
+    <div onClick="{{ stop }}" class="pn-fade" style="width:100%;max-width:560px;max-height:88vh;overflow-y:auto;background:#faf8f4;border-radius:20px;box-shadow:0 40px 100px rgba(0,0,0,.4);color:#1a1815;font-family:var(--fbody);font-weight:400;text-align:left">
+      <div style="padding:22px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid rgba(26,24,21,.1);position:sticky;top:0;background:#faf8f4;z-index:1">
+        <div><div style="font:600 17px var(--fbody);color:#1a1815;letter-spacing:-.01em">Insights</div><div style="font:400 12px var(--fmono);color:rgba(26,24,21,.45);margin-top:3px">{{ title }} · last 14 days</div></div>
+        <div onClick="{{ closeInsights }}" style="font-size:22px;color:rgba(26,24,21,.4);cursor:pointer;line-height:1" style-hover="color:#1a1815">×</div>
+      </div>
+      <div style="padding:22px 24px 24px">
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:26px">
+          <div style="border:1px solid rgba(26,24,21,.1);border-radius:14px;padding:14px 16px;background:#fff"><div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45)">Total views</div><div style="font-family:var(--fdisp);font-weight:400;font-size:30px;line-height:1.1;color:#1a1815;margin-top:7px">{{ insTotalViews }}</div></div>
+          <div style="border:1px solid rgba(26,24,21,.1);border-radius:14px;padding:14px 16px;background:#fff"><div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45)">Avg. time</div><div style="font-family:var(--fdisp);font-weight:400;font-size:30px;line-height:1.1;color:#1a1815;margin-top:7px">{{ insAvgTime }}</div></div>
+        </div>
+        <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:12px">Views over time</div>
+        <div style="display:flex;align-items:flex-end;gap:4px;height:96px;margin-bottom:30px">
+          <sc-for list="{{ insViewBars }}" as="b" hint-placeholder-count="14">
+            <div style="{{ b.style }}" title="{{ b.label }}"></div>
+          </sc-for>
+        </div>
+        <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:14px">By pano</div>
+        <div style="display:flex;flex-direction:column;gap:13px;margin-bottom:30px">
+          <sc-for list="{{ insPanoStats }}" as="p" hint-placeholder-count="3">
+            <div>
+              <div style="display:flex;justify-content:space-between;gap:12px;font:500 13.5px var(--fbody);color:#1a1815;margin-bottom:6px"><span>{{ p.name }}</span><span style="font:400 12px var(--fmono);color:rgba(26,24,21,.5)">{{ p.views }} views</span></div>
+              <div style="height:7px;border-radius:99px;background:rgba(26,24,21,.08);overflow:hidden"><div style="{{ p.barStyle }}"></div></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font:500 11px var(--fmono);letter-spacing:.05em;text-transform:uppercase;color:rgba(26,24,21,.45);margin-bottom:8px">Most-opened points</div>
+        <div style="display:flex;flex-direction:column">
+          <sc-for list="{{ insTopPoints }}" as="p" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(26,24,21,.06)">
+              <div style="display:flex;align-items:center;gap:11px"><span style="font:600 11px var(--fmono);color:rgba(26,24,21,.4)">{{ p.rank }}</span><span style="font:500 13.5px var(--fbody);color:#1a1815">{{ p.title }}</span></div>
+              <span style="font:400 12px var(--fmono);color:rgba(26,24,21,.5)">{{ p.views }} opens</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ SIGN IN (Auth0 · social SSO only) ============ -->
+  <sc-if value="{{ signInOpen }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeSignIn }}" style="position:fixed;inset:0;z-index:66;background:rgba(20,18,14,.5);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:auto">
+    <div onClick="{{ stop }}" class="pn-fade" style="width:100%;max-width:392px;background:#faf8f4;border-radius:20px;box-shadow:0 40px 100px rgba(0,0,0,.4);padding:32px 30px;position:relative">
+      <div onClick="{{ closeSignIn }}" style="position:absolute;top:18px;right:20px;font-size:22px;color:rgba(26,24,21,.4);cursor:pointer;line-height:1" style-hover="color:#1a1815">×</div>
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:24px">
+        <div style="width:38px;height:38px;color:#1a1815;margin-bottom:14px">{{ logoMark }}</div>
+        <div style="font-family:var(--fdisp);font-size:27px;line-height:1.1">Sign in to panote</div>
+        <div style="font:400 14px/1.5 var(--fbody);color:rgba(26,24,21,.55);margin-top:8px">Use an account you already have —<br>no new password to remember.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ ssoProviders }}" as="p" hint-placeholder-count="3">
+          <div onClick="{{ p.onClick }}" style="display:flex;align-items:center;gap:13px;padding:12px 16px;border:1px solid rgba(26,24,21,.16);border-radius:12px;cursor:pointer;background:#fff" style-hover="background:rgba(26,24,21,.03);border-color:rgba(26,24,21,.32)">
+            <div style="width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:#1a1815;font:700 15px var(--fbody)">{{ p.glyph }}</div>
+            <div style="font:500 15px var(--fbody);color:#1a1815">{{ p.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:22px;font:400 11px var(--fmono);color:rgba(26,24,21,.42)">
+        <span style="width:10px;height:8px;border:1.4px solid currentColor;border-radius:2px;border-top:none;position:relative;display:inline-block;margin-top:3px"></span>Secured by Auth0
+      </div>
+      <div style="text-align:center;margin-top:13px;font:400 11.5px/1.5 var(--fbody);color:rgba(26,24,21,.4)">By continuing you agree to panote's <span style="text-decoration:underline">Terms</span> &amp; <span style="text-decoration:underline">Privacy Policy</span>.</div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ CONFIRM ============ -->
+  <sc-if value="{{ hasConfirm }}" hint-placeholder-val="{{ false }}">
+  <div onClick="{{ closeConfirm }}" style="position:fixed;inset:0;z-index:90;background:rgba(20,18,14,.55);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:24px;pointer-events:auto">
+    <div onClick="{{ stop }}" class="pn-fade" style="width:100%;max-width:392px;background:#faf8f4;border-radius:18px;box-shadow:0 40px 100px rgba(0,0,0,.4);padding:26px 26px 22px">
+      <div style="font-family:var(--fdisp);font-size:21px;line-height:1.15;color:#1a1815;margin-bottom:9px">{{ confirmTitle }}</div>
+      <div style="font:400 14px/1.55 var(--fbody);color:rgba(26,24,21,.62);margin-bottom:22px">{{ confirmBody }}</div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <div onClick="{{ closeConfirm }}" style="font:500 14px var(--fbody);padding:10px 18px;border-radius:10px;cursor:pointer;color:rgba(26,24,21,.7)" style-hover="background:rgba(26,24,21,.06)">Cancel</div>
+        <div onClick="{{ doConfirm }}" style="{{ confirmBtnStyle }}" style-hover="filter:brightness(1.08)">{{ confirmLabel }}</div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ============ FLOW NAV (prototype) ============ -->
+  <div style="position:fixed;bottom:18px;right:18px;z-index:80;display:flex;align-items:center;gap:2px;background:rgba(20,18,14,.86);backdrop-filter:var(--cbf);padding:5px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.3);font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif">
+    <div style="font:600 9px ui-sans-serif,system-ui,sans-serif;color:rgba(244,241,234,.4);letter-spacing:.1em;padding:0 8px 0 6px;text-transform:uppercase">flow</div>
+    <sc-for list="{{ flowSteps }}" as="f" hint-placeholder-count="5">
+      <div onClick="{{ f.onClick }}" style="{{ f.style }}">{{ f.label }}</div>
+    </sc-for>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:&quot;100%&quot;,&quot;height&quot;:&quot;100%&quot;},&quot;logo&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;pin-horizon&quot;,&quot;horizon&quot;,&quot;horizon-ring&quot;,&quot;horizon-fov&quot;,&quot;planet-pov&quot;,&quot;wrap-strip&quot;,&quot;sphere&quot;,&quot;lens&quot;],&quot;default&quot;:&quot;pin-horizon&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Brand&quot;}}">
+const SW=2400, SH=1400, BASE_FOV=0.34, ZMIN=1, ZMAX=4;
+const wrap01=v=>((v%1)+1)%1;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+class Component extends DCLogic {
+  rootRef=React.createRef();
+  viewportRef=React.createRef();
+  worldRef=React.createRef();
+  ghostRef=React.createRef();
+  flashRef=React.createRef();
+  compassRef=React.createRef();
+  mapDirRef=React.createRef();
+  heartRef=React.createRef();
+  navArrowsRef=React.createRef();
+  mdRef=React.createRef();
+  ghostSizeRef=React.createRef();
+
+  FONTSETS={
+    grotesk:{disp:"'Schibsted Grotesk',system-ui,sans-serif",body:"'Schibsted Grotesk',system-ui,sans-serif",mono:"'Spline Sans Mono',ui-monospace,monospace"},
+    editorial:{disp:"'Spectral',Georgia,serif",body:"'Figtree',system-ui,sans-serif",mono:"'Spline Sans Mono',ui-monospace,monospace"},
+    expressive:{disp:"'Bricolage Grotesque',system-ui,sans-serif",body:"'Hanken Grotesk',system-ui,sans-serif",mono:"'Spline Sans Mono',ui-monospace,monospace"},
+  };
+  LANGS={en:'English',nl:'Nederlands',de:'Deutsch',fr:'Français',es:'Español',it:'Italiano',pt:'Português',pl:'Polski',sv:'Svenska',ja:'日本語',zh:'中文',ko:'한국어',ar:'العربية'};
+  ICONS=[
+    {ic:'fa-location-dot',kw:'pin marker place point'},{ic:'fa-circle-info',kw:'info information about'},{ic:'fa-landmark',kw:'museum building monument civic'},{ic:'fa-monument',kw:'monument memorial obelisk'},{ic:'fa-church',kw:'church chapel religion cathedral'},{ic:'fa-place-of-worship',kw:'worship religion temple'},{ic:'fa-book',kw:'book read story text'},{ic:'fa-scroll',kw:'scroll document old manuscript'},{ic:'fa-image',kw:'image picture photo art painting'},{ic:'fa-camera',kw:'camera photo'},{ic:'fa-palette',kw:'art paint colour palette'},{ic:'fa-paintbrush',kw:'paint brush art'},{ic:'fa-masks-theater',kw:'theatre drama play masks'},{ic:'fa-music',kw:'music note song audio'},{ic:'fa-guitar',kw:'guitar music instrument'},{ic:'fa-microphone',kw:'mic audio sound voice'},{ic:'fa-headphones',kw:'audio listen sound headphones'},{ic:'fa-volume-high',kw:'audio sound speaker volume'},{ic:'fa-film',kw:'film video movie'},{ic:'fa-video',kw:'video camera record'},{ic:'fa-star',kw:'star favourite highlight'},{ic:'fa-crown',kw:'crown royal king queen'},{ic:'fa-gem',kw:'gem jewel diamond treasure'},{ic:'fa-trophy',kw:'trophy award prize win'},{ic:'fa-flag',kw:'flag marker country'},{ic:'fa-bell',kw:'bell ring sound'},{ic:'fa-clock',kw:'clock time hour'},{ic:'fa-calendar-day',kw:'calendar date event day'},{ic:'fa-graduation-cap',kw:'education school learn graduate'},{ic:'fa-flask',kw:'science lab chemistry flask'},{ic:'fa-lightbulb',kw:'idea light bulb tip'},{ic:'fa-key',kw:'key unlock access'},{ic:'fa-door-open',kw:'door entrance room open'},{ic:'fa-stairs',kw:'stairs steps up'},{ic:'fa-tree',kw:'tree nature plant garden'},{ic:'fa-leaf',kw:'leaf nature eco plant'},{ic:'fa-mountain',kw:'mountain peak nature hill'},{ic:'fa-water',kw:'water sea river lake'},{ic:'fa-fish',kw:'fish sea aquatic'},{ic:'fa-paw',kw:'animal pet paw'},{ic:'fa-utensils',kw:'food restaurant eat dining'},{ic:'fa-mug-hot',kw:'coffee tea drink cafe'},{ic:'fa-wine-glass',kw:'wine drink bar'},{ic:'fa-bed',kw:'bed hotel room sleep'},{ic:'fa-store',kw:'shop store retail market'},{ic:'fa-basket-shopping',kw:'shop basket cart buy'},{ic:'fa-ticket',kw:'ticket event entry'},{ic:'fa-ship',kw:'ship boat sea'},{ic:'fa-plane',kw:'plane travel flight airport'},{ic:'fa-train',kw:'train rail transport'},{ic:'fa-car',kw:'car drive vehicle parking'},{ic:'fa-bicycle',kw:'bike cycle bicycle'},{ic:'fa-heart',kw:'heart love favourite'},{ic:'fa-house',kw:'house home property'},{ic:'fa-hammer',kw:'tool build hammer work'},{ic:'fa-gear',kw:'settings gear cog mechanism'},{ic:'fa-globe',kw:'globe world map earth'},{ic:'fa-compass',kw:'compass direction navigate'},{ic:'fa-map',kw:'map plan location'},{ic:'fa-person',kw:'person human figure'},{ic:'fa-children',kw:'children family kids'},{ic:'fa-dove',kw:'bird dove peace'},{ic:'fa-fire',kw:'fire flame heat'},{ic:'fa-snowflake',kw:'snow cold winter'},{ic:'fa-sun',kw:'sun light day weather'}
+  ];
+
+  state={
+    screen:'landing', scrolled:false, vw:1200,
+    title:'St Lawrence Jewry',
+    sceneId:'nave',
+    scenes:[
+      {id:'nave',hue:204,name:'Courtyard',views:2412,likes:128,startYaw:.30,north:.12,mx:50,my:62,img:'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0a/Veste_Oberhaus_%28Passau%2C_full_spherical_panoramic_image%2C_equirectangular_projection%29.jpg/3840px-Veste_Oberhaus_%28Passau%2C_full_spherical_panoramic_image%2C_equirectangular_projection%29.jpg'},
+      {id:'chancel',hue:158,name:'Cathedral',views:1106,likes:74,startYaw:.50,north:.40,mx:30,my:30,img:'https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/0300a_ITA_Bergamo_Duomo_-_Cattedrale_S_Alessandro_-_360_planar_V-P.jpg/3840px-0300a_ITA_Bergamo_Duomo_-_Cattedrale_S_Alessandro_-_360_planar_V-P.jpg'},
+      {id:'gallery',hue:28,name:'Town Hall',views:863,likes:51,startYaw:0,north:.66,mx:74,my:40,img:'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Lueneburg_town_hall_illuminated_in_Ukrainian_colours.jpg/3840px-Lueneburg_town_hall_illuminated_in_Ukrainian_colours.jpg'},
+    ],
+    points:[
+      {id:'a',scene:'nave',yaw01:.30,pitch01:.62,depth:1.15,icon:'fa-scroll',title:'The Fellowes ledger stone',body:'**George Fellowes**, Citizen and Haberdasher of London, *free of the Mercers\' Company*.\n\nDied 1735, aged 73. The slab marks the family vault beneath the [nave](https://panote.io).'},
+      {id:'b',scene:'nave',yaw01:.70,pitch01:.40,depth:.78,icon:'fa-book',title:'Decalogue boards',body:'Carved oak panels of the Ten Commandments, framed by Corinthian pilasters.\n\n- Late 17th century\n- Gilded lettering on black ground'},
+    ],
+    activePoint:null, draftTitle:'', draftBody:'', draftIcon:'', iconPickerOpen:false, iconQuery:'', draftDepth:1, sizeOpen:false, mediaOpen:false, mediaUrl:'', mediaType:'', mediaLabel:'',
+    viewerPoint:null,
+    placing:false, shareOpen:false, signInOpen:false, insightsOpen:false, tourCfgOpen:false, fullscreen:false,
+    tourCfg:{ctrlPos:'bottom',showMap:true,showCompass:true},
+    autoRotate:true, compass:true, mapOpen:false, statsOpen:false, editingTitle:false, editingScene:false, faqOpen:0,
+    inTour:true, tourMenuOpen:false, newTourName:'', existingTours:['Walthamstow Wetlands','Sutton House','Hackney Empire foyer'], linkAddOpen:false,
+    langs:['en','nl','de'], lang:'en', langMenuOpen:false, langAddOpen:false,
+    links:{ nave:[{to:'chancel',yaw01:.52},{to:'gallery',yaw01:.86}], chancel:[{to:'nave',yaw01:.04}], gallery:[{to:'nave',yaw01:.5}] },
+    i18n:{
+      nl:{ title:'St Lawrence Jewry', scenes:{nave:'Binnenplaats',chancel:'Kathedraal',gallery:'Stadhuis'}, points:{
+        a:{title:'De grafsteen van Fellowes', body:"**George Fellowes**, burger en hoedenmaker van Londen, *lid van de Mercers' Company*.\n\nOverleden in 1735, 73 jaar oud. De steen markeert het familiegraf onder het [schip](https://panote.io)."},
+        b:{title:'Decaloogborden', body:'Gesneden eikenhouten panelen met de Tien Geboden, omlijst door Korinthische pilasters.\n\n- Eind 17e eeuw\n- Verguld schrift op zwarte ondergrond'}
+      }},
+      de:{ title:'St Lawrence Jewry', scenes:{nave:'Innenhof',chancel:'Dom',gallery:'Rathaus'}, points:{
+        a:{title:'Der Fellowes-Grabstein', body:"**George Fellowes**, Bürger und Hutmacher von London, *Mitglied der Mercers' Company*.\n\nGestorben 1735 im Alter von 73 Jahren. Die Platte markiert die Familiengruft unter dem [Kirchenschiff](https://panote.io)."},
+        b:{title:'Dekalogtafeln', body:'Geschnitzte Eichentafeln der Zehn Gebote, gerahmt von korinthischen Pilastern.\n\n- Spätes 17. Jahrhundert\n- Vergoldete Schrift auf schwarzem Grund'}
+      }},
+    },
+    userImg:null, copied:false, likedScenes:[],
+    proc:null,
+    saving:false, lastSaved:'2 min ago',
+    authed:false, user:{name:'Maya Larsson',email:'maya@studiokvist.se',initial:'M'}, acctMenuOpen:false,
+    visibility:'public', slug:'st-lawrence-jewry', published:true, editingSlug:false, slugDraft:'', shareTab:'link',
+    embedScope:'tour', embedSize:480, embedCopied:false,
+    entryId:'nave', confirm:null, replaceId:null,
+    tours:[
+      {id:'t1',title:'St Lawrence Jewry',panos:3,views:4381,visibility:'public',updated:'2 days ago',hue:204,current:true,cover:'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0a/Veste_Oberhaus_%28Passau%2C_full_spherical_panoramic_image%2C_equirectangular_projection%29.jpg/3840px-Veste_Oberhaus_%28Passau%2C_full_spherical_panoramic_image%2C_equirectangular_projection%29.jpg',head:30},
+      {id:'t2',title:'Sutton House',panos:6,views:12903,visibility:'public',updated:'1 week ago',hue:28,cover:'https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/0300a_ITA_Bergamo_Duomo_-_Cattedrale_S_Alessandro_-_360_planar_V-P.jpg/3840px-0300a_ITA_Bergamo_Duomo_-_Cattedrale_S_Alessandro_-_360_planar_V-P.jpg',head:55},
+      {id:'t3',title:'Hackney Empire foyer',panos:2,views:842,visibility:'unlisted',updated:'3 weeks ago',hue:268,cover:'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/Lueneburg_town_hall_illuminated_in_Ukrainian_colours.jpg/3840px-Lueneburg_town_hall_illuminated_in_Ukrainian_colours.jpg',head:62},
+      {id:'t4',title:'Walthamstow Wetlands',panos:9,views:0,visibility:'unlisted',updated:'just now',hue:158,cover:'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0a/Veste_Oberhaus_%28Passau%2C_full_spherical_panoramic_image%2C_equirectangular_projection%29.jpg/3840px-Veste_Oberhaus_%28Passau%2C_full_spherical_panoramic_image%2C_equirectangular_projection%29.jpg',head:78},
+    ],
+  };
+
+  pano={viewYaw:.30,viewPitch:.52,zoom:1,targetZoom:1,vYaw:0,vPitch:0,dragging:false,lastX:0,lastY:0,moved:0,hue:204,targetHue:204,dolly:1};
+
+  componentDidMount(){
+    this.vp=this.viewportRef.current;
+    this._wheel=(e)=>{ if(this.state.screen==='landing')return; e.preventDefault(); this.zoomBy(e.deltaY<0?1.12:.89); };
+    this.vp.addEventListener('wheel',this._wheel,{passive:false});
+    this._scroll=()=>{ const s=window.scrollY>24; if(s!==this.state.scrolled) this.setState({scrolled:s}); };
+    window.addEventListener('scroll',this._scroll,{passive:true});
+    this._resize=()=>{ const w=window.innerWidth; if(w!==this.state.vw) this.setState({vw:w}); };
+    this._resize(); window.addEventListener('resize',this._resize);
+    this.pano.hue=this.pano.targetHue=this.state.scenes[0].hue; this.north=this.state.scenes[0].north; this.pano.viewYaw=this.state.scenes[0].startYaw;
+    this.applyAccent();
+    this.applyFonts();
+    this.applyGlass();
+    try{ const s=JSON.parse(localStorage.getItem('panote_likes')||'[]'); if(Array.isArray(s)&&s.length) this.setState({likedScenes:s}); }catch(_){}
+    this._savedSnapshot=this.snapshot();
+    this.raf=requestAnimationFrame(this.loop);
+    if(Component._procStart&&this.state.proc&&!this.state.proc.ready&&!this.procT) this.procT=setInterval(()=>this.tickProcessing(),120);
+  }
+  componentDidUpdate(){ this.applyAccent(); this.applyFonts(); this.applyGlass(); if(this._seedMd&&this.mdRef.current){ this.mdRef.current.innerHTML=this.mdToHtml(this.state.draftBody)||'<div><br></div>'; this._seedMd=false; } }
+  componentWillUnmount(){ cancelAnimationFrame(this.raf); if(this.vp)this.vp.removeEventListener('wheel',this._wheel); if(this._scroll)window.removeEventListener('scroll',this._scroll); if(this._resize)window.removeEventListener('resize',this._resize); if(this.procT)clearInterval(this.procT); }
+
+  // tokens go on :root as well as the app root — fixed-position subtrees (chip, modals) live outside rootRef
+  _tok(k,v){ const r=this.rootRef.current; if(r)r.style.setProperty(k,v); try{ document.documentElement.style.setProperty(k,v); }catch(_){ } }
+  applyAccent(){
+    if(this.props.accent) this._tok('--accent',this.props.accent);
+  }
+  applyFonts(){
+    const fset=this.FONTSETS[this.props.font]||this.FONTSETS.grotesk;
+    this._tok('--fdisp',fset.disp);
+    this._tok('--fbody',fset.body);
+    this._tok('--fmono',fset.mono);
+  }
+  applyGlass(){
+    const on=this.props.glass!==false;
+    this._tok('--cbg', on?'rgba(255,255,255,.9)':'#ffffff');
+    this._tok('--cbf', on?'blur(12px)':'none');
+    this._tok('--mbg', on?'rgba(250,248,244,.62)':'#f4f1ee');
+  }
+  makeLogo(accent){
+    const h=React.createElement, kind=this.props.logo||'pin-horizon';
+    const svg=(...k)=>h('svg',{viewBox:'0 0 32 32',width:'100%',height:'100%',fill:'none'},...k);
+    const disc=(fill,r)=>h('circle',{cx:16,cy:16,r:r||13,fill:fill});
+    const teardrop='M16 2.4 C9.4 2.4 4.3 7.4 4.3 13.7 C4.3 21 13.4 28.6 16 30 C18.6 28.6 27.7 21 27.7 13.7 C27.7 7.4 22.6 2.4 16 2.4 Z';
+    // HORIZON — round "little world": disc, curved horizon, a viewpoint
+    if(kind==='horizon') return svg(
+      disc(accent),
+      h('path',{d:'M5 19.6 Q16 15 27 19.6',stroke:'#fff',strokeWidth:1.9,fill:'none',strokeLinecap:'round'}),
+      h('circle',{cx:18.6,cy:11.4,r:2,fill:'#fff'})
+    );
+    // HORIZON-RING — globe outline inside, horizon + viewpoint (round echo of pin-horizon)
+    if(kind==='horizon-ring') return svg(
+      disc(accent),
+      h('circle',{cx:16,cy:16,r:8.4,fill:'none',stroke:'#fff',strokeWidth:1.5,opacity:.55}),
+      h('path',{d:'M7.8 18.4 Q16 14 24.2 18.4',stroke:'#fff',strokeWidth:1.9,fill:'none',strokeLinecap:'round'}),
+      h('circle',{cx:19,cy:11.8,r:2,fill:'#fff'})
+    );
+    // HORIZON-FOV — stand on the ground, look around: horizon + rising field-of-view
+    if(kind==='horizon-fov') return svg(
+      disc(accent),
+      h('path',{d:'M16 18.6 L9.6 7.9 A12.4 12.4 0 0 1 22.4 7.9 Z',fill:'#fff',opacity:.95}),
+      h('path',{d:'M4.5 18.6 Q16 14.6 27.5 18.6',stroke:'#fff',strokeWidth:1.8,fill:'none',strokeLinecap:'round'}),
+      h('circle',{cx:16,cy:18.6,r:2.1,fill:accent})
+    );
+    // PLANET-POV — a viewpoint marker standing on the horizon
+    if(kind==='planet-pov') return svg(
+      disc(accent),
+      h('path',{d:'M4.6 19 Q16 14.6 27.4 19',stroke:'#fff',strokeWidth:1.7,fill:'none',strokeLinecap:'round'}),
+      h('path',{d:'M16 9.2 L20 16.6 L12 16.6 Z',fill:'#fff'})
+    );
+    // WRAP-STRIP — a panorama wrapped into a sphere
+    if(kind==='wrap-strip') return svg(
+      disc(accent),
+      h('path',{d:'M3.6 12.2 Q16 8 28.4 12.2',stroke:'#fff',strokeWidth:1.7,fill:'none',strokeLinecap:'round',opacity:.55}),
+      h('path',{d:'M3.2 16.6 Q16 12 28.8 16.6',stroke:'#fff',strokeWidth:1.9,fill:'none',strokeLinecap:'round'}),
+      h('path',{d:'M4.4 21 Q16 16.6 27.6 21',stroke:'#fff',strokeWidth:1.6,fill:'none',strokeLinecap:'round',opacity:.75})
+    );
+    // SPHERE — solid disc with a 360 globe wireframe
+    if(kind==='sphere') return svg(
+      disc(accent),
+      h('ellipse',{cx:16,cy:16,rx:5.2,ry:13,stroke:'#fff',strokeWidth:1.6,opacity:.85}),
+      h('line',{x1:3,y1:16,x2:29,y2:16,stroke:'#fff',strokeWidth:1.6,opacity:.95}),
+      h('ellipse',{cx:16,cy:16,rx:13,ry:5.2,stroke:'#fff',strokeWidth:1.4,opacity:.5})
+    );
+    // LENS — solid disc with the viewer's field-of-view wedge
+    if(kind==='lens') return svg(
+      disc('currentColor'),
+      h('path',{d:'M16 16 L8.9 5.8 A12.4 12.4 0 0 1 23.1 5.8 Z',fill:accent}),
+      h('circle',{cx:16,cy:16,r:2.6,fill:'#faf8f4'})
+    );
+    // PIN-FOV — pin whose head opens into the viewer's field-of-view (location + look-around)
+    if(kind==='pin-fov') return svg(
+      h('path',{d:'M16 2.4 C9.4 2.4 4.3 7.4 4.3 13.7 C4.3 21 13.4 28.6 16 30 C18.6 28.6 27.7 21 27.7 13.7 C27.7 7.4 22.6 2.4 16 2.4 Z',fill:accent}),
+      h('path',{d:'M16 13.7 L10.4 5.6 A9.9 9.9 0 0 1 21.6 5.6 Z',fill:'#fff'}),
+      h('circle',{cx:16,cy:13.7,r:2.3,fill:accent})
+    );
+    // PIN-HORIZON — pin head as a little planet with a horizon + viewpoint
+    if(kind==='pin-horizon') return svg(
+      h('path',{d:teardrop,fill:accent,stroke:'#fff',strokeWidth:3,strokeLinejoin:'round',style:{paintOrder:'stroke'}}),
+      h('circle',{cx:16,cy:13.4,r:6.4,fill:'none',stroke:'#fff',strokeWidth:1.5}),
+      h('path',{d:'M10.2 14.8 Q16 11.4 21.8 14.8',stroke:'#fff',strokeWidth:1.5,fill:'none',strokeLinecap:'round'}),
+      h('circle',{cx:18.4,cy:10.6,r:1.5,fill:'#fff'})
+    );
+    // PIN-ORBIT — pin head with an orbiting viewpoint (360 sweep)
+    if(kind==='pin-orbit') return svg(
+      h('path',{d:'M16 2.4 C9.4 2.4 4.3 7.4 4.3 13.7 C4.3 21 13.4 28.6 16 30 C18.6 28.6 27.7 21 27.7 13.7 C27.7 7.4 22.6 2.4 16 2.4 Z',fill:accent}),
+      h('ellipse',{cx:16,cy:13.4,rx:7,ry:3.1,fill:'none',stroke:'#fff',strokeWidth:1.5,transform:'rotate(-24 16 13.4)'}),
+      h('circle',{cx:16,cy:13.4,r:2.6,fill:'#fff'})
+    );
+    // PIN — solid map pin whose head is a 360 sphere
+    if(kind==='pin') return svg(
+      h('path',{d:'M16 2.4 C9.4 2.4 4.3 7.4 4.3 13.7 C4.3 21 13.4 28.6 16 30 C18.6 28.6 27.7 21 27.7 13.7 C27.7 7.4 22.6 2.4 16 2.4 Z',fill:accent}),
+      h('circle',{cx:16,cy:13.4,r:6,stroke:'#fff',strokeWidth:1.6,fill:'none'}),
+      h('ellipse',{cx:16,cy:13.4,rx:2.4,ry:6,stroke:'#fff',strokeWidth:1.3,fill:'none',opacity:.8}),
+      h('line',{x1:10,y1:13.4,x2:22,y2:13.4,stroke:'#fff',strokeWidth:1.3,opacity:.8})
+    );
+    // APERTURE — solid disc with three chevrons (echoes the floor connections)
+    if(kind==='aperture'){ const ch=(rot)=>h('path',{d:'M12.4 13.8 L16 10.2 L19.6 13.8',stroke:accent,strokeWidth:2.3,strokeLinecap:'round',strokeLinejoin:'round',fill:'none',transform:'rotate('+rot+' 16 16)'});
+      return svg(disc('currentColor'),ch(0),ch(120),ch(240),h('circle',{cx:16,cy:16,r:1.7,fill:accent})); }
+    // WRAP — rounded app-icon tile with a wrapped horizon
+    if(kind==='wrap') return svg(
+      h('rect',{x:3,y:3,width:26,height:26,rx:7.5,fill:accent}),
+      h('path',{d:'M5 19.2 Q11 13.8 16 16 Q21 18.2 27 12.8',stroke:'#fff',strokeWidth:1.9,fill:'none',strokeLinecap:'round'}),
+      h('circle',{cx:16,cy:16,r:2.1,fill:'#fff'})
+    );
+    // legacy thin ring
+    const ring=(sw)=>h('circle',{cx:16,cy:16,r:12.5,stroke:'currentColor',strokeWidth:sw||2.1});
+    return svg(ring(),h('path',{d:'M5 18.6 Q16 11.8 27 18.6',stroke:'currentColor',strokeWidth:1.5,opacity:.5}),h('circle',{cx:16,cy:12.8,r:2.8,fill:accent}));
+  }
+  toggleMap=()=>this.setState(st=>({mapOpen:!st.mapOpen}));
+  openTourCfg=()=>this.setState({tourCfgOpen:true});
+  closeTourCfg=()=>this.setState({tourCfgOpen:false});
+  setCtrlPos=(p)=>()=>this.setState(st=>({tourCfg:{...st.tourCfg,ctrlPos:p}}));
+  setMapCorner=(c)=>()=>this.setState(st=>({tourCfg:{...st.tourCfg,mapCorner:c}}));
+  toggleTourMap=()=>this.setState(st=>({tourCfg:{...st.tourCfg,showMap:!st.tourCfg.showMap}}));
+  toggleTourCompass=()=>this.setState(st=>({tourCfg:{...st.tourCfg,showCompass:!st.tourCfg.showCompass}}));
+  toggleStats=()=>this.setState(st=>({statsOpen:!st.statsOpen}));
+  fmt(n){ return n>=1000 ? (n/1000).toFixed(n>=10000?0:1).replace(/\.0$/,'')+'k' : ''+n; }
+  toggleLike=()=>{ const id=this.state.sceneId; this.setState(st=>{ const set=new Set(st.likedScenes); const now=!set.has(id); if(now)set.add(id); else set.delete(id); const arr=[...set]; try{ localStorage.setItem('panote_likes',JSON.stringify(arr)); }catch(_){} if(now&&this.heartRef.current){ try{ this.heartRef.current.animate([{transform:'scale(1)'},{transform:'scale(1.45)'},{transform:'scale(1)'}],{duration:360,easing:'cubic-bezier(.2,.8,.2,1)'}); }catch(_){} } return {likedScenes:arr}; }); };
+  setStartHere=()=>{ const y=this.pano.viewYaw; this.setState(st=>({scenes:st.scenes.map(s=>s.id===st.sceneId?{...s,startYaw:y}:s)})); };
+  setNorthHere=()=>{ const y=this.pano.viewYaw; this.north=y; this.setState(st=>({scenes:st.scenes.map(s=>s.id===st.sceneId?{...s,north:y}:s)})); };
+  _setLinkYaw=(to,yaw)=>{ const ny=(((yaw%1)+1)%1); this.setState(st=>({links:{...st.links,[st.sceneId]:(st.links[st.sceneId]||[]).map(l=>l.to===to?{...l,yaw01:ny}:l)}})); };
+  aimLink=(to)=>()=>{ this._setLinkYaw(to,this.pano.viewYaw); };
+  nudgeLink=(to,deg)=>()=>{ const cur=(this.state.links[this.state.sceneId]||[]).find(l=>l.to===to); this._setLinkYaw(to,(cur?cur.yaw01:0)+deg/360); };
+  removeLink=(to)=>()=>this.setState(st=>({links:{...st.links,[st.sceneId]:(st.links[st.sceneId]||[]).filter(l=>l.to!==to)}}));
+  toggleLinkAdd=()=>this.setState(st=>({linkAddOpen:!st.linkAddOpen}));
+  addLink=(to)=>()=>{ const y=this.pano.viewYaw; this.setState(st=>({linkAddOpen:false, links:{...st.links,[st.sceneId]:[...(st.links[st.sceneId]||[]),{to,yaw01:(((y%1)+1)%1)}]}})); };
+  arrowAimDown=(to)=>(e)=>{ if(this.state.screen!=='editor')return; e.preventDefault(); e.stopPropagation(); const startX=e.clientX; const link=(this.state.links[this.state.sceneId]||[]).find(l=>l.to===to); const startYaw=link?link.yaw01:0; this._arrowDrag={to,moved:false};
+    const move=(ev)=>{ const dx=ev.clientX-startX; if(Math.abs(dx)>3)this._arrowDrag.moved=true; this._setLinkYaw(to,startYaw+dx*2.2/(this.W||window.innerWidth)); };
+    const up=()=>{ window.removeEventListener('pointermove',move); window.removeEventListener('pointerup',up); setTimeout(()=>{this._arrowDrag=null;},30); };
+    window.addEventListener('pointermove',move); window.addEventListener('pointerup',up); };
+
+  loop=()=>{
+    const p=this.pano, vp=this.vp, w=this.worldRef.current;
+    if(vp&&w){
+      const vw=vp.clientWidth, vh=vp.clientHeight;
+      if(this.state.screen==='landing'&&this.state.autoRotate&&!p.dragging) p.viewYaw+=.0004;
+      if(!p.dragging){ p.viewYaw+=p.vYaw; p.viewPitch+=p.vPitch; p.vYaw*=.93; p.vPitch*=.9; }
+      p.viewYaw=wrap01(p.viewYaw);
+      p.viewPitch=clamp(p.viewPitch,.38,.62);
+      p.zoom+=(p.targetZoom-p.zoom)*.18;
+      p.dolly+=(1-p.dolly)*.08;
+      p.hue+=(this.pano.targetHue-p.hue)*.07;
+      const fov=BASE_FOV/p.zoom;
+      const W=vw/fov, s=(W/SW)*p.dolly, H=s*SH;
+      const tx=-p.viewYaw*W+vw/2, ty=-p.viewPitch*H+vh/2;
+      this.W=W; this.H=H; this.s=s; this.tx=tx; this.ty=ty;
+      w.style.transform=`translate(${tx}px,${ty}px) scale(${s})`;
+      w.style.setProperty('--inv',1/s);
+      w.style.setProperty('--hue',p.hue);
+      if(this.compassRef.current) this.compassRef.current.style.transform=`rotate(${((this.north||0)-p.viewYaw)*360}deg)`;
+      if(this.mapDirRef.current) this.mapDirRef.current.style.transform=`translate(-50%,-50%) rotate(${p.viewYaw*360}deg)`;
+      const navKids=document.querySelectorAll('[data-yaw]'); const zf=1+(p.zoom-1)*0.24; const ovCy=79+(0.5-p.viewPitch)*60+(p.zoom-1)*7; for(let i=0;i<navKids.length;i++){ const k=navKids[i]; const y=parseFloat(k.dataset.yaw); if(isNaN(y))continue; let rel=((y-p.viewYaw)%1+1)%1; if(rel>0.5)rel-=1; const th=rel*2*Math.PI; const ox=50+15*Math.sin(th); const oy=ovCy-5.5*Math.cos(th); const sc=(0.82+0.5*((1-Math.cos(th))/2))*zf; k.style.left=ox.toFixed(2)+'%'; k.style.top=oy.toFixed(2)+'%'; k.style.transform='translate(-50%,-50%) perspective(440px) rotateX(63deg) rotate('+(rel*360).toFixed(1)+'deg) scale('+sc.toFixed(3)+')'; k.style.opacity='1'; }
+    }
+    this.tickProcessing();
+    this.raf=requestAnimationFrame(this.loop);
+  };
+
+  // ---- pointer ----
+  onDown=(e)=>{ if(this.state.placing){ const loc=this.toLocal(e.clientX,e.clientY); const base=1; this._ps={cy:e.clientY,yaw:loc.yaw01,pitch:loc.pitch01,base:base}; this._sizeMul=1; this._sizing=true; this.setGhost(loc.yaw01,loc.pitch01,base,true); try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}; return; } const p=this.pano; p.dragging=true; p.lastX=e.clientX; p.lastY=e.clientY; p.moved=0; p.vYaw=0; p.vPitch=0; try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}};
+  onMove=(e)=>{ const p=this.pano;
+    if(this.state.placing){ if(this._sizing&&this._ps){ const dy=this._ps.cy-e.clientY; let mul=clamp(1+dy/130,.35,2.8); this._sizeMul=mul; const d=clamp(this._ps.base*mul,.3,2.6); this.setGhost(this._ps.yaw,this._ps.pitch,d,true); } else { this.updateGhost(e.clientX,e.clientY); } return; }
+    if(!p.dragging)return;
+    const dx=e.clientX-p.lastX, dy=e.clientY-p.lastY; p.lastX=e.clientX; p.lastY=e.clientY; p.moved+=Math.abs(dx)+Math.abs(dy);
+    p.viewYaw-=dx/this.W; p.viewPitch-=dy/this.H; p.vYaw=-dx/this.W; p.vPitch=-dy/this.H;
+  };
+  onUp=(e)=>{ const p=this.pano; if(this.state.placing){ let yaw,pitch,d; if(this._sizing&&this._ps){ yaw=this._ps.yaw; pitch=this._ps.pitch; d=clamp(this._ps.base*this._sizeMul,.3,2.6); } else { const loc=this.toLocal(e.clientX,e.clientY); yaw=loc.yaw01; pitch=loc.pitch01; d=1; } this._sizing=false; this._ps=null; this.placeAtPos(yaw,pitch,d); return; } p.dragging=false; };
+  onDouble=()=>{ if(this.state.screen!=='landing') this.zoomBy(1.6); };
+
+  toLocal(cx,cy){ const r=this.vp.getBoundingClientRect(); const lx=(cx-r.left-this.tx)/this.s, ly=(cy-r.top-this.ty)/this.s; return {yaw01:wrap01(lx/SW),pitch01:clamp(ly/SH,.05,.95)}; }
+  depthAt(yaw01,pitch01){ let d=.55+(pitch01-.5)*2.1; d+=.13*Math.sin(yaw01*Math.PI*4); return clamp(d,.45,1.7); }
+
+  setGhost(yaw,pitch,d,showSize){ const g=this.ghostRef.current; if(!g)return; g.style.display='block'; g.style.left=(yaw*SW)+'px'; g.style.top=(pitch*SH)+'px'; g.style.setProperty('--d',d); const l=this.ghostSizeRef.current; if(l){ if(showSize){ l.style.display='block'; l.textContent=d.toFixed(2)+'×'; } else { l.style.display='none'; } } }
+  updateGhost(cx,cy){ const {yaw01,pitch01}=this.toLocal(cx,cy); this.setGhost(yaw01,pitch01,1,false); }
+  placeAtPos(yaw01,pitch01,d){ if(this.state.placingMoveId){ const mid=this.state.placingMoveId; if(this.ghostRef.current)this.ghostRef.current.style.display='none'; if(this.ghostSizeRef.current)this.ghostSizeRef.current.style.display='none'; this.setState(st=>({points:st.points.map(p=>p.id===mid?{...p,yaw01,pitch01}:p),placing:false,placingMoveId:null})); return; } const id='p'+Date.now(); const pt={id,scene:this.state.sceneId,yaw01,pitch01,depth:d,icon:'fa-location-dot',title:'',body:''}; if(this.ghostRef.current)this.ghostRef.current.style.display='none'; if(this.ghostSizeRef.current)this.ghostSizeRef.current.style.display='none'; this._seedMd=true; this.setState(st=>({points:[...st.points,pt],placing:false,activePoint:id,draftTitle:'',draftBody:'',draftIcon:'fa-location-dot',draftDepth:d,iconPickerOpen:false,iconQuery:'',mediaOpen:false,mediaUrl:'',mediaType:'',sizeOpen:false})); }
+
+  // ---- zoom/view ----
+  zoomBy=(f)=>{ this.pano.targetZoom=clamp(this.pano.targetZoom*f,ZMIN,ZMAX); };
+  zoomIn=()=>this.zoomBy(1.4);
+  zoomOut=()=>this.zoomBy(1/1.4);
+  resetView=()=>{ this.pano.targetZoom=1; this.pano.viewPitch=.5; this.pano.vYaw=0; this.pano.vPitch=0; };
+
+  // ---- navigation between panos ----
+  navigate(id){ if(id===this.state.sceneId)return; const sc=this.state.scenes.find(s=>s.id===id); if(!sc)return; this.pano.targetHue=sc.hue; this.pano.dolly=1.16; const fl=this.flashRef.current; if(fl){ fl.style.opacity='.55'; setTimeout(()=>{ if(fl)fl.style.opacity='0'; },170); } setTimeout(()=>{ this.north=sc.north; this.pano.viewYaw=sc.startYaw; this.pano.vYaw=0; this.setState({sceneId:id,viewerPoint:null}); },140); }
+
+  // ---- screen flow ----
+  go(screen){ const r=this.rootRef.current; this.setState({screen,placing:false,viewerPoint:null,activePoint:null,shareOpen:false}); if(screen==='landing'){ this.pano.targetZoom=1; if(r)r.style.overflowX='hidden'; } if(screen!=='landing'){ window.scrollTo(0,0); } }
+  setLang=(c)=>this.setState({lang:c,activePoint:null,langMenuOpen:false});
+  toggleLangMenu=()=>this.setState(st=>({langMenuOpen:!st.langMenuOpen}));
+  toggleLangAdd=()=>this.setState(st=>({langAddOpen:!st.langAddOpen}));
+  addLang=(c)=>this.setState(st=>{ if(st.langs.indexOf(c)>=0) return {langAddOpen:false}; var i18n=Object.assign({},st.i18n); if(!i18n[c]) i18n[c]={title:'',scenes:{},points:{}}; return {langs:st.langs.concat([c]), i18n:i18n, lang:c, langAddOpen:false}; });
+  removeLang=(c)=>this.setState(st=>{ if(c===st.langs[0]) return {}; var i18n=Object.assign({},st.i18n); delete i18n[c]; return {langs:st.langs.filter(function(x){return x!==c;}), i18n:i18n, lang:(st.lang===c?st.langs[0]:st.lang)}; });
+  rteExec=(cmd,val)=>(e)=>{ e.preventDefault(); document.execCommand(cmd,false,val||null); if(this.mdRef.current) this.mdRef.current.focus(); };
+  rteLink=(e)=>{ e.preventDefault(); var url=window.prompt('Link URL','https://'); if(url) document.execCommand('createLink',false,url); if(this.mdRef.current) this.mdRef.current.focus(); };
+  mediaKind(u){ u=(u||'').trim();
+    var yt=u.match(/(?:youtube\.com\/(?:watch\?v=|embed\/)|youtu\.be\/)([\w-]{6,})/); if(yt) return {kind:'youtube',id:yt[1]};
+    var vm=u.match(/vimeo\.com\/(?:video\/)?(\d+)/); if(vm) return {kind:'vimeo',id:vm[1]};
+    var ext=((u.split('?')[0].match(/\.(\w+)$/)||[])[1]||'').toLowerCase();
+    if(/^(jpg|jpeg|png|gif|webp|svg|avif|bmp)$/.test(ext)) return {kind:'image'};
+    if(/^(mp3|wav|ogg|oga|m4a|aac|flac)$/.test(ext)) return {kind:'audio'};
+    if(/^(mp4|webm|mov|m4v|ogv)$/.test(ext)) return {kind:'video'};
+    return {kind:null}; }
+  mediaEmbedHtml(u,alt,type){ u=(u||'').trim(); var k=type||this.mediaKind(u).kind; var q=function(s){return (s||'').replace(/"/g,'%22');};
+    if(k==='embed'||k==='youtube'||k==='vimeo'){ var mk=this.mediaKind(u); if(mk.kind==='youtube') return '<div style="position:relative;padding-bottom:56.25%;height:0;margin:10px 0;border-radius:10px;overflow:hidden"><iframe src="https://www.youtube.com/embed/'+mk.id+'" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen></iframe></div>'; if(mk.kind==='vimeo') return '<div style="position:relative;padding-bottom:56.25%;height:0;margin:10px 0;border-radius:10px;overflow:hidden"><iframe src="https://player.vimeo.com/video/'+mk.id+'" style="position:absolute;inset:0;width:100%;height:100%;border:0" allowfullscreen></iframe></div>'; return ''; }
+    if(k==='image') return '<img src="'+q(u)+'" alt="'+q(alt||'')+'" style="max-width:100%;border-radius:10px;display:block;margin:10px 0">';
+    if(k==='audio') return '<audio controls src="'+q(u)+'" style="width:100%;margin:10px 0"></audio>';
+    if(k==='video') return '<video controls src="'+q(u)+'" style="width:100%;border-radius:10px;margin:10px 0;background:#000"></video>';
+    return ''; }
+  mediaChipHtml(u,type){ var k=type||this.mediaKind(u).kind; var label=k==='embed'?'Embedded video':k==='audio'?'Audio file':k==='video'?'Video file':'Media'; var icon=k==='audio'?'fa-volume-high':'fa-film'; var disp=u.replace(/^https?:\/\//,''); if(disp.length>34)disp=disp.slice(0,34)+'…'; return '<div data-url="'+u.replace(/"/g,'%22')+'" data-type="'+(k||'')+'" contenteditable="false" class="pn-embed"><i class="fa-solid '+icon+'"></i><span>'+label+' · '+disp+'</span></div>'; }
+  toggleMedia=()=>this.setState(st=>({mediaOpen:!st.mediaOpen, mediaType:'', mediaUrl:'', mediaLabel:''}));
+  setMediaType=(t)=>this.setState({mediaType:t, mediaUrl:'', mediaLabel:''});
+  backMediaType=()=>this.setState({mediaType:''});
+  onMediaUrl=(e)=>this.setState({mediaUrl:e.target.value});
+  onMediaLabel=(e)=>this.setState({mediaLabel:e.target.value});
+  onMediaKey=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); this.insertMedia(); } };
+  insertMedia=()=>{ var st=this.state; var type=st.mediaType; var url=(st.mediaUrl||'').trim(); if(!url){ return; } if(!/^https?:\/\//.test(url)) url='https://'+url; var html='';
+    if(type==='link'){ var lab=(st.mediaLabel||'').trim()||url.replace(/^https?:\/\//,'').replace(/\/$/,''); html='<div><a href="'+url.replace(/"/g,'%22')+'">'+lab+'</a></div>'; }
+    else if(type==='image'){ html=this.mediaEmbedHtml(url,'','image'); }
+    else { html=this.mediaChipHtml(url,type); }
+    if(this.mdRef.current){ this.mdRef.current.innerHTML += html; }
+    this.setState({mediaOpen:false,mediaType:'',mediaUrl:'',mediaLabel:''}); };
+  onDepth=(e)=>{ var v=parseFloat(e.target.value); this.setState(st=>({draftDepth:v, points:st.points.map(p=>p.id===st.activePoint?{...p,depth:v}:p)})); };
+  lookAt=(yaw01,pitch01)=>{ const p=this.pano; p.vYaw=0; p.vPitch=0; const from=p.viewYaw; let d=(((yaw01-from)%1)+1)%1; if(d>0.5)d-=1; const fromP=p.viewPitch; const toP=clamp(pitch01,.38,.62); const t0=(typeof performance!=='undefined'?performance.now():Date.now()); const dur=460; const ease=t=>1-Math.pow(1-t,3); cancelAnimationFrame(this._lookRaf); const step=(now)=>{ let t=Math.min(1,((now||Date.now())-t0)/dur); const e=ease(t); p.viewYaw=(((from+d*e)%1)+1)%1; p.viewPitch=fromP+(toP-fromP)*e; p.vYaw=0; p.vPitch=0; if(t<1)this._lookRaf=requestAnimationFrame(step); }; this._lookRaf=requestAnimationFrame(step); };
+  toggleSize=()=>this.setState(st=>{ const opening=!st.sizeOpen; if(opening){ const p=st.points.find(x=>x.id===st.activePoint); if(p)this.lookAt(p.yaw01,p.pitch01); } return {sizeOpen:opening}; });
+  toggleTourMenu=()=>this.setState(st=>({tourMenuOpen:!st.tourMenuOpen, newTourName:''}));
+  onNewTourName=(e)=>this.setState({newTourName:e.target.value});
+  createTour=()=>{ var n=(this.state.newTourName||'').trim()||'Untitled tour'; this.setState({inTour:true,title:n,tourMenuOpen:false,newTourName:''}); };
+  addToExistingTour=(name)=>this.setState({inTour:true,title:name,tourMenuOpen:false});
+  onTourKey=(e)=>{ if(e.key!=='Enter')return; e.preventDefault(); var q=(this.state.newTourName||'').trim(); if(!q)return; var ex=this.state.existingTours.filter(n=>n.toLowerCase()===q.toLowerCase())[0]; if(ex){ this.addToExistingTour(ex); } else { this.createTour(); } };
+  leaveTour=()=>this.setState({inTour:false,tourMenuOpen:false});
+  _removeFromTour=(i)=>this.setState(st=>{ var removed=st.scenes[i]; if(removed.id===st.sceneId) return {inTour:false,tourMenuOpen:false}; if(st.scenes.length<=1) return {inTour:false}; var scenes=st.scenes.filter((s,idx)=>idx!==i); var ns={scenes}; if(scenes.length<=1) ns.inTour=false; return ns; });
+  removeFromTour=(i)=>{ const sc=this.state.scenes[i]; this.askConfirm({title:'Remove pano from tour?',body:'\u201c'+((sc&&sc.name)||'This pano')+'\u201d becomes a standalone pano. Its points and photo are kept.',confirmLabel:'Remove from tour',danger:true,onConfirm:()=>this._removeFromTour(i)}); };
+  toggleIconPicker=()=>this.setState(st=>({iconPickerOpen:!st.iconPickerOpen}));
+  onIconQuery=(e)=>this.setState({iconQuery:e.target.value});
+  mdToHtml(src){ if(!src) return ''; var esc=function(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
+    var inline=function(t){ return esc(t).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>').replace(/\[(.+?)\]\((.+?)\)/g,'<a href="$2">$1</a>'); };
+    var lines=src.split(/\n/), out=[], list=[];
+    var flush=function(){ if(list.length){ out.push('<ul>'+list.map(function(li){return '<li>'+li+'</li>';}).join('')+'</ul>'); list=[]; } };
+    for(var i=0;i<lines.length;i++){ var ln=lines[i];
+      var dir=ln.match(/^@(audio|video|embed)\s+(\S+)$/i); if(dir){ flush(); out.push(this.mediaChipHtml(dir[2],dir[1].toLowerCase())); continue; }
+      var im=ln.match(/^!\[(.*?)\]\((.+?)\)\s*$/); if(im){ flush(); out.push('<img src="'+im[2]+'" alt="'+im[1]+'" style="max-width:100%;border-radius:10px;display:block;margin:8px 0">'); continue; }
+      var bu=ln.trim(); if(/^https?:\/\/\S+$/.test(bu)){ var mk=this.mediaKind(bu); if(mk.kind==='image'){ flush(); out.push('<img src="'+bu+'" alt="" style="max-width:100%;border-radius:10px;display:block;margin:8px 0">'); continue; } if(mk.kind){ flush(); out.push(this.mediaChipHtml(bu,mk.kind==='youtube'||mk.kind==='vimeo'?'embed':mk.kind)); continue; } }
+      if(/^#{1,3}\s/.test(ln)){ flush(); var lv=ln.match(/^#+/)[0].length; out.push('<h'+lv+'>'+inline(ln.replace(/^#+\s/,''))+'</h'+lv+'>'); }
+      else if(/^[-*]\s/.test(ln)){ list.push(inline(ln.replace(/^[-*]\s/,''))); }
+      else if(ln.trim()===''){ flush(); }
+      else { flush(); out.push('<div>'+inline(ln)+'</div>'); } }
+    flush(); return out.join(''); }
+  htmlToMd(root){ if(!root) return '';
+    var inline=function(node){ var s=''; node.childNodes.forEach(function(n){
+      if(n.nodeType===3){ s+=n.nodeValue; return; }
+      if(n.nodeType!==1) return;
+      var tag=n.nodeName;
+      if(n.getAttribute&&n.getAttribute('data-url')){ var _du=n.getAttribute('data-url'); var _dt=n.getAttribute('data-type'); s+='\n'+(_dt?('@'+_dt+' '+_du):_du)+'\n'; return; }
+      if(tag==='IMG'){ s+='!['+(n.getAttribute('alt')||'')+']('+(n.getAttribute('src')||'')+')'; return; }
+      if(tag==='BR'){ s+='\n'; return; }
+      var inner=inline(n); var fw=(n.style&&n.style.fontWeight)||'', fs=(n.style&&n.style.fontStyle)||'';
+      if(tag==='STRONG'||tag==='B'||fw==='bold'||fw==='700'){ s+='**'+inner+'**'; }
+      else if(tag==='EM'||tag==='I'||fs==='italic'){ s+='*'+inner+'*'; }
+      else if(tag==='A'){ s+='['+inner+']('+(n.getAttribute('href')||'')+')'; }
+      else { s+=inner; } }); return s; };
+    var blocks=[];
+    root.childNodes.forEach(function(n){
+      if(n.nodeType===3){ var t=n.nodeValue.replace(/\s+/g,' ').trim(); if(t) blocks.push(t); return; }
+      if(n.nodeType!==1) return; var tag=n.nodeName;
+      if(n.getAttribute&&n.getAttribute('data-url')){ var _du=n.getAttribute('data-url'); var _dt=n.getAttribute('data-type'); blocks.push(_dt?('@'+_dt+' '+_du):_du); return; }
+      if(tag==='IMG'){ blocks.push('!['+(n.getAttribute('alt')||'')+']('+(n.getAttribute('src')||'')+')'); return; }
+      if(tag==='UL'||tag==='OL'){ n.querySelectorAll('li').forEach(function(li){ blocks.push('- '+inline(li)); }); }
+      else if(/^H[1-6]$/.test(tag)){ var lv=Math.min(3,parseInt(tag.charAt(1),10)); blocks.push(Array(lv+1).join('#')+' '+inline(n)); }
+      else if(tag==='BR'){ }
+      else { var s=inline(n).trim(); if(s) blocks.push(s); } });
+    return blocks.join('\n').replace(/\n{3,}/g,'\n\n').trim(); }
+  jump=(id)=>{ const el=document.getElementById(id); if(el){ const y=el.getBoundingClientRect().top+window.scrollY-72; window.scrollTo({top:y,behavior:'smooth'}); } };
+  toggleFaq=(i)=>this.setState(st=>({faqOpen:st.faqOpen===i?-1:i}));
+  goLanding=()=>this.go('landing');
+  goUpload=()=>this.go('upload');
+  goEditor=()=>this.go('editor');
+  goViewer=()=>this.go('viewer');
+  goViewerDemo=()=>{ this.go('viewer'); };
+
+  enterEditor=()=>{ this.setState({screen:'editor',replaceId:null}); window.scrollTo(0,0); this.startProcessing(); };
+  onFile=(e)=>{ const f=e.target.files&&e.target.files[0]; if(f){ this.setState({userImg:URL.createObjectURL(f)}); } this.enterEditor(); };
+  onDrop=(e)=>{ e.preventDefault(); const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f){ this.setState({userImg:URL.createObjectURL(f)}); } this.enterEditor(); };
+  onDragOver=(e)=>{ e.preventDefault(); };
+
+  // upload = measurable (PUT progress); processing = indeterminate (poll manifest.json until 200)
+  startProcessing(){ if(this.procT)clearInterval(this.procT);
+    Component._procStart=Date.now();
+    this.setState({proc:{phase:'upload',pct:0,ready:false}});
+    this.procT=setInterval(()=>this.tickProcessing(),120); }
+  // rAF-driven so it survives instance replacement: upload 1.6s (measurable), tiling 2.6s (indeterminate)
+  tickProcessing(){
+    const t0=Component._procStart; if(!t0||!this.state.proc)return;
+    const e=Date.now()-t0, UP=1600, TILE=2600;
+    let next;
+    if(e<UP) next={phase:'upload',pct:Math.min(99,(e/UP)*100),ready:false};
+    else if(e<UP+TILE) next={phase:'processing',pct:100,ready:false};
+    else next={phase:'ready',pct:100,ready:true};
+    const c=this.state.proc;
+    if(next.ready&&this.procT){ clearInterval(this.procT); this.procT=null; }
+    if(c.phase!==next.phase||Math.round(c.pct)!==Math.round(next.pct)) this.setState({proc:next});
+  }
+
+  // ---- points ----
+  startPlacing=()=>this.setState(st=>({placing:!st.placing,placingMoveId:null,activePoint:null,viewerPoint:null}));
+  editPoint(p){ var st=this.state; var base=st.lang===st.langs[0]; var dt=p.title, db=p.body; if(!base){ var o=(st.i18n[st.lang]&&st.i18n[st.lang].points&&st.i18n[st.lang].points[p.id])||{}; dt=o.title||''; db=o.body||''; } this._seedMd=true; this.setState({activePoint:p.id,draftTitle:dt,draftBody:db,draftIcon:p.icon||'fa-location-dot',draftDepth:p.depth,placing:false,iconPickerOpen:false,iconQuery:'',mediaOpen:false,mediaUrl:'',sizeOpen:false}); }
+  onPointClick(p){ if(this.state.placing)return; if(this.state.screen==='editor') this.editPoint(p); else this.setState({viewerPoint:p.id}); }
+  onDraftTitle=(e)=>this.setState({draftTitle:e.target.value});
+  onDraftBody=(e)=>this.setState({draftBody:e.target.value});
+  setDraftIcon=(ic)=>this.setState({draftIcon:ic,iconPickerOpen:false,iconQuery:''});
+  savePoint=()=>{ var md=this.mdRef.current?this.htmlToMd(this.mdRef.current):this.state.draftBody; this.setState(st=>{ var base=st.lang===st.langs[0]; if(base){ return {points:st.points.map(p=>p.id===st.activePoint?{...p,title:st.draftTitle,body:md,icon:st.draftIcon,depth:st.draftDepth}:p),activePoint:null}; } var cur=st.i18n[st.lang]||{title:'',scenes:{},points:{}}; var pts=Object.assign({},cur.points); pts[st.activePoint]={title:st.draftTitle,body:md}; var i18n=Object.assign({},st.i18n); i18n[st.lang]=Object.assign({},cur,{points:pts}); return {points:st.points.map(p=>p.id===st.activePoint?{...p,icon:st.draftIcon,depth:st.draftDepth}:p), i18n:i18n, activePoint:null}; }); };
+  cancelPoint=()=>this.setState(st=>{ const p=st.points.find(x=>x.id===st.activePoint); if(p&&!p.title&&!p.body){ return {points:st.points.filter(x=>x.id!==st.activePoint),activePoint:null}; } return {activePoint:null}; });
+  deletePoint=()=>{ const id=this.state.activePoint; const p=this.state.points.find(x=>x.id===id); this.askConfirm({title:'Delete this point?',body:'\u201c'+((p&&p.title)||'Untitled point')+'\u201d will be removed from this pano.',confirmLabel:'Delete point',danger:true,onConfirm:()=>this.setState(st=>({points:st.points.filter(x=>x.id!==id),activePoint:null}))}); };
+  closeViewerPoint=()=>this.setState({viewerPoint:null});
+
+  // ---- config ----
+  onTitleInput=(e)=>{ var v=e.target.value; this.setState(st=>{ if(st.lang===st.langs[0]) return {title:v}; var cur=st.i18n[st.lang]||{title:'',scenes:{},points:{}}; var i18n=Object.assign({},st.i18n); i18n[st.lang]=Object.assign({},cur,{title:v}); return {i18n:i18n}; }); };
+  startEditTitle=()=>this.setState({editingTitle:true});
+  stopEditTitle=()=>this.setState({editingTitle:false});
+  onTitleKey=(e)=>{ if(e.key==='Enter'){ if(e.target.blur)e.target.blur(); this.setState({editingTitle:false}); } };
+  startEditScene=()=>this.setState({editingScene:true});
+  stopEditScene=()=>this.setState({editingScene:false});
+  onSceneNameInput=(e)=>{ var v=e.target.value; this.setState(st=>{ if(st.lang===st.langs[0]) return {scenes:st.scenes.map(s=>s.id===st.sceneId?{...s,name:v}:s)}; var cur=st.i18n[st.lang]||{title:'',scenes:{},points:{}}; var sc=Object.assign({},cur.scenes); sc[st.sceneId]=v; var i18n=Object.assign({},st.i18n); i18n[st.lang]=Object.assign({},cur,{scenes:sc}); return {i18n:i18n}; }); };
+  onSceneKey=(e)=>{ if(e.key==='Enter'){ if(e.target.blur)e.target.blur(); this.setState({editingScene:false}); } };
+  toggleAuto=()=>this.setState(st=>({autoRotate:!st.autoRotate}));
+  toggleCompass=()=>this.setState(st=>{ var sc=st.scenes.find(s=>s.id===st.sceneId); if(!sc||sc.north==null) return null; return {compass:!st.compass}; });
+  toggleFullscreen=()=>{ const el=this.rootRef.current; try{ if(!document.fullscreenElement){ el.requestFullscreen&&el.requestFullscreen(); } else { document.exitFullscreen&&document.exitFullscreen(); } }catch(_){ } this.setState(st=>({fullscreen:!st.fullscreen})); };
+
+  // ---- save (explicit; one write to the tour's Durable Object) ----
+  snapshot(){ const s=this.state; return JSON.stringify({title:s.title,scenes:s.scenes,points:s.points,links:s.links,tourCfg:s.tourCfg,langs:s.langs,i18n:s.i18n,visibility:s.visibility,slug:s.slug,published:s.published,entryId:s.entryId}); }
+  save=()=>{ if(this.state.saving)return; this.setState({saving:true}); clearTimeout(this._saveT); this._saveT=setTimeout(()=>{ this._savedSnapshot=this.snapshot(); this.setState({saving:false,lastSaved:'just now'}); },750); };
+
+  // ---- confirm dialog ----
+  askConfirm=(opts)=>this.setState({confirm:opts});
+  closeConfirm=()=>this.setState({confirm:null});
+  doConfirm=()=>{ const c=this.state.confirm; this.setState({confirm:null}); if(c&&c.onConfirm)c.onConfirm(); };
+
+  // ---- auth / account ----
+  signOut=()=>{ this.setState({authed:false,acctMenuOpen:false}); this.go('landing'); };
+  toggleAcctMenu=()=>this.setState(st=>({acctMenuOpen:!st.acctMenuOpen}));
+  goDashboard=()=>{ this.setState({acctMenuOpen:false}); this.go('dashboard'); };
+
+  // ---- dashboard / tour CRUD ----
+  openTour=(id)=>{ const t=this.state.tours.find(x=>x.id===id); this.setState(st=>({title:t?t.title:st.title, tours:st.tours.map(x=>({...x,current:x.id===id}))})); this.go('editor'); };
+  duplicateTour=(id)=>this.setState(st=>{ const t=st.tours.find(x=>x.id===id); if(!t)return{}; const copy={...t,id:'t'+Date.now(),title:t.title+' (copy)',views:0,updated:'just now',visibility:'private',current:false}; return {tours:[copy,...st.tours.map(x=>({...x,current:false}))]}; });
+  deleteTour=(id)=>{ const t=this.state.tours.find(x=>x.id===id); this.askConfirm({title:'Delete this tour?',body:'\u201c'+(t?t.title:'')+'\u201d and its '+(t?t.panos:0)+' panos will be permanently deleted. This can\u2019t be undone.',confirmLabel:'Delete tour',danger:true,onConfirm:()=>this.setState(st=>({tours:st.tours.filter(x=>x.id!==id)}))}); };
+  cycleTourVis=(id)=>this.setState(st=>{ const order=['public','unlisted']; return {tours:st.tours.map(t=>{ if(t.id!==id)return t; const i=(order.indexOf(t.visibility)+1)%order.length; return {...t,visibility:order[i]}; })}; });
+  newTourFromDash=()=>{ this.setState({acctMenuOpen:false}); this.go('upload'); };
+
+  // ---- visibility / slug / publish ----
+  setVisibility=(v)=>()=>this.setState({visibility:v});
+  setShareTab=(t)=>()=>this.setState({shareTab:t});
+  setEmbedScope=(v)=>()=>this.setState({embedScope:v});
+  setEmbedSize=(v)=>()=>this.setState({embedSize:v});
+  embedSrc(){ const st=this.state; const base='https://'+this.shareUrl()+'/embed'; return st.embedScope==='pano' ? base+'?pano='+st.sceneId : base; }
+  embedSnippet(){ const h=this.state.embedSize||480; return '<iframe src="'+this.embedSrc()+'"\n  width="100%" height="'+h+'" style="border:0"\n  allow="fullscreen; xr-spatial-tracking"></iframe>'; }
+  copyEmbed=()=>{ try{ navigator.clipboard.writeText(this.embedSnippet()); }catch(_){ } this.setState({embedCopied:true}); setTimeout(()=>this.setState({embedCopied:false}),1600); };
+  startEditSlug=()=>this.setState(st=>({editingSlug:true,slugDraft:st.slug}));
+  onSlugInput=(e)=>this.setState({slugDraft:(e.target.value||'').toLowerCase().replace(/[^a-z0-9-]+/g,'-').replace(/^-+/,'').slice(0,40)});
+  saveSlug=()=>this.setState(st=>({slug:((st.slugDraft||'').replace(/-+$/,''))||st.slug,editingSlug:false}));
+  onSlugKey=(e)=>{ if(e.key==='Enter'){e.preventDefault(); this.saveSlug();} if(e.key==='Escape'){this.setState({editingSlug:false});} };
+  togglePublished=()=>this.setState(st=>({published:!st.published}));
+
+
+  // ---- pano: replace image + entry/cover ----
+  setEntry=(id)=>(e)=>{ if(e)e.stopPropagation(); this.setState({entryId:id}); };
+  replacePano=(id)=>(e)=>{ if(e)e.stopPropagation(); this.setState({replaceId:id}); this.go('upload'); };
+
+  // ---- point: duplicate + reposition ----
+  duplicatePoint=()=>this.setState(st=>{ const p=st.points.find(x=>x.id===st.activePoint); if(!p)return{}; const id='p'+Date.now(); const c={...p,id,yaw01:(p.yaw01+0.05)%1,title:(p.title||'Point')+' (copy)'}; var dt=c.title,db=c.body; return {points:[...st.points,c],activePoint:id,draftTitle:dt,draftBody:db,draftIcon:c.icon,draftDepth:c.depth,_seedMd:true,sizeOpen:false,mediaOpen:false}; });
+  repositionPoint=()=>this.setState(st=>({placing:true,placingMoveId:st.activePoint,activePoint:null,sizeOpen:false}));
+
+  // ---- share ----
+  openShare=()=>this.setState({shareOpen:true});
+  closeShare=()=>this.setState({shareOpen:false,copied:false});
+  openSignIn=()=>this.setState({signInOpen:true});
+  closeSignIn=()=>this.setState({signInOpen:false});
+  signInWith=(k)=>{ const goDash=this.state.screen==='landing'; this.setState({signInOpen:false,authed:true}); if(goDash)this.go('dashboard'); };
+  openInsights=()=>this.setState({insightsOpen:true});
+  closeInsights=()=>this.setState({insightsOpen:false});
+  copyLink=()=>{ try{ navigator.clipboard.writeText(this.shareUrl()); }catch(_){ } this.setState({copied:true}); setTimeout(()=>this.setState({copied:false}),1600); };
+  shareUrl(){ return 'panote.io/s/'+(this.state.slug||'space'); }
+  openSocial(kind){ const u=encodeURIComponent('https://'+this.shareUrl()); const t=encodeURIComponent(this.state.title); const m={x:`https://twitter.com/intent/tweet?url=${u}&text=${t}`,fb:`https://www.facebook.com/sharer/sharer.php?u=${u}`,in:`https://www.linkedin.com/sharing/share-offsite/?url=${u}`,wa:`https://wa.me/?text=${t}%20${u}`}; try{ window.open(m[kind],'_blank','noopener'); }catch(_){ } }
+
+  stop=(e)=>{ e.stopPropagation(); };
+  scrollTop=()=>window.scrollTo({top:0,behavior:'smooth'});
+
+  // ---- markdown ----
+  md(src){ if(!src)return ''; const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); const lines=src.split(/\n/); let out=[],list=[];
+    const flush=()=>{ if(list.length){ out.push('<ul style="margin:6px 0;padding-left:18px">'+list.map(li=>'<li style="margin:2px 0">'+li+'</li>').join('')+'</ul>'); list=[]; } };
+    const inline=t=>esc(t).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>').replace(/\[(.+?)\]\((.+?)\)/g,'<a href="$2" target="_blank" style="color:var(--accent);text-decoration:underline">$1</a>');
+    for(const ln of lines){ const dir=ln.match(/^@(audio|video|embed)\s+(\S+)$/i); if(dir){ flush(); out.push(this.mediaEmbedHtml(dir[2],'',dir[1].toLowerCase())); continue; }
+      const im=ln.match(/^!\[(.*?)\]\((.+?)\)\s*$/); if(im){ flush(); out.push(this.mediaEmbedHtml(im[2],im[1],'image')); continue; }
+      const bu=ln.trim(); if(/^https?:\/\/\S+$/.test(bu)){ const me=this.mediaEmbedHtml(bu); if(me){ flush(); out.push(me); continue; } }
+      if(/^#{1,3}\s/.test(ln)){ flush(); const lv=ln.match(/^#+/)[0].length; out.push(`<div style="font:600 ${18-lv}px var(--fbody);margin:8px 0 4px">${inline(ln.replace(/^#+\s/,''))}</div>`); }
+      else if(/^[-*]\s/.test(ln)){ list.push(inline(ln.replace(/^[-*]\s/,''))); }
+      else if(ln.trim()===''){ flush(); }
+      else { flush(); out.push(`<p style="margin:7px 0">${inline(ln)}</p>`); } }
+    flush(); return out.join(''); }
+  mdEl(src,style){ return React.createElement('div',{style:style||{},dangerouslySetInnerHTML:{__html:this.md(src)}}); }
+
+  renderVals(){
+    const st=this.state, accent=this.props.accent||'#b5483a';
+    const screen=st.screen;
+    const isMobile=(st.vw||1200)<=600;
+    const isLanding=screen==='landing', isUpload=screen==='upload', isEditor=screen==='editor', isViewer=screen==='viewer', isDash=screen==='dashboard';
+    const isApp=isEditor||isViewer;
+    const cfg=st.tourCfg||{ctrlPos:'bottom',showMap:true,showCompass:true};
+    const scenes=st.scenes;
+    const sIdx=Math.max(0,scenes.findIndex(s=>s.id===st.sceneId));
+    const curScene=scenes[sIdx];
+    const startLabel=Math.round(curScene.startYaw*360)+'°';
+    const hasNorth=curScene.north!=null;
+    const northLabel=hasNorth?Math.round(curScene.north*360)+'°':null;
+    const compassOn=cfg.showCompass&&hasNorth;
+    const vis=st.points.filter(p=>p.scene===st.sceneId);
+    const active=st.points.find(p=>p.id===st.activePoint);
+    const viewer=st.points.find(p=>p.id===st.viewerPoint);
+    // ---- i18n effective values ----
+    const baseLang=st.langs[0]; const L=st.lang; const isBaseL=L===baseLang; const trL=st.i18n[L]||{};
+    const effTitle = isBaseL ? st.title : (trL.title||st.title);
+    const effSceneName = isBaseL ? curScene.name : ((trL.scenes&&trL.scenes[curScene.id])||curScene.name);
+    const effPt = (p)=>{ if(isBaseL) return {title:p.title,body:p.body}; const o=(trL.points&&trL.points[p.id])||{}; return {title:o.title||p.title, body:o.body||p.body}; };
+    const titleInputValue = isBaseL ? st.title : (trL.title||'');
+    const titlePh = isBaseL ? 'Untitled space' : (st.title||'Group');
+    const sceneInputValue = isBaseL ? curScene.name : ((trL.scenes&&trL.scenes[curScene.id])||'');
+    const scenePh = isBaseL ? 'Pano' : curScene.name;
+    const activeEff = active ? effPt(active) : {title:'',body:''};
+    const titleFieldPh = isBaseL ? 'e.g. The Fellowes ledger stone' : ((active&&active.title) ? active.title : 'Title');
+    const mdFieldPh = isBaseL ? 'Write a description…' : ((active&&active.body) ? active.body.replace(/[*#\[\]]/g,'').slice(0,80) : 'Add a translation…');
+    // language manager data
+    const coverage=(c)=>{ if(c===baseLang) return {full:true,frac:1,src:true}; const d=st.i18n[c]||{}; let total=1,done=(d.title?1:0); st.scenes.forEach(s=>{ total++; if(d.scenes&&d.scenes[s.id])done++; }); st.points.forEach(p=>{ total+=2; const o=(d.points&&d.points[p.id])||{}; if(o.title)done++; if(o.body)done++; }); return {full:done===total,frac:total?done/total:0,src:false}; };
+    const dotColor=(cv)=>cv.src?'#9a958c':(cv.full?'#1f8a5b':(cv.frac>0?'#c8762e':'rgba(26,24,21,.25)'));
+    const langList = st.langs.map(c=>{ const active=c===st.lang; const cv=coverage(c); return {code:c,label:this.LANGS[c]||c.toUpperCase(),short:c.toUpperCase(),onClick:()=>this.setLang(c),onRemove:(e)=>{e.stopPropagation();this.removeLang(c);},removable:c!==baseLang, isActive:active, rowStyle:{display:'flex',alignItems:'center',gap:'9px',padding:'8px 9px',borderRadius:'8px',cursor:'pointer',font:'500 13px var(--fbody)',background:active?'rgba(26,24,21,.06)':'transparent',color:'#1a1815'},
+      chipStyle:{display:'inline-flex',alignItems:'center',gap:'7px',padding:'6px 10px',borderRadius:'9px',cursor:'pointer',font:'600 12.5px var(--fbody)',border:'1px solid '+(active?'transparent':'rgba(26,24,21,.14)'),background:active?'#1a1815':'transparent',color:active?'#faf8f4':'rgba(26,24,21,.7)'},
+      dotStyle:{width:'7px',height:'7px',borderRadius:'50%',background:dotColor(cv),flex:'none'} }; });
+    const addableLangs = Object.keys(this.LANGS).filter(c=>st.langs.indexOf(c)<0).map(c=>({code:c,short:c.toUpperCase(),label:this.LANGS[c],onClick:()=>this.addLang(c)}));
+    const translating = !isBaseL;
+    const curLangLabel = this.LANGS[L]||L; const baseLangLabel = this.LANGS[baseLang]||baseLang;
+    const showLangCtl = isEditor || (isViewer && st.langs.length>1);
+    const langPillStyle={display:'flex',alignItems:'center',gap:'7px',background:'var(--cbg)',backdropFilter:'var(--cbf)',padding:'10px 13px',borderRadius:'11px',font:'600 13px var(--fbody)',color:(translating?accent:'#1a1815'),cursor:'pointer',boxShadow:'0 2px 10px rgba(0,0,0,.12)'};
+    const viewerLangs = st.langs.map(c=>({code:c,label:this.LANGS[c]||c,short:c.toUpperCase(),active:c===st.lang,onClick:()=>this.setLang(c),
+      rowStyle:{display:'flex',alignItems:'center',gap:'9px',padding:'9px 11px',borderRadius:'9px',cursor:'pointer',font:'500 13.5px var(--fbody)',background:c===st.lang?'rgba(26,24,21,.06)':'transparent',color:'#1a1815'}}));
+    const curLangShort = (st.lang||'en').toUpperCase();
+
+    const ptStyle=p=>({position:'absolute',left:(p.yaw01*SW)+'px',top:(p.pitch01*SH)+'px','--d':p.depth});
+    const visiblePoints=vis.map(p=>({...p,
+      style:ptStyle(p), onClick:()=>this.onPointClick(p),
+      onEdit:()=>this.editPoint(p),
+      rowTitle:(effPt(p).title)||'Untitled point',
+      iconCls:'fa-solid '+(p.icon||'fa-location-dot'),
+      depthLabel:p.depth.toFixed(2),
+      rowStyle:{display:'flex',alignItems:'center',gap:'10px',padding:'9px 10px',borderRadius:'9px',cursor:'pointer',background:st.activePoint===p.id?'color-mix(in srgb, var(--accent) 15%, transparent)':'transparent'},
+    }));
+    const arr=(st.links[st.sceneId]||[]);
+    const navArrows=arr.map(a=>({yaw:a.yaw01, onAimDown:this.arrowAimDown(a.to), onClick:()=>{ if(this._arrowDrag&&this._arrowDrag.moved)return; this.navigate(a.to); }}));
+    const linkRows=arr.map(a=>{ const s=scenes.find(x=>x.id===a.to); return {to:a.to, name:(s?s.name:a.to), bearing:Math.round(a.yaw01*360)+'°', onAim:this.aimLink(a.to), onLeft:this.nudgeLink(a.to,-4), onRight:this.nudgeLink(a.to,4), onRemove:this.removeLink(a.to)}; });
+    const addableLinks=scenes.filter(s=>s.id!==st.sceneId && !arr.some(a=>a.to===s.id)).map(s=>({name:s.name, onClick:this.addLink(s.id)}));
+    const showLinks=isEditor && st.inTour && scenes.length>1;
+    const emptyLinks=arr.length===0;
+    const canAddLink=addableLinks.length>0;
+    const showTour=isEditor && st.inTour;
+    const tourRows=scenes.map((s,i)=>{
+      const isCurrent=s.id===st.sceneId;
+      const lk=arr.find(a=>a.to===s.id);
+      const linked=!!lk;
+      return {
+        id:s.id, name:s.name, isCurrent,
+        thumbStyle:{position:'relative',flex:'none',width:'44px',height:'36px',borderRadius:'8px',cursor:'pointer',background:'linear-gradient(160deg, hsl('+s.hue+' 38% 44%), hsl('+(s.hue+10)+' 26% 22%))',outline:isCurrent?'2px solid '+accent:'1px solid rgba(26,24,21,.12)',outlineOffset:isCurrent?'1px':'0'},
+        rowStyle:{display:'flex',flexDirection:'column',gap:'9px',padding:'9px',borderRadius:'11px',background:isCurrent?'color-mix(in srgb, var(--accent) 12%, transparent)':'transparent',border:'1px solid '+(isCurrent?'color-mix(in srgb, var(--accent) 22%, transparent)':'rgba(26,24,21,.08)')},
+        onSwitch:()=>{ if(!isCurrent) this.navigate(s.id); },
+        onDetach:(e)=>{ e.stopPropagation(); this.removeFromTour(i); },
+        showCurrentTag:isCurrent,
+        showLinked:!isCurrent && linked,
+        showAdd:!isCurrent && !linked,
+        bearing: lk?Math.round(lk.yaw01*360)+'°':'',
+        onAim:this.aimLink(s.id), onLeft:this.nudgeLink(s.id,-4), onRight:this.nudgeLink(s.id,4),
+        onUnlink:this.removeLink(s.id), onAddLink:this.addLink(s.id),
+        isEntry:s.id===st.entryId, onSetEntry:this.setEntry(s.id), onReplace:this.replacePano(s.id),
+        entryStyle:{position:'absolute',bottom:'-4px',left:'-4px',width:'15px',height:'15px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',boxShadow:'0 1px 4px rgba(0,0,0,.4)',background:s.id===st.entryId?accent:'#1a1815',color:s.id===st.entryId?'#fff':'rgba(255,255,255,.5)'},
+        entryTip:s.id===st.entryId?'Tour opens on this pano':'Set as the tour\u2019s entry pano',
+      };
+    });
+
+    const tiles=[-SW,0,SW].map(x=>({style:{position:'absolute',top:0,left:x+'px',width:SW+'px',height:SH+'px'}}));
+
+    const flowDef=[['landing','Site'],['dashboard','My tours'],['upload','Upload'],['editor','Editor'],['viewer','Viewer']];
+    const flowSteps=flowDef.map(([s,label])=>({label,onClick:()=>this.go(s),style:{font:'500 11px ui-sans-serif,system-ui,sans-serif',padding:'6px 12px',borderRadius:'999px',cursor:'pointer',color:screen===s?'#14130f':'rgba(244,241,234,.62)',background:screen===s?'#faf8f4':'transparent'}}));
+
+    const sceneThumbs=scenes.map((s,i)=>({name:s.name,onRemove:(e)=>{e.stopPropagation();this.removeFromTour(i);},onClick:()=>this.navigate(s.id),style:{position:'relative',flex:'none',width:'54px',height:'42px',borderRadius:'9px',cursor:'pointer',background:`linear-gradient(160deg, hsl(${s.hue} 38% 44%), hsl(${s.hue+10} 26% 22%))`,outline:s.id===st.sceneId?'2px solid '+accent:'1px solid rgba(26,24,21,.12)',outlineOffset:s.id===st.sceneId?'1px':'0'}}));
+
+    const mapDirStyle={position:'absolute',left:curScene.mx+'%',top:curScene.my+'%',transform:'translate(-50%,-50%)',transformOrigin:'center',pointerEvents:'none'};
+    const mapLine=scenes.map(s=>s.mx+','+s.my).join(' ');
+    const mapCornerOff=(c)=>{ const o={}; if(c&&c[0]==='t'){o.top='74px';}else{o.bottom='22px';} if(c&&c[1]==='r'){o.right='18px';}else{o.left='18px';} return o; };
+    const mapPanelStyle={position:'absolute',bottom:'22px',left:'18px',width:'188px',background:'var(--mbg)',backdropFilter:'var(--cbf)',border:'1px solid rgba(255,255,255,.35)',borderRadius:'14px',padding:'12px',pointerEvents:'auto',boxShadow:'0 10px 30px rgba(0,0,0,.28)'};
+    const mapChipStyle={position:'absolute',bottom:'22px',left:'18px',display:'flex',alignItems:'center',gap:'8px',background:'var(--cbg)',backdropFilter:'var(--cbf)',padding:'8px 11px',borderRadius:'11px',cursor:'pointer',pointerEvents:'auto',boxShadow:'0 3px 14px rgba(0,0,0,.13)'};
+    const mapNodes=scenes.map(s=>({onClick:()=>this.navigate(s.id),style:{position:'absolute',left:s.mx+'%',top:s.my+'%',width:s.id===st.sceneId?'15px':'11px',height:s.id===st.sceneId?'15px':'11px',borderRadius:'50%',transform:'translate(-50%,-50%)',cursor:'pointer',background:s.id===st.sceneId?accent:'rgba(26,24,21,.45)',border:'2px solid #fff',boxShadow:'0 1px 4px rgba(0,0,0,.3)'}}));
+
+    const editorPanelStyle=isMobile
+      ?{position:'absolute',left:'8px',right:'8px',bottom:'8px',top:'auto',maxHeight:'46vh',pointerEvents:st.sizeOpen?'none':'auto',display:'flex',flexDirection:'column',gap:'8px',transition:'opacity .22s,transform .22s',opacity:st.sizeOpen?'0':'1',transform:st.sizeOpen?'translateY(12px)':'none'}
+      :{position:'absolute',top:'72px',left:'18px',bottom:'18px',width:'312px',pointerEvents:st.sizeOpen?'none':'auto',display:'flex',flexDirection:'column',gap:'12px',transition:'opacity .22s,transform .22s',opacity:st.sizeOpen?'0':'1',transform:st.sizeOpen?'translateX(-12px)':'none'};
+    const toggleOn=v=>({width:'38px',height:'22px',borderRadius:'999px',cursor:'pointer',transition:'background .15s',background:v?accent:'rgba(26,24,21,.18)',position:'relative',flex:'none'});
+    const tab=on=>({flex:1,textAlign:'center',padding:'8px 0',borderRadius:'8px',cursor:'pointer',font:'600 13px var(--fbody)',color:on?'#1a1815':'rgba(26,24,21,.5)',background:on?'#fff':'transparent',boxShadow:on?'0 1px 4px rgba(0,0,0,.1)':'none'});
+    const knob=v=>({position:'absolute',top:'2px',left:v?'18px':'2px',width:'18px',height:'18px',borderRadius:'50%',background:'#fff',transition:'left .15s',boxShadow:'0 1px 3px rgba(0,0,0,.3)'});
+    const segBtn=on=>({padding:'8px 0',borderRadius:'8px',cursor:'pointer',textAlign:'center',font:'600 12px var(--fbody)',background:on?accent:'rgba(26,24,21,.05)',color:on?'#fff':'rgba(26,24,21,.66)',transition:'background .12s'});
+    const ctrlPosOpts=[['bottom','Bottom'],['right','Right']].map(p=>({key:p[0],label:p[1],onClick:this.setCtrlPos(p[0]),style:segBtn(cfg.ctrlPos===p[0])}));
+    const cornerOpts=['tl','tr','bl','br'].map(k=>({key:k,onClick:this.setMapCorner(k),boxStyle:{position:'relative',height:'36px',borderRadius:'8px',cursor:'pointer',border:'1.5px solid '+(cfg.mapCorner===k?accent:'rgba(26,24,21,.16)'),background:cfg.mapCorner===k?'color-mix(in srgb, var(--accent) 12%, transparent)':'rgba(26,24,21,.02)'},dotStyle:{position:'absolute',width:'10px',height:'10px',borderRadius:'2px',background:cfg.mapCorner===k?accent:'rgba(26,24,21,.32)',[k[0]==='t'?'top':'bottom']:'6px',[k[1]==='l'?'left':'right']:'6px'}}));
+
+    const socials=[
+      {label:'X',glyph:'𝕏',kind:'x'},
+      {label:'Facebook',glyph:'f',kind:'fb'},
+      {label:'LinkedIn',glyph:'in',kind:'in'},
+      {label:'WhatsApp',glyph:'✆',kind:'wa'},
+    ].map(s=>({...s,onClick:()=>this.openSocial(s.kind),iconStyle:{width:'52px',height:'52px',borderRadius:'50%',background:'#1a1815',color:'#faf8f4',display:'flex',alignItems:'center',justifyContent:'center',font:'600 19px var(--fbody)'}}));
+
+    const proc=st.proc;
+    const logoMark=this.makeLogo(accent);
+    const side=cfg.ctrlPos==='right';
+    const fsIcon=React.createElement('svg',{viewBox:'0 0 24 24',width:16,height:16,fill:'none',stroke:'currentColor',strokeWidth:2,strokeLinecap:'round',strokeLinejoin:'round'},
+      React.createElement('path',{d:'M4 9 V4 H9'}),
+      React.createElement('path',{d:'M15 4 H20 V9'}),
+      React.createElement('path',{d:'M20 15 V20 H15'}),
+      React.createElement('path',{d:'M9 20 H4 V15'}),
+    );
+    const cbtn=(b)=>({...b,style:side
+      ?{width:'46px',height:'46px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:b.accent?accent:'var(--cbg)',color:b.accent?'#fff':'#1a1815',backdropFilter:'var(--cbf)',boxShadow:b.accent?'0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent)':'0 4px 16px rgba(0,0,0,.16)',fontSize:b.fs||'20px'}
+      :{width:isMobile?'46px':'40px',height:isMobile?'46px':'40px',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',background:b.accent?accent:'transparent',color:b.accent?'#fff':'#1a1815',fontSize:b.fs||'20px'}});
+    const controlButtons=[
+      {key:'zo',el:'−',title:'Zoom out',onClick:this.zoomOut},
+      {key:'zi',el:'+',title:'Zoom in',onClick:this.zoomIn,fs:'19px'},
+      {key:'fs',el:fsIcon,title:'Fullscreen',onClick:this.toggleFullscreen,accent:true},
+    ].map(cbtn);
+    const pill={display:'flex',alignItems:'center',gap:'5px',background:'var(--cbg)',backdropFilter:'var(--cbf)',padding:'6px',borderRadius:'14px',pointerEvents:'auto',boxShadow:'0 6px 24px rgba(0,0,0,.16)'};
+    const controlsWrapStyle=side
+      ?{position:'absolute',right:'18px',top:'50%',transform:'translateY(-50%)',display:'flex',flexDirection:'column',gap:'9px',pointerEvents:'auto'}
+      :{position:'absolute',bottom:'22px',left:'50%',transform:'translateX(-50%)',...pill};
+    const liked=st.likedScenes.includes(st.sceneId);
+    const curViews=this.fmt(curScene.views);
+    const curLikes=this.fmt(curScene.likes+(liked?1:0));
+    const totalViews=scenes.reduce((a,s)=>a+s.views,0);
+    const totalLikes=scenes.reduce((a,s)=>a+s.likes,0)+st.likedScenes.filter(id=>scenes.some(s=>s.id===id)).length;
+    const insDays=[...Array(14)].map((_,i)=>Math.round((Math.sin(i*0.7)*0.32+0.55+(i/13)*0.42)*100));
+    const insMax=Math.max(...insDays);
+    const insViewBars=insDays.map((v,i)=>({label:'day '+(i+1),style:{flex:'1',height:Math.round(v/insMax*100)+'%',minHeight:'4px',borderRadius:'3px 3px 0 0',background:i===13?accent:'color-mix(in srgb, var(--accent) 34%, transparent)'}}));
+    const insPanoStats=scenes.map(s=>({name:s.name,views:this.fmt(s.views),likes:this.fmt(s.likes),barStyle:{height:'100%',width:Math.round(s.views/totalViews*100)+'%',background:accent,borderRadius:'99px'}}));
+    const insTopPoints=st.points.slice(0,5).map((p,i)=>({rank:String(i+1).padStart(2,'0'),title:p.title||'Untitled point',views:this.fmt(Math.round(totalViews*0.42/(i+1)))}));
+    const iconList=['fa-location-dot','fa-circle-info','fa-landmark','fa-monument','fa-church','fa-book','fa-scroll','fa-image','fa-camera','fa-palette','fa-music','fa-star','fa-crown','fa-tree','fa-person','fa-bell','fa-gem','fa-flag'];
+    const iconQ=(st.iconQuery||'').toLowerCase().trim();
+    const iconFiltered=iconQ ? this.ICONS.filter(o=>o.ic.indexOf(iconQ)>=0 || o.kw.split(' ').some(w=>w.indexOf(iconQ)===0||w.indexOf(iconQ)>=0)) : this.ICONS;
+    const iconChoices=iconFiltered.map(o=>({cls:'fa-solid '+o.ic,onClick:()=>this.setDraftIcon(o.ic),style:{display:'flex',alignItems:'center',justifyContent:'center',height:'30px',borderRadius:'7px',cursor:'pointer',color:st.draftIcon===o.ic?'#fff':'rgba(26,24,21,.62)',background:st.draftIcon===o.ic?accent:'rgba(26,24,21,.05)',transition:'background .12s'}}));
+    const currentIconCls='fa-solid '+(st.draftIcon||'fa-location-dot');
+    const iconChevron=st.iconPickerOpen?'fa-solid fa-chevron-up':'fa-solid fa-chevron-down';
+    const iconPickerMb=st.iconPickerOpen?'10px':'18px';
+    const noIcons=iconFiltered.length===0;
+    const viewerIconCls='fa-solid '+((viewer&&viewer.icon)||'fa-location-dot');
+    const eyeIcon=React.createElement('svg',{viewBox:'0 0 24 24',width:15,height:15,fill:'none',stroke:'currentColor',strokeWidth:1.8},
+      React.createElement('path',{d:'M2 12 C5 6 19 6 22 12 C19 18 5 18 2 12 Z'}),
+      React.createElement('circle',{cx:12,cy:12,r:3}),
+    );
+    const heartEl=React.createElement('svg',{ref:this.heartRef,viewBox:'0 0 24 24',width:15,height:15,fill:liked?accent:'none',stroke:liked?accent:'currentColor',strokeWidth:1.8,style:{display:'block',transformOrigin:'center'}},
+      React.createElement('path',{d:'M12 20.5 C12 20.5 4.5 13.7 4.5 8.7 C4.5 5.9 6.8 4.1 9.1 5.1 C10.5 5.7 12 7.4 12 7.4 C12 7.4 13.5 5.7 14.9 5.1 C17.2 4.1 19.5 5.9 19.5 8.7 C19.5 13.7 12 20.5 12 20.5 Z'}),
+    );
+    const appleGlyph=React.createElement('svg',{viewBox:'0 0 24 24',width:17,height:17,fill:'currentColor'},React.createElement('path',{d:'M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z'}));
+    const ssoProviders=[
+      {key:'google',label:'Continue with Google',glyph:'G'},
+      {key:'apple',label:'Continue with Apple',glyph:appleGlyph},
+      {key:'facebook',label:'Continue with Facebook',glyph:'f'},
+    ].map(p=>({...p,onClick:()=>this.signInWith(p.key)}));
+    const navStyle={position:'fixed',top:0,left:0,right:0,zIndex:40,display:'flex',alignItems:'center',justifyContent:'space-between',padding:isMobile?(st.scrolled?'10px 16px':'13px 16px'):(st.scrolled?'12px 30px':'18px 30px'),pointerEvents:'auto',transition:'background .25s, box-shadow .25s, padding .25s, border-color .25s',borderBottom:'1px solid '+(st.scrolled?'rgba(26,24,21,.09)':'transparent'),background:st.scrolled?'rgba(250,248,244,.88)':'transparent',backdropFilter:st.scrolled?'blur(12px)':'none',boxShadow:st.scrolled?'0 6px 20px rgba(0,0,0,.05)':'none'};
+    const statsMini=isViewer&&isMobile&&!st.statsOpen;
+    const statsFull=isViewer&&(!isMobile||st.statsOpen);
+    const shareBase={display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',background:accent,color:'#fff',borderRadius:'11px',cursor:'pointer',font:'600 14px var(--fbody)',boxShadow:'0 6px 18px color-mix(in srgb, var(--accent) 38%, transparent)'};
+    const shareBtnStyle=isMobile?{...shareBase,width:'40px',height:'40px',padding:'0'}:{...shareBase,padding:'10px 17px'};
+    const shareBtnInner=isMobile?React.createElement('i',{className:'fa-solid fa-share-nodes',style:{fontSize:'16px'}}):'Share';
+
+    // ---- save state ----
+    const dirty = !st.saving && this._savedSnapshot!=null && this.snapshot()!==this._savedSnapshot;
+    const saveState = st.saving?'saving':(dirty?'dirty':'saved');
+    const saveLabel = st.saving?'Saving\u2026':(dirty?'Save':'Saved');
+    const saveBtnStyle = {display:'flex',alignItems:'center',gap:'7px',padding:'10px 15px',borderRadius:'11px',cursor:dirty?'pointer':'default',font:'600 14px var(--fbody)',boxShadow:'0 2px 10px rgba(0,0,0,.12)',transition:'background .15s',
+      background: st.saving?'rgba(255,255,255,.9)':(dirty?accent:'var(--cbg)'), color: dirty&&!st.saving?'#fff':'rgba(26,24,21,.55)', backdropFilter:'var(--cbf)'};
+
+    // ---- dashboard ----
+    const visMeta={public:{label:'Public',icon:'fa-globe',color:'#1f8a5b'},unlisted:{label:'Unlisted',icon:'fa-link',color:'#c8762e'},private:{label:'Private',icon:'fa-lock',color:'rgba(26,24,21,.5)'}};
+    const tourCards = st.tours.map(t=>{ const vm=visMeta[t.visibility]||visMeta.public; return {
+      id:t.id, title:t.title, panos:t.panos+' pano'+(t.panos===1?'':'s'), views:this.fmt(t.views)+' views', updated:t.updated, current:!!t.current,
+      visLabel:vm.label, visIcon:'fa-solid '+vm.icon, visColor:vm.color,
+      coverStyle:{position:'relative',height:'132px',backgroundColor:'hsl('+t.hue+' 30% 20%)',backgroundImage:'url('+t.cover+')',backgroundSize:'auto 235%',backgroundPosition:(t.head||40)+'% 40%',backgroundRepeat:'no-repeat'},
+      coverScrim:{position:'absolute',inset:0,background:'linear-gradient(180deg, rgba(10,8,6,.34) 0%, rgba(10,8,6,0) 34%, rgba(10,8,6,0) 64%, rgba(10,8,6,.22) 100%)',pointerEvents:'none'},
+      onOpen:()=>this.openTour(t.id), onDup:(e)=>{e.stopPropagation();this.duplicateTour(t.id);}, onDel:(e)=>{e.stopPropagation();this.deleteTour(t.id);}, onVis:(e)=>{e.stopPropagation();this.cycleTourVis(t.id);},
+    }; });
+    const dashTotals={ tours:st.tours.length, views:this.fmt(st.tours.reduce((a,t)=>a+t.views,0)), panos:st.tours.reduce((a,t)=>a+t.panos,0) };
+
+    // ---- share visibility / slug ----
+    const shareVisOpts=['public','unlisted'].map(v=>{ const vm=visMeta[v]; return {key:v,label:vm.label,icon:'fa-solid '+vm.icon,active:st.visibility===v,onClick:this.setVisibility(v),
+      desc:v==='public'?'Anyone with the link; may appear in panote discovery.':v==='unlisted'?'Only people with the link. Hidden from discovery.':'Only you and people you invite.',
+      rowStyle:{display:'flex',alignItems:'flex-start',gap:'11px',padding:'12px 13px',borderRadius:'12px',cursor:'pointer',border:'1.5px solid '+(st.visibility===v?accent:'rgba(26,24,21,.12)'),background:st.visibility===v?'color-mix(in srgb, var(--accent) 7%, #fff)':'#fff'},
+      iconWrap:{width:'30px',height:'30px',borderRadius:'8px',flex:'none',display:'flex',alignItems:'center',justifyContent:'center',background:st.visibility===v?accent:'rgba(26,24,21,.07)',color:st.visibility===v?'#fff':'rgba(26,24,21,.6)'} }; });
+    const curVis=visMeta[st.visibility]||visMeta.public;
+
+
+    // ---- confirm ----
+    const cf=st.confirm;
+
+    return {
+      rootRef:this.rootRef, viewportRef:this.viewportRef, worldRef:this.worldRef, ghostRef:this.ghostRef, flashRef:this.flashRef, compassRef:this.compassRef,
+      onDown:this.onDown, onMove:this.onMove, onUp:this.onUp, onDouble:this.onDouble,
+      viewportStyle:{position:'fixed',inset:0,zIndex:0,overflow:'hidden',background:'#0c0a08',touchAction:'none',cursor:st.placing?'none':'grab'},
+      tiles, visiblePoints, navArrows, navArrowsRef:this.navArrowsRef, arrowsEditable:isEditor,
+      showTour, tourRows,
+      userImg:st.userImg, userImgStyle:{position:'absolute',inset:0,backgroundImage:`url(${st.userImg})`,backgroundSize:'100% 100%'},
+      sceneImg:curScene.img||st.userImg, sceneImgStyle:{position:'absolute',inset:0,backgroundImage:`url(${curScene.img||st.userImg})`,backgroundSize:'100% 100%'},
+      logoMark,
+      isLanding, isUpload, isEditor, isViewer, isApp,
+      // marketing
+      navStyle, isMobile, showNavLinks:!isMobile, editorPanelStyle,
+      showGroup:st.inTour&&!isMobile, groupText:(isEditor&&!st.editingTitle)||isViewer, groupInput:isEditor&&st.editingTitle, panoText:(isEditor&&!st.editingScene)||isViewer, panoInput:isEditor&&st.editingScene,
+      inTour:st.inTour, standalone:isEditor&&!st.inTour, showFilmstrip:isEditor&&st.inTour, tourMenuOpen:st.tourMenuOpen, newTourName:st.newTourName, toggleTourMenu:this.toggleTourMenu, onNewTourName:this.onNewTourName, createTour:this.createTour, leaveTour:this.leaveTour,
+      existingToursList:st.existingTours.filter(n=>n.toLowerCase().indexOf((st.newTourName||'').trim().toLowerCase())>=0).map(n=>({name:n,onClick:()=>this.addToExistingTour(n)})),
+      tourQuery:st.newTourName, showCreateRow:(st.newTourName||'').trim().length>0 && !st.existingTours.some(n=>n.toLowerCase()===(st.newTourName||'').trim().toLowerCase()), onTourKey:this.onTourKey,
+      standaloneThumbStyle:{flex:'none',width:'54px',height:'42px',borderRadius:'9px',background:`linear-gradient(160deg, hsl(${curScene.hue} 38% 44%), hsl(${curScene.hue+10} 26% 22%))`,border:'1px solid rgba(26,24,21,.12)'},
+      startEditTitle:this.startEditTitle, stopEditTitle:this.stopEditTitle, onTitleKey:this.onTitleKey, startEditScene:this.startEditScene, stopEditScene:this.stopEditScene, onSceneNameInput:this.onSceneNameInput, onSceneKey:this.onSceneKey,
+      statsMini, statsFull, shareBtnStyle, shareBtnInner,
+      navLinks:[{label:'Features',id:'features'},{label:'How it works',id:'how'},{label:'Showcase',id:'showcase'},{label:'FAQ',id:'faq'}].map(l=>({...l,onClick:()=>this.jump(l.id)})),
+      goUpload:this.goUpload, goViewerDemo:this.goViewerDemo, goLanding:this.goLanding, goEditor:this.goEditor, goViewer:this.goViewer, scrollTop:this.scrollTop,
+      onDrop:this.onDrop, onDragOver:this.onDragOver, onFile:this.onFile,
+      steps:[
+        {num:'01 / Upload',title:'Upload your panorama',body:'Drop an equirectangular photo from any 360 camera. It opens in the viewer right away.'},
+        {num:'02 / Process',title:'We make it zoomable',body:'In the background we tile it for fast, full-resolution zoom on any device.'},
+        {num:'03 / Build',title:'Link scenes & hotspots',body:'Connect panoramas into a tour, drop hotspots with rich content, set languages.'},
+        {num:'04 / Share',title:'Share or embed',body:'Publish a link, post to socials, or embed it anywhere. No watermark.'},
+      ],
+      pillars:[
+        {icon:'fa-solid fa-magnifying-glass-plus',tag:'Full resolution',title:'Every pixel you captured',body:'Other free hosts crush your panorama to 4K. We keep every pixel, so visitors zoom into the real detail.'},
+        {icon:'fa-solid fa-infinity',tag:'No limits',title:'Unlimited everything',body:'Unlimited hotspots, panoramas, and tours. No tiered gates, no counting.'},
+        {icon:'fa-solid fa-ban',tag:'No paywall',title:'No watermark, ever',body:'No "made with" badge. No upsell wall in front of basic features. Free means free.'},
+        {icon:'fa-solid fa-lock-open',tag:'Yours to keep',title:'Your work stays yours',body:'You keep full control of every tour — edit, unpublish or delete it whenever you like.'},
+      ],
+      features:[
+        {icon:'fa-solid fa-diagram-project',title:'Multi-scene tours',body:'Link panoramas and walk between them with on-scene arrows.'},
+        {icon:'fa-solid fa-location-dot',title:'Info hotspots',body:'Titles, rich Markdown content, and custom icons on any point.'},
+        {icon:'fa-solid fa-language',title:'Multi-language tours',body:'Offer the same tour in several languages.'},
+        {icon:'fa-solid fa-magnifying-glass-plus',title:'Full-resolution zoom',body:'Tiled streaming keeps detail crisp all the way in.'},
+        {icon:'fa-solid fa-code',title:'One-click embed & share',body:'A link or an iframe. Works anywhere.'},
+        {icon:'fa-solid fa-vr-cardboard',title:'Mobile & VR',body:'Runs on phones and in headsets, with no app.'},
+      ],
+      compareRows:[
+        {label:'Max resolution',panote:'Full',others:'4K cap'},
+        {label:'Hotspots',panote:'Unlimited',others:'Limited'},
+        {label:'Tours',panote:'Unlimited',others:'Limited'},
+        {label:'Watermark',panote:'None',others:'Yes'},
+        {label:'Hosted + editor',panote:'Yes',others:'Yes'},
+        {label:'Price',panote:'Free',others:'Free → paid'},
+      ].map((r,i,a)=>({...r,rowStyle:{display:'grid',gridTemplateColumns:'1.4fr 1fr 1fr',background:'#faf8f4',borderTop:i===0?'none':'1px solid rgba(26,24,21,.09)'}})),
+      freeReasons:[
+        {icon:'fa-solid fa-feather',text:'Panote is a small, focused tool. No sales team, no growth targets to feed.'},
+        {icon:'fa-solid fa-server',text:'Our hosting runs on infrastructure with no bandwidth fees, so serving your tours costs us almost nothing.'},
+        {icon:'fa-solid fa-shield-halved',text:'No ads. We don\'t sell your data.'},
+        {icon:'fa-solid fa-building',text:'If we ever charge, it\'s organizations that want private hosting or support — never the people sharing tours.'},
+      ],
+      useCases:[
+        {icon:'fa-solid fa-landmark',title:'Museums & heritage',tint:'linear-gradient(160deg,#3a2f24,#7a5a38 70%,#c8a05a)'},
+        {icon:'fa-solid fa-house',title:'Real estate',tint:'linear-gradient(160deg,#26323a,#46708a 70%,#9fc4d6)'},
+        {icon:'fa-solid fa-graduation-cap',title:'Education',tint:'linear-gradient(160deg,#2c241f,#6a4636 70%,#b58a5a)'},
+        {icon:'fa-solid fa-plane',title:'Travel & hospitality',tint:'linear-gradient(160deg,#1f3a33,#357a5e 70%,#86c7a6)'},
+        {icon:'fa-solid fa-calendar-day',title:'Events',tint:'linear-gradient(160deg,#33233a,#6a3f7a 70%,#b58ac6)'},
+      ],
+      faqs:[
+        {q:'Is it really free?',a:'Yes. Uploading, hosting, hotspots, and tours are free with no limits. We don\'t ask for a card.'},
+        {q:'Are there resolution limits?',a:'No. We tile your panorama at full resolution, so visitors zoom into the real detail you captured.'},
+        {q:'Will you watermark my tours?',a:'Never. No badge, no overlay, no "made with Panote" on your tour.'},
+                {q:'Do I need an account?',a:'Only to create and manage tours. Visitors never need one — a tour link just opens.'},
+        {q:'Do I own what I upload?',a:'Yes. Your panoramas stay yours — we make no claim on them and never reuse them elsewhere.'},
+        {q:'Which cameras work?',a:'Any 360 camera that outputs an equirectangular image — Ricoh Theta, Insta360, GoPro Max, and others.'},
+      ].map((q,i)=>({...q,onClick:()=>this.toggleFaq(i),
+        iconStyle:{width:'26px',height:'26px',borderRadius:'8px',background:'color-mix(in srgb, var(--accent) 12%, transparent)',display:'flex',alignItems:'center',justifyContent:'center',flex:'none',transition:'transform .2s',transform:st.faqOpen===i?'rotate(45deg)':'none'},
+        answerStyle:{font:'400 15px/1.6 var(--fbody)',color:'rgba(26,24,21,.66)',overflow:'hidden',maxHeight:st.faqOpen===i?'140px':'0',marginTop:st.faqOpen===i?'14px':'0',opacity:st.faqOpen===i?'1':'0',transition:'all .25s ease'}})),
+      gallery:[
+        {name:'St Lawrence Jewry',place:'City of London',points:12,views:'2.4k',tint:'linear-gradient(150deg,#3a2f24,#7a5a38 60%,#c8a05a)'},
+        {name:'Rheingauer Dom',place:'Geisenheim, DE',points:8,views:'1.1k',tint:'linear-gradient(150deg,#26323a,#46708a 60%,#9fc4d6)'},
+        {name:'The Long Gallery',place:'Private collection',points:19,views:'863',tint:'linear-gradient(150deg,#2c241f,#6a4636 60%,#b58a5a)'},
+      ],
+      // app chrome
+      title:effTitle, sceneName:effSceneName, sceneCount:scenes.length,
+      titleInputValue, titlePh, sceneInputValue, scenePh,
+      onTitleInput:this.onTitleInput,
+      langList, addableLangs, langAddOpen:st.langAddOpen, toggleLangAdd:this.toggleLangAdd, translating, curLangLabel, baseLangLabel,
+      showLangCtl, langPillStyle, viewerLangs, langMenuOpen:st.langMenuOpen, toggleLangMenu:this.toggleLangMenu, curLangShort,
+      pointCount:vis.length, noPoints:vis.length===0,
+      startPlacing:this.startPlacing,
+      placeBtnLabel:st.placing?'Cancel':'+ Add point',
+      placeBtnStyle:{font:'600 12.5px var(--fbody)',padding:'7px 12px',borderRadius:'9px',cursor:'pointer',background:st.placing?'#1a1815':accent,color:'#faf8f4'},
+      autoToggleStyle:toggleOn(st.autoRotate), autoKnobStyle:knob(st.autoRotate),
+      compassToggleStyle:hasNorth?toggleOn(compassOn):{width:'38px',height:'22px',borderRadius:'999px',cursor:'not-allowed',background:'rgba(26,24,21,.12)',position:'relative',flex:'none',opacity:'.6'}, compassKnobStyle:knob(compassOn), compassDisabled:!hasNorth, hasNorth,
+      sceneThumbs,
+      setStartHere:this.setStartHere, setNorthHere:this.setNorthHere, startLabel, northLabel,
+      placing:st.placing,
+      zoomIn:this.zoomIn, zoomOut:this.zoomOut, resetView:this.resetView, toggleFullscreen:this.toggleFullscreen,
+      controlsWrapStyle, controlButtons,
+      curViews,
+      insightsOpen:st.insightsOpen, openInsights:this.openInsights, closeInsights:this.closeInsights,
+      insTotalViews:this.fmt(totalViews), insTotalLikes:this.fmt(totalLikes), insAvgTime:'2m 14s', insViewBars, insPanoStats, insTopPoints,
+      mapOpen:isViewer&&st.mapOpen&&cfg.showMap, mapClosed:isViewer&&!st.mapOpen&&cfg.showMap, toggleMap:this.toggleMap, mapNodes, mapLine, mapDirRef:this.mapDirRef, mapDirStyle, mapPanelStyle, mapChipStyle,
+      showCompass:compassOn&&isApp&&cfg.showCompass,
+      tourCfgOpen:st.tourCfgOpen, openTourCfg:this.openTourCfg, closeTourCfg:this.closeTourCfg,
+      ctrlPosOpts, cornerOpts, toggleTourMap:this.toggleTourMap, toggleTourCompass:this.toggleTourCompass,
+      tourMapToggleStyle:toggleOn(cfg.showMap), tourMapKnobStyle:knob(cfg.showMap),
+      tourAutoToggleStyle:toggleOn(st.autoRotate), tourAutoKnobStyle:knob(st.autoRotate),
+      tourCompassToggleStyle:toggleOn(cfg.showCompass), tourCompassKnobStyle:knob(cfg.showCompass),
+      // point editor
+      hasActivePoint:!!active, draftTitle:st.draftTitle, draftBody:st.draftBody,
+      activeDepth:active?active.depth.toFixed(2):'1.00',
+      onDraftTitle:this.onDraftTitle,
+      mdRef:this.mdRef, rteBold:this.rteExec('bold'), rteItalic:this.rteExec('italic'), rteH:this.rteExec('formatBlock','<h3>'), rteUl:this.rteExec('insertUnorderedList'), rteLink:this.rteLink,
+      titleFieldPh, mdFieldPh, translating,
+      savePoint:this.savePoint, cancelPoint:this.cancelPoint, deletePoint:this.deletePoint,
+      hasPreview:!!(st.draftBody&&st.draftBody.trim()),
+      draftPreview:this.mdEl(st.draftBody,{font:'400 14px/1.55 var(--fbody)',color:'rgba(26,24,21,.85)'}),
+      // viewer popover
+      hasViewerPoint:!!viewer, viewerTitle:viewer?effPt(viewer).title:'', viewerBody:viewer?this.mdEl(effPt(viewer).body):'', viewerIconCls,
+      iconChoices, setDraftIcon:this.setDraftIcon,
+      currentIconCls, iconChevron, iconPickerMb, noIcons, iconPickerOpen:st.iconPickerOpen, toggleIconPicker:this.toggleIconPicker, iconQuery:st.iconQuery, onIconQuery:this.onIconQuery,
+      mediaOpen:st.mediaOpen, mediaUrl:st.mediaUrl, mediaLabel:st.mediaLabel, toggleMedia:this.toggleMedia, onMediaUrl:this.onMediaUrl, onMediaLabel:this.onMediaLabel, onMediaKey:this.onMediaKey, insertMedia:this.insertMedia,
+      mediaTypeChooser:st.mediaOpen&&!st.mediaType, mediaTypeChosen:!!st.mediaType, backMediaType:this.backMediaType,
+      mediaTypes:[{t:'image',label:'Image',ic:'fa-solid fa-image'},{t:'audio',label:'Audio',ic:'fa-solid fa-volume-high'},{t:'video',label:'Video',ic:'fa-solid fa-film'},{t:'embed',label:'YouTube / Vimeo',ic:'fa-brands fa-youtube'},{t:'link',label:'Link',ic:'fa-solid fa-link'}].map(o=>({...o,onClick:()=>this.setMediaType(o.t)})),
+      mediaTypeLabel:({image:'Image',audio:'Audio',video:'Video',embed:'YouTube / Vimeo',link:'Link'})[st.mediaType]||'',
+      mediaPh:({image:'Paste image URL (jpg, png, gif, webp)',audio:'Paste audio file URL (mp3, wav, ogg)',video:'Paste video file URL (mp4, webm)',embed:'Paste a YouTube or Vimeo URL',link:'Link URL'})[st.mediaType]||'Paste a URL',
+      mediaEmbedNote:st.mediaType==='link'?'opens in a new tab':'embedded inline',
+      mediaIsLink:st.mediaType==='link',
+      draftDepth:st.draftDepth, depthLabel:(st.draftDepth||1).toFixed(2), onDepth:this.onDepth, sizeOpen:st.sizeOpen, toggleSize:this.toggleSize,
+      modalOverlayStyle:{position:'fixed',inset:0,zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px',transition:'background .2s',background:st.sizeOpen?'transparent':'rgba(20,18,14,.4)',backdropFilter:st.sizeOpen?'none':'blur(3px)',pointerEvents:st.sizeOpen?'none':'auto'},
+      modalCardStyle:{width:'100%',maxWidth:'480px',maxHeight:'90vh',overflowY:'auto',background:'#faf8f4',borderRadius:'18px',boxShadow:'0 40px 100px rgba(0,0,0,.4)',transition:'opacity .2s,transform .2s',opacity:st.sizeOpen?0:1,transform:st.sizeOpen?'scale(.96)':'none',pointerEvents:st.sizeOpen?'none':'auto'},
+      mediaBtnStyle:{width:'28px',height:'26px',display:'flex',alignItems:'center',justifyContent:'center',borderRadius:'6px',cursor:'pointer',background:st.mediaOpen?'#fff':'transparent'},
+      closeViewerPoint:this.closeViewerPoint, stop:this.stop,
+      // processing
+      showProc:isApp&&!!proc, procReady:!!(proc&&proc.ready), procBusy:!!(proc&&!proc.ready),
+      procTitle:!proc?'':proc.phase==='upload'?'Uploading panorama':proc.phase==='processing'?'Processing on our side':'Ready at full resolution',
+      procUploading:!!(proc&&proc.phase==='upload'), procProcessing:!!(proc&&proc.phase==='processing'),
+      procPct:proc?Math.round(proc.pct||0)+'%':'0%',
+      tilingBarStyle:{height:'100%',width:(proc?Math.round(proc.pct||0):0)+'%',background:accent,borderRadius:'99px',transition:'width .18s linear'},
+      indetBarStyle:{position:'absolute',top:0,bottom:0,width:'42%',borderRadius:'99px',background:accent,animation:'pn-indet 1.15s ease-in-out infinite'},
+      procNote:!proc?'':proc.phase==='upload'?'Full-resolution original — keep this tab open':proc.phase==='processing'?'Tiling takes a moment. We\u2019ll switch over the second it lands.':'Tiles cached \u00b7 zoom into every pixel',
+      // share
+      showShare:st.shareOpen, closeShare:this.closeShare, openShare:this.openShare, socials,
+      signInOpen:st.signInOpen, openSignIn:this.openSignIn, closeSignIn:this.closeSignIn, ssoProviders,
+      shareUrl:this.shareUrl(), copyLink:this.copyLink, copyLabel:st.copied?'Copied ✓':'Copy',
+      embedCode:this.embedSnippet(), embedCopyLabel:st.embedCopied?'Copied ✓':'Copy code', copyEmbed:this.copyEmbed, embedCopyStyle:{font:'600 12px var(--fbody)',color:accent,cursor:'pointer'},
+      embedScopeOpts:[
+        {v:'tour',label:'Whole tour',desc:'Visitors can walk between every pano'},
+        {v:'pano',label:'This pano only',desc:effSceneName+' — no links out'},
+      ].map(o=>({...o,onClick:this.setEmbedScope(o.v),style:{padding:'11px 12px',borderRadius:'12px',cursor:'pointer',textAlign:'left',border:'1.5px solid '+(st.embedScope===o.v?accent:'rgba(26,24,21,.13)'),background:st.embedScope===o.v?'color-mix(in srgb, '+accent+' 8%, #fff)':'#fff',color:'#1a1815'}})),
+      embedSizeOpts:[{v:380,label:'Compact'},{v:480,label:'Standard'},{v:660,label:'Large'}]
+        .map(o=>({...o,onClick:this.setEmbedSize(o.v),style:{flex:1,textAlign:'center',padding:'9px 0',borderRadius:'10px',cursor:'pointer',font:'500 12.5px var(--fbody)',border:'1.5px solid '+(st.embedSize===o.v?accent:'rgba(26,24,21,.13)'),background:st.embedSize===o.v?'color-mix(in srgb, '+accent+' 8%, #fff)':'#fff',color:'#1a1815'}})),
+      embedSteps:[
+        {n:'1',title:'Copy the code above',body:'It is a plain iframe — nothing to install.'},
+        {n:'2',title:'Paste it into an embed block',body:'WordPress “Custom HTML”, Squarespace “Code”, Webflow “Embed”, Notion /embed, or straight into your page’s HTML.'},
+        {n:'3',title:'Publish and check on a phone',body:'The width follows your layout; adjust the height above if it feels cramped.'},
+      ],
+      // flow
+      flowSteps,
+      // save
+      dirty, saveState, saveLabel, saveBtnStyle, save:this.save, lastSaved:st.lastSaved, savedClean:saveState==='saved',
+      // auth / account
+      authed:st.authed, signedOut:!st.authed, user:st.user, acctMenuOpen:st.acctMenuOpen, toggleAcctMenu:this.toggleAcctMenu, signOut:this.signOut, goDashboard:this.goDashboard, isDash,
+      // dashboard
+      tourCards, dashTotals, newTourFromDash:this.newTourFromDash,
+      // share visibility / slug / publish
+      shareVisOpts, curVisLabel:curVis.label, curVisIcon:'fa-solid '+curVis.icon, curVisColor:curVis.color,
+      slug:st.slug, editingSlug:st.editingSlug, slugDraft:st.slugDraft, startEditSlug:this.startEditSlug, onSlugInput:this.onSlugInput, saveSlug:this.saveSlug, onSlugKey:this.onSlugKey,
+      published:st.published, togglePublished:this.togglePublished, pubToggleStyle:toggleOn(st.published), pubKnobStyle:knob(st.published),
+      shareTab:st.shareTab, shareTabLink:st.shareTab==='link', shareTabEmbed:st.shareTab==='embed', shareTabPrivacy:st.shareTab==='privacy', slugText:!st.editingSlug,
+      onTabLink:this.setShareTab('link'), onTabPrivacy:this.setShareTab('privacy'), onTabEmbed:this.setShareTab('embed'),
+      tabLinkStyle:tab(st.shareTab==='link'), tabPrivacyStyle:tab(st.shareTab==='privacy'), tabEmbedStyle:tab(st.shareTab==='embed'),
+      // export
+      // point actions
+      duplicatePoint:this.duplicatePoint, repositionPoint:this.repositionPoint,
+      // confirm
+      confirm:cf, hasConfirm:!!cf, confirmTitle:cf?cf.title:'', confirmBody:cf?cf.body:'', confirmLabel:cf?(cf.confirmLabel||'Confirm'):'', confirmDanger:cf?!!cf.danger:false, closeConfirm:this.closeConfirm, doConfirm:this.doConfirm,
+      confirmBtnStyle:{font:'600 14px var(--fbody)',padding:'10px 20px',borderRadius:'10px',cursor:'pointer',color:'#fff',background:(cf&&cf.danger)?'#b5483a':'#1a1815'},
+    };
+  }
+}
+</script>
+</body>
+</html>
