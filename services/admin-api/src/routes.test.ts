@@ -852,9 +852,8 @@ describe('PUT /api/admin/tours/:tourId write guards', () => {
   });
 });
 
-// Unit B1: additive schema fields (north, point icon/size/media, tour
-// startPanoId/settings) round-trip through the existing PUT/GET routes,
-// and a pre-Wave-6 stored doc with none of them still parses.
+// Unit B1: additive fields round-trip through PUT/GET, and old docs
+// (or ones with out-of-range angles/fov) still parse.
 describe('B1 schema extensions round-trip through PUT/GET', () => {
   it('round-trips north and a hotspot with icon/size/media through config PUT then GET', async () => {
     const panoId = 'b1-config-p1';
