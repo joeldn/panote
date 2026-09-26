@@ -60,17 +60,28 @@ export const MAX_HOTSPOT_BODY_LENGTH = 20_000;
 // Font Awesome icon name, as rendered by the editor's icon picker.
 const ICON_PATTERN = /^[a-z0-9-]{1,40}$/;
 
-export const HotspotMediaSchema = z.object({
-  kind: z.enum(['image', 'video', 'youtube']),
-  // https only - rendered directly in the viewer/editor, and youtube embeds
-  // go through youtube-nocookie.com regardless (id is what that needs).
-  url: z
+export const MAX_MEDIA_URL_LENGTH = 2048;
+// A YouTube video id is always exactly 11 base64url-ish characters.
+const YOUTUBE_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+const mediaUrl = () =>
+  z
     .string()
     .url()
-    .refine((u) => u.startsWith('https://'), 'media url must be https')
-    .optional(),
-  id: z.string().max(128).optional(),
-});
+    .max(MAX_MEDIA_URL_LENGTH)
+    .refine((u) => u.startsWith('https://'), 'media url must be https');
+
+// A discriminated union, not one loose shape: image/video need a url,
+// youtube needs an id (rendered via youtube-nocookie.com), and neither
+// is optional on its own variant - unlike the earlier loose `id?: string`.
+export const HotspotMediaSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('image'), url: mediaUrl() }),
+  z.object({ kind: z.literal('video'), url: mediaUrl() }),
+  z.object({
+    kind: z.literal('youtube'),
+    id: z.string().regex(YOUTUBE_ID_PATTERN, `id must match ${YOUTUBE_ID_PATTERN}`),
+  }),
+]);
 export type HotspotMedia = z.infer<typeof HotspotMediaSchema>;
 
 // targetPanoId ends up in a tile/manifest URL the same way panoId does

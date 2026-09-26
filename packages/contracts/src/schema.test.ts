@@ -312,9 +312,9 @@ describe('HotspotSchema icon/size/media/body', () => {
     expect(() => HotspotSchema.parse({ ...base, size })).not.toThrow();
   });
 
-  it('accepts an image/video media with an https url', () => {
+  it.each(['image', 'video'] as const)('accepts a %s media with an https url', (kind) => {
     expect(() =>
-      HotspotSchema.parse({ ...base, media: { kind: 'image', url: 'https://example.com/a.jpg' } }),
+      HotspotSchema.parse({ ...base, media: { kind, url: 'https://example.com/a.jpg' } }),
     ).not.toThrow();
   });
 
@@ -328,6 +328,32 @@ describe('HotspotSchema icon/size/media/body', () => {
     expect(() =>
       HotspotSchema.parse({ ...base, media: { kind: 'audio', url: 'https://example.com/a.mp3' } }),
     ).toThrow();
+  });
+
+  it.each(['image', 'video'] as const)('rejects a %s media with no url', (kind) => {
+    expect(() => HotspotSchema.parse({ ...base, media: { kind } })).toThrow();
+  });
+
+  it('rejects a youtube media with no id', () => {
+    expect(() => HotspotSchema.parse({ ...base, media: { kind: 'youtube' } })).toThrow();
+  });
+
+  it('rejects a youtube id containing path characters', () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, media: { kind: 'youtube', id: 'a/b/c-1234' } }),
+    ).toThrow();
+  });
+
+  it('rejects a youtube id of the wrong length', () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, media: { kind: 'youtube', id: 'short' } }),
+    ).toThrow();
+  });
+
+  it('accepts a valid 11-char youtube id', () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, media: { kind: 'youtube', id: 'dQw4w9WgXcQ' } }),
+    ).not.toThrow();
   });
 
   it(`rejects a body longer than MAX_HOTSPOT_BODY_LENGTH (${MAX_HOTSPOT_BODY_LENGTH})`, () => {
