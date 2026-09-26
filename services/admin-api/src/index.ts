@@ -24,6 +24,22 @@ import { deletePano } from './delete-pano.js';
 // 400/404 error bodies - none of this is CDN/edge-cacheable.
 const NO_STORE = 'private, no-store';
 
+// Structural, not imported from 'zod' - admin-api has no direct zod
+// dependency, and SceneConfigSchema/TourDocSchema already satisfy this shape.
+type ParsableSchema<T> = {
+  safeParse: (raw: unknown) => { success: true; data: T } | { success: false };
+};
+
+// Canonicalizes a stored doc's angle/fov fields on read (safeParse never
+// rejects a finite value, only a genuine structural violation - e.g. a
+// hand-written array over a cap). Falls back to the raw stored JSON on
+// that rarer failure, so a doc the write-side cap didn't catch still GETs
+// 200, same as before this parse was added.
+const parseOrRaw = <T>(schema: ParsableSchema<T>, raw: unknown): T => {
+  const parsed = schema.safeParse(raw);
+  return parsed.success ? parsed.data : (raw as T);
+};
+
 const setEtagAndNoStore = (c: { header: (n: string, v: string) => void }, etag: string): void => {
   c.header('ETag', `"${etag}"`);
   c.header('Cache-Control', NO_STORE);
@@ -60,9 +76,9 @@ const loadSceneConfigs = async (
     const batch = panoIds.slice(i, i + CONFIG_FETCH_CONCURRENCY);
     await Promise.all(
       batch.map(async (panoId) => {
-        const got = await getJson<SceneConfig>(bucket, configKey(sub, panoId));
+        const got = await getJson<unknown>(bucket, configKey(sub, panoId));
         entries[panoId] = got
-          ? { config: got.value, etag: got.etag }
+          ? { config: parseOrRaw<SceneConfig>(SceneConfigSchema, got.value), etag: got.etag }
           : { missing: true, ...(await panoTombstoneStatus(bucket, sub, panoId)) };
       }),
     );
@@ -99,7 +115,10 @@ app.get('/api/admin/panos/:panoId', async (c) => {
   }
   setEtagAndNoStore(c, result.notModified ? result.etag : result.obj.etag);
   if (result.notModified) return c.body(null, 304);
-  return c.json({ config: await result.obj.json<SceneConfig>(), etag: result.obj.etag });
+  // Parsed (not just cast) so a legacy out-of-range angle/fov is
+  // canonicalized on load, not only on the next save.
+  const config = parseOrRaw<SceneConfig>(SceneConfigSchema, await result.obj.json());
+  return c.json({ config, etag: result.obj.etag });
 });
 
 app.put('/api/admin/panos/:panoId/config', async (c) => {
@@ -163,7 +182,8 @@ app.get('/api/admin/tours/:tourId', async (c) => {
   }
   setEtagAndNoStore(c, result.notModified ? result.etag : result.obj.etag);
   if (result.notModified) return c.body(null, 304);
-  const tour = await result.obj.json<TourDoc>();
+  // Parsed (not just cast), same reasoning as the config GET above.
+  const tour = parseOrRaw<TourDoc>(TourDocSchema, await result.obj.json());
   if (c.req.query('include') !== 'configs') return c.json({ tour, etag: result.obj.etag });
   const configs = await loadSceneConfigs(c.env.BUCKET, sub, tour.scenes);
   return c.json({ tour, etag: result.obj.etag, configs });

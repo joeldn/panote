@@ -964,6 +964,44 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
     expect(body.config.north).toBeUndefined();
   });
 
+  it('a legacy doc with out-of-range fov/yaw/pitch GETs 200 with canonical values, and PUT-round-trips them unchanged', async () => {
+    const panoId = 'b1-legacy-canonical-p1';
+    await putJson(
+      env.BUCKET,
+      configKey(MY_SUB, panoId),
+      {
+        panoId,
+        title: 'Legacy Hall',
+        initialView: { yaw: 0, pitch: 0, fov: 90 },
+        hotspots: [{ id: 'h1', type: 'info', yaw: 5, pitch: 2, title: 'Info' }],
+      },
+      { etagDoesNotMatch: '*' },
+    );
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    const got = (await get.json()) as {
+      etag: string;
+      config: { initialView?: { fov: number }; hotspots: { yaw: number; pitch: number }[] };
+    };
+    expect(got.config.initialView?.fov).toBe(80);
+    expect(got.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
+    expect(got.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
+
+    // Saving the already-canonical GET body back through PUT round-trips
+    // the same values (idempotent canonicalization).
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': got.etag },
+      body: JSON.stringify(got.config),
+    });
+    expect(put.status).toBe(200);
+    const reget = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const rebody = (await reget.json()) as typeof got;
+    expect(rebody.config.initialView?.fov).toBe(80);
+    expect(rebody.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
+    expect(rebody.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
+  });
+
   it('round-trips startPanoId and settings through tour PUT then GET', async () => {
     const create = await SELF.fetch('https://x/api/admin/tours', {
       method: 'POST',

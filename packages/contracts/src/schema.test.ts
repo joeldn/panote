@@ -113,16 +113,9 @@ describe('ViewSchema bounds (radians for yaw/pitch, degrees for fov)', () => {
     expect(() => ViewSchema.parse({ yaw: -Math.PI, pitch: Math.PI / 2, fov: 80 })).not.toThrow();
   });
 
-  it.each([
-    { yaw: 0, pitch: Math.PI / 2 + 0.01, fov: 60 },
-    { yaw: 0, pitch: 0, fov: 14 },
-    { yaw: 0, pitch: 0, fov: 81 },
-  ])('rejects an out-of-bounds view %j', (view) => {
-    expect(() => ViewSchema.parse(view)).toThrow();
-  });
-
-  // yaw is canonicalized (wrapped), not bounded - see the schema.ts comment
-  // above ViewSchema for why the viewer's own yaw is unbounded.
+  // yaw/pitch/fov are all canonicalized (wrapped or clamped), not bounded -
+  // see the schema.ts comment above ViewSchema for why. Only a non-finite
+  // value is rejected.
   it.each([
     [3.2, 3.2 - 2 * Math.PI],
     [-7, -7 + 2 * Math.PI],
@@ -132,8 +125,32 @@ describe('ViewSchema bounds (radians for yaw/pitch, degrees for fov)', () => {
     expect(r.yaw).toBeCloseTo(expected);
   });
 
+  it.each([
+    [Math.PI / 2 + 0.5, Math.PI / 2],
+    [-Math.PI / 2 - 0.5, -Math.PI / 2],
+  ])('clamps a pitch of %j to %j instead of rejecting it', (pitch, expected) => {
+    const r = ViewSchema.parse({ yaw: 0, pitch, fov: 60 });
+    expect(r.pitch).toBeCloseTo(expected);
+  });
+
+  it.each([
+    [90, 80],
+    [5, 15],
+  ])('clamps a fov of %j to %j instead of rejecting it', (fov, expected) => {
+    const r = ViewSchema.parse({ yaw: 0, pitch: 0, fov });
+    expect(r.fov).toBe(expected);
+  });
+
   it.each([NaN, Infinity, -Infinity])('rejects a non-finite yaw %j', (yaw) => {
     expect(() => ViewSchema.parse({ yaw, pitch: 0, fov: 60 })).toThrow();
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a non-finite pitch %j', (pitch) => {
+    expect(() => ViewSchema.parse({ yaw: 0, pitch, fov: 60 })).toThrow();
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a non-finite fov %j', (fov) => {
+    expect(() => ViewSchema.parse({ yaw: 0, pitch: 0, fov })).toThrow();
   });
 });
 
@@ -334,10 +351,15 @@ describe('HotspotSchema icon/size/media/body', () => {
     expect(() => HotspotSchema.parse({ ...base, yaw })).toThrow();
   });
 
-  it.each([Math.PI / 2 + 0.01, -Math.PI / 2 - 0.01])(
-    'rejects a pitch %j outside [-π/2, π/2]',
-    (pitch) => {
-      expect(() => HotspotSchema.parse({ ...base, pitch })).toThrow();
-    },
-  );
+  it.each([
+    [Math.PI / 2 + 0.5, Math.PI / 2],
+    [-Math.PI / 2 - 0.5, -Math.PI / 2],
+  ])('clamps a hotspot pitch of %j to %j instead of rejecting it', (pitch, expected) => {
+    const r = HotspotSchema.parse({ ...base, pitch });
+    expect(r.pitch).toBeCloseTo(expected);
+  });
+
+  it.each([NaN, Infinity, -Infinity])('rejects a non-finite hotspot pitch %j', (pitch) => {
+    expect(() => HotspotSchema.parse({ ...base, pitch })).toThrow();
+  });
 });

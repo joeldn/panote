@@ -2,16 +2,20 @@ import { z } from 'zod';
 
 import { PANO_PATTERN } from './keys.js';
 
-// Angles stay in radians (matching the viewer, packages/viewer/src/types.ts),
-// not the prototype's normalised 0..1 (decided, docs/wave6-plan.md D12).
+// Angles/fov stay in radians/degrees (matching the viewer,
+// packages/viewer/src/types.ts), not the prototype's normalised 0..1
+// (decided, docs/wave6-plan.md D12).
 //
-// yaw is canonicalized, not bounded: the viewer's yaw is deliberately
-// unbounded (PanoViewer.ts getView:350, panByPixels:292, momentum:392,
-// setNorth:242), so a value outside (-π, π] is a normal thing to save, not
-// invalid input. Only non-finite input (NaN, ±Infinity) is rejected.
+// All three are canonicalized, not bounded: yaw is deliberately unbounded
+// in the viewer (PanoViewer.ts getView:350, panByPixels:292, momentum:392,
+// setNorth:242), and pitch/fov are only clamped there on the way in
+// (PanoViewer.ts:90-91), never retroactively on a stored value - a legacy
+// or hand-edited doc can carry either out of range. So a finite value
+// outside range is wrapped/clamped rather than rejected; the api.ts
+// response schemas embed these, so this also fixes the editor's load, not
+// just save. Only non-finite input (NaN, ±Infinity) is rejected.
 const PITCH_MIN = -Math.PI / 2;
 const PITCH_MAX = Math.PI / 2;
-// Degrees, matching the viewer's default minFov/maxFov (PanoViewer.ts:90-91).
 const FOV_MIN = 15;
 const FOV_MAX = 80;
 
@@ -25,15 +29,26 @@ const normalizeAngle = (a: number): number => {
   return wrapped;
 };
 
+const clamp = (v: number, min: number, max: number): number => Math.min(max, Math.max(min, v));
+
 // finite() rejects NaN/±Infinity; transform (not preprocess - zod 3's
 // preprocess would widen the input type to unknown) then canonicalizes.
 const angle = () => z.number().finite().transform(normalizeAngle);
-const pitchField = () => z.number().min(PITCH_MIN).max(PITCH_MAX);
+const pitchField = () =>
+  z
+    .number()
+    .finite()
+    .transform((v) => clamp(v, PITCH_MIN, PITCH_MAX));
+const fovField = () =>
+  z
+    .number()
+    .finite()
+    .transform((v) => clamp(v, FOV_MIN, FOV_MAX));
 
 export const ViewSchema = z.object({
   yaw: angle(),
   pitch: pitchField(),
-  fov: z.number().min(FOV_MIN).max(FOV_MAX),
+  fov: fovField(),
 });
 export type View = z.infer<typeof ViewSchema>;
 
