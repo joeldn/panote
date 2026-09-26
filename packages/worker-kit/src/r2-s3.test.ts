@@ -35,6 +35,36 @@ describe('presignPut', () => {
       url.startsWith('https://acct123.r2.cloudflarestorage.com/mybucket/panos/p|1/config.json?'),
     ).toBe(true);
   });
+
+  it('pins content-type into SignedHeaders when opts.headers is given', async () => {
+    // aws4fetch treats content-type as unsignable by default (it's meant for
+    // streamed uploads with no known type yet), so pinning it needs allHeaders.
+    const client = createR2S3Client(config);
+    const url = await client.presignPut('panos/p1/original', {
+      headers: { 'content-type': 'image/png' },
+    });
+    const signedHeaders = new URL(url).searchParams.get('X-Amz-SignedHeaders');
+    expect(signedHeaders).toBe('content-type;host');
+  });
+
+  it('omits content-type from SignedHeaders when no headers are given', async () => {
+    const client = createR2S3Client(config);
+    const url = await client.presignPut('panos/p1/original');
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe('host');
+  });
+
+  it('changes the signature when the pinned content-type changes, proving it is covered', async () => {
+    const client = createR2S3Client(config);
+    const pngUrl = await client.presignPut('panos/p1/original', {
+      headers: { 'content-type': 'image/png' },
+    });
+    const jpegUrl = await client.presignPut('panos/p1/original', {
+      headers: { 'content-type': 'image/jpeg' },
+    });
+    expect(new URL(pngUrl).searchParams.get('X-Amz-Signature')).not.toBe(
+      new URL(jpegUrl).searchParams.get('X-Amz-Signature'),
+    );
+  });
 });
 
 describe('put', () => {
@@ -119,6 +149,30 @@ describe('head', () => {
 
     const result = await client.head('panos/missing/original');
     expect(result).toEqual({ ok: false, status: 404, etag: null });
+  });
+
+  it('returns ok: false and the real status on a 500, without swallowing it as a 404', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 500 })),
+    );
+    // retries: 2 - aws4fetch's own default of 10 retries an all-500 mock for
+    // ~30s of real backoff, which is exactly the bug this test guards against.
+    const client = createR2S3Client({ ...config, retries: 2 });
+
+    const result = await client.head('panos/p1/original');
+    expect(result).toEqual({ ok: false, status: 500, etag: null });
+  });
+
+  it("honours a small configured `retries`, instead of aws4fetch's 10-retry default, so a persistent 5xx surfaces quickly", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client({ ...config, retries: 2 });
+
+    await client.head('panos/p1/original');
+
+    // 1 initial attempt + 2 retries, not aws4fetch's default of 1 + 10.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 

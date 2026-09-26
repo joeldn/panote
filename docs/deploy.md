@@ -135,6 +135,17 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content \
 **Status: set for dev, outstanding for production** — `pano-content-dev`'s CORS ruleset is set
 from `infra/r2/cors.json`; `pano-content` doesn't exist yet.
 
+**Dev-only variant.** `infra/r2/cors.dev.json` is `cors.json` plus `http://localhost:5173` and
+`http://localhost:5174` on both rules, so the local Vite app can hit presigned URLs directly. It
+is for `pano-content-dev` **only** — never run this against `pano-content` (production), which
+must stay on `cors.json`'s origins.
+
+```bash
+# pano-content-dev only. NOT applied yet.
+pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content-dev \
+  --file ../../infra/r2/cors.dev.json
+```
+
 ### CDN custom domain (MANUAL)
 
 #### Prerequisite: WAF custom rule, before attaching the domain
@@ -535,7 +546,11 @@ entirely, leaving that one narrow case to the same manual per-key delete.
 A presigned upload URL stays valid for up to 900 seconds after `upload-api` issues it, and can
 still be used within that window to re-create a deleted pano's original — which re-tiles a pano
 that now has no `config.json`. That isn't a leak of anything new, and the pano can simply be
-deleted again.
+deleted again. The replace-image path (`POST /api/upload-url` with `panoId`) has the same TOCTOU:
+its ownership HEAD check runs once, at presign time, so a presign issued just before a DELETE can
+still land up to 900s later and recreate the original after the delete completed. It stays
+confined to the caller's own owner-scoped prefix either way, so the impact is the same as the
+fresh-upload case above — the pano can simply be deleted again.
 
 ---
 
@@ -603,9 +618,16 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   tiles are `public, max-age=31536000, immutable` and nothing purges the edge cache on delete (see
   "Deleted panos" above for the existing note on this). True revocation needs a Cloudflare cache
   purge by URL or prefix — deferred to Wave 6 / ops.
-- **The presigned upload PUT doesn't pin content-type.** `upload-api`'s presign signs only `host`
-  (`SignedHeaders=host`), so a PUT can upload any content-type the caller likes, not just images.
-  Wave 6 hardening item, alongside presign size limits.
+- **Hardened (pending dev verification): the presigned upload PUT now pins content-type.**
+  `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
+  with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's
+  presigned-URL docs — not yet verified in dev, since B3's dev E2E is outstanding. **content-length
+  is not signed and its enforcement by R2 is unverified** — R2's docs document content-type
+  restriction but never mention content-length, and aws4fetch treats both as unsignable by
+  default. The size cap (150 MiB) is instead enforced as input validation on the presign request
+  itself, backstopped by the tiler's existing byte (`MAX_ORIGINAL_BYTES` var,
+  `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel (`packages/tiler/src/pyramid.ts:43`)
+  caps.
 - **A tile 404 from the CDN is edge-cached for 4h** (`text/html`, `max-age=14400`). Low risk in
   practice since the viewer only requests tiles after the manifest exists, but worth knowing if a
   tile is ever requested before its manifest is written.
