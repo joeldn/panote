@@ -51,6 +51,16 @@ describe('r2-binding', () => {
     expect(kids).toEqual(expect.arrayContaining(['p1', 'p2']));
   });
 
+  it('writes customMetadata when given, readable back without a GET', async () => {
+    const key = 'panos/u-custom-metadata/p1/tile-failed';
+    await putJson(env.BUCKET, key, { reason: 'dlq' }, undefined, {
+      reason: 'dlq',
+      originalEtag: 'abc123',
+    });
+    const listed = await env.BUCKET.list({ prefix: key, include: ['customMetadata'] });
+    expect(listed.objects[0]?.customMetadata).toEqual({ reason: 'dlq', originalEtag: 'abc123' });
+  });
+
   it('deletes a prefix', async () => {
     const prefix = 'panos/u-delete/p1/';
     const key = `${prefix}config.json`;
