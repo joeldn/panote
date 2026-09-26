@@ -9,6 +9,10 @@ named environments (`dev` → `panote.dev`, `production` → `panote.io`) per Wo
 Resource names (R2 bucket, queues) deliberately keep the `pano-*` prefix inherited from
 pano-viewer — the dev bucket and queues are the *same* Cloudflare resources pano-viewer's
 Workers already use, cut over rather than recreated. Worker script names are `panote-*`.
+pano-viewer itself was retired on 2026-09-26: its dev Workers (`pano-upload-dev`,
+`pano-crud-dev`, `pano-tiler-dev`) and an orphaned container (`pano-tiler-dev-tiler-dev`) were
+deleted, and the `joeldn/pano-viewer` GitHub repo was archived (not deleted). The bucket, queue,
+and DLQ above are the only pieces of it still alive, and they belong to panote now.
 
 ---
 
@@ -57,8 +61,13 @@ matched package's directory as its cwd (not the repo root), which is why a relat
 `pano-uploads-dev`, and `pano-uploads-dlq-dev` already exist (inherited from pano-viewer's
 provisioning); bucket CORS, the `cdn.panote.dev` custom domain and its WAF rule, the R2 secrets,
 and the Auth0 dev tenant are now in place too (see each subsection below). `pano-content`,
-`pano-uploads`, and `pano-uploads-dlq` do not exist for production — `panote.io` is still on
-Route 53, not Cloudflare, so production provisioning can't start yet (see DNS section).
+`pano-uploads`, and `pano-uploads-dlq` do not exist for production. `panote.io` moved from Route
+53 to Cloudflare on 2026-09-26 (see DNS section), which clears the one blocker that kept
+production provisioning from starting at all — but none of the steps below have actually been
+run against production yet, and production is still unprovisioned for other reasons too (no
+production Auth0 tenant, no `PRODUCTION_PROVISIONED` repository variable — see Production status
+below). The `production` GitHub Environment itself already exists, with a required reviewer and a
+main-only branch policy, and holds `CLOUDFLARE_API_TOKEN`.
 
 None of `r2 bucket create` / `queues create` / `r2 bucket notification create` take a
 `--if-not-exists` flag (checked via `--help` against wrangler 4.120). Re-running `create`
@@ -201,9 +210,41 @@ production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-ap
   dev `routes` blocks all target `panote.dev`, and their first dev deploy (see the checklist
   below) already succeeded against it. `workers_dev: true` still gives a second, always-reachable
   `*.workers.dev` URL for smoke tests, independent of the route.
-- **`panote.io`** — currently on AWS Route 53, not Cloudflare. Production is blocked on this
-  move happening (same steps as above) before *any* production provisioning — bucket, queues,
-  routes, custom domain — can proceed.
+- **`panote.io`** — **moved from AWS Route 53 to Cloudflare on 2026-09-26**: same nameservers as
+  `panote.dev` (`jo.ns.cloudflare.com` / `kaiser.ns.cloudflare.com`), set at the registrar
+  (Namecheap), with the .io registry delegating to them at ~05:48 UTC. Zone is on the Free plan.
+  No web records exist yet — no A/AAAA/CNAME — so there's nothing for a production route to
+  attach to until production provisioning creates them. The old Route 53 zone carried
+  `issue`/`issuewild "amazon.com"` CAA records left over from an abandoned ACM/CloudFront plan;
+  they weren't carried over, and nothing Amazon-only should be added back to the Cloudflare
+  zone — an Amazon-only CAA record would block Cloudflare from issuing its own certificate for
+  the zone. This move clears the DNS blocker on production provisioning (see Production status
+  below); production remains otherwise unprovisioned.
+- The old Route 53 hosted zone for `panote.io` (in the panote AWS management account) was deleted
+  on 2026-09-26, via a targeted `pulumi destroy` of the zone and its three records in the legacy
+  Pulumi `management` stack (archived `pano-viewer` repo, `legacy/aws-pulumi`). The rest of the
+  panote AWS organization — management/dev/prod/log-archive accounts, SCPs, CloudTrail, budgets,
+  GitHub OIDC roles — is kept on purpose. That stack's code still wires in `deployDns()`, so a
+  future `pulumi up` of `management` would recreate the zone unless that wiring is removed first
+  (noted locally in that checkout's `SUPERSEDED.md`, since the repo is archived).
+
+### Email
+
+`*@panote.io` mail now goes through Cloudflare Email Routing: a single catch-all rule forwards
+every address to the owner's personal inbox (not recorded here). Records: MX
+`route1/2/3.mx.cloudflare.net`, SPF `v=spf1 include:_spf.mx.cloudflare.net ~all`, DKIM at
+`cf2024-1._domainkey`. This replaces ImprovMX, a third-party forwarder: `panote.io` was deleted
+from ImprovMX on 2026-09-26.
+The catch-all is load-bearing, not cosmetic: the AWS organization's root-user emails
+(`aws-root@panote.io`, plus-addressed `aws-root+dev@`/`+prod@`/`+logarchive@`), the
+billing/security/ops contact addresses, and the Cloudflare account login itself are all
+`@panote.io` — don't remove the catch-all or change the MX records without a replacement already
+in place, or account recovery breaks.
+
+`panote.dev` email is a separate, open follow-up: its MX records still point at Namecheap's
+eforward, which stops working once a domain's nameservers leave Namecheap — so `panote.dev`
+inbound mail is likely already broken. Nothing depends on it yet; moving it to Cloudflare Email
+Routing too hasn't been done.
 
 ---
 
@@ -502,20 +543,23 @@ deleted again.
 
 **Unprovisioned.** None of the following exist yet: `pano-content`, `pano-uploads`,
 `pano-uploads-dlq`, the R2→queue notification, bucket CORS, the `cdn.panote.io` custom domain,
-`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` secrets, or a production Auth0 tenant. `panote.io` is
-not a Cloudflare zone, so the `routes` blocks each Worker's `wrangler.jsonc` already declares
-for `production` cannot take effect regardless. Every `production` env block in every
+`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` secrets, or a production Auth0 tenant. `panote.io`
+became a Cloudflare zone on 2026-09-26 (see DNS section above), so that particular blocker on
+the `routes` blocks each Worker's `wrangler.jsonc` already declares for `production` is cleared
+— but the zone has no web records yet, so nothing is actually live, and every other piece of
+production provisioning below is still outstanding. Every `production` env block in every
 `wrangler.jsonc` is deliberately declared-but-unprovisioned — the config exists so Wave 5
 doesn't have to reverse-engineer it, but none of it is live. Before a production deploy can
-succeed: move `panote.io` to Cloudflare (DNS section above), run every "outstanding" step in
-One-time provisioning above with `production` in place of `dev`, provision the production Auth0
-tenant, get the `production` GitHub Environment's reviewer approval configured, and — only once
-all of that is actually done — set the repository variable `PRODUCTION_PROVISIONED` to the
-literal string `true`. `deploy.yml`'s `resolve-environment` job hard-stops any production deploy
-until that variable is `true` (see GitHub setup above); it exists because nothing downstream can
-otherwise tell "provisioned" from "not provisioned" on its own — `wrangler deploy` would just
-fail mid-matrix against whichever resource happens to be missing for whichever service deploys
-first.
+succeed: run every "outstanding" step in One-time provisioning above with `production` in place
+of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, and —
+only once all of that is actually done — set the repository variable `PRODUCTION_PROVISIONED` to
+the literal string `true`. The `production` GitHub Environment itself is already provisioned (a
+required reviewer, a main-only branch policy, and `CLOUDFLARE_API_TOKEN` — see GitHub setup
+above); it's the resources and config underneath it that are missing. `deploy.yml`'s
+`resolve-environment` job hard-stops any production deploy until that variable is `true` (see
+GitHub setup above); it exists because nothing downstream can otherwise tell "provisioned" from
+"not provisioned" on its own — `wrangler deploy` would just fail mid-matrix against whichever
+resource happens to be missing for whichever service deploys first.
 
 ---
 
