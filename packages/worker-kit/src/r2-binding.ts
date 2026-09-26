@@ -15,12 +15,15 @@ export const getJson = async <T>(
  *   - `undefined`                 — unconditional overwrite
  * A failed precondition returns `{ ok: false, conflict: true }` (R2 puts return
  * null when `onlyIf` does not hold); an unconditional put always succeeds.
+ * `customMetadata`, when given, lets a summary field be read back via
+ * `bucket.list({ include: ['customMetadata'] })` with no extra GET.
  */
 export const putJson = async (
   bucket: R2Bucket,
   key: string,
   value: unknown,
   onlyIf?: R2Conditional,
+  customMetadata?: Record<string, string>,
 ): Promise<{ ok: true; etag: string } | { ok: false; conflict: true }> => {
   const res = await bucket.put(key, JSON.stringify(value), {
     ...(onlyIf ? { onlyIf } : {}),
@@ -28,6 +31,7 @@ export const putJson = async (
       contentType: 'application/json',
       cacheControl: 'public, max-age=30',
     },
+    ...(customMetadata ? { customMetadata } : {}),
   });
   if (!res) return { ok: false, conflict: true };
   return { ok: true, etag: res.etag };
