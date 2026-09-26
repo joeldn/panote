@@ -977,16 +977,14 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
       },
       { etagDoesNotMatch: '*' },
     );
-    // admin-api's GET does not parse the stored doc (that's the point: it's
-    // not this route's job) - canonicalization happens where the response
-    // is consumed, via PanoConfigOkSchema (packages/contracts/src/api.test.ts
-    // proves this schema canonicalizes on its own).
+    // admin-api's GET doesn't parse the stored doc; canonicalization is
+    // whatever consumes the response with PanoConfigOkSchema (web-kit).
     const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
     expect(get.status).toBe(200);
     const canonical = PanoConfigOkSchema.parse(await get.json());
     expect(canonical.config.initialView?.fov).toBe(80);
-    expect(canonical.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
-    expect(canonical.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
+    expect(canonical.config.hotspots[0]?.yaw).toBe(5 - 2 * Math.PI);
+    expect(canonical.config.hotspots[0]?.pitch).toBe(Math.PI / 2);
 
     // Saving the canonical values through PUT (admin-api's write path
     // already parses with SceneConfigSchema) round-trips them unchanged.
@@ -1001,8 +999,8 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
       config: { initialView?: { fov: number }; hotspots: { yaw: number; pitch: number }[] };
     };
     expect(rebody.config.initialView?.fov).toBe(80);
-    expect(rebody.config.hotspots[0]?.yaw).toBeCloseTo(5 - 2 * Math.PI);
-    expect(rebody.config.hotspots[0]?.pitch).toBeCloseTo(Math.PI / 2);
+    expect(rebody.config.hotspots[0]?.yaw).toBe(5 - 2 * Math.PI);
+    expect(rebody.config.hotspots[0]?.pitch).toBe(Math.PI / 2);
   });
 
   it('round-trips startPanoId and settings through tour PUT then GET', async () => {

@@ -4,6 +4,7 @@ import {
   MAX_HOTSPOT_BODY_LENGTH,
   MAX_HOTSPOT_ID_LENGTH,
   MAX_HOTSPOTS,
+  MAX_ID_LENGTH,
   MAX_SCENE_DESCRIPTION_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_TOUR_SCENES,
@@ -47,6 +48,16 @@ describe('SceneConfigSchema', () => {
       expect(() => SceneConfigSchema.parse({ panoId, title: 'Hall', hotspots: [] })).not.toThrow();
     },
   );
+
+  it(`accepts a panoId exactly MAX_ID_LENGTH (${MAX_ID_LENGTH}) long`, () => {
+    const panoId = 'p'.repeat(MAX_ID_LENGTH);
+    expect(() => SceneConfigSchema.parse({ panoId, title: 'Hall', hotspots: [] })).not.toThrow();
+  });
+
+  it(`rejects a panoId longer than MAX_ID_LENGTH (${MAX_ID_LENGTH})`, () => {
+    const panoId = 'p'.repeat(MAX_ID_LENGTH + 1);
+    expect(() => SceneConfigSchema.parse({ panoId, title: 'Hall', hotspots: [] })).toThrow();
+  });
 
   // Proves a pre-Wave-6 stored doc (no north/media/icon/size fields) still
   // parses now that those fields exist as optional additions.
@@ -148,9 +159,7 @@ describe('ViewSchema bounds (radians for yaw/pitch, degrees for fov)', () => {
     expect(() => ViewSchema.parse({ yaw: -Math.PI, pitch: Math.PI / 2, fov: 80 })).not.toThrow();
   });
 
-  // yaw/pitch/fov are all canonicalized (wrapped or clamped), not bounded -
-  // see the schema.ts comment above ViewSchema for why. Only a non-finite
-  // value is rejected.
+  // Canonicalized (wrapped/clamped), not bounded - only non-finite rejects.
   it.each([
     [3.2, 3.2 - 2 * Math.PI],
     [-7, -7 + 2 * Math.PI],
@@ -237,6 +246,25 @@ describe('TourDocSchema', () => {
     ).toThrow();
   });
 
+  it(`accepts a tourId/startPanoId exactly MAX_ID_LENGTH (${MAX_ID_LENGTH}) long`, () => {
+    const id = 'p'.repeat(MAX_ID_LENGTH);
+    expect(() =>
+      TourDocSchema.parse({ tourId: id, title: 'WWII', scenes: [], startPanoId: id }),
+    ).not.toThrow();
+  });
+
+  it(`rejects a tourId longer than MAX_ID_LENGTH (${MAX_ID_LENGTH})`, () => {
+    const tourId = 'p'.repeat(MAX_ID_LENGTH + 1);
+    expect(() => TourDocSchema.parse({ tourId, title: 'WWII', scenes: [] })).toThrow();
+  });
+
+  it(`rejects a startPanoId longer than MAX_ID_LENGTH (${MAX_ID_LENGTH})`, () => {
+    const startPanoId = 'p'.repeat(MAX_ID_LENGTH + 1);
+    expect(() =>
+      TourDocSchema.parse({ tourId: 't1', title: 'WWII', scenes: [], startPanoId }),
+    ).toThrow();
+  });
+
   it('rejects settings with an invalid controls value', () => {
     expect(() =>
       TourDocSchema.parse({
@@ -287,6 +315,19 @@ describe('TourSceneSchema.panoId', () => {
   it.each(['a|b', 'a b', 'a/b', ''])('rejects a panoId %j outside PANO_PATTERN', (panoId) => {
     expect(() => TourSceneSchema.parse({ panoId })).toThrow();
   });
+
+  it(`accepts a panoId exactly MAX_ID_LENGTH (${MAX_ID_LENGTH}) long`, () => {
+    expect(() => TourSceneSchema.parse({ panoId: 'p'.repeat(MAX_ID_LENGTH) })).not.toThrow();
+  });
+
+  it(`rejects a panoId longer than MAX_ID_LENGTH (${MAX_ID_LENGTH})`, () => {
+    expect(() => TourSceneSchema.parse({ panoId: 'p'.repeat(MAX_ID_LENGTH + 1) })).toThrow();
+  });
+
+  it('rejects a non-finite mapX/mapY', () => {
+    expect(() => TourSceneSchema.parse({ panoId: 'p1', mapX: NaN })).toThrow();
+    expect(() => TourSceneSchema.parse({ panoId: 'p1', mapY: Infinity })).toThrow();
+  });
 });
 
 describe('HotspotSchema.targetPanoId', () => {
@@ -321,6 +362,18 @@ describe('HotspotSchema.targetPanoId', () => {
         title: 'info',
         targetPanoId: '',
       }),
+    ).toThrow();
+  });
+
+  it(`accepts a targetPanoId exactly MAX_ID_LENGTH (${MAX_ID_LENGTH}) long`, () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, targetPanoId: 'p'.repeat(MAX_ID_LENGTH) }),
+    ).not.toThrow();
+  });
+
+  it(`rejects a targetPanoId longer than MAX_ID_LENGTH (${MAX_ID_LENGTH})`, () => {
+    expect(() =>
+      HotspotSchema.parse({ ...base, targetPanoId: 'p'.repeat(MAX_ID_LENGTH + 1) }),
     ).toThrow();
   });
 });

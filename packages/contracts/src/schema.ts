@@ -2,18 +2,8 @@ import { z } from 'zod';
 
 import { PANO_PATTERN } from './keys.js';
 
-// Angles/fov stay in radians/degrees (matching the viewer,
-// packages/viewer/src/types.ts), not the prototype's normalised 0..1
-// (decided, docs/wave6-plan.md D12).
-//
-// All three are canonicalized, not bounded: yaw is deliberately unbounded
-// in the viewer (PanoViewer.ts getView:350, panByPixels:292, momentum:392,
-// setNorth:242), and pitch/fov are only clamped there on the way in
-// (PanoViewer.ts:90-91), never retroactively on a stored value - a legacy
-// or hand-edited doc can carry either out of range. So a finite value
-// outside range is wrapped/clamped rather than rejected; the api.ts
-// response schemas embed these, so this also fixes the editor's load, not
-// just save. Only non-finite input (NaN, ±Infinity) is rejected.
+// Radians/degrees, canonicalized not bounded: the viewer's yaw is unbounded
+// (PanoViewer.ts panByPixels:292) and pitch/fov clamp only on setView (:344-346).
 const PITCH_MIN = -Math.PI / 2;
 const PITCH_MAX = Math.PI / 2;
 const FOV_MIN = 15;
@@ -60,6 +50,9 @@ export const MAX_HOTSPOT_BODY_LENGTH = 20_000;
 export const MAX_TITLE_LENGTH = 200;
 export const MAX_SCENE_DESCRIPTION_LENGTH = 2000;
 export const MAX_HOTSPOT_ID_LENGTH = 64;
+// A doc already over a cap (legacy or hand-written) fails to parse on
+// load; admin-api does not truncate on read to make it fit.
+export const MAX_ID_LENGTH = 64;
 
 // Font Awesome icon name, as rendered by the editor's icon picker.
 const ICON_PATTERN = /^[a-z0-9-]{1,40}$/;
@@ -75,9 +68,8 @@ const mediaUrl = () =>
     .max(MAX_MEDIA_URL_LENGTH)
     .refine((u) => u.startsWith('https://'), 'media url must be https');
 
-// A discriminated union, not one loose shape: image/video need a url,
-// youtube needs an id (rendered via youtube-nocookie.com), and neither
-// is optional on its own variant - unlike the earlier loose `id?: string`.
+// Discriminated on kind: image/video require url, youtube requires id
+// (rendered via youtube-nocookie.com) - neither is optional per its variant.
 export const HotspotMediaSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), url: mediaUrl() }),
   z.object({ kind: z.literal('video'), url: mediaUrl() }),
@@ -104,6 +96,7 @@ export const HotspotSchema = z
     targetPanoId: z
       .string()
       .regex(PANO_PATTERN, `targetPanoId must match ${PANO_PATTERN}`)
+      .max(MAX_ID_LENGTH)
       .optional(),
   })
   .refine((h) => h.type !== 'link' || !!h.targetPanoId, {
@@ -116,7 +109,7 @@ export type Hotspot = z.infer<typeof HotspotSchema>;
 // the manifest's raw pano value (see keys.ts). Validating it here at the
 // schema boundary is what makes that verbatim use safe.
 export const SceneConfigSchema = z.object({
-  panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`),
+  panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
   title: z.string().min(1).max(MAX_TITLE_LENGTH),
   description: z.string().max(MAX_SCENE_DESCRIPTION_LENGTH).optional(),
   initialView: ViewSchema.optional(),
@@ -129,9 +122,9 @@ export type SceneConfig = z.infer<typeof SceneConfigSchema>;
 
 // Same reason as SceneConfigSchema.panoId above.
 export const TourSceneSchema = z.object({
-  panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`),
-  mapX: z.number().optional(),
-  mapY: z.number().optional(),
+  panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
+  mapX: z.number().finite().optional(),
+  mapY: z.number().finite().optional(),
 });
 export type TourScene = z.infer<typeof TourSceneSchema>;
 
@@ -151,12 +144,16 @@ export type TourSettings = z.infer<typeof TourSettingsSchema>;
 
 // tourId is used verbatim in tourKey(), same reason as panoId above.
 export const TourDocSchema = z.object({
-  tourId: z.string().regex(PANO_PATTERN, `tourId must match ${PANO_PATTERN}`),
+  tourId: z.string().regex(PANO_PATTERN, `tourId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
   title: z.string().min(1).max(MAX_TITLE_LENGTH),
   scenes: z.array(TourSceneSchema).max(MAX_TOUR_SCENES).default([]),
   // Entry scene (design README:113-114); same pattern as TourSceneSchema.panoId.
   // Consumers fall back to scenes[0] when startPanoId isn't in scenes.
-  startPanoId: z.string().regex(PANO_PATTERN, `startPanoId must match ${PANO_PATTERN}`).optional(),
+  startPanoId: z
+    .string()
+    .regex(PANO_PATTERN, `startPanoId must match ${PANO_PATTERN}`)
+    .max(MAX_ID_LENGTH)
+    .optional(),
   settings: TourSettingsSchema.optional(),
 });
 export type TourDoc = z.infer<typeof TourDocSchema>;
