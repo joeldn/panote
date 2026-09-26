@@ -29,3 +29,10 @@ services/*/env.d.ts
 # is on code and config, not narrative.
 *.md
 **/*.md
+
+# Vendored UI design handoff prototype (docs/design/prototype/). Copied
+# byte-for-byte from the design bundle, not written by us: Panote.dc.html uses
+# a template syntax (`<sc-if>`) that isn't valid HTML5 and fails Prettier's
+# parser outright, and support.js is bundle-owned reference code, not a source
+# file we maintain. Neither should be reformatted.
+docs/design/prototype/
