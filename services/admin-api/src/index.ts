@@ -20,6 +20,7 @@ import { Hono } from 'hono';
 import { conditionalGet, guardedPut, updateConditional } from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
+import { insightsRoute } from './insights.js';
 import {
   configCustomMetadata,
   listPanoSummaries,
@@ -278,6 +279,8 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   await deleteTour(c.env.BUCKET, sub, tourId);
   return c.body(null, 204);
 });
+
+app.get('/api/admin/tours/:tourId/insights', (c) => insightsRoute(c, c.req.param('tourId')));
 
 app.onError(errorHandler);
 
