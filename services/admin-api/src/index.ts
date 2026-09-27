@@ -1,21 +1,17 @@
 import {
   checkSlug,
   configKey,
-  DEFAULT_VISIBILITY,
   deletingKey,
   MAX_TOUR_SCENES,
   originalKey,
   PANO_PATTERN,
   PublishRequestSchema,
-  pubTourKey,
   SceneConfigSchema,
   SlugPutRequestSchema,
   TourDocSchema,
   tourKey,
   userPanosPrefix,
   VisibilityPatchRequestSchema,
-  type PublishedTour,
-  type PublishRecord,
   type SceneConfig,
   type TourConfigEntry,
   type TourDoc,
@@ -26,19 +22,24 @@ import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono } from 'hono';
 
-import { conditionalGet, guardedPut, updateConditional } from './conditional.js';
+import {
+  conditionalGet,
+  guardedPut,
+  ifNoneMatchHits,
+  tourIfMatch,
+  tourViewEtag,
+  updateConditional,
+} from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
 import {
-  buildBundle,
-  checkScenes,
-  claimDefaultSlug,
-  moveToSlug,
   parseAliasDays,
+  publishTour,
   readPublishRecord,
+  renameSlug,
+  setVisibility,
   sweepExpiredAliases,
   unpublish,
-  writePublishState,
 } from './publish.js';
 import {
   configCustomMetadata,
@@ -245,29 +246,28 @@ app.get('/api/admin/tours/:tourId', async (c) => {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
   }
-  const result = await conditionalGet(
-    c.env.BUCKET,
-    tourKey(sub, tourId),
-    c.req.header('If-None-Match'),
-  );
-  if (!result) {
+  const [obj, stored] = await Promise.all([
+    c.env.BUCKET.get(tourKey(sub, tourId)),
+    readPublishRecord(c.env.BUCKET, sub, tourId),
+  ]);
+  if (!obj) {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: 'not found' }, 404);
   }
-  setEtagAndNoStore(c, result.notModified ? result.etag : result.obj.etag);
-  if (result.notModified) return c.body(null, 304);
-  const [tour, record] = await Promise.all([
-    result.obj.json<TourDoc>(),
-    readPublishRecord(c.env.BUCKET, sub, tourId),
-  ]);
+  // Header ETag covers publish.json too; the body etag stays tour.json's for If-Match.
+  const viewEtag = tourViewEtag(obj.etag, stored?.etag);
+  setEtagAndNoStore(c, viewEtag);
+  if (ifNoneMatchHits(c.req.header('If-None-Match'), viewEtag)) return c.body(null, 304);
+  const tour = await obj.json<TourDoc>();
+  const record = stored?.value;
   const publish: TourPublishState | null = record
     ? { slug: record.slug, visibility: record.visibility, publishedAt: record.publishedAt }
     : null;
   if (c.req.query('include') !== 'configs') {
-    return c.json({ tour, etag: result.obj.etag, publish });
+    return c.json({ tour, etag: obj.etag, publish });
   }
   const configs = await loadSceneConfigs(c.env.BUCKET, sub, tour.scenes);
-  return c.json({ tour, etag: result.obj.etag, publish, configs });
+  return c.json({ tour, etag: obj.etag, publish, configs });
 });
 
 app.put('/api/admin/tours/:tourId', async (c) => {
@@ -279,7 +279,7 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
   // 428 before any state read, same reasoning as the config PUT above.
-  const conditional = updateConditional(c.req.header('If-Match'));
+  const conditional = updateConditional(tourIfMatch(c.req.header('If-Match')));
   // PUT never creates a tour - tourIds only ever come from POST - so a
   // missing key here is "not found", not a create (guardedPut's 404).
   const result = await guardedPut(
@@ -315,7 +315,7 @@ const slugError = (slug: string): string | null => {
   return check.ok ? null : `${check.reason} slug`;
 };
 
-const shareUrl = (slug: string): string => `/s/${slug}`;
+const clock = (env: Env) => ({ now: new Date(), aliasDays: parseAliasDays(env.SLUG_ALIAS_DAYS) });
 
 app.post('/api/admin/tours/:tourId/publish', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
@@ -326,76 +326,9 @@ app.post('/api/admin/tours/:tourId/publish', async (c) => {
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
-
-  const bucket = c.env.BUCKET;
-  const tour = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
-  if (!tour) return c.json({ error: 'not found' }, 404);
-  if (tour.value.scenes.length === 0) {
-    return c.json({ error: 'tour has no scenes', scenes: [] }, 422);
-  }
-  const { failures, configs } = await checkScenes(
-    bucket,
-    sub,
-    tour.value.scenes.map((s) => s.panoId),
-  );
-  if (failures.length > 0)
-    return c.json({ error: 'scenes not publishable', scenes: failures }, 422);
-
-  const now = new Date();
-  const current = await readPublishRecord(bucket, sub, tourId);
-  let slug: string;
-  let aliases = current?.aliases ?? [];
-  const target = body.data.slug ?? current?.slug;
-  if (target !== undefined) {
-    const moved = await moveToSlug(
-      bucket,
-      tourId,
-      current,
-      target,
-      now,
-      parseAliasDays(c.env.SLUG_ALIAS_DAYS),
-    );
-    if (!moved.ok) return c.json({ error: 'slug taken' }, 409);
-    slug = moved.slug;
-    aliases = moved.aliases;
-  } else {
-    const claimed = await claimDefaultSlug(bucket, tourId, tour.value.title);
-    if (!claimed) return c.json({ error: 'slug taken' }, 409);
-    slug = claimed;
-  }
-
-  const record: PublishRecord = {
-    slug,
-    visibility: body.data.visibility ?? current?.visibility ?? DEFAULT_VISIBILITY,
-    publishedAt: current?.publishedAt ?? now.toISOString(),
-    aliases,
-  };
-  await writePublishState(bucket, sub, tourId, record, buildBundle(tour.value, configs, record));
-  return c.json({
-    slug,
-    visibility: record.visibility,
-    url: shareUrl(slug),
-    publishedAt: record.publishedAt,
-  });
+  const out = await publishTour(c.env.BUCKET, sub, tourId, body.data, clock(c.env));
+  return c.json(out.body, out.status);
 });
-
-// Loads what a slug or visibility change edits in place: the tour must be
-// the caller's, published, with its bundle present.
-const loadPublished = async (
-  bucket: R2Bucket,
-  sub: string,
-  tourId: string,
-): Promise<
-  | { ok: true; record: PublishRecord; bundle: PublishedTour }
-  | { ok: false; status: 404 | 409; error: string }
-> => {
-  if (!(await bucket.head(tourKey(sub, tourId))))
-    return { ok: false, status: 404, error: 'not found' };
-  const record = await readPublishRecord(bucket, sub, tourId);
-  const bundle = record ? await getJson<PublishedTour>(bucket, pubTourKey(tourId)) : null;
-  if (!record || !bundle) return { ok: false, status: 409, error: 'not published' };
-  return { ok: true, record, bundle: bundle.value };
-};
 
 app.put('/api/admin/tours/:tourId/slug', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
@@ -406,22 +339,8 @@ app.put('/api/admin/tours/:tourId/slug', async (c) => {
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = slugError(body.data.slug);
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
-
-  const bucket = c.env.BUCKET;
-  const loaded = await loadPublished(bucket, sub, tourId);
-  if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
-  const moved = await moveToSlug(
-    bucket,
-    tourId,
-    loaded.record,
-    body.data.slug,
-    new Date(),
-    parseAliasDays(c.env.SLUG_ALIAS_DAYS),
-  );
-  if (!moved.ok) return c.json({ error: 'slug taken' }, 409);
-  const record: PublishRecord = { ...loaded.record, slug: moved.slug, aliases: moved.aliases };
-  await writePublishState(bucket, sub, tourId, record, { ...loaded.bundle, slug: moved.slug });
-  return c.json({ slug: moved.slug, oldSlugRedirectsUntil: moved.oldSlugRedirectsUntil });
+  const out = await renameSlug(c.env.BUCKET, sub, tourId, body.data.slug, clock(c.env));
+  return c.json(out.body, out.status);
 });
 
 app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
@@ -431,19 +350,8 @@ app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
   if (idError) return c.json({ error: idError }, 400);
   const body = VisibilityPatchRequestSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
-
-  const bucket = c.env.BUCKET;
-  const loaded = await loadPublished(bucket, sub, tourId);
-  if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
-  const { visibility } = body.data;
-  await writePublishState(
-    bucket,
-    sub,
-    tourId,
-    { ...loaded.record, visibility },
-    { ...loaded.bundle, visibility },
-  );
-  return c.json({ visibility });
+  const out = await setVisibility(c.env.BUCKET, sub, tourId, body.data.visibility, clock(c.env));
+  return c.json(out.body, out.status);
 });
 
 app.delete('/api/admin/tours/:tourId/publish', async (c) => {
