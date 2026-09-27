@@ -43,7 +43,8 @@ export type TourPublishState = z.infer<typeof TourPublishStateSchema>;
 export const TourOkSchema = z.object({
   tour: TourDocSchema,
   etag: z.string(),
-  publish: TourPublishStateSchema.nullable(),
+  // Optional so clients stay compatible with responses from before B2.
+  publish: TourPublishStateSchema.nullable().optional(),
 });
 export type TourOk = z.infer<typeof TourOkSchema>;
 
