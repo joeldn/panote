@@ -19,6 +19,8 @@
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
+      // AE creates the dataset on first write; no provisioning step.
+      "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "panote_events_dev" }],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
@@ -34,6 +36,7 @@
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
+      "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "panote_events" }],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
         // only with the real tenant URL, never another fake name.

@@ -385,6 +385,9 @@ importers:
 
   services/public-api:
     dependencies:
+      '@internal/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@internal/worker-kit':
         specifier: workspace:*
         version: link:../../packages/worker-kit
