@@ -305,12 +305,39 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put R2_ACCESS_KEY_ID 
 pnpm --filter @service/tiler-consumer exec wrangler secret put R2_SECRET_ACCESS_KEY --env dev
 ```
 
-Repeat with `--env production` once production is provisioned. `admin-api` and `public-api`
-need no secrets — `admin-api` reads R2 through the native binding, not the S3 API; `public-api`
-never touches R2 at all. `wrangler deploy --env <env> --secrets-file <file>` is the alternative
+Repeat with `--env production` once production is provisioned. `public-api` needs no secrets (it
+never touches R2); `admin-api` reads R2 through the native binding, not the S3 API, and needs only
+the optional `CF_PURGE_TOKEN` (see "CDN purge on delete" below). `wrangler deploy --env <env> --secrets-file <file>` is the alternative
 to interactive `secret put` if scripting this. **Status: set for dev, outstanding for
 production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and
 `tiler-consumer`'s dev environments; production has neither yet.
+
+### CDN purge on delete (unit B6)
+
+After a pano delete (tiles swept), a tour delete, or an unpublish, `admin-api` calls
+`POST /zones/<CDN_ZONE_ID>/purge_cache` from `ctx.waitUntil`, so the `204` never waits on it.
+A pano delete purges by prefix (`cdn.panote.dev/tiles/<panoId>/`); a tour delete batches every
+pano it removed into one prefix request (100 max each); unpublish purges `pub/tours/<tourId>.json`
+and the removed `slugs/<slug>.json` by URL. It's best-effort: a non-2xx, a network error or the 5s
+timeout is logged (`cdn purge failed …`, status and Cloudflare error codes only) and nothing is
+retried. With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs
+`cdn purge skipped` and does nothing. Free plan limits are per account: 5 prefix requests/min,
+bucket 25, so a burst of single-pano deletes past that gets `429`s and those tiles stay cached
+until their TTL.
+
+Ops steps, per environment:
+
+1. Create an API token (My Profile → API Tokens → Custom token) with **Zone → Cache Purge →
+   Purge**, scoped to the one zone (`panote.dev` for dev, `panote.io` for production).
+2. `pnpm --filter @service/admin-api exec wrangler secret put CF_PURGE_TOKEN --env dev`
+3. Replace the `CDN_ZONE_ID` placeholder in `services/admin-api/wrangler.jsonc` with the zone's id
+   (dashboard: the zone's Overview → API → Zone ID), then redeploy.
+4. Check: fetch a tile twice until `cf-cache-status: HIT`, delete its pano, and the next fetch is a
+   `MISS`/`404`.
+
+TODO: the `panote.dev` zone id isn't recorded anywhere in this repo yet; add it here once looked up.
+**Status: not live** — no token exists, `CF_PURGE_TOKEN` is unset in both envs and
+both `CDN_ZONE_ID` values are placeholders, so every purge currently no-ops.
 
 ---
 
@@ -612,7 +639,8 @@ browser that already fetched one can keep serving it for up to a year after dele
 already has a tile URL keeps access to it until a cache purge, full stop. In practice a deleted
 pano's tile URLs can't be *discovered* once the manifest's ~30s cache expires, since a client would
 need a stale manifest it already had cached to read them from. A Cloudflare cache purge by prefix
-or URL is the only way to revoke access sooner; automated purge on delete is deferred.
+or URL is the only way to revoke access sooner; `admin-api` now does that on delete, best-effort
+(see "CDN purge on delete" above). A browser's own cached copy is out of its reach.
 
 One sweep of `tiles/<panoId>/` is enough to catch every tile a still-in-flight tiler job writes,
 because every tile/manifest write precedes that job's own last HEAD of the original
@@ -831,7 +859,8 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   already cached kept returning `200` (`cf-cache-status: HIT`) after its pano was deleted, because
   tiles are `public, max-age=31536000, immutable` and nothing purges the edge cache on delete (see
   "Deleted panos" above for the existing note on this). True revocation needs a Cloudflare cache
-  purge by URL or prefix — deferred to Wave 6 / ops.
+  purge by URL or prefix — B6 adds a best-effort purge on delete, not live until its token and
+  zone id are set (see "CDN purge on delete").
 - **Hardened (pending dev verification): the presigned upload PUT now pins content-type.**
   `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
   with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's
