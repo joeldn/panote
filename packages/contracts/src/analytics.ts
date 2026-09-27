@@ -42,9 +42,15 @@ export const AnalyticsEventSchema = z
     ms: z.number().finite().optional(),
     surface: z.enum(ANALYTICS_SURFACES).optional(),
   })
-  .refine((e) => e.type !== 'dwell' || e.ms !== undefined, {
-    message: 'dwell events need ms',
-    path: ['ms'],
+  .superRefine((e, ctx) => {
+    const need = (field: 'panoId' | 'hotspotId' | 'ms') => {
+      if (e[field] === undefined) {
+        ctx.addIssue({ code: 'custom', path: [field], message: `${e.type} events need ${field}` });
+      }
+    };
+    if (e.type === 'dwell') need('ms');
+    if (e.type === 'scene' || e.type === 'hotspot') need('panoId');
+    if (e.type === 'hotspot') need('hotspotId');
   });
 export type AnalyticsEvent = z.infer<typeof AnalyticsEventSchema>;
 

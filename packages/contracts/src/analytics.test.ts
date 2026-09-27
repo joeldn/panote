@@ -29,23 +29,40 @@ describe('AnalyticsEventSchema', () => {
     expect(AnalyticsEventSchema.safeParse({ type: 'scene', panoId: 'p1' }).success).toBe(true);
   });
 
+  it('requires panoId on scene, and panoId plus hotspotId on hotspot', () => {
+    const ok = (e: unknown) => AnalyticsEventSchema.safeParse(e).success;
+    expect(ok({ type: 'scene' })).toBe(false);
+    expect(ok({ type: 'hotspot', panoId: 'p1' })).toBe(false);
+    expect(ok({ type: 'hotspot', hotspotId: 'h1' })).toBe(false);
+    expect(ok({ type: 'hotspot', panoId: 'p1', hotspotId: 'h1' })).toBe(true);
+    expect(ok({ type: 'dwell', ms: 1 })).toBe(true);
+  });
+
+  it('reports the missing field by path', () => {
+    const r = AnalyticsEventSchema.safeParse({ type: 'hotspot' });
+    expect(r.success).toBe(false);
+    expect(r.error?.issues.map((i) => i.path.join('.')).sort()).toEqual(['hotspotId', 'panoId']);
+  });
+
   it.each([
     { type: 'view' },
-    { type: 'hotspot', hotspotId: 'has space' },
-    { type: 'hotspot', hotspotId: 'h'.repeat(65) },
+    { type: 'hotspot', panoId: 'p1', hotspotId: 'has space' },
+    { type: 'hotspot', panoId: 'p1', hotspotId: 'h'.repeat(65) },
     { type: 'dwell', ms: Number.NaN },
   ])('rejects %j', (event) => {
     expect(AnalyticsEventSchema.safeParse(event).success).toBe(false);
   });
 
   it('strips unknown keys', () => {
-    const r = AnalyticsEventSchema.parse({ type: 'scene', ip: '1.2.3.4' });
-    expect(r).toEqual({ type: 'scene' });
+    const r = AnalyticsEventSchema.parse({ type: 'scene', panoId: 'p1', ip: '1.2.3.4' });
+    expect(r).toEqual({ type: 'scene', panoId: 'p1' });
   });
 });
 
 describe('AnalyticsEventBatchSchema', () => {
-  const batch = (n: number) => ({ events: Array.from({ length: n }, () => ({ type: 'scene' })) });
+  const batch = (n: number) => ({
+    events: Array.from({ length: n }, () => ({ type: 'scene', panoId: 'p1' })),
+  });
 
   it(`caps a batch at ${MAX_EVENTS_PER_BATCH} events`, () => {
     expect(AnalyticsEventBatchSchema.safeParse(batch(MAX_EVENTS_PER_BATCH)).success).toBe(true);

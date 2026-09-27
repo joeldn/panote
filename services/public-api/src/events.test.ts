@@ -91,6 +91,44 @@ describe('POST /api/tours/:tourId/view', () => {
     expect(r.status).toBe(413);
     expect(writeDataPoint).not.toHaveBeenCalled();
   });
+
+  it('413s from Content-Length alone, without reading the body', async () => {
+    const { writeDataPoint } = setup();
+    const pull = vi.fn();
+    const r = await app.request(
+      '/api/tours/ae-view-cl/view',
+      {
+        method: 'POST',
+        headers: { 'content-length': '9000' },
+        body: new ReadableStream({ pull }, { highWaterMark: 0 }),
+        duplex: 'half',
+      } as RequestInit,
+      { ...env, EVENTS: { writeDataPoint } } as Env,
+    );
+    expect(r.status).toBe(413);
+    expect(pull).not.toHaveBeenCalled();
+    expect(writeDataPoint).not.toHaveBeenCalled();
+  });
+
+  it('still 413s an oversized streamed body with no Content-Length', async () => {
+    const { writeDataPoint } = setup();
+    const big = new TextEncoder().encode(JSON.stringify({ pad: 'x'.repeat(9000) }));
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(big);
+        controller.close();
+      },
+    });
+    const req = new Request('https://x/api/tours/ae-view-chunked/view', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    expect(req.headers.get('content-length')).toBeNull();
+    const r = await app.request(req, undefined, { ...env, EVENTS: { writeDataPoint } } as Env);
+    expect(r.status).toBe(413);
+    expect(writeDataPoint).not.toHaveBeenCalled();
+  });
 });
 
 describe('tourId validation', () => {
@@ -171,7 +209,9 @@ describe('POST /api/tours/:tourId/events', () => {
 
   it('accepts 20 events and 400s 21, writing nothing', async () => {
     const { writeDataPoint, post } = setup();
-    const batch = (n: number) => ({ events: Array.from({ length: n }, () => ({ type: 'scene' })) });
+    const batch = (n: number) => ({
+      events: Array.from({ length: n }, () => ({ type: 'scene', panoId: 'p1' })),
+    });
     expect((await post('/api/tours/ae-ev-cap/events', batch(20))).status).toBe(204);
     expect(writeDataPoint).toHaveBeenCalledTimes(20);
     writeDataPoint.mockClear();
@@ -180,14 +220,16 @@ describe('POST /api/tours/:tourId/events', () => {
   });
 
   it.each([
-    ['a bad hotspotId', { events: [{ type: 'hotspot', hotspotId: 'has space' }] }],
+    ['a bad hotspotId', { events: [{ type: 'hotspot', panoId: 'p1', hotspotId: 'has space' }] }],
+    ['a hotspot without hotspotId', { events: [{ type: 'hotspot', panoId: 'p1' }] }],
+    ['a scene without panoId', { events: [{ type: 'scene' }] }],
     ['an unknown type', { events: [{ type: 'view' }] }],
     ['a bad panoId', { events: [{ type: 'scene', panoId: 'a/b' }] }],
     ['dwell without ms', { events: [{ type: 'dwell' }] }],
     ['a missing events array', {}],
   ])('400s the whole batch on %s', async (_label, body) => {
     const { writeDataPoint, post } = setup();
-    const ok = { type: 'scene' };
+    const ok = { type: 'scene', panoId: 'p1' };
     const withOk =
       'events' in body ? { events: [ok, ...(body as { events: unknown[] }).events] } : body;
     expect((await post('/api/tours/ae-ev-bad/events', withOk)).status).toBe(400);
