@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Assets-only. Vite builds into dist/app/ (base /app/) and also writes dist/_headers
+  // and dist/index.html (the SPA fallback). Deploy with --env, after `vite build`.
+  "name": "panote-admin",
+  "compatibility_date": "2026-01-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+  },
+  "env": {
+    "dev": {
+      "name": "panote-admin-dev",
+      "workers_dev": true,
+      // Two patterns rather than `app*`, which would also take /apple, /application...
+      "routes": [
+        { "pattern": "panote.dev/app", "zone_name": "panote.dev" },
+        { "pattern": "panote.dev/app/*", "zone_name": "panote.dev" },
+      ],
+      "observability": { "enabled": true },
+    },
+    "production": {
+      // production is unprovisioned, see docs/deploy.md
+      "name": "panote-admin",
+      "workers_dev": false,
+      "routes": [
+        { "pattern": "panote.io/app", "zone_name": "panote.io" },
+        { "pattern": "panote.io/app/*", "zone_name": "panote.io" },
+      ],
+      "observability": { "enabled": true },
+    },
+  },
+}

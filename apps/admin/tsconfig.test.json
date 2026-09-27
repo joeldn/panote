@@ -1,0 +1,6 @@
+{
+  "extends": ["./tsconfig.json", "@internal/typescript-config/tests.json"],
+  "compilerOptions": {
+    "types": ["vite/client", "node"]
+  }
+}

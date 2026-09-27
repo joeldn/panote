@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Assets-only for now. Unit D5 adds `main` (/s/* slug redirects), its R2 binding per
+  // env block and `assets.run_worker_first`. Deploy with --env, after `vite build`.
+  "name": "panote-website",
+  "compatibility_date": "2026-01-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+  },
+  "env": {
+    "dev": {
+      "name": "panote-website-dev",
+      "workers_dev": true,
+      // The API Workers' /api/... routes and admin's /app routes are more specific,
+      // so Cloudflare sends those paths there, not here (docs/deploy.md, Frontends).
+      "routes": [{ "pattern": "panote.dev/*", "zone_name": "panote.dev" }],
+      "observability": { "enabled": true },
+    },
+    "production": {
+      // production is unprovisioned, see docs/deploy.md
+      "name": "panote-website",
+      "workers_dev": false,
+      "routes": [{ "pattern": "panote.io/*", "zone_name": "panote.io" }],
+      "observability": { "enabled": true },
+    },
+  },
+}

@@ -1,6 +1,6 @@
 # Deploy
 
-How panote's four Workers get provisioned and deployed, and what state that provisioning is
+How panote's four API/queue Workers and two frontend Workers get provisioned and deployed, and what state that provisioning is
 actually in today. One Cloudflare account (`12e2809e05de8a2bf20b815fd394ec9a`), two Wrangler
 named environments (`dev` → `panote.dev`, `production` → `panote.io`) per Worker's
 `wrangler.jsonc`. See `docs/decisions.md` for why things are shaped this way; this doc is the
@@ -45,6 +45,107 @@ tenant URL, never renamed to another fake one.
 `public-api` verifies it when present but never requires it (`authenticateOptional`) — its only
 bimodal route is `POST /api/tours/:tourId/like` (falls back to an `X-Client-Id` header when
 anonymous).
+
+---
+
+## Frontends
+
+`apps/website` and `apps/admin` are Vite + React SPAs, each deployed as an **assets-only Worker**
+(Workers Static Assets, no `main` script yet) on the same host as the APIs. Why not Pages, and why
+build-time config: `docs/decisions.md`.
+
+| App | Script (dev / production) | Route (dev / production) | Vite `base` / output |
+|---|---|---|---|
+| `apps/website` | `panote-website-dev` / `panote-website` | `panote.dev/*` / `panote.io/*` | `/` → `dist/` |
+| `apps/admin` | `panote-admin-dev` / `panote-admin` | `panote.dev/app` + `panote.dev/app/*` / same on `panote.io` | `/app/` → `dist/app/` |
+
+Both: `assets.not_found_handling: "single-page-application"`, `observability.enabled: true` in
+both env blocks, `workers_dev` `true` in dev and `false` in production, no bindings, no secrets.
+
+**Route precedence.** The website's `panote.dev/*` overlaps every other route on the host.
+Cloudflare resolves that by specificity: "When more than one route pattern could match a request
+URL, the most specific route pattern wins" (Workers docs, [Routes → Matching
+behavior](https://developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior),
+with the example that `example.com/hello/*` takes precedence over `example.com/*`). So
+`/api/admin/*`, `/api/tours/*` and `/api/upload-url` stay on the API Workers and `/app`, `/app/*`
+on admin; everything else lands on the website. The docs' known issue about trailing `/*`
+specificity (`/images/*` vs `/images*` on the same zone,
+[Known issues](https://developers.cloudflare.com/workers/platform/known-issues/)) doesn't apply:
+no two routes here differ only by that slash. Admin uses `/app` + `/app/*` rather than the plan's
+`/app*`, which would also take `/apple`, `/application`, … from the website. Unmatched `/api/...`
+paths now reach the website and get `index.html` with a 200 (accepted for v1; unit W3 adds a
+404). The website's `/s/*` slug-redirect script (unit D5) will add a `main`, an R2 binding and
+`assets.run_worker_first` to `apps/website/wrangler.jsonc`, repeated per env block.
+
+**Admin's assets layout.** Assets build into `dist/app/` so `/app/assets/…` maps onto files, but
+the Worker's assets root is `dist/`. Workers' SPA fallback always serves the *root*
+`/index.html`, and `_headers` must sit in the root, so admin's Vite config also writes
+`dist/index.html` (a copy of `dist/app/index.html`) and `dist/_headers`. `/app` 307s to `/app/`
+(`html_handling: auto-trailing-slash`). `wrangler deploy` prints a warning that the routes "will
+attempt to serve Assets on a configured path" (`panote.dev/app` → `dist/app`); that is exactly the
+intended mapping.
+
+**Config.** Each app commits `.env.dev` and `.env.production` (`VITE_SITE_ORIGIN`,
+`VITE_CDN_BASE`, `VITE_AUTH0_DOMAIN`, `VITE_AUTH0_CLIENT_ID`, `VITE_AUTH0_AUDIENCE`,
+`VITE_AUTH0_CONNECTIONS`, `VITE_SHOWCASE_SLUG`; admin also has `CSP_UPLOAD_ORIGIN`, the R2 S3
+endpoint for presigned PUTs, which only feeds the CSP and is not bundled). `pnpm build` runs
+`vite build --mode ${APP_MODE:-dev}`; `deploy.yml` sets `APP_MODE` to the target environment
+(declared in each app's `turbo.json`, so turbo passes it through and keys the cache on it). The
+build validates the env with `loadConfig` from `@internal/web-kit` and fails on a bad value.
+`YOUR_` placeholders parse, and auth then reports itself unconfigured: the dev SPA client id is
+`YOUR_DEV_SPA_CLIENT_ID` until the Auth0 dev SPA application exists (unit C3), and production's
+tenant domain and client id are placeholders until the production tenant exists. The
+production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
+
+**Headers.** The build also emits `_headers` from the env (`buildHeadersFile` in
+`@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
+`style-src 'self'`, `img-src 'self' <cdn> data: blob:`, `connect-src 'self' <cdn> <auth0 domain>`
+(admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com`,
+`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
+`strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
+`/s/:slug/embed`, whose rule removes the inherited CSP (`! Content-Security-Policy`) and sets
+the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
+the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
+Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CSP would block.
+The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Dev builds add
+`X-Robots-Tag: noindex` on every path; production stays indexable.
+
+CSP gaps the D units must close when they land (the scaffold doesn't hit them yet):
+
+- The viewer's info-hotspots UI injects a `<style>` element, which `style-src 'self'` blocks: move
+  it to a stylesheet, or allow it by hash/nonce.
+- Hotspot video from the CDN needs `media-src` with the CDN origin (it falls back to
+  `default-src 'self'` today).
+- The admin share modal's embed preview iframe needs `frame-src 'self'` (only YouTube is allowed).
+
+**Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
+Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
+`http://localhost:5174/`. Both proxy `/api` to `https://panote.dev`, so the APIs stay
+same-origin. The two apps run on **different origins** locally (unlike deployed, where both are
+`panote.dev`), so an auth `returnTo` path like `/app/t/…` resolves against the admin origin
+(`:5173`), and a website sign-in that hands off to `/app/` has to use the admin dev server's
+origin. `_headers` doesn't apply under Vite; use `wrangler dev --env dev` on a built `dist/` to
+check headers and SPA fallback.
+
+**Deploy.** `deploy.yml`'s `deploy-apps` matrix job (`website`, `admin`) `needs:
+resolve-environment` and runs only when it says `proceed`, so it shares every gate with the other
+deploy jobs: `DEV_AUTO_DEPLOY`, the main-tip check, the production guards. It checks out the
+commit CI verified (`workflow_run.head_sha`), builds with `turbo run build
+--filter="@app/<app>..."` and `APP_MODE=<env>`, then runs `wrangler deploy --env <env>`. CI's
+`deploy-dry-run` job dry-runs both apps with `--env dev`. The existing `CLOUDFLARE_API_TOKEN`
+scopes (Workers Scripts + Routes) should cover assets-only Workers; confirm on the first deploy.
+
+**Status: not deployed yet.** The first dev deploy happens through `DEV_AUTO_DEPLOY` when this
+lands on `main`. After it, check:
+
+- `curl -I https://panote.dev/` → 200 with the website's CSP.
+- `curl -I https://panote.dev/app/t/anything` → 200 (deep link hard-refresh), `/app` → 307 to
+  `/app/`.
+- `curl -i https://panote.dev/api/admin/panos` → still **401** without a token (route
+  precedence), likewise `/api/tours/<id>/stats` still answers from `public-api`.
+- `curl -I https://panote.dev/s/x/embed` → `frame-ancestors *`; any other path → `'none'`.
+
+Production is unprovisioned, like the rest (see Production status).
 
 ---
 
@@ -217,7 +318,7 @@ production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-ap
 
 - **`panote.dev`** — **live on Cloudflare as of 2026-09-25**: nameservers `jo.ns.cloudflare.com`
   and `kaiser.ns.cloudflare.com`, zone Active, with the placeholder proxied `AAAA @ 100::` record
-  in place (until the Wave 6 Pages site is real). `admin-api`, `public-api`, and `upload-api`'s
+  in place; the website and admin Workers' routes will serve it after the first deploy (see Frontends). `admin-api`, `public-api`, and `upload-api`'s
   dev `routes` blocks all target `panote.dev`, and their first dev deploy (see the checklist
   below) already succeeded against it. `workers_dev: true` still gives a second, always-reachable
   `*.workers.dev` URL for smoke tests, independent of the route.
@@ -286,11 +387,11 @@ hard-guarded to `main` — the `resolve-environment` job's "Guard production to 
 the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main` — hard-stops
 unless the repo variable `PRODUCTION_PROVISIONED` is the literal string `true` (the
 `resolve-environment` job's "Fail unless production is provisioned" step) — and fails closed if
-any of the four services' `wrangler.jsonc` `env.production` block still contains a `YOUR_`
-placeholder anywhere (the `resolve-environment` job's "Fail if any production config still has a
+any of the four services' or two apps' `wrangler.jsonc` `env.production` block, or either app's
+`.env.production`, still contains a `YOUR_` placeholder anywhere (the `resolve-environment` job's "Fail if any production config still has a
 YOUR_ placeholder" step). That's a single case-insensitive check, run once for all four services'
-configs rather than duplicated per deploy job: both `deploy-workers` and `deploy-tiler-consumer`
-`need: resolve-environment`, so this one check failing blocks every deploy job, including
+and both apps' configs (and the apps' `.env.production`) rather than duplicated per deploy job: `deploy-workers`, `deploy-tiler-consumer` and
+`deploy-apps` all `need: resolve-environment`, so this one check failing blocks every deploy job, including
 `deploy-tiler-consumer` — whose own `wrangler.jsonc` has no `OAUTH_ISSUER` var to trip a
 per-service check, and would otherwise deploy to production regardless of the other three
 services' placeholders. Before this workflow can succeed:
