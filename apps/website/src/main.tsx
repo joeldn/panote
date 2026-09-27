@@ -1,4 +1,5 @@
 import '@internal/ui/styles.css';
+import '@internal/ui/icons.css';
 import './app.css';
 
 import { loadConfig } from '@internal/web-kit';
