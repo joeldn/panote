@@ -42,8 +42,15 @@ const toHotspot = ({ source }: ViewerTour['hotspots'][string][number]): ViewerHo
   return h;
 };
 
+// Inline media must come from the CDN: that is all the CSP's img-src/media-src allow.
+const cdnMatcher = (cdnBase: string) => {
+  const cdn = new URL(cdnBase).origin;
+  return (url: string): boolean => URL.canParse(url) && new URL(url).origin === cdn;
+};
+
 interface PointsLayerProps {
   panoId: string;
+  isAllowedMediaUrl: (url: string) => boolean;
   hotspots: ViewerHotspot[];
   links: ViewerLinkArrow[];
   active: ViewerHotspot | null;
@@ -52,7 +59,15 @@ interface PointsLayerProps {
 }
 
 // Rendered inside PanoStage so it can reach the viewer for hotspot-open events.
-function PointsLayer({ panoId, hotspots, links, active, setActive, onGo }: PointsLayerProps) {
+function PointsLayer({
+  panoId,
+  isAllowedMediaUrl,
+  hotspots,
+  links,
+  active,
+  setActive,
+  onGo,
+}: PointsLayerProps) {
   const viewer = usePanoViewer();
   const open = (h: ViewerHotspot) => {
     setActive(h);
@@ -67,9 +82,21 @@ function PointsLayer({ panoId, hotspots, links, active, setActive, onGo }: Point
         activeId={active?.id ?? null}
         onOpen={open}
       />
-      {active && <HotspotPanel hotspot={active} onClose={() => setActive(null)} />}
+      {active && (
+        <HotspotPanel
+          hotspot={active}
+          onClose={() => setActive(null)}
+          isAllowedMediaUrl={isAllowedMediaUrl}
+        />
+      )}
     </>
   );
+}
+
+// Mounted only once a scene is shown, so an unavailable tour never records a view.
+function TourStats({ tourId, visible }: { tourId: string; visible: boolean }) {
+  const stats = useTourStats(tourId);
+  return visible ? <StatsChips {...stats} /> : null;
 }
 
 /** Screen 05: the visitor viewer, or the chrome-free embed. */
@@ -78,8 +105,8 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
   const createViewer = useContext(StageFactoryContext);
   const [params] = useSearchParams();
   const vt = useMemo(() => publishedToViewerTour(tour), [tour]);
-  const stats = useTourStats(tour.tourId);
   const frame = useRef<HTMLDivElement>(null);
+  const isCdnUrl = useMemo(() => cdnMatcher(config.cdnBase), [config.cdnBase]);
 
   const requested = params.get('pano');
   const requestedOk = requested !== null && !!vt.tour?.scenes[requested];
@@ -93,7 +120,8 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(vt.settings.autoRotate);
   const [failed, setFailed] = useState(false);
-  const shown = useRef(false);
+  // Set once a scene is on screen; a view is only counted from then on.
+  const [shown, setShown] = useState(false);
 
   if (!scene || failed || (single && !requestedOk)) return <Unavailable embed={embed} />;
 
@@ -131,7 +159,7 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
         {...(createViewer && { createViewer })}
         aria-label={`${tour.title}: ${vt.titles[panoId] ?? ''}`}
         onSceneChange={(id) => {
-          shown.current = true;
+          setShown(true);
           trackViewerEvent({ type: 'scene', tourId: tour.tourId, panoId: id });
         }}
         onHotspotOpen={(hotspotId) =>
@@ -140,10 +168,11 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
         onLoadError={(err) => {
           console.error('pano load failed', err);
           // Nothing on screen yet (e.g. the manifest 404s): same placeholder as a missing tour.
-          if (!shown.current) setFailed(true);
+          if (!shown) setFailed(true);
         }}
       >
         <PointsLayer
+          isAllowedMediaUrl={isCdnUrl}
           panoId={panoId}
           hotspots={hotspots}
           links={links}
@@ -163,9 +192,10 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
                 {vt.titles[panoId]}
               </span>
             </nav>
-            <StatsChips {...stats} />
+            {shown && <TourStats tourId={tour.tourId} visible />}
           </div>
         )}
+        {embed && shown && <TourStats tourId={tour.tourId} visible={false} />}
         {embed && !single && (
           <a className="tour-embed-brand" href={`/s/${tour.slug}`} target="_blank" rel="noopener">
             <Logo />

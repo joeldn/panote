@@ -175,6 +175,42 @@ describe('/s/:slug', () => {
     expect(screen.getByText('Church').getAttribute('aria-current')).toBe('location');
   });
 
+  it('loads CDN media inline and links media hosted elsewhere', async () => {
+    objects['pub/tours/tour-a.json'] = bundle({
+      scenes: [
+        scene('square', 'Square', [
+          {
+            id: 'm1',
+            type: 'info',
+            yaw: 0,
+            pitch: 0,
+            title: 'Plan',
+            media: { kind: 'image', url: `${CDN}media/plan.jpg` },
+          },
+          {
+            id: 'm2',
+            type: 'info',
+            yaw: 1,
+            pitch: 0,
+            title: 'Clip',
+            media: { kind: 'video', url: 'https://other.test/clip.mp4' },
+          },
+        ]),
+      ],
+    });
+    renderAt('/s/old-town');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+    expect(screen.getByRole('complementary').querySelector('img')?.getAttribute('src')).toBe(
+      `${CDN}media/plan.jpg`,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Clip' }));
+    expect(screen.getByRole('complementary').querySelector('video')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open video ↗' }).getAttribute('href')).toBe(
+      'https://other.test/clip.mp4',
+    );
+  });
+
   it('honours the tour settings', async () => {
     objects['pub/tours/tour-a.json'] = bundle({
       settings: { controls: 'top', showMap: false, showCompass: false, autoRotate: true },
@@ -253,6 +289,8 @@ describe('unavailable placeholder', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     renderAt('/s/old-town');
     await unavailable();
+    // The stats hook only mounts once a scene is on screen.
+    expect(calls('/view')).toHaveLength(0);
   });
 
   it('shows for an invalid slug without fetching', async () => {
@@ -327,6 +365,7 @@ describe('/s/:slug/embed', () => {
   it('shows the placeholder for an unknown ?pano= or a missing tour', async () => {
     renderAt('/s/old-town/embed?pano=gone');
     await unavailable();
+    expect(calls('/view')).toHaveLength(0);
     cleanup();
     objects = {};
     renderAt('/s/old-town/embed/');
