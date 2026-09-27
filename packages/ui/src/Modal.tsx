@@ -1,6 +1,10 @@
 import {
+  createContext,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
@@ -12,6 +16,38 @@ import { cx } from './cx.js';
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+
+// Open modals, bottom first. Only the topmost handles Escape, scrim and Tab,
+// so a ConfirmModal over a Modal closes alone.
+const openStack: object[] = [];
+const parentOf = new Map<object, object | null>();
+
+interface ModalFrame {
+  token: object;
+  depth: number;
+}
+// A modal rendered inside another modal's content sits above it.
+const ModalParent = createContext<ModalFrame | null>(null);
+
+const isDescendant = (node: object, ancestor: object): boolean => {
+  for (let p = parentOf.get(node); p; p = parentOf.get(p)) if (p === ancestor) return true;
+  return false;
+};
+
+// Children mount (and run effects) before their parent, so a parent opening
+// in the same commit slots itself in below any of its already-open descendants.
+function pushModal(token: object, parent: object | null): void {
+  parentOf.set(token, parent);
+  const at = openStack.findIndex((t) => isDescendant(t, token));
+  if (at === -1) openStack.push(token);
+  else openStack.splice(at, 0, token);
+}
+
+function popModal(token: object): void {
+  const at = openStack.indexOf(token);
+  if (at !== -1) openStack.splice(at, 1);
+  parentOf.delete(token);
+}
 
 export interface ModalProps {
   open: boolean;
@@ -49,6 +85,11 @@ export function Modal({
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const pressedOnScrim = useRef(false);
+  const [token] = useState<object>(() => ({}));
+  const parent = useContext(ModalParent);
+  const depth = parent ? parent.depth + 1 : 0;
+  const frame = useMemo<ModalFrame>(() => ({ token, depth }), [token, depth]);
+  const isTop = () => openStack[openStack.length - 1] === token;
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -56,12 +97,14 @@ export function Modal({
 
   useEffect(() => {
     if (!open) return;
+    const self = token;
+    pushModal(self, parent?.token ?? null);
     const previous = document.activeElement as HTMLElement | null;
     const dialog = dialogRef.current;
     const first = dialog?.querySelector<HTMLElement>('[autofocus],[data-autofocus]');
     (first ?? dialog)?.focus();
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && openStack[openStack.length - 1] === self) {
         e.stopPropagation();
         onCloseRef.current();
       }
@@ -69,14 +112,15 @@ export function Modal({
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
+      popModal(self);
       if (previous && previous.isConnected) previous.focus();
     };
-  }, [open]);
+  }, [open, parent, token]);
 
   if (!open) return null;
 
   const trapTab = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Tab' || !dialogRef.current) return;
+    if (e.key !== 'Tab' || !dialogRef.current || !isTop()) return;
     const items = [...dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
     if (items.length === 0) {
       e.preventDefault();
@@ -100,7 +144,8 @@ export function Modal({
     pressedOnScrim.current = e.target === e.currentTarget;
   };
   const onScrimClick = (e: MouseEvent<HTMLDivElement>) => {
-    if (closeOnScrim && pressedOnScrim.current && e.target === e.currentTarget) onClose();
+    const own = pressedOnScrim.current && e.target === e.currentTarget;
+    if (closeOnScrim && own && isTop()) onClose();
     pressedOnScrim.current = false;
   };
 
@@ -108,7 +153,12 @@ export function Modal({
   if (radius !== undefined) style['--pn-modal-radius'] = `${radius}px`;
 
   return createPortal(
-    <div className="pn-scrim" onMouseDown={onScrimDown} onClick={onScrimClick}>
+    <div
+      className="pn-scrim"
+      style={depth ? { zIndex: 90 + depth } : undefined}
+      onMouseDown={onScrimDown}
+      onClick={onScrimClick}
+    >
       <div
         ref={dialogRef}
         role="dialog"
@@ -120,7 +170,7 @@ export function Modal({
         style={style}
         onKeyDown={trapTab}
       >
-        {children}
+        <ModalParent.Provider value={frame}>{children}</ModalParent.Provider>
       </div>
     </div>,
     container ?? document.body,

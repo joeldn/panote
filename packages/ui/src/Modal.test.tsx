@@ -164,3 +164,48 @@ describe('ConfirmModal', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+describe('nested modals', () => {
+  function Nested({ onOuter, onInner }: { onOuter: () => void; onInner: () => void }) {
+    return (
+      <Modal open onClose={onOuter} aria-label="Editor settings">
+        <button type="button">Outer action</button>
+        <ConfirmModal open title="Delete point?" body="b" onConfirm={() => {}} onCancel={onInner} />
+      </Modal>
+    );
+  }
+
+  it('Escape closes only the topmost modal', () => {
+    const onOuter = vi.fn();
+    const onInner = vi.fn();
+    render(<Nested onOuter={onOuter} onInner={onInner} />);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onInner).toHaveBeenCalledTimes(1);
+    expect(onOuter).not.toHaveBeenCalled();
+  });
+
+  it("a click on the top modal's scrim closes only that modal", () => {
+    const onOuter = vi.fn();
+    const onInner = vi.fn();
+    render(<Nested onOuter={onOuter} onInner={onInner} />);
+    const innerScrim = screen.getByRole('dialog', { name: 'Delete point?' })
+      .parentElement as HTMLElement;
+    expect(innerScrim.style.zIndex).toBe('91');
+    fireEvent.mouseDown(innerScrim);
+    fireEvent.click(innerScrim);
+    expect(onInner).toHaveBeenCalledTimes(1);
+    expect(onOuter).not.toHaveBeenCalled();
+  });
+
+  it('the lower modal handles Escape again once the top one closes', () => {
+    const onOuter = vi.fn();
+    const { rerender } = render(<Nested onOuter={onOuter} onInner={() => {}} />);
+    rerender(
+      <Modal open onClose={onOuter} aria-label="Editor settings">
+        <button type="button">Outer action</button>
+      </Modal>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onOuter).toHaveBeenCalledTimes(1);
+  });
+});
