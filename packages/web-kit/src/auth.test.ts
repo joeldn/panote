@@ -58,6 +58,15 @@ describe('createAuth', () => {
     });
   });
 
+  it('keeps the PKCE transaction in a cookie when the callback is on another origin', async () => {
+    const createClient = vi.fn(async () => fakeClient());
+    const auth = createAuth(config, { redirectUri: CB, crossOriginCallback: true, createClient });
+    await auth.isAuthenticated();
+    expect(createClient).toHaveBeenCalledWith(
+      expect.objectContaining({ useCookiesForTransactions: true }),
+    );
+  });
+
   it('exposes only configured connections (Google only by default)', () => {
     const auth = createAuth(config, { redirectUri: CB, createClient: async () => fakeClient() });
     expect(auth.connections).toEqual([
