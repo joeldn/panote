@@ -87,7 +87,7 @@ describe('deletePano', () => {
 
     const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, tilesDeleted: true });
     expect(bucket.calls).toEqual([
       `head:${originalKey(SUB, PANO)}`,
       `head:${deletingKey(SUB, PANO)}`,
@@ -107,7 +107,7 @@ describe('deletePano', () => {
 
     const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, tilesDeleted: true });
     expect(await bucket.head(lateKey)).toBeNull();
   });
 
@@ -119,7 +119,7 @@ describe('deletePano', () => {
 
     const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, tilesDeleted: false });
     expect(bucket.calls).toEqual([
       `head:${originalKey(SUB, PANO)}`,
       `head:${deletingKey(SUB, PANO)}`,
@@ -145,7 +145,7 @@ describe('deletePano', () => {
     // Retry: the fault is gone, the tombstone is the only proof left.
     bucket.clearFault();
     const retry = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
-    expect(retry).toEqual({ ok: true });
+    expect(retry).toEqual({ ok: true, tilesDeleted: true });
     expect(await bucket.head(lateTile)).toBeNull();
     expect(await bucket.head(deletingKey(SUB, PANO))).toBeNull();
   });
@@ -165,7 +165,8 @@ describe('deletePano', () => {
 
     bucket.clearFault();
     const retry = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
-    expect(retry).toEqual({ ok: true });
+    // The failed first attempt already swept the tiles, so the retry has nothing to purge.
+    expect(retry).toEqual({ ok: true, tilesDeleted: false });
     expect(await bucket.head(configKey(SUB, PANO))).toBeNull();
     expect(await bucket.head(deletingKey(SUB, PANO))).toBeNull();
   });
@@ -176,11 +177,20 @@ describe('deletePano', () => {
 
     const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, tilesDeleted: true });
     expect(await bucket.head(lateTile)).toBeNull();
     expect(await bucket.head(deletingKey(SUB, PANO))).toBeNull();
     // No tombstone put - one was already there.
     expect(bucket.calls).not.toContain(`put:${deletingKey(SUB, PANO)}`);
+  });
+
+  it('an owned pano with no tiles yet reports tilesDeleted: false (nothing to purge)', async () => {
+    const bucket = new RecordingBucket([originalKey(SUB, PANO), configKey(SUB, PANO)]);
+
+    const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
+
+    expect(result).toEqual({ ok: true, tilesDeleted: false });
+    expect(await bucket.head(originalKey(SUB, PANO))).toBeNull();
   });
 
   it('a repeat delete of an already-fully-deleted pano is idempotent', async () => {
@@ -188,6 +198,6 @@ describe('deletePano', () => {
 
     const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, tilesDeleted: false });
   });
 });
