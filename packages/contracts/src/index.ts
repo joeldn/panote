@@ -4,3 +4,5 @@ export * from './keys.js';
 export * from './jwt.js';
 export * from './jwks.js';
 export * from './api.js';
+export * from './slug.js';
+export * from './publish.js';
