@@ -54,11 +54,15 @@ export const listChildren = async (bucket: R2Bucket, prefix: string): Promise<st
   return [...out];
 };
 
-export const deletePrefix = async (bucket: R2Bucket, prefix: string): Promise<void> => {
+/** Returns how many objects it deleted. */
+export const deletePrefix = async (bucket: R2Bucket, prefix: string): Promise<number> => {
   let cursor: string | undefined;
+  let deleted = 0;
   do {
     const r = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
     if (r.objects.length) await bucket.delete(r.objects.map((o) => o.key));
+    deleted += r.objects.length;
     cursor = r.truncated ? r.cursor : undefined;
   } while (cursor);
+  return deleted;
 };

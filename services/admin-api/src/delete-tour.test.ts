@@ -1,4 +1,4 @@
-import { configKey, originalKey, tourKey } from '@internal/contracts';
+import { configKey, manifestKey, originalKey, tourKey } from '@internal/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
@@ -123,7 +123,10 @@ describe('deleteTour: two tours sharing a pano, deleted concurrently (review fix
     const bucket = new FakeBucket();
     bucket.seed(tourKey(SUB, 'tour-e'), tourDoc('tour-e', ['own-1', 'own-2', 'shared-3']));
     bucket.seed(tourKey(SUB, 'tour-f'), tourDoc('tour-f', ['shared-3']));
-    for (const p of ['own-1', 'own-2', 'shared-3']) bucket.seed(originalKey(SUB, p), 'bytes');
+    for (const p of ['own-1', 'own-2', 'shared-3']) {
+      bucket.seed(originalKey(SUB, p), 'bytes');
+      bucket.seed(manifestKey(p), '{}');
+    }
 
     const purge = await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-e', async () => [
       'pub/tours/tour-e.json',

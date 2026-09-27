@@ -165,7 +165,8 @@ describe('deletePano', () => {
 
     bucket.clearFault();
     const retry = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
-    expect(retry).toEqual({ ok: true, tilesDeleted: true });
+    // The failed first attempt already swept the tiles, so the retry has nothing to purge.
+    expect(retry).toEqual({ ok: true, tilesDeleted: false });
     expect(await bucket.head(configKey(SUB, PANO))).toBeNull();
     expect(await bucket.head(deletingKey(SUB, PANO))).toBeNull();
   });
@@ -181,6 +182,15 @@ describe('deletePano', () => {
     expect(await bucket.head(deletingKey(SUB, PANO))).toBeNull();
     // No tombstone put - one was already there.
     expect(bucket.calls).not.toContain(`put:${deletingKey(SUB, PANO)}`);
+  });
+
+  it('an owned pano with no tiles yet reports tilesDeleted: false (nothing to purge)', async () => {
+    const bucket = new RecordingBucket([originalKey(SUB, PANO), configKey(SUB, PANO)]);
+
+    const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
+
+    expect(result).toEqual({ ok: true, tilesDeleted: false });
+    expect(await bucket.head(originalKey(SUB, PANO))).toBeNull();
   });
 
   it('a repeat delete of an already-fully-deleted pano is idempotent', async () => {

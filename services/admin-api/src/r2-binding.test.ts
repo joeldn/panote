@@ -66,7 +66,8 @@ describe('r2-binding', () => {
     const key = `${prefix}config.json`;
     await putJson(env.BUCKET, key, { x: 1 }, CREATE_ONLY);
     expect(await getJson(env.BUCKET, key)).not.toBeNull();
-    await deletePrefix(env.BUCKET, prefix);
+    expect(await deletePrefix(env.BUCKET, prefix)).toBe(1);
     expect(await getJson(env.BUCKET, key)).toBeNull();
+    expect(await deletePrefix(env.BUCKET, prefix)).toBe(0);
   });
 });

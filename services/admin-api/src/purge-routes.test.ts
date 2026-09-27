@@ -12,9 +12,11 @@ const PURGE_URL = `https://api.cloudflare.com/client/v4/zones/${ZONE}/purge_cach
 const AUTH = { Authorization: 'Bearer good' };
 
 beforeAll(() => {
-  setTestJwtVerifier(async (t) =>
-    t === 'good' ? { sub: MY_SUB } : Promise.reject(new Error('bad')),
-  );
+  setTestJwtVerifier(async (t) => {
+    if (t === 'good') return { sub: MY_SUB };
+    if (t === 'good-other') return { sub: 'auth0|purge-other' };
+    return Promise.reject(new Error('bad'));
+  });
 });
 
 afterEach(() => {
@@ -33,11 +35,16 @@ const mockPurgeFetch = (respond: () => Promise<Response> = async () => Response.
 };
 
 /** Calls the worker with purge configured, and waits for its waitUntil work. */
-const call = async (path: string, init: RequestInit, configured = true): Promise<Response> => {
+const call = async (
+  path: string,
+  init: RequestInit,
+  configured = true,
+  headers: Record<string, string> = AUTH,
+): Promise<Response> => {
   const ctx = createExecutionContext();
   const purgeEnv = configured ? { ...env, CF_PURGE_TOKEN: TOKEN, CDN_ZONE_ID: ZONE } : env;
   const res = await worker.fetch(
-    new Request(`https://x${path}`, { ...init, headers: AUTH }),
+    new Request(`https://x${path}`, { ...init, headers }),
     purgeEnv,
     ctx,
   );
@@ -85,6 +92,26 @@ describe('CDN purge on delete/unpublish (B6)', () => {
     const { spy } = mockPurgeFetch();
     expect((await call('/api/admin/panos/purge-never', { method: 'DELETE' })).status).toBe(204);
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('DELETE pano of an owned original with no tiles yet purges nothing', async () => {
+    await env.BUCKET.put(originalKey(MY_SUB, 'purge-untiled'), 'bytes');
+    const { spy } = mockPurgeFetch();
+    expect((await call('/api/admin/panos/purge-untiled', { method: 'DELETE' })).status).toBe(204);
+    expect(spy).not.toHaveBeenCalled();
+    expect(await env.BUCKET.head(originalKey(MY_SUB, 'purge-untiled'))).toBeNull();
+  });
+
+  it("a non-owner's DELETE tour and DELETE publish purge nothing", async () => {
+    const tourId = await publishedTour(['purge-foreign-p'], 'purge-foreign');
+    const { spy } = mockPurgeFetch();
+    const other = { Authorization: 'Bearer good-other' };
+    for (const path of [`/api/admin/tours/${tourId}`, `/api/admin/tours/${tourId}/publish`]) {
+      expect((await call(path, { method: 'DELETE' }, true, other)).status).toBe(204);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    expect(await env.BUCKET.head(pubTourKey(tourId))).not.toBeNull();
+    expect(await env.BUCKET.head(slugKey('purge-foreign'))).not.toBeNull();
   });
 
   it('DELETE tour batches every deleted pano into one prefix purge, plus the pub URLs', async () => {
@@ -135,7 +162,7 @@ describe('CDN purge on delete/unpublish (B6)', () => {
     expect(spy).toHaveBeenCalledOnce();
   });
 
-  it('makes no purge call when unconfigured (the dev placeholder zone id)', async () => {
+  it('makes no purge call when CF_PURGE_TOKEN is unset (the test env)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await readyPano('purge-unconf');
     const { spy } = mockPurgeFetch();

@@ -462,7 +462,7 @@ export const unpublish = async (
   }
   await bucket.delete(pubTourKey(tourId));
   await bucket.delete(publishKey(sub, tourId));
-  return stored ? [pubTourKey(tourId), ...removed] : [];
+  return [pubTourKey(tourId), ...removed];
 };
 
 /** Daily cron: deletes every redirect alias past its expiresAt (Q6). */

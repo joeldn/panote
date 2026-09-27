@@ -1,7 +1,7 @@
 import { deletingKey, originalKey, panoPrefix, tilesPrefix } from '@internal/contracts';
 import { deletePrefix } from '@internal/worker-kit/r2-binding';
 
-// tilesDeleted: this call swept tiles/<panoId>/, so its edge copies need a purge.
+// tilesDeleted: the tiles/<panoId>/ sweep removed objects, so their edge copies need a purge.
 export type DeletePanoResult = { ok: true; tilesDeleted: boolean };
 
 /** Proves ownership via the original OR a tombstone left by an interrupted
@@ -25,9 +25,9 @@ export const deletePano = async (
   await bucket.delete(originalKey(sub, panoId));
   // One sweep suffices: every tiler write precedes that job's own last HEAD
   // of the original, which 404s after this delete and self-cleans that job's writes.
-  await deletePrefix(bucket, tilesPrefix(panoId));
+  const tiles = await deletePrefix(bucket, tilesPrefix(panoId));
   // Tombstone included: a retry with no proof left still clears this prefix
   // via the no-proof branch above.
   await deletePrefix(bucket, panoPrefix(sub, panoId));
-  return { ok: true, tilesDeleted: true };
+  return { ok: true, tilesDeleted: tiles > 0 };
 };

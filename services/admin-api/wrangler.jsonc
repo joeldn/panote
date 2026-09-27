@@ -27,8 +27,8 @@
         "OAUTH_AUDIENCE": "https://api.panote.dev",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
-        // CDN purge target (B6). Placeholder zone id: the purge no-ops until it's real.
-        "CDN_ZONE_ID": "YOUR_PANOTE_DEV_ZONE_ID",
+        // CDN purge target (B6): the panote.dev zone id (not secret).
+        "CDN_ZONE_ID": "2196d8dead0322ad69307711fc72b5d3",
         "CDN_HOST": "cdn.panote.dev",
       },
       // Daily sweep that releases expired slug aliases.
