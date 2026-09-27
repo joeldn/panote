@@ -19,6 +19,8 @@ import {
 } from '@internal/contracts';
 import { z } from 'zod';
 
+import { AuthRequiredError } from '../auth.js';
+
 import {
   ApiError,
   ConflictError,
@@ -115,6 +117,8 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       request.body = JSON.stringify(init.body);
     }
     const res = await doFetch(url, request);
+    // One error type for "sign in again", whether the token or the API said so.
+    if (res.status === 401) throw new AuthRequiredError(`401 from ${path}`);
     return {
       res,
       url,

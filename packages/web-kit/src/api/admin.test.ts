@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { json } from '../__fixtures__/helpers.js';
+import { AuthRequiredError } from '../auth.js';
 import { createAdminApi } from './admin.js';
 import { ApiError, ApiSchemaError, ConflictError } from './http.js';
 
@@ -194,5 +195,26 @@ describe('createAdminApi', () => {
     const { api } = setup(new Response(null, { status: 204 }), json({ error: 'boom' }, 500));
     await expect(api.deleteTour('t1')).resolves.toBeUndefined();
     await expect(api.deletePano('p1')).rejects.toMatchObject({ status: 500 });
+  });
+
+  it('maps a 401 on any route to AuthRequiredError', async () => {
+    const { api } = setup(
+      json({ error: 'unauthorized' }, 401),
+      json({ error: 'unauthorized' }, 401),
+      json({ error: 'unauthorized' }, 401),
+    );
+    await expect(api.listTours()).rejects.toBeInstanceOf(AuthRequiredError);
+    await expect(api.getTour('t1')).rejects.toBeInstanceOf(AuthRequiredError);
+    await expect(api.putTour('t1', { title: 'T' }, 'e')).rejects.toBeInstanceOf(AuthRequiredError);
+  });
+
+  it('passes through a token getter that already requires sign-in', async () => {
+    const fetch = vi.fn();
+    const api = createAdminApi({
+      getToken: () => Promise.reject(new AuthRequiredError()),
+      fetch,
+    });
+    await expect(api.listPanos()).rejects.toBeInstanceOf(AuthRequiredError);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,8 @@
 import { PANO_PATTERN } from '@internal/contracts';
 import { z } from 'zod';
 
+import { AuthRequiredError } from '../auth.js';
+
 import { ApiError, parseWith, readJson, type FetchLike, type TokenGetter } from './http.js';
 
 /** Must match services/upload-api (MAX_ORIGINAL_BYTES, ALLOWED_CONTENT_TYPES). */
@@ -46,6 +48,7 @@ export function createUploadApi(opts: UploadApiOptions): UploadApi {
         },
         body: JSON.stringify(req),
       });
+      if (res.status === 401) throw new AuthRequiredError('401 from /api/upload-url');
       const body = await readJson(res);
       if (!res.ok) throw new ApiError(res.status, body);
       const ok = parseWith(UploadUrlOkSchema, url, body);

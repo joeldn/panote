@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { json } from '../__fixtures__/helpers.js';
+import { AuthRequiredError } from '../auth.js';
 import { ApiError, ApiSchemaError } from './http.js';
 import {
   createUploadApi,
@@ -146,6 +147,18 @@ describe('createUploadApi', () => {
         panoId: 'p1',
       }),
     ).rejects.toMatchObject({ status: 404, message: '404: original not found' });
+  });
+});
+
+describe('createUploadApi auth', () => {
+  it('maps a 401 to AuthRequiredError', async () => {
+    const fetch = vi.fn(async () => json({ error: 'unauthorized' }, 401));
+    await expect(
+      createUploadApi({ fetch, getToken: async () => 't' }).presign({
+        contentType: 'image/png',
+        size: 1,
+      }),
+    ).rejects.toBeInstanceOf(AuthRequiredError);
   });
 });
 

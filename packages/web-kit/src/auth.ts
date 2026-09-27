@@ -1,3 +1,5 @@
+// Tokens are cached in localStorage (D3). That is only acceptable while the Auth0
+// tenant keeps refresh-token rotation and reuse detection enabled.
 import type { Auth0ClientOptions } from '@auth0/auth0-spa-js';
 
 import { KNOWN_CONNECTIONS, type AuthConfig, type ConnectionId } from './config.js';
@@ -44,19 +46,51 @@ export class AuthNotConfiguredError extends Error {
 }
 
 // Auth0 error codes meaning "the session is gone", not "something broke".
-const SESSION_GONE = new Set(['login_required', 'consent_required', 'missing_refresh_token']);
+// invalid_grant: the refresh token expired, was revoked, or reuse was detected.
+const SESSION_GONE = new Set([
+  'login_required',
+  'consent_required',
+  'missing_refresh_token',
+  'invalid_grant',
+]);
+
+// Error classes from the lazily loaded SDK, registered once it is imported.
+const sessionGoneClasses: Array<abstract new (...args: never[]) => Error> = [];
 
 const errorCode = (e: unknown): string | undefined =>
   e && typeof e === 'object' && 'error' in e && typeof e.error === 'string' ? e.error : undefined;
 
+/** True for an SDK error that means the user has to sign in again. */
+export function isSessionGoneError(e: unknown): boolean {
+  if (sessionGoneClasses.some((cls) => e instanceof cls)) return true;
+  const code = errorCode(e);
+  return code !== undefined && SESSION_GONE.has(code);
+}
+
+/** True for any error meaning "sign in again": a gone session or an API 401. */
+export const isAuthError = (e: unknown): e is AuthRequiredError => e instanceof AuthRequiredError;
+
+// C0 controls are stripped by the WHATWG URL parser ("/\t/evil" -> "//evil"),
+// and browsers treat a backslash as "/", so both are refused before resolving.
+const hasUnsafeChars = (v: string): boolean =>
+  [...v].some((ch) => ch === '\\' || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
+
 /**
- * Only same-origin absolute paths survive the round trip through Auth0's
- * `appState`, so a crafted `next=` cannot become an open redirect.
+ * Resolve `value` against `origin` and keep it only if it stays on that origin,
+ * returned as path + query + hash, so a crafted `next=` can't open-redirect.
  */
-export function safeReturnTo(value: unknown, fallback = '/app/'): string {
-  if (typeof value !== 'string') return fallback;
-  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return fallback;
-  return value;
+export function safeReturnTo(value: unknown, origin: string, fallback = '/app/'): string {
+  if (typeof value !== 'string' || value === '' || hasUnsafeChars(value)) return fallback;
+  let base: string;
+  let url: URL;
+  try {
+    base = new URL(origin).origin;
+    url = new URL(value, base);
+  } catch {
+    return fallback;
+  }
+  if (url.origin !== base) return fallback;
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 export interface SignInConnection {
@@ -79,15 +113,18 @@ export interface Auth {
 }
 
 export interface CreateAuthOptions {
-  /** Absolute callback URL, e.g. `${siteOrigin}/app/callback`. */
+  /** Absolute callback URL, e.g. `${siteOrigin}/app/callback`; its origin bounds returnTo. */
   redirectUri: string;
   createClient?: Auth0Factory;
 }
 
 const defaultFactory: Auth0Factory = async (options) => {
   // Loaded on first use so pages that never touch auth don't ship the SDK.
-  const { Auth0Client } = await import('@auth0/auth0-spa-js');
-  return new Auth0Client(options) as unknown as Auth0Like;
+  const sdk = await import('@auth0/auth0-spa-js');
+  if (!sessionGoneClasses.includes(sdk.MissingRefreshTokenError)) {
+    sessionGoneClasses.push(sdk.MissingRefreshTokenError);
+  }
+  return new sdk.Auth0Client(options) as unknown as Auth0Like;
 };
 
 /**
@@ -96,6 +133,7 @@ const defaultFactory: Auth0Factory = async (options) => {
  */
 export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
   const factory = opts.createClient ?? defaultFactory;
+  const origin = new URL(opts.redirectUri).origin;
   let client: Promise<Auth0Like> | undefined;
   const getClient = (): Promise<Auth0Like> => {
     if (!config.configured) return Promise.reject(new AuthNotConfiguredError());
@@ -112,7 +150,12 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
       useRefreshTokens: true,
       useRefreshTokensFallback: false,
     });
-    return client;
+    const pending = client;
+    // Forget a failed load (e.g. a chunk fetch) so the next call can retry.
+    pending.catch(() => {
+      if (client === pending) client = undefined;
+    });
+    return pending;
   };
 
   const connections: SignInConnection[] = config.connections.map((id) => ({
@@ -130,13 +173,13 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
       const c = await getClient();
       await c.loginWithRedirect({
         authorizationParams: { connection, redirect_uri: opts.redirectUri },
-        appState: { returnTo: safeReturnTo(returnTo) },
+        appState: { returnTo: safeReturnTo(returnTo, origin) },
       });
     },
     async handleCallback(url) {
       const c = await getClient();
       const result = await c.handleRedirectCallback(url);
-      return safeReturnTo(result.appState?.returnTo);
+      return safeReturnTo(result.appState?.returnTo, origin);
     },
     async getAccessToken() {
       const c = await getClient().catch((e: unknown) => {
@@ -145,8 +188,7 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
       try {
         return await c.getTokenSilently();
       } catch (e) {
-        const code = errorCode(e);
-        if (code && SESSION_GONE.has(code)) throw new AuthRequiredError();
+        if (isSessionGoneError(e)) throw new AuthRequiredError();
         throw e;
       }
     },
