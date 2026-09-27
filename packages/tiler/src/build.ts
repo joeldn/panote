@@ -144,6 +144,15 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     }
   }
 
+  await mkdir(panoDir, { recursive: true });
+  log('rendering preview image');
+  // Fixed 1024x512 regardless of tile format/quality knobs, so dashboard
+  // cards get a stable, small asset alongside the tile pyramid.
+  await sharp(srcImg.data, { raw: { width: srcImg.width, height: srcImg.height, channels: 3 } })
+    .resize(1024, 512, { fit: 'fill' })
+    .webp({ quality })
+    .toFile(join(panoDir, 'preview.webp'));
+
   const manifest: Manifest = {
     pano: opts.pano,
     faceSize,
@@ -152,11 +161,11 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     faces: FACES,
     quality,
     format: fmt,
+    preview: true,
     ...(opts.version !== undefined
       ? { version: opts.version, tilerVersion: TILER_OUTPUT_VERSION }
       : {}),
   };
-  await mkdir(panoDir, { recursive: true });
   await writeFile(join(panoDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
   log(`wrote manifest to ${join(panoDir, 'manifest.json')}`);
   return manifest;

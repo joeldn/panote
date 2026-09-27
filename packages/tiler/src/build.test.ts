@@ -24,12 +24,19 @@ import type { Manifest } from '@panote/core';
 // build() fails loudly instead of proceeding.
 const toBuffer = vi.fn();
 const metadata = vi.fn();
+// Shared across every sharp() call (each gets its own `self`-closing chain),
+// so a test can assert which dims a particular resize() was asked for -
+// e.g. distinguishing the face pyramid's resize from the preview's 1024x512.
+const resizeCalls: unknown[][] = [];
 
 function chainable(): Record<string, unknown> {
   const self: Record<string, unknown> = {
     removeAlpha: () => self,
     raw: () => self,
-    resize: () => self,
+    resize: (...args: unknown[]) => {
+      resizeCalls.push(args);
+      return self;
+    },
     extract: () => self,
     clone: () => self,
     webp: () => self,
@@ -269,6 +276,8 @@ describe('build', () => {
       const manifest = await readManifest(outDir, 'ok-pano');
       expect(manifest.version).toBe('t1-abc123');
       expect(manifest.tilerVersion).toBe(TILER_OUTPUT_VERSION);
+      expect(manifest.preview).toBe(true);
+      expect(resizeCalls).toContainEqual([1024, 512, { fit: 'fill' }]);
     }, 20_000);
 
     // Same real rendering pipeline as above; same timeout treatment.
@@ -285,6 +294,7 @@ describe('build', () => {
       const manifest = await readManifest(outDir, 'ok-pano-unversioned');
       expect(manifest.version).toBeUndefined();
       expect(manifest.tilerVersion).toBeUndefined();
+      expect(manifest.preview).toBe(true);
     }, 20_000);
   });
 

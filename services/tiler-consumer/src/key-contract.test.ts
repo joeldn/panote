@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { manifestKey, originalKey, tileVersionPrefix } from '@internal/contracts';
-import { manifestUrl, tilePath } from '@panote/core';
+import { manifestKey, originalKey, previewKey, tileVersionPrefix } from '@internal/contracts';
+import { manifestUrl, previewUrl, tilePath } from '@panote/core';
 import { deriveUploadTarget } from './upload-prefix.js';
 
 // Pins that the container's uploads and the viewer's read URLs agree under
@@ -33,6 +33,15 @@ describe('tiler container upload key vs. viewer read URL (owner-free)', () => {
     const requestedTilePath = tilePath('tiles/', pano, level, face, x, y, format, version);
 
     expect(requestedTilePath).toBe(uploadedTileKey);
+  });
+
+  it('the preview key the container uploads to (via the generic file walk) equals the viewer preview URL under baseUrl "tiles/"', () => {
+    const notificationKey = originalKey('auth0|me', pano);
+    const { panoId } = deriveUploadTarget(notificationKey);
+    const uploadedPreviewKey = tileVersionPrefix(panoId, version) + 'preview.webp';
+
+    expect(previewKey(panoId, version)).toBe(uploadedPreviewKey);
+    expect(previewUrl('tiles/', pano, version)).toBe(uploadedPreviewKey);
   });
 
   it('two different owner subs with the same panoId produce identical output keys', () => {

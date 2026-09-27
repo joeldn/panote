@@ -4,6 +4,7 @@ import {
   deletingKey,
   originalKey,
   manifestKey,
+  previewKey,
   userPanosPrefix,
   tourKey,
   panoPrefix,
@@ -138,6 +139,18 @@ describe('keys', () => {
 
     it('manifestKey throws on an invalid panoId', () => {
       expect(() => manifestKey('a/b')).toThrow(/panoId must match/);
+    });
+
+    it('previewKey nests preview.webp under the version dir, alongside the tiles', () => {
+      expect(previewKey(panoId, 't1-abc123')).toBe(`tiles/${panoId}/t1-abc123/preview.webp`);
+    });
+
+    it('previewKey throws on an invalid panoId', () => {
+      expect(() => previewKey('a/b', 't1-abc123')).toThrow(/panoId must match/);
+    });
+
+    it('previewKey throws on an invalid version', () => {
+      expect(() => previewKey(panoId, 'v/1')).toThrow(/version must match/);
     });
   });
 

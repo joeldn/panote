@@ -96,5 +96,8 @@ export const tilesPrefix = (p: string): string => `${TILES_ROOT}${assertValidId(
 export const tileVersionPrefix = (p: string, v: string): string =>
   `${tilesPrefix(p)}${assertValidId(v, 'version')}/`;
 export const manifestKey = (p: string): string => `${tilesPrefix(p)}manifest.json`;
+// Alongside the tiles in the version dir, not next to the unversioned manifest.
+export const previewKey = (p: string, v: string): string =>
+  `${tileVersionPrefix(p, v)}preview.webp`;
 
 export { PANO_PATTERN };
