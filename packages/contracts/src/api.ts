@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { TILE_FORMATS } from './manifest.js';
+import { VisibilitySchema } from './publish.js';
 import { SceneConfigSchema, TourDocSchema } from './schema.js';
 
 // Response schemas for admin-api's owner GET routes; web-kit validates
@@ -31,9 +32,19 @@ export type TourMissingConfig = z.infer<typeof TourMissingConfigSchema>;
 export const TourConfigEntrySchema = z.union([PanoConfigOkSchema, TourMissingConfigSchema]);
 export type TourConfigEntry = z.infer<typeof TourConfigEntrySchema>;
 
+// The tour's share-link state (from its private publish.json), null when unpublished.
+export const TourPublishStateSchema = z.object({
+  slug: z.string(),
+  visibility: VisibilitySchema,
+  publishedAt: z.string(),
+});
+export type TourPublishState = z.infer<typeof TourPublishStateSchema>;
+
 export const TourOkSchema = z.object({
   tour: TourDocSchema,
   etag: z.string(),
+  // Optional so clients stay compatible with responses from before B2.
+  publish: TourPublishStateSchema.nullable().optional(),
 });
 export type TourOk = z.infer<typeof TourOkSchema>;
 
@@ -58,6 +69,7 @@ export const PanoManifestSummarySchema = z.object({
   version: z.string().optional(),
   format: z.enum(TILE_FORMATS),
   tileSize: z.number().int().positive(),
+  preview: z.literal(true).optional(),
 });
 export type PanoManifestSummary = z.infer<typeof PanoManifestSummarySchema>;
 
@@ -95,7 +107,7 @@ export type PanoStatusOnlyOk = z.infer<typeof PanoStatusOnlyOkSchema>;
 
 export const TourPublishSummarySchema = z.object({
   slug: z.string(),
-  visibility: z.enum(['public', 'unlisted']),
+  visibility: VisibilitySchema,
 });
 export type TourPublishSummary = z.infer<typeof TourPublishSummarySchema>;
 
@@ -106,8 +118,7 @@ export const TourSummarySchema = z.object({
   coverPanoId: z.string().nullable(),
   updatedAt: z.string(),
   etag: z.string(),
-  // Always null until unit B2 writes publish.json; the list route already
-  // groups it in by tourId so B2 needs no read-path change.
+  // From publish.json's customMetadata, grouped in by tourId; null when unpublished.
   publish: TourPublishSummarySchema.nullable(),
 });
 export type TourSummary = z.infer<typeof TourSummarySchema>;
@@ -117,6 +128,54 @@ export const ToursListOkSchema = z.object({
   cursor: z.string().nullable(),
 });
 export type ToursListOk = z.infer<typeof ToursListOkSchema>;
+
+// --- Publish, slugs, visibility (unit B2) ---
+
+export const PublishRequestSchema = z.object({
+  visibility: VisibilitySchema.optional(),
+  slug: z.string().optional(),
+});
+export type PublishRequest = z.infer<typeof PublishRequestSchema>;
+
+export const PublishOkSchema = z.object({
+  slug: z.string(),
+  visibility: VisibilitySchema,
+  url: z.string(),
+  publishedAt: z.string(),
+});
+export type PublishOk = z.infer<typeof PublishOkSchema>;
+
+export const PUBLISH_FAILURE_REASONS = ['missing', 'deleting', 'not-owned', 'not-ready'] as const;
+export const PublishFailureReasonSchema = z.enum(PUBLISH_FAILURE_REASONS);
+export type PublishFailureReason = z.infer<typeof PublishFailureReasonSchema>;
+
+// 422: every scene that failed its ownership/readiness check, not just the first.
+export const PublishUnprocessableSchema = z.object({
+  error: z.enum(['scenes not publishable', 'tour has no scenes']),
+  scenes: z.array(z.object({ panoId: z.string(), reason: PublishFailureReasonSchema })),
+});
+export type PublishUnprocessable = z.infer<typeof PublishUnprocessableSchema>;
+
+export const SlugTakenSchema = z.object({ error: z.literal('slug taken') });
+// A bare publish whose current slug another tour now holds: retrying won't help,
+// the user has to pick a new slug.
+export const SlugLostSchema = z.object({ error: z.literal('slug lost') });
+export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'reserved slug']) });
+// 409 when a concurrent publish, rename or visibility change got there first; retry.
+export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
+export const NotPublishedSchema = z.object({ error: z.literal('not published') });
+
+export const SlugPutRequestSchema = z.object({ slug: z.string() });
+export const SlugPutOkSchema = z.object({
+  slug: z.string(),
+  // When the previous slug stops redirecting; null when the slug didn't change.
+  oldSlugRedirectsUntil: z.string().nullable(),
+});
+export type SlugPutOk = z.infer<typeof SlugPutOkSchema>;
+
+export const VisibilityPatchRequestSchema = z.object({ visibility: VisibilitySchema });
+export const VisibilityOkSchema = z.object({ visibility: VisibilitySchema });
+export type VisibilityOk = z.infer<typeof VisibilityOkSchema>;
 
 // --- Tour insights (unit B5) ---
 

@@ -1,26 +1,40 @@
 import {
+  checkSlug,
   configKey,
   deletingKey,
   MAX_TOUR_SCENES,
   originalKey,
   PANO_PATTERN,
+  PublishRequestSchema,
   SceneConfigSchema,
+  SlugPutRequestSchema,
   TourDocSchema,
   tourKey,
   userPanosPrefix,
+  VisibilityPatchRequestSchema,
   type SceneConfig,
   type TourConfigEntry,
   type TourDoc,
+  type TourPublishState,
 } from '@internal/contracts';
 import { authenticate } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono } from 'hono';
 
-import { conditionalGet, guardedPut, updateConditional } from './conditional.js';
+import {
+  conditionalGet,
+  guardedPut,
+  ifNoneMatchHits,
+  tourIfMatch,
+  tourViewEtag,
+  updateConditional,
+} from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
+import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
   listPanoSummaries,
@@ -226,21 +240,28 @@ app.get('/api/admin/tours/:tourId', async (c) => {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
   }
-  const result = await conditionalGet(
-    c.env.BUCKET,
-    tourKey(sub, tourId),
-    c.req.header('If-None-Match'),
-  );
-  if (!result) {
+  const [obj, stored] = await Promise.all([
+    c.env.BUCKET.get(tourKey(sub, tourId)),
+    readPublishRecord(c.env.BUCKET, sub, tourId),
+  ]);
+  if (!obj) {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: 'not found' }, 404);
   }
-  setEtagAndNoStore(c, result.notModified ? result.etag : result.obj.etag);
-  if (result.notModified) return c.body(null, 304);
-  const tour = await result.obj.json<TourDoc>();
-  if (c.req.query('include') !== 'configs') return c.json({ tour, etag: result.obj.etag });
+  // Header ETag covers publish.json too; the body etag stays tour.json's for If-Match.
+  const viewEtag = tourViewEtag(obj.etag, stored?.etag);
+  setEtagAndNoStore(c, viewEtag);
+  if (ifNoneMatchHits(c.req.header('If-None-Match'), viewEtag)) return c.body(null, 304);
+  const tour = await obj.json<TourDoc>();
+  const record = stored?.value;
+  const publish: TourPublishState | null = record
+    ? { slug: record.slug, visibility: record.visibility, publishedAt: record.publishedAt }
+    : null;
+  if (c.req.query('include') !== 'configs') {
+    return c.json({ tour, etag: obj.etag, publish });
+  }
   const configs = await loadSceneConfigs(c.env.BUCKET, sub, tour.scenes);
-  return c.json({ tour, etag: result.obj.etag, configs });
+  return c.json({ tour, etag: obj.etag, publish, configs });
 });
 
 app.put('/api/admin/tours/:tourId', async (c) => {
@@ -252,7 +273,7 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
   // 428 before any state read, same reasoning as the config PUT above.
-  const conditional = updateConditional(c.req.header('If-Match'));
+  const conditional = updateConditional(tourIfMatch(c.req.header('If-Match')));
   // PUT never creates a tour - tourIds only ever come from POST - so a
   // missing key here is "not found", not a create (guardedPut's 404).
   const result = await guardedPut(
@@ -276,7 +297,65 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   if (!PANO_PATTERN.test(tourId)) {
     return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
   }
-  await deleteTour(c.env.BUCKET, sub, tourId);
+  const stub = publisher(c.env, tourId);
+  await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId));
+  return c.body(null, 204);
+});
+
+const tourIdError = (tourId: string): string | null =>
+  PANO_PATTERN.test(tourId) ? null : `tourId must match ${PANO_PATTERN}`;
+
+const slugError = (slug: string): string | null => {
+  const check = checkSlug(slug);
+  return check.ok ? null : `${check.reason} slug`;
+};
+
+// All publish-state changes for a tour go through its TourPublisher, one at a time.
+const publisher = (env: Env, tourId: string) => env.PUBLISHER.get(env.PUBLISHER.idFromName(tourId));
+
+app.post('/api/admin/tours/:tourId/publish', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = PublishRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
+  if (invalidSlug) return c.json({ error: invalidSlug }, 400);
+  const out = await publisher(c.env, tourId).publish(sub, tourId, body.data);
+  return c.json(out.body, out.status);
+});
+
+app.put('/api/admin/tours/:tourId/slug', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = SlugPutRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const invalidSlug = slugError(body.data.slug);
+  if (invalidSlug) return c.json({ error: invalidSlug }, 400);
+  const out = await publisher(c.env, tourId).rename(sub, tourId, body.data.slug);
+  return c.json(out.body, out.status);
+});
+
+app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = VisibilityPatchRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const out = await publisher(c.env, tourId).setVisibility(sub, tourId, body.data.visibility);
+  return c.json(out.body, out.status);
+});
+
+app.delete('/api/admin/tours/:tourId/publish', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  await publisher(c.env, tourId).unpublish(sub, tourId);
   return c.body(null, 204);
 });
 
@@ -284,4 +363,12 @@ app.get('/api/admin/tours/:tourId/insights', (c) => insightsRoute(c, c.req.param
 
 app.onError(errorHandler);
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6).
+  scheduled(controller, env, ctx) {
+    ctx.waitUntil(sweepExpiredAliases(env.BUCKET, new Date(controller.scheduledTime)));
+  },
+} satisfies ExportedHandler<Env>;
+
+export { TourPublisher };

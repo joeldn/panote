@@ -18,13 +18,22 @@
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read).
       // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
+      // Serializes publish/slug/visibility changes per tour (one instance per tourId).
+      "durable_objects": {
+        "bindings": [{ "name": "PUBLISHER", "class_name": "TourPublisher" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
         "CF_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         // public-api's EVENTS dataset for the same env
         "AE_DATASET": "panote_events_dev",
+        // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
+        "SLUG_ALIAS_DAYS": "30",
       },
+      // Daily sweep that releases expired slug aliases.
+      "triggers": { "crons": ["17 3 * * *"] },
     },
     "production": {
       // production is unprovisioned, see docs/deploy.md
@@ -35,6 +44,11 @@
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env production (Account Analytics: Read).
       // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
+      // Serializes publish/slug/visibility changes per tour (one instance per tourId).
+      "durable_objects": {
+        "bindings": [{ "name": "PUBLISHER", "class_name": "TourPublisher" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
         // only with the real tenant URL, never another fake name.
@@ -42,7 +56,11 @@
         "OAUTH_AUDIENCE": "https://api.panote.io",
         "CF_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         "AE_DATASET": "panote_events",
+        // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
+        "SLUG_ALIAS_DAYS": "30",
       },
+      // Daily sweep that releases expired slug aliases.
+      "triggers": { "crons": ["17 3 * * *"] },
     },
   },
 }

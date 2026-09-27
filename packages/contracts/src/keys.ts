@@ -1,5 +1,7 @@
 import { PANO_PATTERN } from '@panote/core';
 
+import { isValidSlug } from './slug.js';
+
 // panoId/tourId are used verbatim, only checked against PANO_PATTERN,
 // because the viewer builds tile/manifest URLs from the manifest's raw
 // pano value - encoding them here would desync the tiler's key from
@@ -88,6 +90,9 @@ export const userPanosPrefix = (u: string): string => `panos/${encodeId(u)}/`;
 export const userToursPrefix = (u: string): string => `tours/${encodeId(u)}/`;
 export const tourKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/tour.json`;
+// Private publish sidecar ({ slug, visibility, publishedAt }), never CDN-served.
+export const publishKey = (u: string, t: string): string =>
+  `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/publish.json`;
 
 // Owner-free: base64url(sub) is reversible, so these must stay safe for a
 // public bucket - panoId alone (a server-generated UUID) is unique enough.
@@ -96,5 +101,23 @@ export const tilesPrefix = (p: string): string => `${TILES_ROOT}${assertValidId(
 export const tileVersionPrefix = (p: string, v: string): string =>
   `${tilesPrefix(p)}${assertValidId(v, 'version')}/`;
 export const manifestKey = (p: string): string => `${tilesPrefix(p)}manifest.json`;
+// Alongside the tiles in the version dir, not next to the unversioned manifest.
+export const previewKey = (p: string, v: string): string =>
+  `${tileVersionPrefix(p, v)}preview.webp`;
+
+// Share links (plan 3.2): public and owner-free, same rule as tiles/ above.
+export const PUB_TOURS_ROOT = 'pub/tours/';
+export const pubTourKey = (t: string): string =>
+  `${PUB_TOURS_ROOT}${assertValidId(t, 'tourId')}.json`;
+export const SLUGS_ROOT = 'slugs/';
+export const slugKey = (slug: string): string => {
+  if (!isValidSlug(slug)) throw new Error(`invalid or reserved slug ${JSON.stringify(slug)}`);
+  return `${SLUGS_ROOT}${slug}.json`;
+};
+// For a slug read back from storage: charset-checked against traversal but not
+// re-validated, so a word reserved later still unpublishes. Null if unsafe.
+const STORED_SLUG_RE = /^[a-z0-9-]{1,64}$/;
+export const storedSlugKey = (slug: string): string | null =>
+  STORED_SLUG_RE.test(slug) ? `${SLUGS_ROOT}${slug}.json` : null;
 
 export { PANO_PATTERN };

@@ -47,6 +47,8 @@ const config: UserConfig = {
         'tiler',
         'contracts',
         'worker-kit',
+        'ui',
+        'web-kit',
         // shared config packages
         'typescript-config',
         'eslint-config',

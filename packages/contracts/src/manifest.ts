@@ -42,6 +42,7 @@ export const ManifestSchema = z
     format: z.enum(TILE_FORMATS),
     version: z.string().regex(PANO_PATTERN).optional(),
     tilerVersion: z.number().int().positive().optional(),
+    preview: z.literal(true).optional(),
   })
   .refine((m) => (ALLOWED_TILE_SIZES as readonly number[]).includes(m.tileSize), {
     message: `tileSize must be one of ${ALLOWED_TILE_SIZES.join(', ')}`,

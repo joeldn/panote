@@ -154,4 +154,18 @@ describe('ManifestSchema', () => {
       expect(() => ManifestSchema.parse({ ...manifest, tilerVersion: 1.5 })).toThrow();
     });
   });
+
+  describe('preview', () => {
+    it('accepts a manifest with no preview field (old manifests still parse)', () => {
+      expect(() => ManifestSchema.parse(manifest)).not.toThrow();
+    });
+
+    it('accepts preview: true', () => {
+      expect(ManifestSchema.parse({ ...manifest, preview: true }).preview).toBe(true);
+    });
+
+    it('rejects preview: false', () => {
+      expect(() => ManifestSchema.parse({ ...manifest, preview: false })).toThrow();
+    });
+  });
 });

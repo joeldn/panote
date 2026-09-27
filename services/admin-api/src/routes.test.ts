@@ -1102,6 +1102,38 @@ describe('GET /api/admin/panos summaries (unit A2)', () => {
     expect(entry?.manifest).toEqual({ version, format: 'webp', tileSize: 256 });
   });
 
+  it('carries manifest.preview through to the list summary when the manifest has one (unit B7)', async () => {
+    const panoId = 'summary-preview-p1';
+    const put = await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const version = `t1-${put?.etag}`;
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256, preview: true }),
+    );
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as {
+      panos: Array<{ panoId: string; manifest: { preview?: boolean } | null }>;
+    };
+    const entry = body.panos.find((p) => p.panoId === panoId);
+    expect(entry?.manifest?.preview).toBe(true);
+  });
+
+  it('omits manifest.preview from the list summary when the manifest has none (old manifest)', async () => {
+    const panoId = 'summary-no-preview-p1';
+    const put = await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
+    const version = `t1-${put?.etag}`;
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256 }),
+    );
+    const list = await SELF.fetch('https://x/api/admin/panos', auth);
+    const body = (await list.json()) as {
+      panos: Array<{ panoId: string; manifest: { preview?: boolean } | null }>;
+    };
+    const entry = body.panos.find((p) => p.panoId === panoId);
+    expect(entry?.manifest?.preview).toBeUndefined();
+  });
+
   it('summarizes a replaced original whose old manifest no longer matches as pending, not ready', async () => {
     const panoId = 'summary-replaced-p1';
     await env.BUCKET.put(

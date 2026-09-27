@@ -1,0 +1,44 @@
+{
+  "name": "@app/admin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "panote owner app under /app/: dashboard, upload, editor, share and insights (Workers static assets)",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "vite build --mode ${APP_MODE:-dev}",
+    "dev": "vite --mode dev",
+    "preview": "vite preview --mode dev",
+    "deploy": "wrangler deploy --env dev",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.node.json",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "dependencies": {
+    "@internal/ui": "workspace:*",
+    "@internal/web-kit": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-router": "catalog:"
+  },
+  "devDependencies": {
+    "@internal/eslint-config": "workspace:*",
+    "@internal/typescript-config": "workspace:*",
+    "@internal/vitest-config": "workspace:*",
+    "@testing-library/dom": "catalog:",
+    "@testing-library/react": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

@@ -20,6 +20,9 @@ coverage/
 .env
 .env.*
 !.env.example
+# The SPAs' build-time config is public by design (VITE_* ends up in the bundle).
+!apps/*/.env.dev
+!apps/*/.env.production
 .dev.vars
 .dev.vars.*
 

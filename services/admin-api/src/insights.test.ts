@@ -1,6 +1,6 @@
 import { InsightsOkSchema, tourKey } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
-import { env } from 'cloudflare:test';
+import { createExecutionContext, env } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -11,7 +11,7 @@ import {
   parseDays,
   SQL_TIMEOUT_MS,
 } from './insights.js';
-import app from './index.js';
+import worker from './index.js';
 
 const MY_SUB = 'auth0|me';
 
@@ -29,8 +29,12 @@ afterEach(() => {
 
 const testEnv = { ...env, CF_ANALYTICS_TOKEN: 'test-token' } as Env;
 
+// The default export is { fetch, scheduled } since the publish cron landed.
+const request = (path: string, init: RequestInit, e: Env) =>
+  worker.fetch(new Request(`https://x${path}`, init), e, createExecutionContext());
+
 const get = (path: string, token = 'good', e: Env = testEnv) =>
-  app.request(path, { headers: { Authorization: `Bearer ${token}` } }, e);
+  request(path, { headers: { Authorization: `Bearer ${token}` } }, e);
 
 const createTour = (tourId: string) =>
   env.BUCKET.put(tourKey(MY_SUB, tourId), JSON.stringify({ tourId, title: 't', scenes: [] }));
@@ -145,7 +149,7 @@ describe('getInsights', () => {
 
 describe('GET /api/admin/tours/:tourId/insights', () => {
   it('401s without a token', async () => {
-    const r = await app.request('/api/admin/tours/ins-unauth/insights', {}, testEnv);
+    const r = await request('/api/admin/tours/ins-unauth/insights', {}, testEnv);
     expect(r.status).toBe(401);
   });
 

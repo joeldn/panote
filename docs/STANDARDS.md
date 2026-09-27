@@ -86,7 +86,7 @@ Every workspace's `package.json` name declares two things at a glance: whether o
 | `@panote/*` | May be published to the npm registry as a standalone package | `packages/` | `@panote/viewer`, `@panote/core` |
 | `@internal/*` | Repo-only library — never published, may be imported by any other workspace | `packages/` | `@internal/contracts`, `@internal/worker-kit`, `@internal/tiler`, `@internal/typescript-config`, `@internal/eslint-config`, `@internal/vitest-config` |
 | `@service/*` | Deployable Cloudflare Worker | `services/` | `@service/public-api`, `@service/admin-api`, `@service/upload-api`, `@service/tiler-consumer` |
-| `@app/*` | Deployable frontend (Pages SPA) | `apps/` | `@app/website`, `@app/admin`, `@app/demo` |
+| `@app/*` | Deployable frontend (Vite SPA served by an assets-only Worker) | `apps/` | `@app/website`, `@app/admin` |
 
 If a workspace's scope doesn't match its directory, that's a bug — fix the scope, don't special-case the rule.
 

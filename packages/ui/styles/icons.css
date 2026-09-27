@@ -1,0 +1,4 @@
+/* Font Awesome (solid + brands), self-hosted. Separate from styles.css: it is large. */
+@import '@fortawesome/fontawesome-free/css/fontawesome.min.css';
+@import '@fortawesome/fontawesome-free/css/solid.min.css';
+@import '@fortawesome/fontawesome-free/css/brands.min.css';

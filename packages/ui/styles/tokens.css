@@ -1,0 +1,86 @@
+/*
+ * Design tokens (docs/design/README.md, "Design Tokens"). Everything lives on
+ * :root so fixed-position subtrees (modals, the upload chip) inherit them too.
+ */
+:root {
+  --accent: #b5483a;
+  --ink: #1a1815;
+  --paper: #faf8f4;
+  --depth: #2f8fb3;
+  --dark-panel: #14130f;
+  --code-text: #9fd0e0;
+  --success: #5fae6e;
+  --vis-public: #1f8a5b;
+  --vis-unlisted: #c8762e;
+
+  --scrim: rgba(20, 18, 14, 0.5);
+  --scrim-blur: blur(6px);
+  --cbg: rgba(255, 255, 255, 0.9);
+  --cbf: blur(12px);
+  --mbg: rgba(250, 248, 244, 0.62);
+  --chip-bg: rgba(20, 18, 14, 0.92);
+  --chip-text: #f4f1ea;
+
+  --ink-82: rgba(26, 24, 21, 0.82);
+  --ink-70: rgba(26, 24, 21, 0.7);
+  --ink-62: rgba(26, 24, 21, 0.62);
+  --ink-55: rgba(26, 24, 21, 0.55);
+  --ink-50: rgba(26, 24, 21, 0.5);
+  --ink-45: rgba(26, 24, 21, 0.45);
+  --ink-40: rgba(26, 24, 21, 0.4);
+  --ink-13: rgba(26, 24, 21, 0.13);
+  --ink-10: rgba(26, 24, 21, 0.1);
+  --ink-09: rgba(26, 24, 21, 0.09);
+  --ink-08: rgba(26, 24, 21, 0.08);
+  --ink-06: rgba(26, 24, 21, 0.06);
+  --ink-05: rgba(26, 24, 21, 0.05);
+
+  --fdisp: 'Schibsted Grotesk', system-ui, sans-serif;
+  --fbody: 'Schibsted Grotesk', system-ui, sans-serif;
+  --fmono: 'Spline Sans Mono', ui-monospace, monospace;
+
+  --r-xs: 6px;
+  --r-chip: 8px;
+  --r-field: 10px;
+  --r-row: 12px;
+  --r-card: 14px;
+  --r-lg: 16px;
+  --r-xl: 18px;
+  --r-modal: 20px;
+  --r-pill: 999px;
+
+  --shadow-modal: 0 40px 100px rgba(0, 0, 0, 0.4);
+  --shadow-chip: 0 10px 34px rgba(0, 0, 0, 0.3);
+  --shadow-popover: 0 18px 50px rgba(0, 0, 0, 0.26);
+  --shadow-glass: 0 2px 10px rgba(0, 0, 0, 0.12);
+
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fadeup: 0.7s;
+  --dur-spin: 0.8s;
+  --dur-indet: 1.15s;
+  --dur-bar: 0.18s;
+}
+
+@keyframes pn-fadeup {
+  from {
+    transform: translateY(12px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes pn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pn-indet {
+  0% {
+    left: -42%;
+  }
+  100% {
+    left: 100%;
+  }
+}

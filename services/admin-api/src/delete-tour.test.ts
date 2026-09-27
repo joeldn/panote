@@ -2,6 +2,7 @@ import { configKey, originalKey, tourKey } from '@internal/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
+import { unpublish } from './publish.js';
 
 const SUB = 'auth0|delete-tour-fixture';
 
@@ -85,7 +86,9 @@ describe('deleteTour: two tours sharing a pano, deleted concurrently (review fix
       void bucket.delete(tourKey(SUB, 'tour-b'));
     });
 
-    await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-a');
+    await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-a', () =>
+      unpublish(bucket as unknown as R2Bucket, SUB, 'tour-a'),
+    );
 
     expect(await bucket.head(originalKey(SUB, sharedPano))).toBeNull();
     expect(await bucket.head(tourKey(SUB, 'tour-a'))).toBeNull();
@@ -98,7 +101,9 @@ describe('deleteTour: two tours sharing a pano, deleted concurrently (review fix
     bucket.seed(tourKey(SUB, 'tour-d'), tourDoc('tour-d', [sharedPano]));
     bucket.seed(originalKey(SUB, sharedPano), 'original bytes');
 
-    await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-c');
+    await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-c', () =>
+      unpublish(bucket as unknown as R2Bucket, SUB, 'tour-c'),
+    );
 
     expect(await bucket.head(tourKey(SUB, 'tour-c'))).toBeNull();
     expect(await bucket.head(originalKey(SUB, sharedPano))).not.toBeNull();
@@ -108,7 +113,9 @@ describe('deleteTour: two tours sharing a pano, deleted concurrently (review fix
   it('is a no-op for a tourId that was already deleted', async () => {
     const bucket = new FakeBucket();
     await expect(
-      deleteTour(bucket as unknown as R2Bucket, SUB, 'never-existed'),
+      deleteTour(bucket as unknown as R2Bucket, SUB, 'never-existed', () =>
+        unpublish(bucket as unknown as R2Bucket, SUB, 'never-existed'),
+      ),
     ).resolves.toBeUndefined();
   });
 });
