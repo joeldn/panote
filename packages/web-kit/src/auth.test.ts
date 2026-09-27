@@ -147,18 +147,17 @@ describe('createAuth', () => {
 
 describe('safeReturnTo', () => {
   const origin = 'https://panote.dev';
-  it.each([
+  const accepted: Array<[string, string]> = [
     ['/app/t/1?pano=2#h', '/app/t/1?pano=2#h'],
     ['https://panote.dev/app/t/1?x=1', '/app/t/1?x=1'],
     ['https://panote.dev', '/'],
     ['/app/../s/abc', '/s/abc'],
+    ['/./app/', '/app/'],
+    ['app/t/1', '/app/t/1'],
     // Percent-encoded controls stay encoded on our own origin.
     ['/%09/evil.example', '/%09/evil.example'],
-  ])('accepts %j -> %j', (input, out) => {
-    expect(safeReturnTo(input, origin)).toBe(out);
-  });
-
-  it.each([
+  ];
+  const rejected: unknown[] = [
     '/\t/evil.example',
     '/\n/evil.example',
     '/\r/evil.example',
@@ -173,16 +172,45 @@ describe('safeReturnTo', () => {
     'https://evil.example/app/',
     'http://panote.dev/app/',
     'https://panote.dev.evil.example/',
+    // Dot segments or an empty first segment normalising to a "//host" path.
+    '/.//evil.com',
+    '/..//evil.com',
+    '/app/..//evil.com',
+    '/%2e%2e//evil.com',
+    '/%2e//evil.com',
+    './/evil.com',
+    '..//evil.com',
+    'https://panote.dev//evil.com',
+    'HTTPS://PANOTE.DEV//evil.com',
+    'https://panote.dev:443//evil.com',
+    '/app/%2e%2e/%2e%2e//evil.com',
     '',
     undefined,
     42,
-  ])('rejects %j', (input) => {
+  ];
+
+  it.each(accepted)('accepts %j -> %j', (input, out) => {
+    expect(safeReturnTo(input, origin)).toBe(out);
+  });
+
+  it.each(rejected)('rejects %j', (input) => {
     expect(safeReturnTo(input, origin)).toBe('/app/');
+  });
+
+  it('every result, accepted or fallback, stays on the origin when navigated to', () => {
+    for (const input of [...accepted.map(([i]) => i), ...rejected]) {
+      const result = safeReturnTo(input, origin);
+      expect(result).toMatch(/^\/(?![/\\])/);
+      expect(new URL(result, origin).origin).toBe(origin);
+      // Resolving against a page deep in the site must not escape either.
+      expect(new URL(result, `${origin}/app/t/abc`).origin).toBe(origin);
+    }
   });
 
   it('never resolves a rejected-class input to another origin', () => {
     // The WHATWG parser strips C0 controls, which is how "/\t/x" became "//x".
     expect(new URL('/\t/evil.example', origin).origin).not.toBe(origin);
+    expect(new URL(new URL('/.//evil.com', origin).pathname, origin).origin).not.toBe(origin);
     expect(safeReturnTo('/\t/evil.example', origin, '/fallback')).toBe('/fallback');
   });
 });

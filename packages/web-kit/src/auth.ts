@@ -75,6 +75,8 @@ export const isAuthError = (e: unknown): e is AuthRequiredError => e instanceof 
 const hasUnsafeChars = (v: string): boolean =>
   [...v].some((ch) => ch === '\\' || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
 
+const SAFE_PATH = /^\/(?![/\\])/;
+
 /**
  * Resolve `value` against `origin` and keep it only if it stays on that origin,
  * returned as path + query + hash, so a crafted `next=` can't open-redirect.
@@ -89,8 +91,11 @@ export function safeReturnTo(value: unknown, origin: string, fallback = '/app/')
   } catch {
     return fallback;
   }
-  if (url.origin !== base) return fallback;
-  return `${url.pathname}${url.search}${url.hash}`;
+  // Dot segments can normalise "/.//evil" to a "//evil" path, which a browser
+  // would read as protocol-relative; the last check fails closed on any such form.
+  if (url.origin !== base || url.pathname.startsWith('//')) return fallback;
+  const path = `${url.pathname}${url.search}${url.hash}`;
+  return SAFE_PATH.test(path) ? path : fallback;
 }
 
 export interface SignInConnection {
