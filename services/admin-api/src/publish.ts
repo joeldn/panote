@@ -280,6 +280,54 @@ type Commit = {
   freshExpiresAt: string;
 };
 
+// Create-only re-put of the live pointer; true if it is (again) this tour's.
+const reassertPointer = async (
+  bucket: R2Bucket,
+  tourId: string,
+  slug: string,
+): Promise<boolean> => {
+  const pointer: SlugRecord = { v: 1, kind: 'tour', tourId };
+  const put = await putJson(
+    bucket,
+    slugKey(slug),
+    pointer,
+    { etagDoesNotMatch: '*' },
+    pointerMetadata,
+  );
+  if (put.ok) return true;
+  const existing = await readSlug(bucket, slug);
+  return existing?.record?.kind === 'tour' && existing.record.tourId === tourId;
+};
+
+const BUNDLE_WRITE_ATTEMPTS = 3;
+
+// Once publish.json has committed it is the source of truth: on a bundle etag
+// conflict, re-read the bundle and re-apply slug/visibility, while publish.json is still ours.
+const writeBundle = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+  c: Commit,
+  recordEtag: string,
+): Promise<boolean> => {
+  let bundle = c.bundle;
+  let etag = c.bundleEtag;
+  for (let attempt = 0; attempt < BUNDLE_WRITE_ATTEMPTS; attempt += 1) {
+    const onlyIf = etag ? { etagMatches: etag } : { etagDoesNotMatch: '*' };
+    if ((await putJson(bucket, pubTourKey(tourId), bundle, onlyIf)).ok) return true;
+    const [record, latest] = await Promise.all([
+      bucket.head(publishKey(sub, tourId)),
+      getJson<PublishedTour>(bucket, pubTourKey(tourId)),
+    ]);
+    if (record?.etag !== recordEtag) return false;
+    bundle = latest
+      ? { ...latest.value, slug: c.record.slug, visibility: c.record.visibility }
+      : c.bundle;
+    etag = latest?.etag ?? null;
+  }
+  return false;
+};
+
 // publish.json (etag-guarded) first, then aliases, then the etag-guarded bundle.
 // Re-checks tour.json at the end so a concurrent tour delete can't leave it public.
 const commit = async (
@@ -299,14 +347,14 @@ const commit = async (
     if (c.createdSlug) await releaseIfUnused(bucket, sub, tourId, c.createdSlug);
     return { ok: false, status: 409 };
   }
+  // A concurrent loser's release may have removed our pointer after the claim.
+  if (!(await reassertPointer(bucket, tourId, c.record.slug))) {
+    console.error('publish: slug now held by another tour', { tourId, slug: c.record.slug });
+    return { ok: false, status: 409 };
+  }
   const expiries = await applyAliases(bucket, tourId, c.plan, c.record.slug, c.freshExpiresAt);
-  const bundled = await putJson(
-    bucket,
-    pubTourKey(tourId),
-    c.bundle,
-    c.bundleEtag ? { etagMatches: c.bundleEtag } : { etagDoesNotMatch: '*' },
-  );
-  if (!bundled.ok) return { ok: false, status: 409 };
+  const recordEtag = wrote.etag;
+  if (!(await writeBundle(bucket, sub, tourId, c, recordEtag))) return { ok: false, status: 409 };
   if (!(await bucket.head(tourKey(sub, tourId)))) {
     await unpublish(bucket, sub, tourId);
     return { ok: false, status: 404 };
@@ -356,7 +404,8 @@ export const publishTour = async (
     if (!claimed) return SLUG_TAKEN;
     ({ slug, result } = claimed);
   }
-  if (result === 'taken') return SLUG_TAKEN;
+  // A bare publish never picked a slug, so losing its current one is a conflict.
+  if (result === 'taken') return req.slug === undefined ? CONFLICT : SLUG_TAKEN;
 
   const plan = await planAliases(bucket, tourId, cur, slug, clock.now);
   const record: PublishRecord = {

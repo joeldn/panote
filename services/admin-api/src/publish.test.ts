@@ -22,8 +22,9 @@ import {
   SELF,
   waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { deleteTour } from './delete-tour.js';
 import worker from './index.js';
 import {
   DEFAULT_SLUG_ALIAS_DAYS,
@@ -607,7 +608,7 @@ describe('publish races', () => {
       expect((await putSlug(tourId, 'race-rename-new')).status).toBe(200);
     });
     const out = await publishTour(bucket, MY_SUB, tourId, {}, clock());
-    expect(out.status).toBe(409);
+    expect(out).toEqual({ status: 409, body: { error: 'conflict' } });
     expect(await readSlug('race-rename-new')).toEqual({ v: 1, kind: 'tour', tourId });
     expect(await readSlug('race-rename-old')).toMatchObject({
       kind: 'redirect',
@@ -632,29 +633,77 @@ describe('publish races', () => {
     expect(await readSlug('race-release-winner')).toEqual({ v: 1, kind: 'tour', tourId });
   });
 
-  it('a rename 409s rather than writing back a bundle a concurrent Save replaced', async () => {
+  it('a rename that loses the bundle race re-applies its slug onto the newer bundle', async () => {
     const tourId = await publishedTour('race-bundle', 'race-bundle-slug');
     const bucket = hookedBucket('get', pubTourKey(tourId), async () => {
       const b = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
       await env.BUCKET.put(pubTourKey(tourId), JSON.stringify({ ...b, title: 'Newer Save' }));
     });
     const out = await renameSlug(bucket, MY_SUB, tourId, 'race-bundle-renamed', clock());
-    expect(out).toEqual({ status: 409, body: { error: 'conflict' } });
-    expect((await readJson<PublishedTour>(pubTourKey(tourId)))?.title).toBe('Newer Save');
+    expect(out.status).toBe(200);
+    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+    const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
+    expect(record.slug).toBe('race-bundle-renamed');
+    expect(bundle).toMatchObject({ title: 'Newer Save', slug: record.slug });
+    expect(bundle.visibility).toBe(record.visibility);
   });
 
-  it('a visibility change 409s rather than writing back a replaced bundle', async () => {
+  it('a visibility change that loses the bundle race keeps record and bundle in step', async () => {
     const tourId = await publishedTour('race-vis', 'race-vis-slug');
     const bucket = hookedBucket('get', pubTourKey(tourId), async () => {
       const b = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
       await env.BUCKET.put(pubTourKey(tourId), JSON.stringify({ ...b, title: 'Newer Save' }));
     });
     const out = await setVisibility(bucket, MY_SUB, tourId, 'public', clock());
-    expect(out.status).toBe(409);
+    expect(out.status).toBe(200);
+    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+    expect(record.visibility).toBe('public');
     expect(await readJson<PublishedTour>(pubTourKey(tourId))).toMatchObject({
       title: 'Newer Save',
-      visibility: 'unlisted',
+      visibility: 'public',
+      slug: record.slug,
     });
+  });
+
+  it('re-creates its live pointer if a concurrent release removed it after the claim', async () => {
+    await readyPano('race-reassert-p1');
+    const tourId = await createTour('Race Reassert', ['race-reassert-p1']);
+    const bucket = hookedBucket('put', publishKey(MY_SUB, tourId), async () => {
+      await env.BUCKET.delete(slugKey('race-reassert-slug'));
+    });
+    const out = await publishTour(bucket, MY_SUB, tourId, { slug: 'race-reassert-slug' }, clock());
+    expect(out.status).toBe(200);
+    expect(await readSlug('race-reassert-slug')).toEqual({ v: 1, kind: 'tour', tourId });
+  });
+
+  it('409s if another tour took the slug between the claim and publish.json', async () => {
+    await readyPano('race-stolen-p1');
+    const tourId = await createTour('Race Stolen', ['race-stolen-p1']);
+    const bucket = hookedBucket('put', publishKey(MY_SUB, tourId), async () => {
+      await env.BUCKET.put(
+        slugKey('race-stolen-slug'),
+        JSON.stringify({ v: 1, kind: 'tour', tourId: 'someone-else' }),
+      );
+    });
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = await publishTour(bucket, MY_SUB, tourId, { slug: 'race-stolen-slug' }, clock());
+    expect(out).toEqual({ status: 409, body: { error: 'conflict' } });
+    expect(quiet).toHaveBeenCalled();
+    expect(await readSlug('race-stolen-slug')).toMatchObject({ tourId: 'someone-else' });
+    expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
+  });
+
+  it('a publish that lands mid-delete (after the unpublish, before tour.json goes) ends up gone', async () => {
+    await readyPano('race-middel-p1');
+    const tourId = await createTour('Race Mid Delete', ['race-middel-p1']);
+    // deleteTour reads tour.json after its first unpublish; the publish lands there.
+    const bucket = hookedBucket('get', tourKey(MY_SUB, tourId), async () => {
+      expect((await publish(tourId, { slug: 'race-middel-slug' })).status).toBe(200);
+    });
+    await deleteTour(bucket, MY_SUB, tourId);
+    expect(await env.BUCKET.head(slugKey('race-middel-slug'))).toBeNull();
+    expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
+    expect(await env.BUCKET.head(publishKey(MY_SUB, tourId))).toBeNull();
   });
 
   it('a tour deleted while publishing ends up unpublished, and the publish 404s', async () => {
