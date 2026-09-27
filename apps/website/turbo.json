@@ -1,0 +1,12 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // deploy.yml sets APP_MODE to pick the .env.<mode> file; declared so turbo
+    // passes it through (strict env mode) and keys the cache on it.
+    "build": {
+      "env": ["APP_MODE"],
+      "inputs": ["$TURBO_DEFAULT$", ".env.*"]
+    }
+  }
+}
