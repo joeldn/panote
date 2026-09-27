@@ -19,10 +19,34 @@ import { Hono } from 'hono';
 
 import { conditionalGet, guardedPut, updateConditional } from './conditional.js';
 import { deletePano } from './delete-pano.js';
+import { deleteTour } from './delete-tour.js';
+import {
+  configCustomMetadata,
+  listPanoSummaries,
+  listTourSummaries,
+  MAX_LIST_LIMIT,
+  parseListLimit,
+  summarizePano,
+  tourCustomMetadata,
+} from './lists.js';
 
 // Every owner GET's Cache-Control, on both the 200/304 body and the
 // 400/404 error bodies - none of this is CDN/edge-cacheable.
 const NO_STORE = 'private, no-store';
+
+// Shared ?cursor/?limit validation for both list routes: a cursor is an
+// opaque id, so it's checked the same way a path param id would be.
+const parseListQuery = (c: {
+  req: { query: (n: string) => string | undefined };
+}): { cursor: string | undefined; limit: number } | { error: string } => {
+  const cursor = c.req.query('cursor');
+  if (cursor !== undefined && !PANO_PATTERN.test(cursor)) {
+    return { error: `cursor must match ${PANO_PATTERN}` };
+  }
+  const limit = parseListLimit(c.req.query('limit'));
+  if (!limit.ok) return { error: `limit must be an integer between 1 and ${MAX_LIST_LIMIT}` };
+  return { cursor, limit: limit.limit };
+};
 
 const setEtagAndNoStore = (c: { header: (n: string, v: string) => void }, etag: string): void => {
   c.header('ETag', `"${etag}"`);
@@ -74,10 +98,24 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get('/api/admin/panos', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
+  const query = parseListQuery(c);
+  if ('error' in query) {
+    c.header('Cache-Control', NO_STORE);
+    return c.json({ error: query.error }, 400);
+  }
   // panoId segments are never encoded (unlike the owner segment), so
   // listChildren() needs no decode step to return what the caller passed in.
   const panoIds = await listChildren(c.env.BUCKET, userPanosPrefix(sub));
-  return c.json({ panoIds });
+  // panoIds stays the full, unpaginated list for compatibility; cursor/limit
+  // only bound how many of them get the more expensive per-pano summary.
+  const { panos, cursor } = await listPanoSummaries(
+    c.env.BUCKET,
+    sub,
+    panoIds,
+    query.cursor,
+    query.limit,
+  );
+  return c.json({ panoIds, panos, cursor });
 });
 
 app.get('/api/admin/panos/:panoId', async (c) => {
@@ -86,6 +124,13 @@ app.get('/api/admin/panos/:panoId', async (c) => {
   if (!PANO_PATTERN.test(panoId)) {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
+  }
+  // Cheap polling path (the upload chip's failure detection, every 15s):
+  // skips reading config.json entirely, unlike the full GET below.
+  if (c.req.query('status') === '1') {
+    c.header('Cache-Control', NO_STORE);
+    const { title: _title, ...panoStatus } = await summarizePano(c.env.BUCKET, sub, panoId);
+    return c.json({ status: panoStatus });
   }
   const result = await conditionalGet(
     c.env.BUCKET,
@@ -99,7 +144,12 @@ app.get('/api/admin/panos/:panoId', async (c) => {
   }
   setEtagAndNoStore(c, result.notModified ? result.etag : result.obj.etag);
   if (result.notModified) return c.body(null, 304);
-  return c.json({ config: await result.obj.json<SceneConfig>(), etag: result.obj.etag });
+  const { title: _title, ...panoStatus } = await summarizePano(c.env.BUCKET, sub, panoId);
+  return c.json({
+    config: await result.obj.json<SceneConfig>(),
+    etag: result.obj.etag,
+    status: panoStatus,
+  });
 });
 
 app.put('/api/admin/panos/:panoId/config', async (c) => {
@@ -118,7 +168,13 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
   if (await c.env.BUCKET.head(deletingKey(sub, panoId))) {
     return c.json({ error: 'pano is being deleted' }, 409);
   }
-  const res = await putJson(c.env.BUCKET, configKey(sub, panoId), parsed.data, onlyIf);
+  const res = await putJson(
+    c.env.BUCKET,
+    configKey(sub, panoId),
+    parsed.data,
+    onlyIf,
+    configCustomMetadata(parsed.data),
+  );
   return res.ok ? c.json({ etag: res.etag }) : c.json({ error: 'conflict' }, 412);
 });
 
@@ -141,8 +197,25 @@ app.post('/api/admin/tours', async (c) => {
     tourId,
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
-  await putJson(c.env.BUCKET, tourKey(sub, tourId), parsed.data, { etagDoesNotMatch: '*' });
+  await putJson(
+    c.env.BUCKET,
+    tourKey(sub, tourId),
+    parsed.data,
+    { etagDoesNotMatch: '*' },
+    tourCustomMetadata(parsed.data),
+  );
   return c.json({ tourId }, 201);
+});
+
+app.get('/api/admin/tours', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const query = parseListQuery(c);
+  if ('error' in query) {
+    c.header('Cache-Control', NO_STORE);
+    return c.json({ error: query.error }, 400);
+  }
+  const { tours, cursor } = await listTourSummaries(c.env.BUCKET, sub, query.cursor, query.limit);
+  return c.json({ tours, cursor });
 });
 
 app.get('/api/admin/tours/:tourId', async (c) => {
@@ -181,11 +254,29 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   const conditional = updateConditional(c.req.header('If-Match'));
   // PUT never creates a tour - tourIds only ever come from POST - so a
   // missing key here is "not found", not a create (guardedPut's 404).
-  const result = await guardedPut(c.env.BUCKET, tourKey(sub, tourId), parsed.data, conditional);
+  const result = await guardedPut(
+    c.env.BUCKET,
+    tourKey(sub, tourId),
+    parsed.data,
+    conditional,
+    tourCustomMetadata(parsed.data),
+  );
   if (!result.ok) {
     return c.json({ error: result.status === 404 ? 'not found' : 'conflict' }, result.status);
   }
   return c.json({ etag: result.etag });
+});
+
+app.delete('/api/admin/tours/:tourId', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  // No body schema here, so check tourId directly (same reasoning as the
+  // pano DELETE above) or tourKey() throws a 500 below.
+  if (!PANO_PATTERN.test(tourId)) {
+    return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
+  }
+  await deleteTour(c.env.BUCKET, sub, tourId);
+  return c.body(null, 204);
 });
 
 app.onError(errorHandler);

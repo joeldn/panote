@@ -86,7 +86,11 @@ export interface HeadAndPut {
   put(
     key: string,
     value: string,
-    options: { onlyIf: R2Conditional; httpMetadata: R2HTTPMetadata },
+    options: {
+      onlyIf: R2Conditional;
+      httpMetadata: R2HTTPMetadata;
+      customMetadata?: Record<string, string>;
+    },
   ): Promise<R2Object | null>;
 }
 
@@ -94,13 +98,15 @@ export interface HeadAndPut {
  * A PUT that refuses to create: 404 if `key` doesn't exist. A wildcard
  * `conditional` (from `updateConditional`) is pinned to the etag this
  * same head() saw, so a write racing in between 412s instead of either
- * overwriting it blindly or resurrecting a since-deleted key.
+ * overwriting it blindly or resurrecting a since-deleted key. `customMetadata`,
+ * when given, lets a list route read a summary field with no per-item GET.
  */
 export const guardedPut = async (
   bucket: HeadAndPut,
   key: string,
   value: unknown,
   conditional: R2Conditional | undefined,
+  customMetadata?: Record<string, string>,
 ): Promise<GuardedPutResult> => {
   const existing = await bucket.head(key);
   if (!existing) return { ok: false, status: 404 };
@@ -108,6 +114,7 @@ export const guardedPut = async (
   const res = await bucket.put(key, JSON.stringify(value), {
     onlyIf,
     httpMetadata: JSON_HTTP_METADATA,
+    ...(customMetadata ? { customMetadata } : {}),
   });
   return res ? { ok: true, etag: res.etag } : { ok: false, status: 412 };
 };

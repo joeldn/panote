@@ -85,6 +85,7 @@ export const tileFailedKeyFromOriginalKey = (key: string): string => {
 export const panoIdFromOriginalKey = (key: string): string => parseOriginalKey(key).panoId;
 
 export const userPanosPrefix = (u: string): string => `panos/${encodeId(u)}/`;
+export const userToursPrefix = (u: string): string => `tours/${encodeId(u)}/`;
 export const tourKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/tour.json`;
 
