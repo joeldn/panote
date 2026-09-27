@@ -281,3 +281,190 @@ button.pn-chip {
 .pn-stage__overlay > * {
   pointer-events: auto;
 }
+
+/* --- SignInModal (design README "Sign-in modal") --- */
+.pn-signin {
+  position: relative;
+  padding: 32px 30px;
+}
+.pn-signin__close {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+}
+.pn-signin__head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 24px;
+  text-align: center;
+}
+.pn-signin__head .pn-logo__mark {
+  margin-bottom: 14px;
+}
+.pn-signin__title {
+  margin: 0;
+  font: 400 27px/1.1 var(--fdisp);
+}
+.pn-signin__sub {
+  margin: 8px 0 0;
+  font: 400 14px/1.5 var(--fbody);
+  color: var(--ink-55);
+}
+.pn-signin__options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pn-signin__option {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 12px 16px;
+  border: 1px solid var(--ink-13);
+  border-radius: var(--r-row);
+  background: #fff;
+  font: 500 15px var(--fbody);
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.pn-signin__option:hover:not(:disabled) {
+  background: var(--ink-05);
+  border-color: var(--ink-40);
+}
+.pn-signin__option:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.pn-signin__option:focus-visible,
+.pn-account__avatar:focus-visible,
+.pn-account__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.pn-signin__glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 17px;
+}
+.pn-signin__unavailable,
+.pn-signin__error {
+  margin: 0;
+  font: 500 13.5px/1.5 var(--fbody);
+  text-align: center;
+}
+.pn-signin__unavailable {
+  color: var(--ink-62);
+}
+.pn-signin__error {
+  margin-top: 14px;
+  color: var(--accent);
+}
+.pn-signin__secured {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 22px 0 0;
+  font: 400 11px var(--fmono);
+  color: var(--ink-40);
+}
+.pn-signin__legal {
+  margin: 13px 0 0;
+  font: 400 11.5px/1.5 var(--fbody);
+  text-align: center;
+  color: var(--ink-40);
+}
+.pn-signin__legal a {
+  color: inherit;
+}
+
+/* --- AccountMenu --- */
+.pn-account {
+  position: relative;
+  font-family: var(--fbody);
+}
+.pn-account__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  font: 600 15px var(--fbody);
+  cursor: pointer;
+}
+.pn-account__menu {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  z-index: 50;
+  width: 230px;
+  padding: 7px;
+  border: 1px solid var(--ink-10);
+  border-radius: var(--r-card);
+  background: #fff;
+  box-shadow: var(--shadow-popover);
+  text-align: left;
+}
+.pn-account__who {
+  margin-bottom: 6px;
+  padding: 10px 11px 11px;
+  border-bottom: 1px solid var(--ink-08);
+}
+.pn-account__name {
+  font: 600 14px var(--fbody);
+  color: var(--ink);
+}
+.pn-account__email {
+  overflow: hidden;
+  font: 400 12px var(--fmono);
+  color: var(--ink-45);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pn-account__item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  font: 500 14px var(--fbody);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.pn-account__item:hover {
+  background: var(--ink-05);
+}
+.pn-account__item i {
+  width: 16px;
+  font-size: 13px;
+  color: var(--ink-50);
+}
+.pn-account__item--danger,
+.pn-account__item--danger i {
+  color: var(--accent);
+}
+.pn-account__item--danger:hover {
+  background: rgba(181, 72, 58, 0.07);
+}
+.pn-account__divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--ink-08);
+}

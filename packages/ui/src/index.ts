@@ -1,3 +1,9 @@
+export {
+  AccountMenu,
+  type AccountMenuItem,
+  type AccountMenuProps,
+  type AccountUser,
+} from './AccountMenu.js';
 export { Button, type ButtonProps, type ButtonVariant } from './Button.js';
 export { Chip, type ChipProps, type ChipTone } from './Chip.js';
 export { ConfirmModal, type ConfirmModalProps } from './ConfirmModal.js';
@@ -11,6 +17,7 @@ export {
   type StageViewerOptions,
   type ViewerFactory,
 } from './PanoStage.js';
+export { SignInModal, type SignInModalProps, type SignInOption } from './SignInModal.js';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented.js';
 export { useModalTitleId } from './use-modal-title-id.js';
 export { usePanoViewer } from './viewer-context.js';
