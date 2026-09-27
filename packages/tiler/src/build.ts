@@ -146,7 +146,7 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
 
   await mkdir(panoDir, { recursive: true });
   log('rendering preview image');
-  // Fixed 1024x512 regardless of tile format/quality knobs, so dashboard
+  // Fixed 1024x512 and always webp regardless of tile format, so dashboard
   // cards get a stable, small asset alongside the tile pyramid.
   await sharp(srcImg.data, { raw: { width: srcImg.width, height: srcImg.height, channels: 3 } })
     .resize(1024, 512, { fit: 'fill' })
