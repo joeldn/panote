@@ -3,13 +3,16 @@ import {
   deletingKey,
   encodeId,
   manifestKey,
+  MAX_HOTSPOTS,
+  MAX_TITLE_LENGTH,
   MAX_TOUR_SCENES,
   originalKey,
+  PanoConfigOkSchema,
   tileFailedKey,
   tileVersionPrefix,
   tourKey,
 } from '@internal/contracts';
-import { getJson } from '@internal/worker-kit/r2-binding';
+import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -1455,11 +1458,11 @@ describe('review fix: manifest is not returned without ownership proof', () => {
   });
 });
 
-describe('review fix: title truncation for R2 customMetadata (8192-byte limit, error 10012)', () => {
-  const hugeTitle = (ch: string) => ch.repeat(9000);
-
-  it('a 9000-char tour POST title still 200s, and the list shows the truncated title', async () => {
-    const title = hugeTitle('a');
+// B1 (#18) caps title at MAX_TITLE_LENGTH, so no write route can reach
+// customMetadata's own 256-unit truncation any more (still unit-tested in lists.test.ts).
+describe('review fix: MAX_TITLE_LENGTH boundary (was: 9000-char title truncation)', () => {
+  it('a tour POST title of exactly MAX_TITLE_LENGTH ASCII chars 201s', async () => {
+    const title = 'a'.repeat(MAX_TITLE_LENGTH);
     const create = await SELF.fetch('https://x/api/admin/tours', {
       method: 'POST',
       headers: auth.headers,
@@ -1468,26 +1471,23 @@ describe('review fix: title truncation for R2 customMetadata (8192-byte limit, e
     expect(create.status).toBe(201);
     const { tourId } = (await create.json()) as { tourId: string };
 
+    // Well under customMetadata's 256-unit truncation, so the list shows
+    // the title verbatim.
     const list = await SELF.fetch('https://x/api/admin/tours', auth);
     const body = (await list.json()) as { tours: Array<{ tourId: string; title: string }> };
-    const entry = body.tours.find((t) => t.tourId === tourId);
-    expect(entry?.title.length).toBe(256);
-    expect(entry?.title).toBe(title.slice(0, 256));
-
-    // The direct GET still returns the full, untruncated title from the doc.
-    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
-    const getBody = (await get.json()) as { tour: { title: string } };
-    expect(getBody.tour.title.length).toBe(9000);
+    expect(body.tours.find((t) => t.tourId === tourId)?.title).toBe(title);
   });
 
-  it('a 9000-char tour PUT title still 200s, and the list shows the truncated title', async () => {
+  it('a tour PUT title of exactly MAX_TITLE_LENGTH multibyte (CJK) chars 200s', async () => {
     const create = await SELF.fetch('https://x/api/admin/tours', {
       method: 'POST',
       headers: auth.headers,
       body: JSON.stringify({ title: 'Short', scenes: [] }),
     });
     const { tourId } = (await create.json()) as { tourId: string };
-    const title = hugeTitle('b');
+    // Each CJK char here is one UTF-16 unit (BMP, no surrogate pairs), so
+    // this is exactly MAX_TITLE_LENGTH units, not bytes.
+    const title = '日'.repeat(MAX_TITLE_LENGTH);
     const update = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -1497,12 +1497,15 @@ describe('review fix: title truncation for R2 customMetadata (8192-byte limit, e
 
     const list = await SELF.fetch('https://x/api/admin/tours', auth);
     const body = (await list.json()) as { tours: Array<{ tourId: string; title: string }> };
-    expect(body.tours.find((t) => t.tourId === tourId)?.title.length).toBe(256);
+    expect(body.tours.find((t) => t.tourId === tourId)?.title).toBe(title);
   });
 
-  it('a 9000-char pano config PUT title still 200s, and the list shows the truncated title', async () => {
-    const panoId = 'huge-title-config-p1';
-    const title = hugeTitle('c');
+  it('a pano config PUT title near MAX_TITLE_LENGTH with multibyte (emoji) chars 200s', async () => {
+    const panoId = 'max-title-config-p1';
+    // 99 emoji (2 UTF-16 units each) + 2 ASCII = 200 units, one short of a
+    // surrogate pair straddling the cap - proves the cap counts units, not code points.
+    const title = '\u{1F600}'.repeat(99) + 'ab';
+    expect(title.length).toBe(MAX_TITLE_LENGTH);
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -1512,12 +1515,17 @@ describe('review fix: title truncation for R2 customMetadata (8192-byte limit, e
 
     const list = await SELF.fetch('https://x/api/admin/panos', auth);
     const body = (await list.json()) as { panos: Array<{ panoId: string; title: string | null }> };
-    expect(body.panos.find((p) => p.panoId === panoId)?.title?.length).toBe(256);
+    expect(body.panos.find((p) => p.panoId === panoId)?.title).toBe(title);
+  });
 
-    // The direct GET still returns the full, untruncated title from the doc.
-    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
-    const getBody = (await get.json()) as { config: { title: string } };
-    expect(getBody.config.title.length).toBe(9000);
+  it('a title one character over MAX_TITLE_LENGTH 400s on tour POST', async () => {
+    const title = 'a'.repeat(MAX_TITLE_LENGTH + 1);
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title, scenes: [] }),
+    });
+    expect(create.status).toBe(400);
   });
 });
 
@@ -1600,5 +1608,225 @@ describe('review fix: tours list page boundary never splits a tour from its publ
     expect(seen).toContain(tourIdA);
     expect(seen).toContain(tourIdB);
     expect(new Set(seen).size).toBe(seen.length);
+  });
+});
+
+// Unit B1: additive fields round-trip through PUT/GET, and old docs
+// (or ones with out-of-range angles/fov) still parse.
+describe('B1 schema extensions round-trip through PUT/GET', () => {
+  it('round-trips north and a hotspot with icon/size/media through config PUT then GET', async () => {
+    const panoId = 'b1-config-p1';
+    const body = {
+      panoId,
+      title: 'Hall',
+      north: 1.2,
+      hotspots: [
+        {
+          id: 'h1',
+          type: 'info',
+          yaw: 0.1,
+          pitch: -0.1,
+          title: 'Statue',
+          icon: 'map-pin',
+          size: 1.5,
+          media: { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+        },
+      ],
+    };
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify(body),
+    });
+    expect(put.status).toBe(200);
+
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    const got = (await get.json()) as { config: typeof body };
+    expect(got.config.north).toBe(1.2);
+    expect(got.config.hotspots[0]).toMatchObject({
+      icon: 'map-pin',
+      size: 1.5,
+      media: { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+    });
+  });
+
+  it('wraps a finite out-of-range north instead of 400ing (the viewer produces such values)', async () => {
+    const panoId = 'b1-config-wrap-north-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', north: 3.2, hotspots: [] }),
+    });
+    expect(put.status).toBe(200);
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const body = (await get.json()) as { config: { north?: number } };
+    expect(body.config.north).toBeCloseTo(3.2 - 2 * Math.PI);
+  });
+
+  it('400s a config PUT with a null north (JSON has no NaN/Infinity literal, so this is the closest wire form)', async () => {
+    const panoId = 'b1-config-nonfinite-north-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', north: null, hotspots: [] }),
+    });
+    expect(put.status).toBe(400);
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+  });
+
+  it('400s a config PUT with more than MAX_HOTSPOTS hotspots', async () => {
+    const panoId = 'b1-config-too-many-hotspots-p1';
+    const hotspots = Array.from({ length: MAX_HOTSPOTS + 1 }, (_, i) => ({
+      id: `h${i}`,
+      type: 'info',
+      yaw: 0,
+      pitch: 0,
+      title: 'Info',
+    }));
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots }),
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('400s a config PUT with an invalid icon name', async () => {
+    const panoId = 'b1-config-bad-icon-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        panoId,
+        title: 'Hall',
+        hotspots: [{ id: 'h1', type: 'info', yaw: 0, pitch: 0, title: 'Info', icon: 'Bad_Icon' }],
+      }),
+    });
+    expect(put.status).toBe(400);
+  });
+
+  it('a pre-Wave-6 stored config (written straight to R2, no new fields) still GETs 200', async () => {
+    const panoId = 'b1-legacy-config-p1';
+    // Bypasses the schema on purpose, to simulate a doc stored before B1.
+    await putJson(
+      env.BUCKET,
+      configKey(MY_SUB, panoId),
+      { panoId, title: 'Legacy Hall', hotspots: [] },
+      { etagDoesNotMatch: '*' },
+    );
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { config: { title: string; north?: number } };
+    expect(body.config.title).toBe('Legacy Hall');
+    expect(body.config.north).toBeUndefined();
+  });
+
+  it('a legacy doc with out-of-range fov/yaw/pitch GETs 200; PanoConfigOkSchema (what web-kit validates the response with) canonicalizes it; PUTting the canonical values round-trips them', async () => {
+    const panoId = 'b1-legacy-canonical-p1';
+    await putJson(
+      env.BUCKET,
+      configKey(MY_SUB, panoId),
+      {
+        panoId,
+        title: 'Legacy Hall',
+        initialView: { yaw: 0, pitch: 0, fov: 90 },
+        hotspots: [{ id: 'h1', type: 'info', yaw: 5, pitch: 2, title: 'Info' }],
+      },
+      { etagDoesNotMatch: '*' },
+    );
+    // admin-api's GET doesn't parse the stored doc; canonicalization is
+    // whatever consumes the response with PanoConfigOkSchema (web-kit).
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    expect(get.status).toBe(200);
+    const canonical = PanoConfigOkSchema.parse(await get.json());
+    expect(canonical.config.initialView?.fov).toBe(80);
+    expect(canonical.config.hotspots[0]?.yaw).toBe(5 - 2 * Math.PI);
+    expect(canonical.config.hotspots[0]?.pitch).toBe(Math.PI / 2);
+
+    // Saving the canonical values through PUT (admin-api's write path
+    // already parses with SceneConfigSchema) round-trips them unchanged.
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': canonical.etag },
+      body: JSON.stringify(canonical.config),
+    });
+    expect(put.status).toBe(200);
+    const reget = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const rebody = (await reget.json()) as {
+      config: { initialView?: { fov: number }; hotspots: { yaw: number; pitch: number }[] };
+    };
+    expect(rebody.config.initialView?.fov).toBe(80);
+    expect(rebody.config.hotspots[0]?.yaw).toBe(5 - 2 * Math.PI);
+    expect(rebody.config.hotspots[0]?.pitch).toBe(Math.PI / 2);
+  });
+
+  it('round-trips startPanoId and settings through tour PUT then GET', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'B1 Tour', scenes: [{ panoId: 'b1-scene-1' }] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const update = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        title: 'B1 Tour',
+        scenes: [{ panoId: 'b1-scene-1' }],
+        startPanoId: 'b1-scene-1',
+        settings: { controls: 'top', showMap: true, showCompass: true, autoRotate: false },
+      }),
+    });
+    expect(update.status).toBe(200);
+
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    expect(get.status).toBe(200);
+    const got = (await get.json()) as {
+      tour: { startPanoId?: string; settings?: { controls: string } };
+    };
+    expect(got.tour.startPanoId).toBe('b1-scene-1');
+    expect(got.tour.settings).toEqual({
+      controls: 'top',
+      showMap: true,
+      showCompass: true,
+      autoRotate: false,
+    });
+  });
+
+  it('400s a tour PUT with an invalid settings.controls value', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'B1 Bad Settings', scenes: [] }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+
+    const update = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        title: 'B1 Bad Settings',
+        scenes: [],
+        settings: { controls: 'left', showMap: true, showCompass: true, autoRotate: false },
+      }),
+    });
+    expect(update.status).toBe(400);
+  });
+
+  it('a pre-Wave-6 stored tour (written straight to R2, no new fields) still GETs 200', async () => {
+    const tourId = 'b1-legacy-tour-t1';
+    await putJson(
+      env.BUCKET,
+      tourKey(MY_SUB, tourId),
+      { tourId, title: 'Legacy Tour', scenes: [] },
+      { etagDoesNotMatch: '*' },
+    );
+    const get = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth);
+    expect(get.status).toBe(200);
+    const body = (await get.json()) as { tour: { title: string; settings?: unknown } };
+    expect(body.tour.title).toBe('Legacy Tour');
+    expect(body.tour.settings).toBeUndefined();
   });
 });
