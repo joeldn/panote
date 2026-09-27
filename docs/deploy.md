@@ -323,21 +323,21 @@ timeout is logged (`cdn purge failed …`, status and Cloudflare error codes onl
 retried. With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs
 `cdn purge skipped` and does nothing. Free plan limits are per account: 5 prefix requests/min,
 bucket 25, so a burst of single-pano deletes past that gets `429`s and those tiles stay cached
-until their TTL.
+until their TTL. Dev and production share that one account-wide prefix-purge budget.
 
 Ops steps, per environment:
 
 1. Create an API token (My Profile → API Tokens → Custom token) with **Zone → Cache Purge →
    Purge**, scoped to the one zone (`panote.dev` for dev, `panote.io` for production).
 2. `pnpm --filter @service/admin-api exec wrangler secret put CF_PURGE_TOKEN --env dev`
-3. Replace the `CDN_ZONE_ID` placeholder in `services/admin-api/wrangler.jsonc` with the zone's id
-   (dashboard: the zone's Overview → API → Zone ID), then redeploy.
+3. Set `CDN_ZONE_ID` in `services/admin-api/wrangler.jsonc` to the zone's id (dashboard: the
+   zone's Overview → API → Zone ID), then redeploy. Dev's is `2196d8dead0322ad69307711fc72b5d3`.
 4. Check: fetch a tile twice until `cf-cache-status: HIT`, delete its pano, and the next fetch is a
    `MISS`/`404`.
 
-TODO: the `panote.dev` zone id isn't recorded anywhere in this repo yet; add it here once looked up.
-**Status: not live** — no token exists, `CF_PURGE_TOKEN` is unset in both envs and
-both `CDN_ZONE_ID` values are placeholders, so every purge currently no-ops.
+**Status: set for dev, outstanding for production** — the dev `CDN_ZONE_ID` is set and
+`CF_PURGE_TOKEN` has been set on dev, so purges go live in dev with the next deploy (step 4 not yet
+run). Production has no token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
 
 ---
 
@@ -806,7 +806,9 @@ production provisioning below is still outstanding. Every `production` env block
 `wrangler.jsonc` is deliberately declared-but-unprovisioned — the config exists so Wave 5
 doesn't have to reverse-engineer it, but none of it is live. Before a production deploy can
 succeed: run every "outstanding" step in One-time provisioning above with `production` in place
-of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, and —
+of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, replace
+`admin-api`'s `YOUR_PANOTE_IO_ZONE_ID` (production deploys fail on any `YOUR_` placeholder until
+then) and set its `CF_PURGE_TOKEN` (see "CDN purge on delete"), and —
 only once all of that is actually done — set the repository variable `PRODUCTION_PROVISIONED` to
 the literal string `true`. The `production` GitHub Environment itself is already provisioned (a
 required reviewer, a main-only branch policy, and `CLOUDFLARE_API_TOKEN` — see GitHub setup
@@ -859,8 +861,8 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   already cached kept returning `200` (`cf-cache-status: HIT`) after its pano was deleted, because
   tiles are `public, max-age=31536000, immutable` and nothing purges the edge cache on delete (see
   "Deleted panos" above for the existing note on this). True revocation needs a Cloudflare cache
-  purge by URL or prefix — B6 adds a best-effort purge on delete, not live until its token and
-  zone id are set (see "CDN purge on delete").
+  purge by URL or prefix — B6 adds a best-effort purge on delete (see "CDN purge on delete" for
+  its status).
 - **Hardened (pending dev verification): the presigned upload PUT now pins content-type.**
   `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
   with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's
