@@ -63,3 +63,30 @@ export {
   type UploadValidationError,
   type XhrLike,
 } from './api/upload.js';
+export {
+  DEFAULT_TOUR_SETTINGS,
+  toViewerTour,
+  type SceneConfigSource,
+  type ViewerTour,
+} from './tour-adapter.js';
+export {
+  initialUploadState,
+  isReadyManifest,
+  isTerminal,
+  MANIFEST_POLL_INITIAL_MS,
+  MANIFEST_POLL_MAX_MS,
+  PROCESSING_TIMEOUT_MS,
+  startUpload,
+  STATUS_POLL_MS,
+  uploadReducer,
+  type StartUploadOptions,
+  type Timers,
+  type UploadController,
+  type UploadDeps,
+  type UploadEvent,
+  type UploadFailureStage,
+  type UploadMode,
+  type UploadPhase,
+  type UploadState,
+} from './upload-machine.js';
+export { createUploadDeps, type UploadDepsOptions } from './upload-deps.js';

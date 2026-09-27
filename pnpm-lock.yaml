@@ -332,6 +332,9 @@ importers:
       '@panote/core':
         specifier: workspace:*
         version: link:../core
+      '@panote/viewer':
+        specifier: workspace:*
+        version: link:../viewer
       zod:
         specifier: 'catalog:'
         version: 3.25.76

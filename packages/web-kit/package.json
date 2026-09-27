@@ -28,6 +28,7 @@
     "@auth0/auth0-spa-js": "catalog:",
     "@internal/contracts": "workspace:*",
     "@panote/core": "workspace:*",
+    "@panote/viewer": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {
