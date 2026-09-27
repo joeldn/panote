@@ -49,6 +49,11 @@ export {
   type TourStats,
 } from './api/public.js';
 export {
+  loadPublishedTour,
+  type LoadPublishedTourOptions,
+  type PublishedTourResult,
+} from './api/published.js';
+export {
   createUploadApi,
   MAX_UPLOAD_BYTES,
   putFile,
@@ -67,6 +72,7 @@ export {
 } from './api/upload.js';
 export {
   DEFAULT_TOUR_SETTINGS,
+  publishedToViewerTour,
   toViewerTour,
   type SceneConfigSource,
   type ViewerInfoHotspot,

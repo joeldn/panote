@@ -22,8 +22,16 @@ describe('contentSecurityPolicy', () => {
     expect(csp).toContain(
       "connect-src 'self' https://cdn.panote.dev https://acct.r2.cloudflarestorage.com https://panote-dev.au.auth0.com;",
     );
-    expect(csp).toContain('frame-src https://www.youtube-nocookie.com');
+    expect(csp).toContain('frame-src https://www.youtube-nocookie.com;');
     expect(csp).toMatch(/frame-ancestors 'none'$/);
+  });
+
+  it('allows hotspot video from the CDN only', () => {
+    const csp = contentSecurityPolicy(loadConfig(env), "'none'");
+    expect(csp).toContain("media-src 'self' https://cdn.panote.dev;");
+    // YouTube hotspots render through the privacy-enhanced host, nothing else frames.
+    expect(csp).toMatch(/frame-src https:\/\/www\.youtube-nocookie\.com;/);
+    expect(csp).not.toContain('youtube.com ');
   });
 
   it('skips a placeholder Auth0 domain and adds a cross-origin API base', () => {

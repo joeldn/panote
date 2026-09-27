@@ -136,4 +136,29 @@ describe('share-link documents', () => {
     };
     expect(PublishedTourSchema.parse(bundle).scenes).toHaveLength(1);
   });
+
+  it("rejects a bundle with unsafe ids or a scene carrying another pano's config", () => {
+    const bundle = {
+      v: 1,
+      tourId: 't1',
+      title: 'Tour',
+      visibility: 'public',
+      slug: 'tour',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      settings: { controls: 'bottom', showMap: true, showCompass: true, autoRotate: false },
+      startPanoId: 'p1',
+      scenes: [{ panoId: 'p1', config: { panoId: 'p1', title: 'Hall', hotspots: [] } }],
+    };
+    const scene = (panoId: string, configId: string) => ({
+      panoId,
+      config: { panoId: configId, title: 'Hall', hotspots: [] },
+    });
+    const bad = [
+      { ...bundle, tourId: '../t1' },
+      { ...bundle, startPanoId: 'p1/../x' },
+      { ...bundle, scenes: [scene('../p1', '../p1')] },
+      { ...bundle, scenes: [scene('p1', 'p2')] },
+    ];
+    for (const b of bad) expect(PublishedTourSchema.safeParse(b).success).toBe(false);
+  });
 });

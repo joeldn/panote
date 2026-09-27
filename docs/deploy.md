@@ -50,8 +50,9 @@ anonymous).
 
 ## Frontends
 
-`apps/website` and `apps/admin` are Vite + React SPAs, each deployed as an **assets-only Worker**
-(Workers Static Assets, no `main` script yet) on the same host as the APIs. Why not Pages, and why
+`apps/website` and `apps/admin` are Vite + React SPAs, each deployed as a Worker with **static
+assets** on the same host as the APIs. Admin is assets-only; the website also has a small `main`
+script that only runs for `/s/*` (slug redirects, below). Why not Pages, and why
 build-time config: `docs/decisions.md`.
 
 | App | Script (dev / production) | Route (dev / production) | Vite `base` / output |
@@ -60,7 +61,8 @@ build-time config: `docs/decisions.md`.
 | `apps/admin` | `panote-admin-dev` / `panote-admin` | `panote.dev/app` + `panote.dev/app/*` / same on `panote.io` | `/app/` → `dist/app/` |
 
 Both: `assets.not_found_handling: "single-page-application"`, `observability.enabled: true` in
-both env blocks, `workers_dev` `true` in dev and `false` in production, no bindings, no secrets.
+both env blocks, `workers_dev` `true` in dev and `false` in production, no secrets. Admin has no
+bindings; the website has `BUCKET` (R2, `pano-content-dev` / `pano-content`) and `ASSETS`.
 
 **Route precedence.** The website's `panote.dev/*` overlaps every other route on the host.
 Cloudflare resolves that by specificity: "When more than one route pattern could match a request
@@ -74,8 +76,29 @@ specificity (`/images/*` vs `/images*` on the same zone,
 no two routes here differ only by that slash. Admin uses `/app` + `/app/*` rather than the plan's
 `/app*`, which would also take `/apple`, `/application`, … from the website. Unmatched `/api/...`
 paths now reach the website and get `index.html` with a 200 (accepted for v1; unit W3 adds a
-404). The website's `/s/*` slug-redirect script (unit D5) will add a `main`, an R2 binding and
-`assets.run_worker_first` to `apps/website/wrangler.jsonc`, repeated per env block.
+404).
+
+**Website slug redirects (`/s/*`).** `apps/website/wrangler.jsonc` sets `main: worker/index.ts`
+and `assets.run_worker_first: ["/s/*"]` ([Static Assets binding →
+`run_worker_first`](https://developers.cloudflare.com/workers/static-assets/binding/#run_worker_first):
+an array of route patterns, `*` deep-matches, `!` negates). Every other path is served by the
+assets router and never invokes the script. For `/s/<slug>` and `/s/<slug>/embed[/]` the script
+reads `slugs/<slug>.json` through the `BUCKET` binding (it only ever reads that prefix; R2
+bindings can't be scoped, so read-only is by convention). An unexpired `redirect` alias whose
+target slug is still a live pointer to the **same** tourId gets a `308` to `/s/<new>` (or
+`/s/<new>/embed`) with the query string kept and `Cache-Control: no-store`. Anything else (live
+pointer, miss, expired alias, a target another tour holds, an invalid slug, an R2 error) falls
+through to `env.ASSETS.fetch`, i.e. the SPA, which then shows the tour or its "This tour isn't
+available" placeholder. `_headers` still applies to responses served through `env.ASSETS.fetch`
+(checked under `wrangler dev`: CSP, `frame-ancestors` per path, nosniff). `wrangler types --env
+dev` omits the inherited `ASSETS` binding, so `worker/assets.d.ts` declares it.
+The `Location` is relative (`/s/<new-slug>`, query kept).
+Post-deploy checks (dev; production the same on `panote.io`):
+- `curl -sI https://panote.dev/s/<old-slug>` on a renamed tour: `308`,
+  `Location: /s/<new-slug>`, `Cache-Control: no-store`.
+- `curl -sI https://panote.dev/s/<live-slug>`: `200` with `frame-ancestors 'none'` in the CSP.
+- `curl -sI https://panote.dev/s/<live-slug>/embed` (and `/embed/`): `200` with `frame-ancestors *`.
+  These two confirm `_headers` still applies to responses that pass through the script.
 
 **Admin's assets layout.** Assets build into `dist/app/` so `/app/assets/…` maps onto files, but
 the Worker's assets root is `dist/`. Workers' SPA fallback always serves the *root*
@@ -99,7 +122,7 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 
 **Headers.** The build also emits `_headers` from the env (`buildHeadersFile` in
 `@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
-`style-src 'self'`, `img-src 'self' <cdn> data: blob:`, `connect-src 'self' <cdn> <auth0 domain>`
+`style-src 'self'`, `img-src 'self' <cdn> data: blob:`, `media-src 'self' <cdn>`, `connect-src 'self' <cdn> <auth0 domain>`
 (admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com`,
 `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
 `strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
@@ -110,13 +133,15 @@ Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CS
 The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Dev builds add
 `X-Robots-Tag: noindex` on every path; production stays indexable.
 
-CSP gaps the D units must close when they land (the scaffold doesn't hit them yet):
+CSP notes for the D units:
 
-- The viewer's info-hotspots UI injects a `<style>` element, which `style-src 'self'` blocks: move
-  it to a stylesheet, or allow it by hash/nonce.
-- Hotspot video from the CDN needs `media-src` with the CDN origin (it falls back to
-  `default-src 'self'` today).
-- The admin share modal's embed preview iframe needs `frame-src 'self'` (only YouTube is allowed).
+- The viewer's vanilla info-hotspots UI (`@panote/viewer/ui`) injects a `<style>` element, which
+  `style-src 'self'` blocks. The apps don't use it: the React viewer chrome in `@internal/ui`
+  (`styles/viewer.css`) replaces it. Inline `style` set from JS (CSSOM) is not affected.
+- Hotspot media: video and images load only from `'self'` and the CDN (`media-src`/`img-src`),
+  YouTube only via `www.youtube-nocookie.com` (`frame-src`). The public viewer renders media on any
+  other host (or media that fails to load) as an "Open image/video ↗" link instead.
+- Still open: the admin share modal's embed preview iframe needs `frame-src 'self'` (unit D6).
 
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
 Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
