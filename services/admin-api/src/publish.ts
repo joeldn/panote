@@ -439,23 +439,30 @@ export const setVisibility = async (
   return { status: 200, body: { visibility } };
 };
 
-// Idempotent. Needs tour.json or publish.json under the caller as proof,
-// since pub/ is owner-free. Deletes the slug only if it's a live pointer here.
-export const unpublish = async (bucket: R2Bucket, sub: string, tourId: string): Promise<void> => {
+// Idempotent; needs tour.json or publish.json as proof (pub/ is owner-free). Deletes the
+// slug only if it's a live pointer here. Returns the public keys to purge (B6).
+export const unpublish = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+): Promise<string[]> => {
   const [stored, tour] = await Promise.all([
     readPublishRecord(bucket, sub, tourId),
     bucket.head(tourKey(sub, tourId)),
   ]);
-  if (!stored && !tour) return;
+  if (!stored && !tour) return [];
+  const removed: string[] = [];
   if (stored) {
     const existing = await readSlug(bucket, stored.value.slug);
     const key = storedSlugKey(stored.value.slug);
     if (key && existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
       await bucket.delete(key);
+      removed.push(key);
     }
   }
   await bucket.delete(pubTourKey(tourId));
   await bucket.delete(publishKey(sub, tourId));
+  return [pubTourKey(tourId), ...removed];
 };
 
 /** Daily cron: deletes every redirect alias past its expiresAt (Q6). */
