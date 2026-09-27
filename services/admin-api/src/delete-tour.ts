@@ -59,6 +59,8 @@ export const deleteTour = async (bucket: R2Bucket, sub: string, tourId: string):
   const referenced = await referencedPanoIds(bucket, sub, tourId);
   const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced);
   await bucket.delete(tourKey(sub, tourId));
+  // Again: a publish that passed its tour.json re-check during the fan-out above.
+  await unpublish(bucket, sub, tourId);
 
   // Recheck after this tour.json is gone: catches the common 2-tour race
   // (see PR body); a rarer 3+-way overlap can still leak storage, not safety.
