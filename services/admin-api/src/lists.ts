@@ -73,8 +73,8 @@ export const resolvePanoTitle = async (
   return doc?.title ?? null;
 };
 
-// A publish.json's customMetadata (unit B2 writes it; nothing does yet, so
-// this always returns null until then, per the plan's forward-compat note).
+// A publish.json's customMetadata ({ slug, visibility }, written by publish.ts);
+// null for an unpublished tour.
 const toPublishSummary = (
   meta: Record<string, string> | undefined,
 ): { slug: string; visibility: 'public' | 'unlisted' } | null => {
@@ -229,7 +229,7 @@ export const listPanoSummaries = async (
 type TourGroup = { tourObj?: R2Object; publishObj?: R2Object };
 
 // Groups tour.json + publish.json by tourId from list() batches (per the
-// plan); publish.json is unwritten until B2, so publish is null until then.
+// plan); publish is null for a tour without publish.json.
 export const listTourSummaries = async (
   bucket: R2Bucket,
   sub: string,

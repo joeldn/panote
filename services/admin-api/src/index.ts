@@ -1,16 +1,25 @@
 import {
+  checkSlug,
   configKey,
+  DEFAULT_VISIBILITY,
   deletingKey,
   MAX_TOUR_SCENES,
   originalKey,
   PANO_PATTERN,
+  PublishRequestSchema,
+  pubTourKey,
   SceneConfigSchema,
+  SlugPutRequestSchema,
   TourDocSchema,
   tourKey,
   userPanosPrefix,
+  VisibilityPatchRequestSchema,
+  type PublishedTour,
+  type PublishRecord,
   type SceneConfig,
   type TourConfigEntry,
   type TourDoc,
+  type TourPublishState,
 } from '@internal/contracts';
 import { authenticate } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
@@ -20,6 +29,17 @@ import { Hono } from 'hono';
 import { conditionalGet, guardedPut, updateConditional } from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
+import {
+  buildBundle,
+  checkScenes,
+  claimDefaultSlug,
+  moveToSlug,
+  parseAliasDays,
+  readPublishRecord,
+  sweepExpiredAliases,
+  unpublish,
+  writePublishState,
+} from './publish.js';
 import {
   configCustomMetadata,
   listPanoSummaries,
@@ -236,10 +256,18 @@ app.get('/api/admin/tours/:tourId', async (c) => {
   }
   setEtagAndNoStore(c, result.notModified ? result.etag : result.obj.etag);
   if (result.notModified) return c.body(null, 304);
-  const tour = await result.obj.json<TourDoc>();
-  if (c.req.query('include') !== 'configs') return c.json({ tour, etag: result.obj.etag });
+  const [tour, record] = await Promise.all([
+    result.obj.json<TourDoc>(),
+    readPublishRecord(c.env.BUCKET, sub, tourId),
+  ]);
+  const publish: TourPublishState | null = record
+    ? { slug: record.slug, visibility: record.visibility, publishedAt: record.publishedAt }
+    : null;
+  if (c.req.query('include') !== 'configs') {
+    return c.json({ tour, etag: result.obj.etag, publish });
+  }
   const configs = await loadSceneConfigs(c.env.BUCKET, sub, tour.scenes);
-  return c.json({ tour, etag: result.obj.etag, configs });
+  return c.json({ tour, etag: result.obj.etag, publish, configs });
 });
 
 app.put('/api/admin/tours/:tourId', async (c) => {
@@ -279,6 +307,160 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   return c.body(null, 204);
 });
 
+const tourIdError = (tourId: string): string | null =>
+  PANO_PATTERN.test(tourId) ? null : `tourId must match ${PANO_PATTERN}`;
+
+const slugError = (slug: string): string | null => {
+  const check = checkSlug(slug);
+  return check.ok ? null : `${check.reason} slug`;
+};
+
+const shareUrl = (slug: string): string => `/s/${slug}`;
+
+app.post('/api/admin/tours/:tourId/publish', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = PublishRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
+  if (invalidSlug) return c.json({ error: invalidSlug }, 400);
+
+  const bucket = c.env.BUCKET;
+  const tour = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
+  if (!tour) return c.json({ error: 'not found' }, 404);
+  if (tour.value.scenes.length === 0) {
+    return c.json({ error: 'tour has no scenes', scenes: [] }, 422);
+  }
+  const { failures, configs } = await checkScenes(
+    bucket,
+    sub,
+    tour.value.scenes.map((s) => s.panoId),
+  );
+  if (failures.length > 0)
+    return c.json({ error: 'scenes not publishable', scenes: failures }, 422);
+
+  const now = new Date();
+  const current = await readPublishRecord(bucket, sub, tourId);
+  let slug: string;
+  let aliases = current?.aliases ?? [];
+  const target = body.data.slug ?? current?.slug;
+  if (target !== undefined) {
+    const moved = await moveToSlug(
+      bucket,
+      tourId,
+      current,
+      target,
+      now,
+      parseAliasDays(c.env.SLUG_ALIAS_DAYS),
+    );
+    if (!moved.ok) return c.json({ error: 'slug taken' }, 409);
+    slug = moved.slug;
+    aliases = moved.aliases;
+  } else {
+    const claimed = await claimDefaultSlug(bucket, tourId, tour.value.title);
+    if (!claimed) return c.json({ error: 'slug taken' }, 409);
+    slug = claimed;
+  }
+
+  const record: PublishRecord = {
+    slug,
+    visibility: body.data.visibility ?? current?.visibility ?? DEFAULT_VISIBILITY,
+    publishedAt: current?.publishedAt ?? now.toISOString(),
+    aliases,
+  };
+  await writePublishState(bucket, sub, tourId, record, buildBundle(tour.value, configs, record));
+  return c.json({
+    slug,
+    visibility: record.visibility,
+    url: shareUrl(slug),
+    publishedAt: record.publishedAt,
+  });
+});
+
+// Loads what a slug or visibility change edits in place: the tour must be
+// the caller's, published, with its bundle present.
+const loadPublished = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+): Promise<
+  | { ok: true; record: PublishRecord; bundle: PublishedTour }
+  | { ok: false; status: 404 | 409; error: string }
+> => {
+  if (!(await bucket.head(tourKey(sub, tourId))))
+    return { ok: false, status: 404, error: 'not found' };
+  const record = await readPublishRecord(bucket, sub, tourId);
+  const bundle = record ? await getJson<PublishedTour>(bucket, pubTourKey(tourId)) : null;
+  if (!record || !bundle) return { ok: false, status: 409, error: 'not published' };
+  return { ok: true, record, bundle: bundle.value };
+};
+
+app.put('/api/admin/tours/:tourId/slug', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = SlugPutRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const invalidSlug = slugError(body.data.slug);
+  if (invalidSlug) return c.json({ error: invalidSlug }, 400);
+
+  const bucket = c.env.BUCKET;
+  const loaded = await loadPublished(bucket, sub, tourId);
+  if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
+  const moved = await moveToSlug(
+    bucket,
+    tourId,
+    loaded.record,
+    body.data.slug,
+    new Date(),
+    parseAliasDays(c.env.SLUG_ALIAS_DAYS),
+  );
+  if (!moved.ok) return c.json({ error: 'slug taken' }, 409);
+  const record: PublishRecord = { ...loaded.record, slug: moved.slug, aliases: moved.aliases };
+  await writePublishState(bucket, sub, tourId, record, { ...loaded.bundle, slug: moved.slug });
+  return c.json({ slug: moved.slug, oldSlugRedirectsUntil: moved.oldSlugRedirectsUntil });
+});
+
+app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = VisibilityPatchRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+
+  const bucket = c.env.BUCKET;
+  const loaded = await loadPublished(bucket, sub, tourId);
+  if (!loaded.ok) return c.json({ error: loaded.error }, loaded.status);
+  const { visibility } = body.data;
+  await writePublishState(
+    bucket,
+    sub,
+    tourId,
+    { ...loaded.record, visibility },
+    { ...loaded.bundle, visibility },
+  );
+  return c.json({ visibility });
+});
+
+app.delete('/api/admin/tours/:tourId/publish', async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  await unpublish(c.env.BUCKET, sub, tourId);
+  return c.body(null, 204);
+});
+
 app.onError(errorHandler);
 
-export default app;
+export default {
+  fetch: app.fetch,
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6).
+  scheduled(controller, env, ctx) {
+    ctx.waitUntil(sweepExpiredAliases(env.BUCKET, new Date(controller.scheduledTime)));
+  },
+} satisfies ExportedHandler<Env>;

@@ -2,6 +2,7 @@ import { tourKey, userToursPrefix, type TourDoc } from '@internal/contracts';
 import { getJson, listChildren } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
+import { unpublish } from './publish.js';
 
 const REFERENCE_CONCURRENCY = 8;
 
@@ -48,6 +49,8 @@ const deleteUnreferenced = async (
 // Q5: deletes the tour and any of its panos no other tour of the owner still
 // references (idempotent). tour.json is deleted last so a crash/retry can resume.
 export const deleteTour = async (bucket: R2Bucket, sub: string, tourId: string): Promise<void> => {
+  // Unpublish first so a deleted tour never stays public, even on a partial delete.
+  await unpublish(bucket, sub, tourId);
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
   const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
   if (!own) return;
