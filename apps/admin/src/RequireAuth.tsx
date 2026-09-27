@@ -19,11 +19,8 @@ function useCurrentPath(): string {
   return `/app${pathname === '/' ? '/' : pathname}${search}${hash}`;
 }
 
-/**
- * Guards every admin route but the callback. Signed out goes to the website's
- * sign-in modal with `next` set to this page; a session that dies later
- * (refresh token gone, API 401) reopens sign-in in place.
- */
+// Guards every admin route but the callback: signed out goes to the website's sign-in with
+// next = this page, and a session that dies later (API 401, refresh gone) reopens sign-in here.
 export function RequireAuth() {
   const env = useAuthEnv();
   const { auth, origins, assign } = env;
