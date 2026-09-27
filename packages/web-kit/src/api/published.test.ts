@@ -101,6 +101,16 @@ describe('loadPublishedTour', () => {
     await expect(load('old-town', bad)).rejects.toBeInstanceOf(ApiSchemaError);
   });
 
+  it("rejects a bundle whose scene carries another pano's config", async () => {
+    const b = bundle();
+    b.scenes = [{ panoId: 'pano-1', config: { panoId: 'pano-2', title: 'Square', hotspots: [] } }];
+    const fetch = cdn({
+      'slugs/old-town.json': { v: 1, kind: 'tour', tourId: 'tour-a' },
+      'pub/tours/tour-a.json': b,
+    });
+    await expect(load('old-town', fetch)).rejects.toBeInstanceOf(ApiSchemaError);
+  });
+
   it('passes the abort signal through', async () => {
     const ac = new AbortController();
     const fetch = cdn({});

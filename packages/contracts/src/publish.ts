@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-import { SceneConfigSchema, TourSettingsSchema, type TourSettings } from './schema.js';
+import { PANO_PATTERN } from './keys.js';
+import {
+  MAX_ID_LENGTH,
+  SceneConfigSchema,
+  TourSettingsSchema,
+  type TourSettings,
+} from './schema.js';
 import { checkSlug } from './slug.js';
 
 // Stored documents behind share links (plan 3.2). Everything here except
@@ -26,23 +32,31 @@ export const SlugSchema = z.string().superRefine((s, ctx) => {
   if (!check.ok) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${check.reason} slug` });
 });
 
+// Public readers build tile/manifest URLs from these ids, so they get the same check as a TourDoc.
+const publicId = () => z.string().regex(PANO_PATTERN).max(MAX_ID_LENGTH);
+
 // pub/tours/<tourId>.json
 export const PublishedTourSchema = z.object({
   v: z.literal(1),
-  tourId: z.string(),
+  tourId: publicId(),
   title: z.string(),
   visibility: VisibilitySchema,
   slug: z.string(),
   publishedAt: z.string(),
   settings: TourSettingsSchema,
-  startPanoId: z.string(),
+  startPanoId: publicId(),
   scenes: z.array(
-    z.object({
-      panoId: z.string(),
-      mapX: z.number().optional(),
-      mapY: z.number().optional(),
-      config: SceneConfigSchema,
-    }),
+    z
+      .object({
+        panoId: publicId(),
+        mapX: z.number().optional(),
+        mapY: z.number().optional(),
+        config: SceneConfigSchema,
+      })
+      .refine((s) => s.config.panoId === s.panoId, {
+        message: "config.panoId must match the scene's panoId",
+        path: ['config', 'panoId'],
+      }),
   ),
 });
 export type PublishedTour = z.infer<typeof PublishedTourSchema>;
