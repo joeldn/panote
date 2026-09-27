@@ -53,4 +53,30 @@ describe('loadConfig', () => {
     expect((err as ConfigError).issues.join('\n')).toMatch(/VITE_CDN_BASE/);
     expect((err as ConfigError).issues.join('\n')).toMatch(/VITE_AUTH0_CLIENT_ID/);
   });
+
+  it.each([
+    ['', ''],
+    ['/', ''],
+    ['/proxy/', '/proxy'],
+    ['https://panote.dev/', 'https://panote.dev'],
+    ['http://localhost:8787', 'http://localhost:8787'],
+  ])('accepts VITE_API_BASE %j', (value, out) => {
+    expect(loadConfig({ ...env, VITE_API_BASE: value }).apiBase).toBe(out);
+  });
+
+  it.each(['api', 'panote.dev/api', '//evil.example', 'ftp://panote.dev', 'javascript:alert(1)'])(
+    'rejects VITE_API_BASE %j',
+    (value) => {
+      expect(() => loadConfig({ ...env, VITE_API_BASE: value })).toThrow(/VITE_API_BASE/);
+    },
+  );
+
+  it('rejects VITE_AUTH0_CONNECTIONS that names no known connection', () => {
+    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'github, twitter' })).toThrow(
+      ConfigError,
+    );
+    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: '' })).toThrow(
+      /VITE_AUTH0_CONNECTIONS/,
+    );
+  });
 });

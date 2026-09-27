@@ -35,6 +35,10 @@ const EnvSchema = z.object({
   VITE_API_BASE: z
     .string()
     .optional()
+    .refine((v) => !v || v.startsWith('/') || /^https?:\/\/[^/]/.test(v), {
+      message: 'must be an absolute http(s) URL or a path starting with /',
+    })
+    .refine((v) => !v?.startsWith('//'), { message: 'must not be protocol-relative' })
     .transform((v) => (v ?? '').replace(/\/+$/, '')),
   VITE_AUTH0_DOMAIN: z
     .string()
@@ -50,7 +54,8 @@ const EnvSchema = z.object({
         .split(',')
         .map((c) => c.trim())
         .filter(isKnownConnection),
-    ),
+    )
+    .refine((c) => c.length > 0, { message: 'names no known sign-in connection' }),
   VITE_SHOWCASE_SLUG: z
     .string()
     .optional()
