@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { pubTourKey, publishKey, slugKey, encodeId, SLUGS_ROOT } from './keys.js';
+import { pubTourKey, publishKey, slugKey, encodeId, SLUGS_ROOT, storedSlugKey } from './keys.js';
 import { PublishedTourSchema, SlugRecordSchema, SlugSchema } from './publish.js';
 import {
   checkSlug,
@@ -93,6 +93,13 @@ describe('share-link keys', () => {
 
   it('builds the private publish sidecar under the encoded owner', () => {
     expect(publishKey('auth0|abc', 't1')).toBe(`tours/${encodeId('auth0|abc')}/t1/publish.json`);
+  });
+
+  it('builds a stored-slug key without re-validating, but refuses traversal', () => {
+    expect(storedSlugKey('admin')).toBe('slugs/admin.json');
+    expect(storedSlugKey('my-tour')).toBe('slugs/my-tour.json');
+    for (const bad of ['../x', 'a/b', '', 'A', 'x'.repeat(65)])
+      expect(storedSlugKey(bad)).toBeNull();
   });
 
   it('refuses an invalid or reserved slug and a bad tourId', () => {

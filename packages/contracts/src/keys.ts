@@ -111,5 +111,10 @@ export const slugKey = (slug: string): string => {
   if (!isValidSlug(slug)) throw new Error(`invalid or reserved slug ${JSON.stringify(slug)}`);
   return `${SLUGS_ROOT}${slug}.json`;
 };
+// For a slug read back from storage: charset-checked against traversal but not
+// re-validated, so a word reserved later still unpublishes. Null if unsafe.
+const STORED_SLUG_RE = /^[a-z0-9-]{1,64}$/;
+export const storedSlugKey = (slug: string): string | null =>
+  STORED_SLUG_RE.test(slug) ? `${SLUGS_ROOT}${slug}.json` : null;
 
 export { PANO_PATTERN };

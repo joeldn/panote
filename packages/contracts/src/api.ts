@@ -156,6 +156,9 @@ export const PublishUnprocessableSchema = z.object({
 export type PublishUnprocessable = z.infer<typeof PublishUnprocessableSchema>;
 
 export const SlugTakenSchema = z.object({ error: z.literal('slug taken') });
+// A bare publish whose current slug another tour now holds: retrying won't help,
+// the user has to pick a new slug.
+export const SlugLostSchema = z.object({ error: z.literal('slug lost') });
 export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'reserved slug']) });
 // 409 when a concurrent publish, rename or visibility change got there first; retry.
 export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
