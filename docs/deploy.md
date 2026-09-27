@@ -92,8 +92,13 @@ through to `env.ASSETS.fetch`, i.e. the SPA, which then shows the tour or its "T
 available" placeholder. `_headers` still applies to responses served through `env.ASSETS.fetch`
 (checked under `wrangler dev`: CSP, `frame-ancestors` per path, nosniff). `wrangler types --env
 dev` omits the inherited `ASSETS` binding, so `worker/assets.d.ts` declares it.
-Post-deploy check: `curl -I https://panote.dev/s/<old-slug>` on a renamed tour returns `308` with
-`Location: https://panote.dev/s/<new-slug>`.
+The `Location` is relative (`/s/<new-slug>`, query kept).
+Post-deploy checks (dev; production the same on `panote.io`):
+- `curl -sI https://panote.dev/s/<old-slug>` on a renamed tour: `308`,
+  `Location: /s/<new-slug>`, `Cache-Control: no-store`.
+- `curl -sI https://panote.dev/s/<live-slug>`: `200` with `frame-ancestors 'none'` in the CSP.
+- `curl -sI https://panote.dev/s/<live-slug>/embed` (and `/embed/`): `200` with `frame-ancestors *`.
+  These two confirm `_headers` still applies to responses that pass through the script.
 
 **Admin's assets layout.** Assets build into `dist/app/` so `/app/assets/…` maps onto files, but
 the Worker's assets root is `dist/`. Workers' SPA fallback always serves the *root*
@@ -134,8 +139,8 @@ CSP notes for the D units:
   `style-src 'self'` blocks. The apps don't use it: the React viewer chrome in `@internal/ui`
   (`styles/viewer.css`) replaces it. Inline `style` set from JS (CSSOM) is not affected.
 - Hotspot media: video and images load only from `'self'` and the CDN (`media-src`/`img-src`),
-  YouTube only via `www.youtube-nocookie.com` (`frame-src`). A media URL on any other host is
-  blocked.
+  YouTube only via `www.youtube-nocookie.com` (`frame-src`). The public viewer renders media on any
+  other host (or media that fails to load) as an "Open image/video ↗" link instead.
 - Still open: the admin share modal's embed preview iframe needs `frame-src 'self'` (unit D6).
 
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
