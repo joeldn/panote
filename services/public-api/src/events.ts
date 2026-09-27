@@ -31,6 +31,10 @@ export type BodyResult = { ok: true; value: unknown } | { ok: false; status: 400
 // Reads the body as text whatever the content-type, since sendBeacon sends
 // strings as text/plain. An empty body is treated as `{}`.
 export const readJsonBody = async (req: Request): Promise<BodyResult> => {
+  // Reject by header before buffering; the post-read check covers chunked bodies.
+  if (Number(req.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) {
+    return { ok: false, status: 413 };
+  }
   const text = await req.text();
   if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
     return { ok: false, status: 413 };
