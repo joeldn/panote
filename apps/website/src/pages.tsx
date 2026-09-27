@@ -1,16 +1,10 @@
-import { useParams, useSearchParams } from 'react-router';
+import { useParams } from 'react-router';
 
 import { Placeholder } from './Shell.js';
 
 // Route placeholders; the real screens land in the D units (docs/wave6-plan.md 4.3).
-export function Landing() {
-  const [params] = useSearchParams();
-  return (
-    <Placeholder title="Landing">
-      {params.get('signin') === '1' && <p role="dialog">Sign-in modal (unit C3)</p>}
-    </Placeholder>
-  );
-}
+// `?signin=1` opens the sign-in modal from the Shell, on any page.
+export const Landing = () => <Placeholder title="Landing" />;
 
 export function TourViewer() {
   const { slug } = useParams();
