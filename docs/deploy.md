@@ -20,8 +20,8 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` / `panote.io/api/tours/*` | `STATS` — Durable Object, class `TourStats` | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` | none (native R2 binding, not the S3 API) |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` / `panote.io/api/tours/*` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`) |
 
@@ -204,9 +204,9 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put R2_ACCESS_KEY_ID 
 pnpm --filter @service/tiler-consumer exec wrangler secret put R2_SECRET_ACCESS_KEY --env dev
 ```
 
-Repeat with `--env production` once production is provisioned. `admin-api` and `public-api`
-need no secrets — `admin-api` reads R2 through the native binding, not the S3 API; `public-api`
-never touches R2 at all. `wrangler deploy --env <env> --secrets-file <file>` is the alternative
+Repeat with `--env production` once production is provisioned. `public-api` needs no secrets, and
+`admin-api` reads R2 through the native binding, not the S3 API. `admin-api` does need
+`CF_ANALYTICS_TOKEN` for tour insights; see "Insights (unit B5)" below. `wrangler deploy --env <env> --secrets-file <file>` is the alternative
 to interactive `secret put` if scripting this. **Status: set for dev, outstanding for
 production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and
 `tiler-consumer`'s dev environments; production has neither yet.
@@ -665,11 +665,41 @@ fresh-upload case above — the pano can simply be deleted again.
 
 ---
 
+## Insights (unit B5)
+
+`public-api` writes one Workers Analytics Engine data point per viewer event (`view`, `scene`,
+`hotspot`, `dwell`) to its `EVENTS` binding. `admin-api` reads them back through the AE SQL API
+for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules are in
+`docs/wave6-plan.md` section 3.3: content ids only, no IP, UA, country, referrer, client id or sub.
+
+- **Datasets.** `panote_events_dev` / `panote_events`. AE creates a dataset the first time a
+  Worker writes to it, so there is no provisioning command; the first `POST .../view` after
+  deploying `public-api` creates it. AE keeps data for three months (Cloudflare's limit, not
+  configurable). **Status: not yet deployed.**
+- **Secret.** `admin-api` needs an account API token with **Account → Account Analytics → Read**
+  and nothing else, created in the dashboard under My Profile → API Tokens:
+  ```bash
+  pnpm --filter @service/admin-api exec wrangler secret put CF_ANALYTICS_TOKEN --env dev
+  ```
+  Repeat with `--env production` once production is provisioned. Until it's set, the insights
+  route returns `502 { error: 'analytics unavailable' }` (the rest of `admin-api` is unaffected).
+  **Status: outstanding for dev and production.**
+- **Vars.** `CF_ACCOUNT_ID` (`12e2809e05de8a2bf20b815fd394ec9a`) and `AE_DATASET` are plain vars
+  in both `admin-api` env blocks; `AE_DATASET` must match `public-api`'s `EVENTS` dataset for the
+  same env. Nothing to do beyond deploying.
+- **Smoke test (dev).** After both Workers deploy and the secret is set, open a tour a few times,
+  wait a minute or two for AE ingestion, then `GET /api/admin/tours/<tourId>/insights` as the
+  owner and check `daily` shows today's views. The same token can run ad-hoc queries against
+  the SQL API directly; `SHOW TABLES` lists the datasets.
+
+---
+
 ## Production status
 
 **Unprovisioned.** None of the following exist yet: `pano-content`, `pano-uploads`,
 `pano-uploads-dlq`, the R2→queue notification, bucket CORS, the `cdn.panote.io` custom domain,
-`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` secrets, or a production Auth0 tenant. `panote.io`
+`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` secrets, the `CF_ANALYTICS_TOKEN` secret, or a production
+Auth0 tenant. `panote.io`
 became a Cloudflare zone on 2026-09-26 (see DNS section above), so that particular blocker on
 the `routes` blocks each Worker's `wrangler.jsonc` already declares for `production` is cleared
 — but the zone has no web records yet, so nothing is actually live, and every other piece of
