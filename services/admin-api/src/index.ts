@@ -32,15 +32,8 @@ import {
 } from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
-import {
-  parseAliasDays,
-  publishTour,
-  readPublishRecord,
-  renameSlug,
-  setVisibility,
-  sweepExpiredAliases,
-  unpublish,
-} from './publish.js';
+import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
   listPanoSummaries,
@@ -303,7 +296,8 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   if (!PANO_PATTERN.test(tourId)) {
     return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
   }
-  await deleteTour(c.env.BUCKET, sub, tourId);
+  const stub = publisher(c.env, tourId);
+  await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId));
   return c.body(null, 204);
 });
 
@@ -315,7 +309,8 @@ const slugError = (slug: string): string | null => {
   return check.ok ? null : `${check.reason} slug`;
 };
 
-const clock = (env: Env) => ({ now: new Date(), aliasDays: parseAliasDays(env.SLUG_ALIAS_DAYS) });
+// All publish-state changes for a tour go through its TourPublisher, one at a time.
+const publisher = (env: Env, tourId: string) => env.PUBLISHER.get(env.PUBLISHER.idFromName(tourId));
 
 app.post('/api/admin/tours/:tourId/publish', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
@@ -326,7 +321,7 @@ app.post('/api/admin/tours/:tourId/publish', async (c) => {
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
-  const out = await publishTour(c.env.BUCKET, sub, tourId, body.data, clock(c.env));
+  const out = await publisher(c.env, tourId).publish(sub, tourId, body.data);
   return c.json(out.body, out.status);
 });
 
@@ -339,7 +334,7 @@ app.put('/api/admin/tours/:tourId/slug', async (c) => {
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = slugError(body.data.slug);
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
-  const out = await renameSlug(c.env.BUCKET, sub, tourId, body.data.slug, clock(c.env));
+  const out = await publisher(c.env, tourId).rename(sub, tourId, body.data.slug);
   return c.json(out.body, out.status);
 });
 
@@ -350,7 +345,7 @@ app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
   if (idError) return c.json({ error: idError }, 400);
   const body = VisibilityPatchRequestSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
-  const out = await setVisibility(c.env.BUCKET, sub, tourId, body.data.visibility, clock(c.env));
+  const out = await publisher(c.env, tourId).setVisibility(sub, tourId, body.data.visibility);
   return c.json(out.body, out.status);
 });
 
@@ -359,7 +354,7 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  await unpublish(c.env.BUCKET, sub, tourId);
+  await publisher(c.env, tourId).unpublish(sub, tourId);
   return c.body(null, 204);
 });
 
@@ -372,3 +367,5 @@ export default {
     ctx.waitUntil(sweepExpiredAliases(env.BUCKET, new Date(controller.scheduledTime)));
   },
 } satisfies ExportedHandler<Env>;
+
+export { TourPublisher };

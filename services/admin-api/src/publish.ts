@@ -127,7 +127,7 @@ const isExpired = (record: SlugRedirect, now: Date): boolean =>
 
 const pointerMetadata = { kind: 'tour' };
 
-export type ClaimResult = 'created' | 'ours' | 'taken';
+type ClaimResult = 'created' | 'ours' | 'taken';
 
 // Makes `slug` a live pointer at `tourId`, create-only. Also ours: a live pointer
 // here, or an unexpired alias of this tour that redirects to its current slug.
@@ -245,21 +245,6 @@ export const readPublishRecord = (
   tourId: string,
 ): Promise<StoredRecord | null> => getJson<PublishRecord>(bucket, publishKey(sub, tourId));
 
-// Deletes a pointer this request created if publish.json (re-read) doesn't use it.
-const releaseIfUnused = async (
-  bucket: R2Bucket,
-  sub: string,
-  tourId: string,
-  slug: string,
-): Promise<void> => {
-  const winner = (await readPublishRecord(bucket, sub, tourId))?.value;
-  if (winner && (winner.slug === slug || winner.aliases?.includes(slug))) return;
-  const existing = await readSlug(bucket, slug);
-  if (existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
-    await bucket.delete(slugKey(slug));
-  }
-};
-
 export type Outcome<T> =
   | { status: 200; body: T }
   | { status: 404 | 409 | 422; body: { error: string; scenes?: SceneFailure[] } };
@@ -274,68 +259,18 @@ type Commit = {
   record: PublishRecord;
   plan: AliasPlan;
   bundle: PublishedTour;
-  bundleEtag: string | null;
-  // A pointer this request created, to release if it loses the publish.json race.
-  createdSlug: string | null;
   freshExpiresAt: string;
 };
 
-// Create-only re-put of the live pointer; true if it is (again) this tour's.
-const reassertPointer = async (
-  bucket: R2Bucket,
-  tourId: string,
-  slug: string,
-): Promise<boolean> => {
-  const pointer: SlugRecord = { v: 1, kind: 'tour', tourId };
-  const put = await putJson(
-    bucket,
-    slugKey(slug),
-    pointer,
-    { etagDoesNotMatch: '*' },
-    pointerMetadata,
-  );
-  if (put.ok) return true;
-  const existing = await readSlug(bucket, slug);
-  return existing?.record?.kind === 'tour' && existing.record.tourId === tourId;
-};
-
-const BUNDLE_WRITE_ATTEMPTS = 3;
-
-// Once publish.json has committed it is the source of truth: on a bundle etag
-// conflict, re-read the bundle and re-apply slug/visibility, while publish.json is still ours.
-const writeBundle = async (
-  bucket: R2Bucket,
-  sub: string,
-  tourId: string,
-  c: Commit,
-  recordEtag: string,
-): Promise<boolean> => {
-  let bundle = c.bundle;
-  let etag = c.bundleEtag;
-  for (let attempt = 0; attempt < BUNDLE_WRITE_ATTEMPTS; attempt += 1) {
-    const onlyIf = etag ? { etagMatches: etag } : { etagDoesNotMatch: '*' };
-    if ((await putJson(bucket, pubTourKey(tourId), bundle, onlyIf)).ok) return true;
-    const [record, latest] = await Promise.all([
-      bucket.head(publishKey(sub, tourId)),
-      getJson<PublishedTour>(bucket, pubTourKey(tourId)),
-    ]);
-    if (record?.etag !== recordEtag) return false;
-    bundle = latest
-      ? { ...latest.value, slug: c.record.slug, visibility: c.record.visibility }
-      : c.bundle;
-    etag = latest?.etag ?? null;
-  }
-  return false;
-};
-
-// publish.json (etag-guarded) first, then aliases, then the etag-guarded bundle.
-// Re-checks tour.json at the end so a concurrent tour delete can't leave it public.
+// Callers run one at a time per tour (TourPublisher). Order keeps a crash
+// retryable: publish.json, then aliases, then the bundle, then the tour re-check.
 const commit = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
   c: Commit,
 ): Promise<{ ok: true; expiries: Map<string, string> } | { ok: false; status: 404 | 409 }> => {
+  // Belt and braces: serialization means this precondition should always hold.
   const wrote = await putJson(
     bucket,
     publishKey(sub, tourId),
@@ -343,18 +278,10 @@ const commit = async (
     c.current ? { etagMatches: c.current.etag } : { etagDoesNotMatch: '*' },
     { slug: c.record.slug, visibility: c.record.visibility },
   );
-  if (!wrote.ok) {
-    if (c.createdSlug) await releaseIfUnused(bucket, sub, tourId, c.createdSlug);
-    return { ok: false, status: 409 };
-  }
-  // A concurrent loser's release may have removed our pointer after the claim.
-  if (!(await reassertPointer(bucket, tourId, c.record.slug))) {
-    console.error('publish: slug now held by another tour', { tourId, slug: c.record.slug });
-    return { ok: false, status: 409 };
-  }
+  if (!wrote.ok) return { ok: false, status: 409 };
   const expiries = await applyAliases(bucket, tourId, c.plan, c.record.slug, c.freshExpiresAt);
-  const recordEtag = wrote.etag;
-  if (!(await writeBundle(bucket, sub, tourId, c, recordEtag))) return { ok: false, status: 409 };
+  await putJson(bucket, pubTourKey(tourId), c.bundle);
+  // A tour deleted meanwhile (the delete itself isn't serialized) must not stay public.
   if (!(await bucket.head(tourKey(sub, tourId)))) {
     await unpublish(bucket, sub, tourId);
     return { ok: false, status: 404 };
@@ -362,21 +289,29 @@ const commit = async (
   return { ok: true, expiries };
 };
 
-type Clock = { now: Date; aliasDays: number };
+export type Clock = { now: Date; aliasDays: number };
 
 const freshExpiry = ({ now, aliasDays }: Clock): string =>
   new Date(now.getTime() + aliasDays * DAY_MS).toISOString();
 
 const failed = (status: 404 | 409) => (status === 404 ? NOT_FOUND : CONFLICT);
 
-/** POST …/publish: idempotent, safe to retry (plan 3.2). */
+export type PublishBody = {
+  slug: string;
+  visibility: Visibility;
+  url: string;
+  publishedAt: string;
+};
+export type PublishRequest = { slug?: string | undefined; visibility?: Visibility | undefined };
+
+// POST …/publish: idempotent, safe to retry (plan 3.2).
 export const publishTour = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
-  req: { slug?: string | undefined; visibility?: Visibility | undefined },
+  req: PublishRequest,
   clock: Clock,
-): Promise<Outcome<{ slug: string; visibility: Visibility; url: string; publishedAt: string }>> => {
+): Promise<Outcome<PublishBody>> => {
   const tour = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
   if (!tour) return NOT_FOUND;
   if (tour.value.scenes.length === 0) {
@@ -388,10 +323,7 @@ export const publishTour = async (
     return { status: 422, body: { error: 'scenes not publishable', scenes: failures } };
   }
 
-  const [current, bundleHead] = await Promise.all([
-    readPublishRecord(bucket, sub, tourId),
-    bucket.head(pubTourKey(tourId)),
-  ]);
+  const current = await readPublishRecord(bucket, sub, tourId);
   const cur = current?.value ?? null;
   const target = req.slug ?? cur?.slug;
   let slug: string;
@@ -419,8 +351,6 @@ export const publishTour = async (
     record,
     plan,
     bundle: buildBundle(tour.value, configs, record),
-    bundleEtag: bundleHead?.etag ?? null,
-    createdSlug: result === 'created' ? slug : null,
     freshExpiresAt: freshExpiry(clock),
   });
   if (!done.ok) return failed(done.status);
@@ -441,7 +371,7 @@ const loadPublished = async (
   sub: string,
   tourId: string,
 ): Promise<
-  | { ok: true; current: StoredRecord; bundle: { value: PublishedTour; etag: string } }
+  | { ok: true; current: StoredRecord; bundle: { value: PublishedTour } }
   | { ok: false; outcome: typeof NOT_FOUND | typeof NOT_PUBLISHED }
 > => {
   if (!(await bucket.head(tourKey(sub, tourId)))) return { ok: false, outcome: NOT_FOUND };
@@ -451,7 +381,7 @@ const loadPublished = async (
   return { ok: true, current, bundle };
 };
 
-/** PUT …/slug: rename, leaving the old slug as a redirect alias (Q6). */
+// PUT …/slug: rename, leaving the old slug as a redirect alias (Q6).
 export const renameSlug = async (
   bucket: R2Bucket,
   sub: string,
@@ -475,8 +405,6 @@ export const renameSlug = async (
     record,
     plan,
     bundle: { ...loaded.bundle.value, slug: target },
-    bundleEtag: loaded.bundle.etag,
-    createdSlug: result === 'created' ? target : null,
     freshExpiresAt: freshExpiry(clock),
   });
   if (!done.ok) return failed(done.status);
@@ -490,7 +418,7 @@ export const renameSlug = async (
   };
 };
 
-/** PATCH …/visibility. */
+// PATCH …/visibility.
 export const setVisibility = async (
   bucket: R2Bucket,
   sub: string,
@@ -505,8 +433,6 @@ export const setVisibility = async (
     record: { ...loaded.current.value, visibility },
     plan: [],
     bundle: { ...loaded.bundle.value, visibility },
-    bundleEtag: loaded.bundle.etag,
-    createdSlug: null,
     freshExpiresAt: freshExpiry(clock),
   });
   if (!done.ok) return failed(done.status);

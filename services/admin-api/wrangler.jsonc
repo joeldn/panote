@@ -17,6 +17,11 @@
       "observability": { "enabled": true },
       // secrets (per env): none - admin-api uses the native R2 binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
+      // Serializes publish/slug/visibility changes per tour (one instance per tourId).
+      "durable_objects": {
+        "bindings": [{ "name": "PUBLISHER", "class_name": "TourPublisher" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
@@ -34,6 +39,11 @@
       "observability": { "enabled": true },
       // secrets (per env): none - admin-api uses the native R2 binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
+      // Serializes publish/slug/visibility changes per tour (one instance per tourId).
+      "durable_objects": {
+        "bindings": [{ "name": "PUBLISHER", "class_name": "TourPublisher" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
         // only with the real tenant URL, never another fake name.

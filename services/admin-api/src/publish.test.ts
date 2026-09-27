@@ -22,22 +22,17 @@ import {
   SELF,
   waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
 import worker from './index.js';
-import {
-  DEFAULT_SLUG_ALIAS_DAYS,
-  MAX_ALIASES,
-  parseAliasDays,
-  publishTour,
-  renameSlug,
-  setVisibility,
-} from './publish.js';
+import { DEFAULT_SLUG_ALIAS_DAYS, MAX_ALIASES, parseAliasDays, publishTour } from './publish.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Many sequential R2 round trips; the 5s default is tight on a loaded CI runner.
+const SLOW_TEST_MS = 30_000;
 
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
@@ -600,98 +595,71 @@ const hookedBucket = (op: 'get' | 'put', key: string, fn: () => Promise<unknown>
 
 const clock = () => ({ now: new Date(), aliasDays: 30 });
 
-describe('publish races', () => {
-  it('a stale publish racing a rename gets 409 and does not revert the rename', async () => {
-    const tourId = await publishedTour('race-rename', 'race-rename-old');
-    // The publish reads publish.json (slug old), then the rename lands in full.
-    const bucket = hookedBucket('get', publishKey(MY_SUB, tourId), async () => {
-      expect((await putSlug(tourId, 'race-rename-new')).status).toBe(200);
-    });
-    const out = await publishTour(bucket, MY_SUB, tourId, {}, clock());
-    expect(out).toEqual({ status: 409, body: { error: 'conflict' } });
-    expect(await readSlug('race-rename-new')).toEqual({ v: 1, kind: 'tour', tourId });
-    expect(await readSlug('race-rename-old')).toMatchObject({
-      kind: 'redirect',
-      redirect: 'race-rename-new',
-    });
-    expect((await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))?.slug).toBe(
-      'race-rename-new',
-    );
-    expect((await readJson<PublishedTour>(pubTourKey(tourId)))?.slug).toBe('race-rename-new');
-  });
+const publisherFor = (tourId: string) => env.PUBLISHER.get(env.PUBLISHER.idFromName(tourId));
 
-  it('losing the publish.json race releases the slug this request claimed', async () => {
-    await readyPano('race-release-p1');
-    const tourId = await createTour('Race Release', ['race-release-p1']);
-    // A concurrent first publish wins publish.json with a different slug.
-    const bucket = hookedBucket('get', publishKey(MY_SUB, tourId), async () => {
-      expect((await publish(tourId, { slug: 'race-release-winner' })).status).toBe(200);
-    });
-    const out = await publishTour(bucket, MY_SUB, tourId, { slug: 'race-release-loser' }, clock());
-    expect(out).toEqual({ status: 409, body: { error: 'conflict' } });
-    expect(await env.BUCKET.head(slugKey('race-release-loser'))).toBeNull();
-    expect(await readSlug('race-release-winner')).toEqual({ v: 1, kind: 'tour', tourId });
-  });
+/** Asserts publish.json, the bundle and the slug records agree for a published tour. */
+const expectConsistent = async (tourId: string, slugsSeen: string[]) => {
+  const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+  const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
+  expect(bundle.slug).toBe(record.slug);
+  expect(bundle.visibility).toBe(record.visibility);
+  expect(await readSlug(record.slug)).toEqual({ v: 1, kind: 'tour', tourId });
+  for (const alias of record.aliases ?? []) {
+    expect(await readSlug(alias)).toMatchObject({ kind: 'redirect', redirect: record.slug });
+  }
+  // Never a second live pointer. (An alias from before an unpublish expires on its own.)
+  for (const slug of slugsSeen.filter((s) => s !== record.slug)) {
+    expect((await readSlug(slug))?.kind).not.toBe('tour');
+  }
+};
 
-  it('a rename that loses the bundle race re-applies its slug onto the newer bundle', async () => {
-    const tourId = await publishedTour('race-bundle', 'race-bundle-slug');
-    const bucket = hookedBucket('get', pubTourKey(tourId), async () => {
-      const b = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
-      await env.BUCKET.put(pubTourKey(tourId), JSON.stringify({ ...b, title: 'Newer Save' }));
-    });
-    const out = await renameSlug(bucket, MY_SUB, tourId, 'race-bundle-renamed', clock());
-    expect(out.status).toBe(200);
-    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
-    const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
-    expect(record.slug).toBe('race-bundle-renamed');
-    expect(bundle).toMatchObject({ title: 'Newer Save', slug: record.slug });
-    expect(bundle.visibility).toBe(record.visibility);
-  });
+describe('per-tour serialization (TourPublisher)', () => {
+  it(
+    'concurrent publish, rename and visibility changes leave one consistent state',
+    async () => {
+      for (const round of [1, 2, 3]) {
+        const id = `serial-${round}`;
+        const tourId = await publishedTour(id, `${id}-a`);
+        const results = await Promise.all([
+          publish(tourId),
+          putSlug(tourId, `${id}-b`),
+          patchVisibility(tourId, 'public'),
+          publish(tourId, { visibility: 'unlisted' }),
+          putSlug(tourId, `${id}-c`),
+          publish(tourId),
+          patchVisibility(tourId, 'public'),
+        ]);
+        expect(results.map((r) => r.status)).toEqual([200, 200, 200, 200, 200, 200, 200]);
+        await expectConsistent(tourId, [`${id}-a`, `${id}-b`, `${id}-c`]);
+      }
+    },
+    SLOW_TEST_MS,
+  );
 
-  it('a visibility change that loses the bundle race keeps record and bundle in step', async () => {
-    const tourId = await publishedTour('race-vis', 'race-vis-slug');
-    const bucket = hookedBucket('get', pubTourKey(tourId), async () => {
-      const b = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
-      await env.BUCKET.put(pubTourKey(tourId), JSON.stringify({ ...b, title: 'Newer Save' }));
-    });
-    const out = await setVisibility(bucket, MY_SUB, tourId, 'public', clock());
-    expect(out.status).toBe(200);
-    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
-    expect(record.visibility).toBe('public');
-    expect(await readJson<PublishedTour>(pubTourKey(tourId))).toMatchObject({
-      title: 'Newer Save',
-      visibility: 'public',
-      slug: record.slug,
-    });
-  });
-
-  it('re-creates its live pointer if a concurrent release removed it after the claim', async () => {
-    await readyPano('race-reassert-p1');
-    const tourId = await createTour('Race Reassert', ['race-reassert-p1']);
-    const bucket = hookedBucket('put', publishKey(MY_SUB, tourId), async () => {
-      await env.BUCKET.delete(slugKey('race-reassert-slug'));
-    });
-    const out = await publishTour(bucket, MY_SUB, tourId, { slug: 'race-reassert-slug' }, clock());
-    expect(out.status).toBe(200);
-    expect(await readSlug('race-reassert-slug')).toEqual({ v: 1, kind: 'tour', tourId });
-  });
-
-  it('409s if another tour took the slug between the claim and publish.json', async () => {
-    await readyPano('race-stolen-p1');
-    const tourId = await createTour('Race Stolen', ['race-stolen-p1']);
-    const bucket = hookedBucket('put', publishKey(MY_SUB, tourId), async () => {
-      await env.BUCKET.put(
-        slugKey('race-stolen-slug'),
-        JSON.stringify({ v: 1, kind: 'tour', tourId: 'someone-else' }),
-      );
-    });
-    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const out = await publishTour(bucket, MY_SUB, tourId, { slug: 'race-stolen-slug' }, clock());
-    expect(out).toEqual({ status: 409, body: { error: 'conflict' } });
-    expect(quiet).toHaveBeenCalled();
-    expect(await readSlug('race-stolen-slug')).toMatchObject({ tourId: 'someone-else' });
-    expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
-  });
+  it(
+    'an unpublish racing publishes and renames never leaves a half-published tour',
+    async () => {
+      for (const round of [1, 2, 3]) {
+        const id = `serial-unpub-${round}`;
+        const tourId = await publishedTour(id, `${id}-a`);
+        const results = await Promise.all([
+          putSlug(tourId, `${id}-b`),
+          unpublishReq(tourId),
+          patchVisibility(tourId, 'public'),
+          ...(round === 2 ? [publish(tourId)] : []),
+        ]);
+        for (const r of results) expect([200, 204, 409]).toContain(r.status);
+        const slugs = [`${id}-a`, `${id}-b`];
+        if (await env.BUCKET.head(publishKey(MY_SUB, tourId))) {
+          await expectConsistent(tourId, slugs);
+        } else {
+          expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
+          for (const slug of slugs) expect((await readSlug(slug))?.kind).not.toBe('tour');
+        }
+      }
+    },
+    SLOW_TEST_MS,
+  );
 
   it('a publish that lands mid-delete (after the unpublish, before tour.json goes) ends up gone', async () => {
     await readyPano('race-middel-p1');
@@ -700,10 +668,13 @@ describe('publish races', () => {
     const bucket = hookedBucket('get', tourKey(MY_SUB, tourId), async () => {
       expect((await publish(tourId, { slug: 'race-middel-slug' })).status).toBe(200);
     });
-    await deleteTour(bucket, MY_SUB, tourId);
+    const stub = publisherFor(tourId);
+    await deleteTour(bucket, MY_SUB, tourId, () => stub.unpublish(MY_SUB, tourId));
     expect(await env.BUCKET.head(slugKey('race-middel-slug'))).toBeNull();
     expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
     expect(await env.BUCKET.head(publishKey(MY_SUB, tourId))).toBeNull();
+    // Serialized after the delete, a publish sees tour.json gone.
+    expect((await publish(tourId, { slug: 'race-middel-slug' })).status).toBe(404);
   });
 
   it('a tour deleted while publishing ends up unpublished, and the publish 404s', async () => {
@@ -746,24 +717,28 @@ describe('alias edge cases', () => {
     expect((await putSlug(tourId, 'alias-expired-a')).status).toBe(200);
   });
 
-  it(`tracks at most ${MAX_ALIASES} aliases; a dropped one still points at the current slug`, async () => {
-    const tourId = await publishedTour('alias-cap', 'alias-cap-0');
-    const renames = MAX_ALIASES + 1;
-    for (let i = 1; i <= renames; i += 1) {
-      expect((await putSlug(tourId, `alias-cap-${i}`)).status).toBe(200);
-    }
-    const current = `alias-cap-${renames}`;
-    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
-    expect(record.aliases).toHaveLength(MAX_ALIASES);
-    expect(record.aliases?.[0]).toBe(`alias-cap-${renames - 1}`);
-    expect(record.aliases).not.toContain('alias-cap-0');
-    for (let i = 0; i < renames; i += 1) {
-      expect(await readSlug(`alias-cap-${i}`)).toMatchObject({
-        kind: 'redirect',
-        redirect: current,
-      });
-    }
-  });
+  it(
+    `tracks at most ${MAX_ALIASES} aliases; a dropped one still points at the current slug`,
+    async () => {
+      const tourId = await publishedTour('alias-cap', 'alias-cap-0');
+      const renames = MAX_ALIASES + 1;
+      for (let i = 1; i <= renames; i += 1) {
+        expect((await putSlug(tourId, `alias-cap-${i}`)).status).toBe(200);
+      }
+      const current = `alias-cap-${renames}`;
+      const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+      expect(record.aliases).toHaveLength(MAX_ALIASES);
+      expect(record.aliases?.[0]).toBe(`alias-cap-${renames - 1}`);
+      expect(record.aliases).not.toContain('alias-cap-0');
+      for (let i = 0; i < renames; i += 1) {
+        expect(await readSlug(`alias-cap-${i}`)).toMatchObject({
+          kind: 'redirect',
+          redirect: current,
+        });
+      }
+    },
+    SLOW_TEST_MS,
+  );
 
   it('link hotspots to panos outside the tour are stripped from the bundle', async () => {
     await readyPano('hs-a');
