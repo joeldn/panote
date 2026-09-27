@@ -15,7 +15,7 @@
       "workers_dev": true,
       "routes": [{ "pattern": "panote.dev/api/admin/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
-      // secrets (per env): none - admin-api uses the native R2 binding, not the S3 API.
+      // secrets (per env): CF_PURGE_TOKEN (Zone > Cache Purge), for the best-effort CDN purge.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
       "durable_objects": {
@@ -27,6 +27,9 @@
         "OAUTH_AUDIENCE": "https://api.panote.dev",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
+        // CDN purge target (B6). Placeholder zone id: the purge no-ops until it's real.
+        "CDN_ZONE_ID": "YOUR_PANOTE_DEV_ZONE_ID",
+        "CDN_HOST": "cdn.panote.dev",
       },
       // Daily sweep that releases expired slug aliases.
       "triggers": { "crons": ["17 3 * * *"] },
@@ -37,7 +40,7 @@
       "workers_dev": false,
       "routes": [{ "pattern": "panote.io/api/admin/*", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
-      // secrets (per env): none - admin-api uses the native R2 binding, not the S3 API.
+      // secrets (per env): CF_PURGE_TOKEN (Zone > Cache Purge), for the best-effort CDN purge.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
       "durable_objects": {
@@ -51,6 +54,9 @@
         "OAUTH_AUDIENCE": "https://api.panote.io",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
+        // CDN purge target (B6). Placeholder zone id: the purge no-ops until it's real.
+        "CDN_ZONE_ID": "YOUR_PANOTE_IO_ZONE_ID",
+        "CDN_HOST": "cdn.panote.io",
       },
       // Daily sweep that releases expired slug aliases.
       "triggers": { "crons": ["17 3 * * *"] },

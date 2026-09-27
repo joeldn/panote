@@ -1,7 +1,8 @@
 import { deletingKey, originalKey, panoPrefix, tilesPrefix } from '@internal/contracts';
 import { deletePrefix } from '@internal/worker-kit/r2-binding';
 
-export type DeletePanoResult = { ok: true };
+// tilesDeleted: this call swept tiles/<panoId>/, so its edge copies need a purge.
+export type DeletePanoResult = { ok: true; tilesDeleted: boolean };
 
 /** Proves ownership via the original OR a tombstone left by an interrupted
  * delete; the route itself checks auth before this ever runs. */
@@ -18,7 +19,7 @@ export const deletePano = async (
   // config-only pano still deletes (and stays deleted) and tiles/ is untouched.
   if (!original && !tombstone) {
     await deletePrefix(bucket, panoPrefix(sub, panoId));
-    return { ok: true };
+    return { ok: true, tilesDeleted: false };
   }
   if (!tombstone) await bucket.put(deletingKey(sub, panoId), '');
   await bucket.delete(originalKey(sub, panoId));
@@ -28,5 +29,5 @@ export const deletePano = async (
   // Tombstone included: a retry with no proof left still clears this prefix
   // via the no-proof branch above.
   await deletePrefix(bucket, panoPrefix(sub, panoId));
-  return { ok: true };
+  return { ok: true, tilesDeleted: true };
 };

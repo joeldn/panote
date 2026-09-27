@@ -8,6 +8,7 @@ import {
   PublishRequestSchema,
   SceneConfigSchema,
   SlugPutRequestSchema,
+  tilesPrefix,
   TourDocSchema,
   tourKey,
   userPanosPrefix,
@@ -33,6 +34,7 @@ import {
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { purgeCdn, type CdnPurge } from './purge.js';
 import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
@@ -109,6 +111,14 @@ const loadSceneConfigs = async (
 };
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Runs after the response; purgeCdn never throws, so a failure can't turn a 204 into a 500.
+const purgeLater = (
+  c: { env: Env; executionCtx: { waitUntil: (p: Promise<unknown>) => void } },
+  purge: CdnPurge,
+): void => {
+  c.executionCtx.waitUntil(purgeCdn(c.env, purge));
+};
 
 app.get('/api/admin/panos', async (c) => {
   const { sub } = await authenticate(c.req.raw, c.env);
@@ -199,7 +209,8 @@ app.delete('/api/admin/panos/:panoId', async (c) => {
   if (!PANO_PATTERN.test(panoId)) {
     return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
   }
-  await deletePano(c.env.BUCKET, sub, panoId);
+  const { tilesDeleted } = await deletePano(c.env.BUCKET, sub, panoId);
+  if (tilesDeleted) purgeLater(c, { prefixes: [tilesPrefix(panoId)], files: [] });
   return c.body(null, 204);
 });
 
@@ -297,7 +308,7 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
     return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
   }
   const stub = publisher(c.env, tourId);
-  await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId));
+  purgeLater(c, await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId)));
   return c.body(null, 204);
 });
 
@@ -354,7 +365,8 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  await publisher(c.env, tourId).unpublish(sub, tourId);
+  const files = await publisher(c.env, tourId).unpublish(sub, tourId);
+  purgeLater(c, { prefixes: [], files });
   return c.body(null, 204);
 });
 
