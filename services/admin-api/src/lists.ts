@@ -168,7 +168,12 @@ export const summarizePano = async (
   // of ownership (originalObj) - else any caller could probe another owner's tiling state.
   const manifestObj = originalObj ? await bucket.get(manifestKey(panoId)) : null;
   const manifestBody = manifestObj
-    ? await manifestObj.json<{ version?: string; format?: string; tileSize?: number }>()
+    ? await manifestObj.json<{
+        version?: string;
+        format?: string;
+        tileSize?: number;
+        preview?: true;
+      }>()
     : null;
 
   const tiling = computeTilingStatus({
@@ -198,6 +203,7 @@ export const summarizePano = async (
           version: manifestBody.version,
           format: manifestBody.format,
           tileSize: manifestBody.tileSize,
+          ...(manifestBody.preview ? { preview: manifestBody.preview } : {}),
         } as PanoManifestSummary)
       : null,
     updatedAt: (updatedAtSource?.uploaded ?? new Date(0)).toISOString(),
