@@ -19,6 +19,7 @@ import {
   createExecutionContext,
   createScheduledController,
   env,
+  runInDurableObject,
   SELF,
   waitOnExecutionContext,
 } from 'cloudflare:test';
@@ -26,6 +27,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
 import worker from './index.js';
+import type { TourPublisher } from './publisher.js';
 import { DEFAULT_SLUG_ALIAS_DAYS, MAX_ALIASES, parseAliasDays, publishTour } from './publish.js';
 
 const MY_SUB = 'auth0|me';
@@ -661,6 +663,34 @@ describe('per-tour serialization (TourPublisher)', () => {
     },
     SLOW_TEST_MS,
   );
+
+  it("a non-owner's requests are refused before they join the owner's queue", async () => {
+    const tourId = await publishedTour('queue-guard', 'queue-guard-slug');
+    const stub = publisherFor(tourId);
+    const queued = () => runInDurableObject(stub, (o: TourPublisher) => o.queued);
+    const before = await queued();
+    const results = await Promise.all([
+      publish(tourId, {}, 'other'),
+      putSlug(tourId, 'queue-guard-x', 'other'),
+      patchVisibility(tourId, 'public', 'other'),
+      unpublishReq(tourId, 'other'),
+    ]);
+    expect(results.map((r) => r.status)).toEqual([404, 404, 404, 204]);
+    expect(await queued()).toBe(before);
+    expect((await publish(tourId)).status).toBe(200);
+    expect(await queued()).toBe(before + 1);
+  });
+
+  it('a bare publish whose slug another tour now holds gets 409 slug lost', async () => {
+    const tourId = await publishedTour('slug-lost', 'slug-lost-slug');
+    await env.BUCKET.put(
+      slugKey('slug-lost-slug'),
+      JSON.stringify({ v: 1, kind: 'tour', tourId: 'someone-else' }),
+    );
+    const r = await publish(tourId);
+    expect(r.status).toBe(409);
+    expect(await r.json()).toEqual({ error: 'slug lost' });
+  });
 
   it('a publish that lands mid-delete (after the unpublish, before tour.json goes) ends up gone', async () => {
     await readyPano('race-middel-p1');

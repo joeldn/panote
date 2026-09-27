@@ -2,7 +2,6 @@ import { tourKey, userToursPrefix, type TourDoc } from '@internal/contracts';
 import { getJson, listChildren } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
-import { unpublish } from './publish.js';
 
 const REFERENCE_CONCURRENCY = 8;
 
@@ -46,15 +45,13 @@ const deleteUnreferenced = async (
   return stillReferenced;
 };
 
-// Q5: deletes the tour and any of its panos no other tour of the owner still
-// references (idempotent). tour.json is deleted last so a crash/retry can resume.
-// `unpublishTour` goes through the tour's TourPublisher in the Worker, so it
-// queues behind any in-flight publish for the same tour.
+// Q5: deletes the tour and its panos no other tour references; idempotent, tour.json
+// last. `unpublishTour` must go through the tour's TourPublisher (serialized).
 export const deleteTour = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
-  unpublishTour: () => Promise<void> = () => unpublish(bucket, sub, tourId),
+  unpublishTour: () => Promise<void>,
 ): Promise<void> => {
   // Unpublish first so a deleted tour never stays public, even on a partial delete.
   await unpublishTour();

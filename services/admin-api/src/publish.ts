@@ -8,6 +8,7 @@ import {
   publishKey,
   pubTourKey,
   slugKey,
+  storedSlugKey,
   SlugRecordSchema,
   SLUGS_ROOT,
   tourKey,
@@ -116,14 +117,15 @@ type StoredSlug = { record: SlugRecord | null; etag: string };
 
 // record is null for an unparsable object: it exists, so it's treated as taken.
 const readSlug = async (bucket: R2Bucket, slug: string): Promise<StoredSlug | null> => {
-  const got = await getJson<unknown>(bucket, slugKey(slug));
+  const key = storedSlugKey(slug);
+  const got = key ? await getJson<unknown>(bucket, key) : null;
   if (!got) return null;
   const parsed = SlugRecordSchema.safeParse(got.value);
   return { record: parsed.success ? parsed.data : null, etag: got.etag };
 };
 
-const isExpired = (record: SlugRedirect, now: Date): boolean =>
-  Date.parse(record.expiresAt) <= now.getTime();
+// Reads the clock at check time (not op start), keeping the cron race to an instant.
+const isExpired = (record: SlugRedirect): boolean => Date.parse(record.expiresAt) <= Date.now();
 
 const pointerMetadata = { kind: 'tour' };
 
@@ -136,7 +138,6 @@ export const claimSlug = async (
   slug: string,
   tourId: string,
   currentSlug: string | null,
-  now: Date,
 ): Promise<ClaimResult> => {
   const pointer: SlugRecord = { v: 1, kind: 'tour', tourId };
   // Bounded retry: each loop only repeats after the key changed under us.
@@ -155,7 +156,7 @@ export const claimSlug = async (
     if (!record || record.tourId !== tourId) return 'taken';
     if (record.kind === 'tour') return 'ours';
     // A stale caller (currentSlug out of date) or an expired alias must not revive it.
-    if (record.redirect !== currentSlug || isExpired(record, now)) return 'taken';
+    if (record.redirect !== currentSlug || isExpired(record)) return 'taken';
     const reclaimed = await putJson(
       bucket,
       slugKey(slug),
@@ -173,10 +174,9 @@ const claimDefaultSlug = async (
   bucket: R2Bucket,
   tourId: string,
   title: string,
-  now: Date,
 ): Promise<{ slug: string; result: ClaimResult } | null> => {
   for (const candidate of defaultSlugCandidates(title)) {
-    const result = await claimSlug(bucket, candidate, tourId, null, now);
+    const result = await claimSlug(bucket, candidate, tourId, null);
     if (result !== 'taken') return { slug: candidate, result };
   }
   return null;
@@ -193,7 +193,6 @@ const planAliases = async (
   tourId: string,
   current: PublishRecord | null,
   newSlug: string,
-  now: Date,
 ): Promise<AliasPlan> => {
   const previous = current ? [current.slug, ...(current.aliases ?? [])] : [];
   const plan: AliasPlan = [];
@@ -202,7 +201,7 @@ const planAliases = async (
     const existing = await readSlug(bucket, slug);
     const record = existing?.record;
     if (!existing || !record || record.tourId !== tourId) continue;
-    if (record.kind === 'redirect' && isExpired(record, now)) continue;
+    if (record.kind === 'redirect' && isExpired(record)) continue;
     plan.push({ slug, etag: existing.etag, record });
   }
   return plan;
@@ -224,7 +223,7 @@ const applyAliases = async (
       const alias: SlugRecord = { v: 1, kind: 'redirect', tourId, redirect: newSlug, expiresAt };
       const res = await putJson(
         bucket,
-        slugKey(slug),
+        storedSlugKey(slug) as string,
         alias,
         { etagMatches: etag },
         { kind: 'redirect', expiresAt },
@@ -249,7 +248,8 @@ export type Outcome<T> =
   | { status: 200; body: T }
   | { status: 404 | 409 | 422; body: { error: string; scenes?: SceneFailure[] } };
 
-const NOT_FOUND = { status: 404, body: { error: 'not found' } } as const;
+export const NOT_FOUND = { status: 404, body: { error: 'not found' } } as const;
+const SLUG_LOST = { status: 409, body: { error: 'slug lost' } } as const;
 const SLUG_TAKEN = { status: 409, body: { error: 'slug taken' } } as const;
 const CONFLICT = { status: 409, body: { error: 'conflict' } } as const;
 const NOT_PUBLISHED = { status: 409, body: { error: 'not published' } } as const;
@@ -329,17 +329,17 @@ export const publishTour = async (
   let slug: string;
   let result: ClaimResult;
   if (target !== undefined) {
-    result = await claimSlug(bucket, target, tourId, cur?.slug ?? null, clock.now);
+    result = await claimSlug(bucket, target, tourId, cur?.slug ?? null);
     slug = target;
   } else {
-    const claimed = await claimDefaultSlug(bucket, tourId, tour.value.title, clock.now);
+    const claimed = await claimDefaultSlug(bucket, tourId, tour.value.title);
     if (!claimed) return SLUG_TAKEN;
     ({ slug, result } = claimed);
   }
-  // A bare publish never picked a slug, so losing its current one is a conflict.
-  if (result === 'taken') return req.slug === undefined ? CONFLICT : SLUG_TAKEN;
+  // Another tour holds the current slug; retrying won't help, so say so.
+  if (result === 'taken') return req.slug === undefined ? SLUG_LOST : SLUG_TAKEN;
 
-  const plan = await planAliases(bucket, tourId, cur, slug, clock.now);
+  const plan = await planAliases(bucket, tourId, cur, slug);
   const record: PublishRecord = {
     slug,
     visibility: req.visibility ?? cur?.visibility ?? DEFAULT_VISIBILITY,
@@ -392,9 +392,9 @@ export const renameSlug = async (
   const loaded = await loadPublished(bucket, sub, tourId);
   if (!loaded.ok) return loaded.outcome;
   const cur = loaded.current.value;
-  const result = await claimSlug(bucket, target, tourId, cur.slug, clock.now);
+  const result = await claimSlug(bucket, target, tourId, cur.slug);
   if (result === 'taken') return SLUG_TAKEN;
-  const plan = await planAliases(bucket, tourId, cur, target, clock.now);
+  const plan = await planAliases(bucket, tourId, cur, target);
   const record: PublishRecord = {
     ...cur,
     slug: target,
@@ -449,8 +449,9 @@ export const unpublish = async (bucket: R2Bucket, sub: string, tourId: string): 
   if (!stored && !tour) return;
   if (stored) {
     const existing = await readSlug(bucket, stored.value.slug);
-    if (existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
-      await bucket.delete(slugKey(stored.value.slug));
+    const key = storedSlugKey(stored.value.slug);
+    if (key && existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
+      await bucket.delete(key);
     }
   }
   await bucket.delete(pubTourKey(tourId));
