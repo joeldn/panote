@@ -45,9 +45,16 @@ const deleteUnreferenced = async (
   return stillReferenced;
 };
 
-// Q5: deletes the tour and any of its panos no other tour of the owner still
-// references (idempotent). tour.json is deleted last so a crash/retry can resume.
-export const deleteTour = async (bucket: R2Bucket, sub: string, tourId: string): Promise<void> => {
+// Q5: deletes the tour and its panos no other tour references; idempotent, tour.json
+// last. `unpublishTour` must go through the tour's TourPublisher (serialized).
+export const deleteTour = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+  unpublishTour: () => Promise<void>,
+): Promise<void> => {
+  // Unpublish first so a deleted tour never stays public, even on a partial delete.
+  await unpublishTour();
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
   const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
   if (!own) return;
@@ -56,6 +63,8 @@ export const deleteTour = async (bucket: R2Bucket, sub: string, tourId: string):
   const referenced = await referencedPanoIds(bucket, sub, tourId);
   const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced);
   await bucket.delete(tourKey(sub, tourId));
+  // Again: a publish serialized before this point may have re-published it.
+  await unpublishTour();
 
   // Recheck after this tour.json is gone: catches the common 2-tour race
   // (see PR body); a rarer 3+-way overlap can still leak storage, not safety.

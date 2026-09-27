@@ -42,6 +42,22 @@ export const updateConditional = (ifMatch: string | undefined): R2Conditional | 
   return { etagMatches: parsed.tags[0] ?? '' };
 };
 
+/** True when an If-None-Match header (single, list or `*`) matches `etag`. */
+export const ifNoneMatchHits = (ifNoneMatch: string | undefined, etag: string): boolean => {
+  if (!ifNoneMatch) return false;
+  const parsed = parseETags(ifNoneMatch);
+  return parsed.wildcard || parsed.tags.includes(etag);
+};
+
+// The owner tour GET's ETag is `<tour.json etag>:<publish.json etag>` once published,
+// so a rename busts a 304. R2 etags never contain `:`.
+export const tourViewEtag = (tourEtag: string, publishEtag: string | undefined): string =>
+  publishEtag ? `${tourEtag}:${publishEtag}` : tourEtag;
+
+/** Drops the publish part of a tour view ETag, so If-Match on PUT tour takes either form. */
+export const tourIfMatch = (ifMatch: string | undefined): string | undefined =>
+  ifMatch?.replace(/:[^",\s]*/g, '');
+
 /** True for the body-bearing branch of R2Bucket#get's conditional return type. */
 const hasBody = (obj: R2Object | R2ObjectBody): obj is R2ObjectBody => 'body' in obj;
 
