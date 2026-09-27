@@ -220,4 +220,23 @@ describe('PanoStage', () => {
     expect(live).toHaveLength(1);
     expect(live[0]?.load).toHaveBeenCalledWith('hall');
   });
+
+  it('reloads the same pano when reloadKey changes (replace-image finished)', () => {
+    const f = factory();
+    const { rerender } = render(
+      <PanoStage baseUrl="b/" panoId="hall" reloadKey="t1-old" createViewer={f.createViewer} />,
+    );
+    const v = f.last();
+    expect(v.load).toHaveBeenCalledTimes(1);
+    rerender(
+      <PanoStage baseUrl="b/" panoId="hall" reloadKey="t1-old" createViewer={f.createViewer} />,
+    );
+    expect(v.load).toHaveBeenCalledTimes(1);
+    rerender(
+      <PanoStage baseUrl="b/" panoId="hall" reloadKey="t1-new" createViewer={f.createViewer} />,
+    );
+    expect(v.load).toHaveBeenCalledTimes(2);
+    expect(v.load).toHaveBeenLastCalledWith('hall');
+    expect(f.createViewer).toHaveBeenCalledTimes(1);
+  });
 });

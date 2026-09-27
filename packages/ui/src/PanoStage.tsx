@@ -23,6 +23,11 @@ export interface PanoStageProps {
   /** Compass north offset for the current pano, radians. */
   north?: number;
   autoRotate?: boolean;
+  /**
+   * Reloads the current pano when it changes, e.g. the new `manifest.version`
+   * once a replace-image upload is ready, so the stage picks up the new tiles.
+   */
+  reloadKey?: string | number;
   /** Crossfade between panos with `transitionTo` instead of a plain `load`. */
   transition?: boolean;
   /** Read once when the viewer is created. */
@@ -44,6 +49,7 @@ export interface PanoStageProps {
 export function PanoStage({
   baseUrl,
   panoId,
+  reloadKey,
   view,
   north,
   autoRotate = false,
@@ -113,7 +119,8 @@ export function PanoStage({
     return () => {
       current = false;
     };
-  }, [viewer, panoId]);
+    // reloadKey is a dependency only to re-run this load when it changes.
+  }, [viewer, panoId, reloadKey]);
 
   useEffect(() => {
     viewer?.setNorth(north ?? 0);
