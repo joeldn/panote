@@ -92,9 +92,10 @@ endpoint for presigned PUTs, which only feeds the CSP and is not bundled). `pnpm
 `vite build --mode ${APP_MODE:-dev}`; `deploy.yml` sets `APP_MODE` to the target environment
 (declared in each app's `turbo.json`, so turbo passes it through and keys the cache on it). The
 build validates the env with `loadConfig` from `@internal/web-kit` and fails on a bad value.
-`YOUR_` placeholders parse, and auth then reports itself unconfigured: the dev SPA client id is
-`YOUR_DEV_SPA_CLIENT_ID` until the Auth0 dev SPA application exists (unit C3), and production's
-tenant domain and client id are placeholders until the production tenant exists. The
+`YOUR_` placeholders parse, and auth then reports itself unconfigured (the admin app shows "Sign-in
+isn't set up here" and the website's modal has no buttons): production's tenant domain and client
+id are placeholders until the production tenant exists. Dev uses the Auth0 dev SPA application
+(client id `DEXWa49LnwVmX8flff1kcxHpj8G0d9d2`, public). The
 production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 
 **Headers.** The build also emits `_headers` from the env (`buildHeadersFile` in
@@ -118,13 +119,35 @@ CSP gaps the D units must close when they land (the scaffold doesn't hit them ye
   `default-src 'self'` today).
 - The admin share modal's embed preview iframe needs `frame-src 'self'` (only YouTube is allowed).
 
+**Sign-in (unit C3).** Auth0 SPA flow (Authorization Code + PKCE, `google-oauth2` only) with
+rotating refresh tokens cached in localStorage, so both apps share one session on `panote.dev`.
+The Auth0 dev SPA application allows callbacks `https://panote.dev/app/callback` and
+`http://localhost:5173/app/callback`, and logout URLs `https://panote.dev/`,
+`https://panote.dev/app/`, `http://localhost:5173/app/` and `http://localhost:5174/`; refresh-token
+rotation is on and the API `https://api.panote.dev` allows offline access.
+
+- The website's modal opens on any page with `?signin=1`; `next` (a path, query kept, e.g.
+  `/app/new?resume=1`) is where the callback lands, defaulting to `/app/`.
+- `/app/callback` is the only unguarded admin route. It sends `/app/...` targets through the router
+  and anything else to the website with a full navigation.
+- Every other admin route checks for a session first; signed out goes to
+  `/?signin=1&next=<current path>`. If the refresh token dies mid-session (or an API call 401s),
+  the admin app reopens sign-in in place and returns to the same page.
+- Sign-out goes through Auth0's `/v2/logout` back to the website's `/`.
+- CSP: `/authorize` and `/v2/logout` are top-level navigations, which CSP doesn't restrict; token
+  refreshes are `fetch` calls to `/oauth/token`, covered by the tenant in `connect-src`. There is no
+  silent-auth iframe (`useRefreshTokensFallback: false`), so no `frame-src` entry is needed. The
+  avatar is the user's initial, not the Google profile photo, so `img-src` stays as is.
+
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
 Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
 `http://localhost:5174/`. Both proxy `/api` to `https://panote.dev`, so the APIs stay
 same-origin. The two apps run on **different origins** locally (unlike deployed, where both are
 `panote.dev`), so an auth `returnTo` path like `/app/t/…` resolves against the admin origin
 (`:5173`), and a website sign-in that hands off to `/app/` has to use the admin dev server's
-origin. `_headers` doesn't apply under Vite; use `wrangler dev --env dev` on a built `dist/` to
+origin. Under `vite dev` the apps use those two origins for callbacks, logout and cross-app links,
+and keep the PKCE transaction in a cookie (shared across ports) rather than sessionStorage. Tokens
+still live in each origin's localStorage, so locally the website doesn't see the admin's session. `_headers` doesn't apply under Vite; use `wrangler dev --env dev` on a built `dist/` to
 check headers and SPA fallback.
 
 **Deploy.** `deploy.yml`'s `deploy-apps` matrix job (`website`, `admin`) `needs:
@@ -144,6 +167,9 @@ lands on `main`. After it, check:
 - `curl -i https://panote.dev/api/admin/panos` → still **401** without a token (route
   precedence), likewise `/api/tours/<id>/stats` still answers from `public-api`.
 - `curl -I https://panote.dev/s/x/embed` → `frame-ancestors *`; any other path → `'none'`.
+- Sign in with Google from `https://panote.dev/?signin=1` → lands on `/app/` with the account
+  menu; the access token is a JWT (three dot-separated parts) and `GET /api/admin/tours` with it
+  returns 200. Sign out returns to `https://panote.dev/`.
 
 Production is unprovisioned, like the rest (see Production status).
 
