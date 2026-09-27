@@ -1,7 +1,12 @@
-import { SceneConfigSchema, TourDocSchema, type SceneConfig } from '@internal/contracts';
+import {
+  PublishedTourSchema,
+  SceneConfigSchema,
+  TourDocSchema,
+  type SceneConfig,
+} from '@internal/contracts';
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_TOUR_SETTINGS, toViewerTour } from './tour-adapter.js';
+import { DEFAULT_TOUR_SETTINGS, publishedToViewerTour, toViewerTour } from './tour-adapter.js';
 
 // Parse through the contract schemas, exactly as API responses are.
 const scene = (raw: Record<string, unknown>): SceneConfig => SceneConfigSchema.parse(raw);
@@ -161,5 +166,32 @@ describe('toViewerTour', () => {
       nave,
     });
     expect(v.links.hall?.[0]?.label).toBe('Nave');
+  });
+});
+
+describe('publishedToViewerTour', () => {
+  it('adapts a pub bundle: start scene, links, map positions and settings', () => {
+    const settings = { controls: 'top', showMap: false, showCompass: true, autoRotate: true };
+    const pub = PublishedTourSchema.parse({
+      v: 1,
+      tourId: 't1',
+      title: 'T',
+      visibility: 'public',
+      slug: 'tee',
+      publishedAt: '2026-09-20T00:00:00Z',
+      settings,
+      startPanoId: 'nave',
+      scenes: [
+        { panoId: 'hall', mapX: 1, mapY: 2, config: hall },
+        { panoId: 'nave', config: nave },
+      ],
+    });
+    const vt = publishedToViewerTour(pub);
+    expect(vt.tour?.start).toBe('nave');
+    expect(vt.links.hall?.map((l) => l.to)).toEqual(['nave']);
+    expect(vt.hotspots.hall?.[0]?.source.media).toEqual({ kind: 'youtube', id: 'dQw4w9WgXcQ' });
+    expect(vt.mapPositions).toEqual({ hall: { x: 1, y: 2 } });
+    expect(vt.settings).toEqual(settings);
+    expect(vt.missing).toEqual([]);
   });
 });

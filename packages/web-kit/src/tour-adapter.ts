@@ -1,5 +1,6 @@
 import type {
   Hotspot,
+  PublishedTour,
   SceneConfig,
   TourConfigEntry,
   TourDoc,
@@ -122,4 +123,20 @@ export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTo
     missing,
     settings: doc.settings ?? DEFAULT_TOUR_SETTINGS,
   };
+}
+
+/** Adapt a published bundle (`pub/tours/<tourId>.json`) the same way as an owner's tour. */
+export function publishedToViewerTour(pub: PublishedTour): ViewerTour {
+  const doc: TourDoc = {
+    tourId: pub.tourId,
+    title: pub.title,
+    startPanoId: pub.startPanoId,
+    settings: pub.settings,
+    scenes: pub.scenes.map(({ panoId, mapX, mapY }) => ({
+      panoId,
+      ...(mapX !== undefined && { mapX }),
+      ...(mapY !== undefined && { mapY }),
+    })),
+  };
+  return toViewerTour(doc, Object.fromEntries(pub.scenes.map((s) => [s.panoId, s.config])));
 }
