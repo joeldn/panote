@@ -3,7 +3,14 @@ import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { buildInsightsQueries, getInsights, insightsWindow, parseDays } from './insights.js';
+import {
+  AnalyticsUnavailable,
+  buildInsightsQueries,
+  getInsights,
+  insightsWindow,
+  parseDays,
+  SQL_TIMEOUT_MS,
+} from './insights.js';
 import app from './index.js';
 
 const MY_SUB = 'auth0|me';
@@ -81,6 +88,12 @@ describe('buildInsightsQueries', () => {
     ['dataset', 'events; DROP', 'tour-1'],
   ])('throws on an unsafe %s rather than interpolating it', (_label, ds, tourId) => {
     expect(() => buildInsightsQueries(ds, tourId, new Date())).toThrow();
+  });
+
+  it('treats a bad dataset as analytics unavailable', () => {
+    expect(() => buildInsightsQueries('bad-name', 'tour-1', new Date())).toThrow(
+      AnalyticsUnavailable,
+    );
   });
 });
 
@@ -195,6 +208,38 @@ describe('GET /api/admin/tours/:tourId/insights', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network'));
     const r = await get('/api/admin/tours/ins-502-net/insights');
     expect(r.status).toBe(502);
+  });
+
+  it('502s when a SQL call hangs past the timeout', async () => {
+    await createTour('ins-502-timeout');
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) reject(signal.reason);
+          signal?.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+    const pending = get('/api/admin/tours/ins-502-timeout/insights');
+    controller.abort(new DOMException('timed out', 'TimeoutError'));
+    const r = await pending;
+    expect(timeout).toHaveBeenCalledWith(SQL_TIMEOUT_MS);
+    expect(SQL_TIMEOUT_MS).toBe(10_000);
+    expect(r.status).toBe(502);
+    expect(await r.json()).toEqual({ error: 'analytics unavailable' });
+  });
+
+  it('502s when AE_DATASET is not a safe identifier', async () => {
+    await createTour('ins-bad-ds');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const r = await get('/api/admin/tours/ins-bad-ds/insights', 'good', {
+      ...testEnv,
+      AE_DATASET: 'events; DROP',
+    } as Env);
+    expect(r.status).toBe(502);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('502s when the token secret is not set', async () => {

@@ -16,6 +16,7 @@ const DAY_MS = 86_400_000;
 const DATASET_PATTERN = /^[A-Za-z0-9_]+$/;
 const TOP_HOTSPOTS = 5;
 const MAX_BY_PANO = 100;
+export const SQL_TIMEOUT_MS = 10_000;
 
 export class AnalyticsUnavailable extends Error {}
 
@@ -50,7 +51,10 @@ export const buildInsightsQueries = (
   tourId: string,
   from: Date,
 ): InsightsQueries => {
-  if (!DATASET_PATTERN.test(dataset)) throw new Error(`AE_DATASET must match ${DATASET_PATTERN}`);
+  // A bad var is a config fault: surface it as the route's 502, not a 500.
+  if (!DATASET_PATTERN.test(dataset)) {
+    throw new AnalyticsUnavailable(`AE_DATASET must match ${DATASET_PATTERN}`);
+  }
   if (!PANO_PATTERN.test(tourId)) throw new Error(`tourId must match ${PANO_PATTERN}`);
   const since = from.toISOString().slice(0, 19).replace('T', ' ');
   const where = (type: string) =>
@@ -73,6 +77,7 @@ const runSql = async (env: Env, sql: string): Promise<Row[]> => {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.CF_ANALYTICS_TOKEN}` },
     body: sql,
+    signal: AbortSignal.timeout(SQL_TIMEOUT_MS),
   }).catch((err: unknown) => {
     throw new AnalyticsUnavailable(`SQL API fetch failed: ${String(err)}`);
   });
