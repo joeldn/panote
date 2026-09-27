@@ -14,14 +14,12 @@ describe('ViewBeaconSchema', () => {
     expect(ViewBeaconSchema.safeParse({ panoId: 'p_1-a', surface: 'embed' }).success).toBe(true);
   });
 
-  it.each([
-    { panoId: '../x' },
-    { panoId: 'a'.repeat(65) },
-    { panoId: '' },
-    { surface: 'iframe' },
-  ])('rejects %j', (body) => {
-    expect(ViewBeaconSchema.safeParse(body).success).toBe(false);
-  });
+  it.each([{ panoId: '../x' }, { panoId: 'a'.repeat(65) }, { panoId: '' }, { surface: 'iframe' }])(
+    'rejects %j',
+    (body) => {
+      expect(ViewBeaconSchema.safeParse(body).success).toBe(false);
+    },
+  );
 });
 
 describe('AnalyticsEventSchema', () => {
