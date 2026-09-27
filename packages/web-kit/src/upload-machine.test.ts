@@ -2,8 +2,11 @@ import type { Manifest, TilingStatus } from '@internal/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { manifest } from './__fixtures__/helpers.js';
+import { AuthRequiredError } from './auth.js';
 import {
+  canRetryPoll,
   initialUploadState,
+  isTerminal,
   isReadyManifest,
   PROCESSING_TIMEOUT_MS,
   startUpload,
@@ -110,6 +113,32 @@ describe('uploadReducer', () => {
       stage: 'tiling',
       panoId: 'p1',
     });
+  });
+
+  it('auth-required during processing is a resumable failure', () => {
+    const f = uploadReducer(processing({ kind: 'replace', baselineVersion: 'v1' }), {
+      type: 'auth-required',
+      message: 'sign-in required',
+    });
+    expect(f).toEqual({
+      phase: 'failed',
+      panoId: 'p1',
+      stage: 'auth',
+      message: 'sign-in required',
+      resumable: { kind: 'replace', baselineVersion: 'v1' },
+    });
+    expect(isTerminal(f)).toBe(false);
+    expect(canRetryPoll(f)).toBe(true);
+    expect(uploadReducer(f, { type: 'error', stage: 'upload', message: 'x' })).toBe(f);
+    expect(uploadReducer(f, { type: 'retry-poll', at: 42 })).toEqual({
+      phase: 'processing',
+      mode: { kind: 'replace', baselineVersion: 'v1' },
+      panoId: 'p1',
+      startedAt: 42,
+    });
+    const nonResumable = run([{ type: 'error', stage: 'auth', message: 'x' }]);
+    expect(isTerminal(nonResumable)).toBe(true);
+    expect(uploadReducer(nonResumable, { type: 'retry-poll', at: 1 })).toBe(nonResumable);
   });
 
   it('retry-poll restarts processing with a fresh timeout window', () => {
@@ -421,6 +450,53 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     const ctl = startUpload(h.deps, { file: file(), replacePanoId: 'p9' });
     await expect(ctl.settled).resolves.toMatchObject({ phase: 'failed', stage: 'prepare' });
     expect(h.deps.presign).not.toHaveBeenCalled();
+  });
+
+  it('an expired session during status polling fails at stage auth; retryPoll resumes after re-auth', async () => {
+    const h = harness();
+    h.manifests = [null];
+    vi.mocked(h.deps.getPanoStatus).mockRejectedValueOnce(new AuthRequiredError());
+    const ctl = startUpload(h.deps, { file: file(), replacePanoId: 'p9' });
+    let settled = false;
+    void ctl.settled.then(() => (settled = true));
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(STATUS_POLL_MS);
+    expect(ctl.getState()).toMatchObject({
+      phase: 'failed',
+      stage: 'auth',
+      panoId: 'p9',
+      resumable: { kind: 'replace', baselineVersion: null },
+    });
+    // Polling stops while signed out, and the upload is not settled.
+    const polls = vi.mocked(h.deps.fetchManifest).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.deps.fetchManifest).toHaveBeenCalledTimes(polls);
+    expect(settled).toBe(false);
+
+    // After signing in again, the same controller picks polling back up.
+    ctl.retryPoll();
+    expect(ctl.getState()).toMatchObject({ phase: 'processing', panoId: 'p9' });
+    h.manifests = [manifest('t1-new')];
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ctl.getState().phase).toBe('ready');
+    expect(h.deps.presign).toHaveBeenCalledTimes(1);
+    await expect(ctl.settled).resolves.toMatchObject({ phase: 'ready' });
+  });
+
+  it('a 401 on presign fails at stage auth and is terminal (nothing uploaded)', async () => {
+    const h = harness();
+    vi.mocked(h.deps.presign).mockRejectedValue(new AuthRequiredError());
+    const ctl = startUpload(h.deps, { file: file() });
+    await expect(ctl.settled).resolves.toEqual({
+      phase: 'failed',
+      panoId: null,
+      stage: 'auth',
+      message: 'sign-in required',
+    });
+    ctl.retryPoll();
+    expect(ctl.getState().phase).toBe('failed');
   });
 
   it('cancel aborts the PUT and stops everything', async () => {

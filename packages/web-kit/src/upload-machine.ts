@@ -1,6 +1,7 @@
 import type { Manifest, PanoStatus, TilingStatus } from '@internal/contracts';
 
 import type { UploadUrlOk } from './api/upload.js';
+import { isAuthError } from './auth.js';
 
 /** Processing gives up (timed-out, with retry) this long after the PUT completes. */
 export const PROCESSING_TIMEOUT_MS = 10 * 60_000;
@@ -16,7 +17,8 @@ const MANIFEST_POLL_FACTOR = 1.5;
  */
 export type UploadMode = { kind: 'fresh' } | { kind: 'replace'; baselineVersion: string | null };
 
-export type UploadFailureStage = 'prepare' | 'presign' | 'upload' | 'tiling';
+/** `auth`: the session expired (a 401 or a dead refresh token); sign in, then resume. */
+export type UploadFailureStage = 'prepare' | 'presign' | 'upload' | 'tiling' | 'auth';
 
 export type UploadState =
   | { phase: 'preparing'; mode: UploadMode | null }
@@ -30,7 +32,14 @@ export type UploadState =
     }
   | { phase: 'processing'; mode: UploadMode; panoId: string; startedAt: number }
   | { phase: 'ready'; panoId: string; manifest: Manifest }
-  | { phase: 'failed'; panoId: string | null; stage: UploadFailureStage; message: string }
+  | {
+      phase: 'failed';
+      panoId: string | null;
+      stage: UploadFailureStage;
+      message: string;
+      /** Set when the image already landed: `retryPoll()` resumes polling with this mode. */
+      resumable?: UploadMode;
+    }
   | { phase: 'timed-out'; mode: UploadMode; panoId: string }
   | { phase: 'cancelled'; panoId: string | null };
 
@@ -46,13 +55,18 @@ export type UploadEvent =
   | { type: 'tick'; at: number }
   | { type: 'retry-poll'; at: number }
   | { type: 'error'; stage: Exclude<UploadFailureStage, 'tiling'>; message: string }
+  | { type: 'auth-required'; message: string }
   | { type: 'cancel' };
 
 export const initialUploadState = (): UploadState => ({ phase: 'preparing', mode: null });
 
-/** `timed-out` is not terminal: `retryPoll()` resumes it. */
+/** `timed-out` and a resumable `failed` (auth) are not terminal: `retryPoll()` resumes them. */
 export const isTerminal = (s: UploadState): boolean =>
-  s.phase === 'ready' || s.phase === 'failed' || s.phase === 'cancelled';
+  s.phase === 'ready' || s.phase === 'cancelled' || (s.phase === 'failed' && !s.resumable);
+
+/** Whether `retryPoll()` can pick this state back up. */
+export const canRetryPoll = (s: UploadState): boolean =>
+  s.phase === 'timed-out' || (s.phase === 'failed' && s.resumable !== undefined);
 
 const panoIdOf = (s: UploadState): string | null => ('panoId' in s ? s.panoId : null);
 
@@ -77,9 +91,8 @@ export function uploadReducer(state: UploadState, event: UploadEvent): UploadSta
     return isTerminal(state) ? state : { phase: 'cancelled', panoId: panoIdOf(state) };
   }
   if (event.type === 'error') {
-    if (isTerminal(state) || state.phase === 'processing' || state.phase === 'timed-out') {
-      return state;
-    }
+    // Errors only come from the steps before the image lands.
+    if (state.phase !== 'preparing' && state.phase !== 'upload') return state;
     return { phase: 'failed', panoId: panoIdOf(state), stage: event.stage, message: event.message };
   }
   switch (state.phase) {
@@ -121,6 +134,15 @@ export function uploadReducer(state: UploadState, event: UploadEvent): UploadSta
           message: 'Tiling failed for this image.',
         };
       }
+      if (event.type === 'auth-required') {
+        return {
+          phase: 'failed',
+          panoId: state.panoId,
+          stage: 'auth',
+          message: event.message,
+          resumable: state.mode,
+        };
+      }
       if (
         (event.type === 'manifest' || event.type === 'status' || event.type === 'tick') &&
         event.at - state.startedAt >= PROCESSING_TIMEOUT_MS
@@ -132,6 +154,12 @@ export function uploadReducer(state: UploadState, event: UploadEvent): UploadSta
     case 'timed-out':
       if (event.type === 'retry-poll') {
         return { phase: 'processing', mode: state.mode, panoId: state.panoId, startedAt: event.at };
+      }
+      return state;
+    case 'failed':
+      if (event.type === 'retry-poll' && state.resumable && state.panoId !== null) {
+        const { resumable: mode, panoId } = state;
+        return { phase: 'processing', mode, panoId, startedAt: event.at };
       }
       return state;
     default:
@@ -178,7 +206,7 @@ export interface StartUploadOptions {
 
 export interface UploadController {
   getState(): UploadState;
-  /** From `timed-out`: poll again for another full timeout window. */
+  /** From `timed-out`, or `failed` at stage `auth` after re-auth: poll again for a full window. */
   retryPoll(): void;
   cancel(): void;
   /** Settles with the terminal state: ready, failed or cancelled. */
@@ -256,9 +284,11 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
         const { tiling } = await deps.getPanoStatus(panoId);
         if (signal.aborted) return;
         dispatch({ type: 'status', tiling, at: timers.now() });
-      } catch {
+      } catch (e) {
         if (signal.aborted) return;
-        dispatch({ type: 'tick', at: timers.now() });
+        // Polling can't continue without a session; the image itself is safe.
+        if (isAuthError(e)) dispatch({ type: 'auth-required', message: messageOf(e) });
+        else dispatch({ type: 'tick', at: timers.now() });
       }
       if (signal.aborted || phase() !== 'processing') return;
       later(() => void pollStatus(), STATUS_POLL_MS);
@@ -293,7 +323,11 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
       if (opts.replacePanoId !== undefined) req.panoId = opts.replacePanoId;
       presigned = await deps.presign(req);
     } catch (e) {
-      dispatch({ type: 'error', stage: 'presign', message: messageOf(e) });
+      dispatch({
+        type: 'error',
+        stage: isAuthError(e) ? 'auth' : 'presign',
+        message: messageOf(e),
+      });
       return;
     }
     if (phase() !== 'preparing') return;
@@ -319,7 +353,7 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
   return {
     getState: () => state,
     retryPoll: () => {
-      if (phase() !== 'timed-out') return;
+      if (!canRetryPoll(state)) return;
       dispatch({ type: 'retry-poll', at: timers.now() });
       if (phase() === 'processing') startPolling();
     },

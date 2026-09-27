@@ -74,6 +74,7 @@ export {
   type ViewerTour,
 } from './tour-adapter.js';
 export {
+  canRetryPoll,
   initialUploadState,
   isReadyManifest,
   isTerminal,
