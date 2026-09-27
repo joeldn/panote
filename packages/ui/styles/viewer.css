@@ -1,0 +1,344 @@
+/* Viewer chrome over PanoStage (design README section 7). Positions update via JS transforms. */
+
+.pn-anchors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.pn-anchor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  visibility: hidden;
+  will-change: transform;
+}
+
+/* --- Info-point markers --- */
+.pn-hotspot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%) scale(var(--pn-hs-scale, 1));
+  transition: transform 0.15s var(--ease-out);
+}
+.pn-hotspot:hover,
+.pn-hotspot--active {
+  transform: translate(-50%, -50%) scale(calc(var(--pn-hs-scale, 1) * 1.12));
+}
+.pn-hotspot:focus-visible,
+.pn-floorlink:focus-visible,
+.pn-controls__btn:focus-visible,
+.pn-scenemap__toggle:focus-visible,
+.pn-scenemap__item:focus-visible,
+.pn-hspanel__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- Floor chevrons: laid on the floor with a fixed perspective tilt --- */
+.pn-floorlink {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(20, 18, 14, 0.42);
+  color: #fff;
+  font-size: 24px;
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) perspective(440px) rotateX(63deg);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+  transition: background 0.15s;
+}
+.pn-floorlink:hover {
+  background: var(--accent);
+}
+
+/* --- Compass --- */
+.pn-compass {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+}
+.pn-compass__needle {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  font-size: 17px;
+  will-change: transform;
+}
+.pn-compass__needle > i {
+  /* fa-location-arrow points up-right; turn it to point up at heading 0. */
+  transform: rotate(-45deg);
+}
+
+/* --- Controls pill --- */
+.pn-controls {
+  position: absolute;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  transform: translateX(-50%);
+}
+.pn-controls--bottom {
+  bottom: 22px;
+}
+.pn-controls--top {
+  top: 84px;
+}
+.pn-controls__btn {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 15px;
+  cursor: pointer;
+}
+.pn-controls__btn:hover {
+  background: var(--ink-06);
+}
+.pn-controls__btn--accent {
+  border: 2px solid var(--accent);
+  color: var(--accent);
+}
+.pn-controls__btn[aria-pressed='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --- Scene map --- */
+.pn-scenemap {
+  position: absolute;
+  left: 18px;
+  bottom: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.pn-scenemap__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 9px 14px;
+  border-radius: 11px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  color: var(--ink);
+  font: 500 13px var(--fbody);
+  cursor: pointer;
+}
+.pn-scenemap__toggle > i {
+  color: var(--accent);
+  font-size: 11px;
+}
+.pn-scenemap__panel {
+  width: 240px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 10px;
+  border-radius: var(--r-lg);
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-popover);
+  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+}
+.pn-scenemap__plan {
+  position: relative;
+  height: 140px;
+  margin-bottom: 8px;
+  border-radius: var(--r-row);
+  background: var(--ink-05);
+}
+.pn-scenemap__dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--ink-40);
+  transform: translate(-50%, -50%);
+}
+.pn-scenemap__dot--on {
+  background: var(--accent);
+}
+.pn-scenemap__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pn-scenemap__item {
+  width: 100%;
+  border: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-chip);
+  background: transparent;
+  color: var(--ink-82);
+  font: 500 13.5px var(--fbody);
+  text-align: left;
+  cursor: pointer;
+}
+.pn-scenemap__item:hover {
+  background: var(--ink-06);
+}
+.pn-scenemap__item[aria-current] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --- Info-point panel (side panel; bottom sheet on mobile) --- */
+.pn-hspanel {
+  position: absolute;
+  top: 84px;
+  right: 18px;
+  bottom: 22px;
+  width: 340px;
+  max-height: calc(100% - 106px);
+  height: fit-content;
+  overflow: auto;
+  padding: 18px 20px 20px;
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-popover);
+  font-family: var(--fbody);
+  color: var(--ink);
+  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+}
+.pn-hspanel__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.pn-hspanel__icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+}
+.pn-hspanel__title {
+  flex: 1;
+  margin: 4px 0 0;
+  font: 600 17px/1.3 var(--fbody);
+}
+.pn-hspanel__close {
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--ink-40);
+  cursor: pointer;
+}
+.pn-hspanel__media {
+  display: block;
+  width: 100%;
+  margin-bottom: 12px;
+  border: 0;
+  border-radius: var(--r-row);
+  background: var(--ink-06);
+}
+.pn-hspanel__media--frame {
+  aspect-ratio: 16 / 9;
+  height: auto;
+}
+.pn-hspanel__body {
+  font: 400 14.5px/1.55 var(--fbody);
+  color: var(--ink-82);
+}
+.pn-hspanel__body h1,
+.pn-hspanel__body h2,
+.pn-hspanel__body h3 {
+  margin: 0.6em 0 0.3em;
+  line-height: 1.25;
+}
+.pn-hspanel__body h1 {
+  font-size: 1.3em;
+}
+.pn-hspanel__body h2 {
+  font-size: 1.15em;
+}
+.pn-hspanel__body h3 {
+  font-size: 1.05em;
+}
+.pn-hspanel__body p {
+  margin: 0.5em 0;
+}
+.pn-hspanel__body ul,
+.pn-hspanel__body ol {
+  margin: 0.5em 0;
+  padding-left: 1.3em;
+}
+.pn-hspanel__body a {
+  color: var(--accent);
+}
+.pn-hspanel__body code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--r-xs);
+  background: var(--ink-06);
+  font: 0.9em var(--fmono);
+}
+
+@media (max-width: 600px) {
+  .pn-hspanel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 62%;
+    border-radius: var(--r-modal) var(--r-modal) 0 0;
+  }
+  .pn-controls--bottom {
+    bottom: 16px;
+  }
+  .pn-scenemap {
+    left: 12px;
+    bottom: 78px;
+  }
+}
