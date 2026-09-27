@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "_comment": "Browser / React config for the Vite SPAs on Cloudflare Pages. Vite does the transpiling and bundling, so tsc is type-check-only (noEmit). Consuming apps add their own ambient types (e.g. \"types\": [\"vite/client\"]).",
+  "_comment": "Browser / React config for the Vite SPAs in apps/* (served by assets-only Workers). Vite does the transpiling and bundling, so tsc is type-check-only (noEmit). Consuming apps add their own ambient types (e.g. \"types\": [\"vite/client\"]).",
   "extends": "./base.json",
   "compilerOptions": {
     "target": "ES2023",

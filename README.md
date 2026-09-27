@@ -5,16 +5,15 @@ image, panote tiles it into a cube-face pyramid, and serves it through a
 progressive multiresolution viewer — a low-res base layer covering the whole
 panorama up front, streamed higher-resolution tiles as you pan and zoom.
 
-Cloudflare-native: Workers, R2, Durable Objects, Queues, and Pages. No servers
-to run.
+Cloudflare-native: Workers (the two web apps are assets-only Workers), R2, Durable
+Objects, Queues, and Containers. No servers to run.
 
 ## Repo layout
 
 | Workspace | Scope | Purpose |
 |---|---|---|
-| `apps/website` | `@app/*` | Public marketing/viewing site (Pages) |
-| `apps/admin` | `@app/*` | Authenticated admin UI for managing tours (Pages) |
-| `apps/demo` | `@app/*` | Dev/verification app for the viewer package (Pages) |
+| `apps/website` | `@app/*` | Public site: landing, legal pages, public tour viewer and embed (Vite SPA, assets-only Worker on `/*`) |
+| `apps/admin` | `@app/*` | Owner app under `/app/`: dashboard, upload, editor, share, insights (Vite SPA, assets-only Worker on `/app`) |
 | `services/public-api` | `@service/*` | Anonymous Worker — view/like/stats, owns the `TourStats` Durable Object |
 | `services/admin-api` | `@service/*` | Fully authed Worker (Auth0 JWT) — tour management |
 | `services/tiler-consumer` | `@service/*` | Queue consumer Worker — tiles uploaded panoramas |
@@ -24,6 +23,8 @@ to run.
 | `packages/tiler` | `@internal/*` | Panorama-to-tile-pyramid tiling logic |
 | `packages/contracts` | `@internal/*` | Shared zod schemas — request validation and frontend form validation from one source of truth |
 | `packages/worker-kit` | `@internal/*` | Shared Worker helpers (Hono setup, error handling, etc.) |
+| `packages/ui` | `@internal/*` | Design tokens, self-hosted fonts/icons, React primitives, `PanoStage` |
+| `packages/web-kit` | `@internal/*` | SPA config, Auth0 auth, API client, tour adapter, upload state machine |
 | `packages/typescript-config` | `@internal/*` | Shared `tsconfig` base |
 | `packages/eslint-config` | `@internal/*` | Shared ESLint flat config |
 | `packages/vitest-config` | `@internal/*` | Shared Vitest config |
