@@ -156,6 +156,8 @@ export type PublishUnprocessable = z.infer<typeof PublishUnprocessableSchema>;
 
 export const SlugTakenSchema = z.object({ error: z.literal('slug taken') });
 export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'reserved slug']) });
+// 409 when a concurrent publish, rename or visibility change got there first; retry.
+export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
 export const NotPublishedSchema = z.object({ error: z.literal('not published') });
 
 export const SlugPutRequestSchema = z.object({ slug: z.string() });

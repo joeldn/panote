@@ -65,11 +65,8 @@ export const randomSlugSuffix = (): string => {
 const withSuffix = (base: string, suffix: string): string =>
   `${base.slice(0, SLUG_MAX_LENGTH - suffix.length).replace(/-+$/, '')}${suffix}`;
 
-/**
- * Default-slug candidates for a title, in claim order: `slugify(title)`,
- * then `-2`..`-9`, then a random 6-char suffix. An empty, too-short or
- * reserved base yields only `tour-<random>`.
- */
+// Claim order: slugify(title), `-2`..`-9`, then a random suffix; an
+// unusable base (empty, too short, reserved) yields only `tour-<random>`.
 export const defaultSlugCandidates = (
   title: string,
   random: () => string = randomSlugSuffix,
