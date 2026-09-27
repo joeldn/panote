@@ -19,6 +19,7 @@ worker-configuration.d.ts
 # package root so it does not also swallow hand-written `src/env.d.ts` files
 # (secret bindings), which are ordinary linted/formatted source.
 services/*/env.d.ts
+apps/*/worker/env.d.ts
 
 # Markdown is deliberately outside the format gate.
 #

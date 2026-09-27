@@ -10,13 +10,15 @@
     "dev": "vite --mode dev",
     "preview": "vite preview --mode dev",
     "deploy": "wrangler deploy --env dev",
+    "types": "wrangler types worker/env.d.ts --env dev --env-file /dev/null --strict-vars=false --include-runtime=false",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.node.json",
-    "test": "vitest run --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests"
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.node.json && tsc -p worker/tsconfig.json && tsc -p worker/tsconfig.test.json",
+    "test": "vitest run --passWithNoTests && vitest run --config vitest.worker.config.ts",
+    "test:coverage": "vitest run --coverage --passWithNoTests && vitest run --config vitest.worker.config.ts"
   },
   "dependencies": {
+    "@internal/contracts": "workspace:*",
     "@internal/ui": "workspace:*",
     "@internal/web-kit": "workspace:*",
     "react": "catalog:",
@@ -24,6 +26,7 @@
     "react-router": "catalog:"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
     "@internal/eslint-config": "workspace:*",
     "@internal/typescript-config": "workspace:*",
     "@internal/vitest-config": "workspace:*",
