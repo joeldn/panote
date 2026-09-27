@@ -31,7 +31,8 @@ import { DEFAULT_SLUG_ALIAS_DAYS, MAX_ALIASES, parseAliasDays, publishTour } fro
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
 const DAY_MS = 24 * 60 * 60 * 1000;
-// Many sequential R2 round trips; the 5s default is tight on a loaded CI runner.
+// Duration-bound: 21 renames through the DO take ~2-2.6s idle, 4.5-5.4s with the
+// CPU saturated, where the 5s default timed out (measured locally).
 const SLOW_TEST_MS = 30_000;
 
 beforeAll(() => {
