@@ -117,3 +117,28 @@ export const ToursListOkSchema = z.object({
   cursor: z.string().nullable(),
 });
 export type ToursListOk = z.infer<typeof ToursListOkSchema>;
+
+// --- Tour insights (unit B5) ---
+
+export const MIN_INSIGHTS_DAYS = 1;
+export const MAX_INSIGHTS_DAYS = 30;
+export const DEFAULT_INSIGHTS_DAYS = 14;
+
+const count = () => z.number().int().nonnegative();
+
+export const InsightsOkSchema = z.object({
+  days: z.number().int().min(MIN_INSIGHTS_DAYS).max(MAX_INSIGHTS_DAYS),
+  // ISO timestamps: `from` is 00:00 UTC of the first day, `to` is query time.
+  from: z.string(),
+  to: z.string(),
+  totalViews: count(),
+  avgDwellMs: z.number().nonnegative().nullable(),
+  // One entry per UTC day, oldest first, zero-filled.
+  daily: z.array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), views: count() })),
+  byPano: z.array(z.object({ panoId: z.string(), views: count() })),
+  topHotspots: z.array(z.object({ panoId: z.string(), hotspotId: z.string(), opens: count() })),
+});
+export type InsightsOk = z.infer<typeof InsightsOkSchema>;
+
+export const InsightsUnavailableSchema = z.object({ error: z.literal('analytics unavailable') });
+export type InsightsUnavailable = z.infer<typeof InsightsUnavailableSchema>;
