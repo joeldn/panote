@@ -35,6 +35,8 @@ export function contentSecurityPolicy(
     "script-src 'self'",
     "style-src 'self'",
     `img-src 'self' ${cdn} data: blob:`,
+    // Hotspot video (HotspotMedia kind 'video'); media URLs outside the CDN stay blocked.
+    `media-src 'self' ${cdn}`,
     `connect-src ${src(connect)}`,
     'frame-src https://www.youtube-nocookie.com',
     "object-src 'none'",
