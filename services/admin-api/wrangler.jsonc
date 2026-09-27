@@ -15,7 +15,9 @@
       "workers_dev": true,
       "routes": [{ "pattern": "panote.dev/api/admin/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
-      // secrets (per env): CF_PURGE_TOKEN (Zone > Cache Purge), for the best-effort CDN purge.
+      // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read)
+      // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6).
+      // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
       "durable_objects": {
@@ -25,6 +27,9 @@
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
+        "CF_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        // public-api's EVENTS dataset for the same env
+        "AE_DATASET": "panote_events_dev",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
         // CDN purge target (B6): the panote.dev zone id (not secret).
@@ -40,7 +45,9 @@
       "workers_dev": false,
       "routes": [{ "pattern": "panote.io/api/admin/*", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
-      // secrets (per env): CF_PURGE_TOKEN (Zone > Cache Purge), for the best-effort CDN purge.
+      // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env production (Account Analytics: Read)
+      // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6).
+      // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
       "durable_objects": {
@@ -52,6 +59,8 @@
         // only with the real tenant URL, never another fake name.
         "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.io",
+        "CF_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
+        "AE_DATASET": "panote_events",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
         // CDN purge target (B6). Placeholder zone id: the purge no-ops until it's real.

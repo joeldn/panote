@@ -33,6 +33,7 @@ import {
 } from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
+import { insightsRoute } from './insights.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { TourPublisher } from './publisher.js';
@@ -369,6 +370,8 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   purgeLater(c, { prefixes: [], files });
   return c.body(null, 204);
 });
+
+app.get('/api/admin/tours/:tourId/insights', (c) => insightsRoute(c, c.req.param('tourId')));
 
 app.onError(errorHandler);
 

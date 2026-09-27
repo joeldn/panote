@@ -17,6 +17,7 @@
     "test:coverage": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@internal/contracts": "workspace:*",
     "@internal/worker-kit": "workspace:*",
     "hono": "catalog:"
   },
