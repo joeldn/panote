@@ -1,0 +1,42 @@
+{
+  "name": "@internal/web-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Non-React frontend logic shared by the panote SPAs: env config, Auth0 auth, response-validated API client, tour adapter, upload state machine",
+  "license": "UNLICENSED",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests"
+  },
+  "dependencies": {
+    "@auth0/auth0-spa-js": "catalog:",
+    "@internal/contracts": "workspace:*",
+    "@panote/core": "workspace:*",
+    "@panote/viewer": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@internal/typescript-config": "workspace:*",
+    "@internal/vitest-config": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
