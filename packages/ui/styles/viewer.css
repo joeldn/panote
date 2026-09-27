@@ -342,3 +342,13 @@
     bottom: 78px;
   }
 }
+.pn-hspanel__medialink {
+  display: inline-block;
+  margin-bottom: 12px;
+  color: var(--accent);
+  font: 600 13.5px var(--fbody);
+  text-decoration: none;
+}
+.pn-hspanel__medialink:hover {
+  text-decoration: underline;
+}

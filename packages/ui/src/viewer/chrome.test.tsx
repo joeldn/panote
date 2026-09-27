@@ -146,22 +146,72 @@ describe('HotspotPanel', () => {
     );
   });
 
-  it('renders image and video media', () => {
+  const cdnOnly = (url: string) => new URL(url).origin === 'https://cdn.test';
+
+  it('renders CDN image and video media inline', () => {
     const { container, rerender } = render(
       <HotspotPanel
         hotspot={{ ...base, media: { kind: 'image', url: 'https://cdn.test/a.jpg' } }}
         onClose={() => {}}
+        isAllowedMediaUrl={cdnOnly}
       />,
     );
     expect(container.querySelector('img')!.getAttribute('src')).toBe('https://cdn.test/a.jpg');
     rerender(
       <HotspotPanel
-        hotspot={{ ...base, media: { kind: 'video', url: 'https://cdn.test/a.mp4' } }}
+        hotspot={{ ...base, id: 'b', media: { kind: 'video', url: 'https://cdn.test/a.mp4' } }}
         onClose={() => {}}
+        isAllowedMediaUrl={cdnOnly}
       />,
     );
     expect(container.querySelector('video')!.getAttribute('src')).toBe('https://cdn.test/a.mp4');
   });
+
+  it.each([
+    ['image', 'Open image ↗'],
+    ['video', 'Open video ↗'],
+  ] as const)('links %s media from another origin instead of loading it', (kind, label) => {
+    const url = `https://elsewhere.test/a.${kind === 'image' ? 'jpg' : 'mp4'}`;
+    const { container } = render(
+      <HotspotPanel
+        hotspot={{ ...base, media: { kind, url } }}
+        onClose={() => {}}
+        isAllowedMediaUrl={cdnOnly}
+      />,
+    );
+    expect(container.querySelector('img, video')).toBeNull();
+    const link = screen.getByRole('link', { name: label });
+    expect(link.getAttribute('href')).toBe(url);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('links media by default, when no origin is allowed', () => {
+    render(
+      <HotspotPanel
+        hotspot={{ ...base, media: { kind: 'image', url: 'https://cdn.test/a.jpg' } }}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Open image ↗' })).toBeTruthy();
+  });
+
+  it.each(['image', 'video'] as const)(
+    'falls back to a link when %s media fails to load',
+    (kind) => {
+      const url = `https://cdn.test/a.${kind === 'image' ? 'jpg' : 'mp4'}`;
+      const { container } = render(
+        <HotspotPanel
+          hotspot={{ ...base, media: { kind, url } }}
+          onClose={() => {}}
+          isAllowedMediaUrl={cdnOnly}
+        />,
+      );
+      fireEvent.error(container.querySelector(kind === 'image' ? 'img' : 'video')!);
+      expect(container.querySelector('img, video')).toBeNull();
+      expect(screen.getByRole('link', { name: /^Open / }).getAttribute('href')).toBe(url);
+    },
+  );
 });
 
 describe('SceneMap', () => {
