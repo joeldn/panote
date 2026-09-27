@@ -14,7 +14,17 @@ const hall = scene({
   initialView: { yaw: 1, pitch: 0.1, fov: 60 },
   north: 0.5,
   hotspots: [
-    { id: 'i1', type: 'info', yaw: 0.2, pitch: 0.3, title: 'Clock', body: '**old**' },
+    {
+      id: 'i1',
+      type: 'info',
+      yaw: 0.2,
+      pitch: 0.3,
+      title: 'Clock',
+      body: '**old**',
+      icon: 'clock',
+      size: 1.5,
+      media: { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+    },
     { id: 'l1', type: 'link', yaw: 2, pitch: -0.4, title: 'To nave', targetPanoId: 'nave' },
     { id: 'l2', type: 'link', yaw: -2, pitch: -0.4, title: 'To crypt', targetPanoId: 'crypt' },
   ],
@@ -39,14 +49,29 @@ describe('toViewerTour', () => {
       scenes: {
         hall: {
           initialView: { yaw: 1, pitch: 0.1, fov: 60 },
-          links: [{ to: 'nave', yaw: 2, label: 'Nave' }],
+          links: [{ to: 'nave', yaw: 2, label: 'To nave', source: hall.hotspots[1] }],
         },
-        nave: { links: [{ to: 'hall', yaw: -1, label: 'Hall' }] },
+        nave: { links: [{ to: 'hall', yaw: -1, label: 'Back', source: nave.hotspots[0] }] },
       },
     });
     expect(v.hotspots.hall).toEqual([
-      { id: 'i1', yaw: 0.2, pitch: 0.3, title: 'Clock', body: '**old**' },
+      {
+        id: 'i1',
+        yaw: 0.2,
+        pitch: 0.3,
+        title: 'Clock',
+        body: '**old**',
+        source: hall.hotspots[0],
+      },
     ]);
+    // The full stored hotspot rides along for the React chrome (icon, size, media).
+    expect(v.hotspots.hall?.[0]?.source).toMatchObject({
+      icon: 'clock',
+      size: 1.5,
+      media: { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+    });
+    expect(v.links.hall).toBe(v.tour?.scenes.hall?.links);
+    expect(v.links.nave?.[0]?.source.id).toBe('l3');
     expect(v.hotspots.nave).toEqual([]);
     expect(v.north).toEqual({ hall: 0.5, nave: 0 });
     expect(v.titles).toEqual({ hall: 'Hall', nave: 'Nave' });
@@ -127,5 +152,14 @@ describe('toViewerTour', () => {
     });
     expect(v.hotspots.hall?.[0]?.yaw).toBeCloseTo(-9 + 2 * Math.PI);
     expect(v.hotspots.hall?.[0]?.pitch).toBe(-Math.PI / 2);
+  });
+
+  it('labels a link with the hotspot title, falling back to the target scene title', () => {
+    const untitled = { ...hall, hotspots: [{ ...hall.hotspots[1]!, title: '' }] };
+    const v = toViewerTour(tour({ scenes: [{ panoId: 'hall' }, { panoId: 'nave' }] }), {
+      hall: untitled,
+      nave,
+    });
+    expect(v.links.hall?.[0]?.label).toBe('Nave');
   });
 });

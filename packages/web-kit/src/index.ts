@@ -69,6 +69,8 @@ export {
   DEFAULT_TOUR_SETTINGS,
   toViewerTour,
   type SceneConfigSource,
+  type ViewerInfoHotspot,
+  type ViewerLink,
   type ViewerTour,
 } from './tour-adapter.js';
 export {

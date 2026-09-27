@@ -1,4 +1,10 @@
-import type { SceneConfig, TourConfigEntry, TourDoc, TourSettings } from '@internal/contracts';
+import type {
+  Hotspot,
+  SceneConfig,
+  TourConfigEntry,
+  TourDoc,
+  TourSettings,
+} from '@internal/contracts';
 import type { InfoHotspotData, Tour, TourLink, TourScene } from '@panote/viewer/ui';
 
 /** Prototype defaults (design `tourCfg`), used when a tour has no saved settings. */
@@ -9,11 +15,18 @@ export const DEFAULT_TOUR_SETTINGS: TourSettings = {
   autoRotate: false,
 };
 
+/** Viewer info-hotspot data plus the stored hotspot (icon, size, media) it came from. */
+export type ViewerInfoHotspot = InfoHotspotData & { source: Hotspot };
+/** Viewer link plus its stored link hotspot. */
+export type ViewerLink = TourLink & { source: Hotspot };
+
 export interface ViewerTour {
   /** Null when no scene of the tour has a loadable config. */
   tour: Tour | null;
   /** Info hotspots per panoId, ready for `mountInfoHotspots`. */
-  hotspots: Record<string, InfoHotspotData[]>;
+  hotspots: Record<string, ViewerInfoHotspot[]>;
+  /** The same objects as `tour.scenes[id].links`, typed with their `source`. */
+  links: Record<string, ViewerLink[]>;
   /** Compass north offset per panoId, radians (0 when unset). */
   north: Record<string, number>;
   titles: Record<string, string>;
@@ -57,20 +70,28 @@ export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTo
 
   const scenes: Record<string, TourScene> = {};
   const hotspots: ViewerTour['hotspots'] = {};
+  const linksByPano: ViewerTour['links'] = {};
   const north: ViewerTour['north'] = {};
   const titles: ViewerTour['titles'] = {};
   for (const [panoId, config] of loaded) {
-    const links: TourLink[] = [];
-    const info: InfoHotspotData[] = [];
+    const links: ViewerLink[] = [];
+    const info: ViewerInfoHotspot[] = [];
     for (const h of config.hotspots) {
       if (h.type === 'link') {
         const target = h.targetPanoId !== undefined ? loaded.get(h.targetPanoId) : undefined;
         if (target && h.targetPanoId !== panoId) {
-          links.push({ to: target.panoId, yaw: h.yaw, label: target.title });
+          // The hotspot's own title labels the arrow; the target scene's is the fallback.
+          links.push({ to: target.panoId, yaw: h.yaw, label: h.title || target.title, source: h });
         }
         continue;
       }
-      const data: InfoHotspotData = { id: h.id, yaw: h.yaw, pitch: h.pitch, title: h.title };
+      const data: ViewerInfoHotspot = {
+        id: h.id,
+        yaw: h.yaw,
+        pitch: h.pitch,
+        title: h.title,
+        source: h,
+      };
       if (h.body !== undefined) data.body = h.body;
       info.push(data);
     }
@@ -78,6 +99,7 @@ export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTo
     if (config.initialView) scene.initialView = { ...config.initialView };
     scenes[panoId] = scene;
     hotspots[panoId] = info;
+    linksByPano[panoId] = links;
     north[panoId] = config.north ?? 0;
     titles[panoId] = config.title;
   }
@@ -93,6 +115,7 @@ export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTo
   return {
     tour: start === null ? null : { start, scenes },
     hotspots,
+    links: linksByPano,
     north,
     titles,
     mapPositions,
