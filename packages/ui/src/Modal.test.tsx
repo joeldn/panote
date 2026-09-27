@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConfirmModal } from './ConfirmModal.js';
@@ -207,5 +208,51 @@ describe('nested modals', () => {
     );
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onOuter).toHaveBeenCalledTimes(1);
+  });
+
+  it('StrictMode double effects leave exactly one stack entry per open modal', () => {
+    const onOuter = vi.fn();
+    const onInner = vi.fn();
+    const tree = (inner: boolean) => (
+      <StrictMode>
+        <Modal open onClose={onOuter} aria-label="Editor settings">
+          <button type="button">Outer action</button>
+          <ConfirmModal
+            open={inner}
+            title="Delete point?"
+            body="b"
+            onConfirm={() => {}}
+            onCancel={onInner}
+          />
+        </Modal>
+      </StrictMode>
+    );
+    const { rerender, unmount } = render(tree(true));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onInner).toHaveBeenCalledTimes(1);
+    expect(onOuter).not.toHaveBeenCalled();
+
+    // Inner closed: a leaked inner entry would leave the outer deaf to Escape.
+    rerender(tree(false));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onOuter).toHaveBeenCalledTimes(1);
+    expect(onInner).toHaveBeenCalledTimes(1);
+    unmount();
+
+    // Everything closed: a fresh modal must be the top of an empty stack.
+    const onFresh = vi.fn();
+    render(
+      <StrictMode>
+        <Modal open onClose={onFresh} aria-label="Fresh">
+          <p>x</p>
+        </Modal>
+      </StrictMode>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onFresh).toHaveBeenCalledTimes(1);
+    const scrim = screen.getByRole('dialog', { name: 'Fresh' }).parentElement as HTMLElement;
+    fireEvent.mouseDown(scrim);
+    fireEvent.click(scrim);
+    expect(onFresh).toHaveBeenCalledTimes(2);
   });
 });
