@@ -260,3 +260,24 @@ button.pn-chip {
   font: 500 18px var(--fbody);
   letter-spacing: -0.02em;
 }
+
+/* --- PanoStage --- */
+.pn-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0d0c0a;
+}
+.pn-stage__viewer {
+  position: absolute;
+  inset: 0;
+}
+.pn-stage__overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.pn-stage__overlay > * {
+  pointer-events: auto;
+}

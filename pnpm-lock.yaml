@@ -312,6 +312,9 @@ importers:
       '@fortawesome/fontawesome-free':
         specifier: 'catalog:'
         version: 6.7.2
+      '@panote/viewer':
+        specifier: workspace:*
+        version: link:../viewer
     devDependencies:
       '@internal/eslint-config':
         specifier: workspace:*

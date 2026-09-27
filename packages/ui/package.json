@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "panote design tokens, self-hosted fonts and icons, and React primitives",
+  "description": "panote design tokens, self-hosted fonts and icons, React primitives, and the PanoStage wrapper around @panote/viewer",
   "license": "UNLICENSED",
   "sideEffects": [
     "*.css"
@@ -34,7 +34,8 @@
   "dependencies": {
     "@fontsource/schibsted-grotesk": "catalog:",
     "@fontsource/spline-sans-mono": "catalog:",
-    "@fortawesome/fontawesome-free": "catalog:"
+    "@fortawesome/fontawesome-free": "catalog:",
+    "@panote/viewer": "workspace:*"
   },
   "peerDependencies": {
     "react": "catalog:",
