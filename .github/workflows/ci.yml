@@ -124,10 +124,10 @@ jobs:
           fi
           echo 'Committed Worker types match what wrangler types emits.'
 
-  # Builds each plain-Worker service and dry-runs `wrangler deploy` against
-  # it, catching a broken build or unresolvable workspace import on every PR
-  # instead of only on a real deploy. tiler-consumer is skipped (needs
-  # Docker). Not a required check.
+  # Builds each plain-Worker service and both SPAs and dry-runs `wrangler
+  # deploy` against them, catching a broken build or unresolvable workspace
+  # import on every PR instead of only on a real deploy. tiler-consumer is
+  # skipped (needs Docker). Not a required check.
   deploy-dry-run:
     name: Deploy dry-run
     runs-on: ubuntu-latest
@@ -145,6 +145,8 @@ jobs:
           --filter="@service/public-api..."
           --filter="@service/admin-api..."
           --filter="@service/upload-api..."
+          --filter="@app/website..."
+          --filter="@app/admin..."
 
       # Bundles with esbuild and reports bindings without publishing or
       # needing credentials, catching what a real deploy would catch.
@@ -162,6 +164,27 @@ jobs:
         run: >-
           pnpm --filter "@service/upload-api" exec wrangler deploy
           --dry-run --env dev --outdir /tmp/deploy-dry-run/upload-api
+
+      # Assets-only Workers: checks the config, routes and the built dist/
+      # (APP_MODE unset, so the build above used .env.dev).
+      - name: Dry-run deploy website
+        run: >-
+          pnpm --filter "@app/website" exec wrangler deploy
+          --dry-run --env dev --outdir /tmp/deploy-dry-run/website
+
+      - name: Dry-run deploy admin
+        run: >-
+          pnpm --filter "@app/admin" exec wrangler deploy
+          --dry-run --env dev --outdir /tmp/deploy-dry-run/admin
+
+      # The production build validates apps/*/.env.production (no deploy needed).
+      - name: Build apps for production
+        env:
+          APP_MODE: production
+        run: >-
+          pnpm exec turbo run build
+          --filter="@app/website"
+          --filter="@app/admin"
 
   # Runs in parallel with `gate`, not after it. `pnpm test:coverage` is a
   # superset of `pnpm test` for the Node-side packages (same tests, plus

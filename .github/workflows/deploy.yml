@@ -1,6 +1,7 @@
 name: Deploy
 
-# Deploys the four Cloudflare Workers under services/*.
+# Deploys the four Cloudflare Workers under services/* and the two
+# assets-only SPA Workers under apps/*.
 #
 # Two triggers: workflow_dispatch (choose the environment) and workflow_run
 # after CI succeeds on main, which always targets dev and only runs when
@@ -138,17 +139,24 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: ${{ steps.resolve.outputs.environment == 'production' }}
 
-      # Blocks a leftover YOUR_ placeholder (e.g. OAUTH_ISSUER) from
-      # reaching production, across all four services' configs.
+      # Blocks a leftover YOUR_ placeholder (e.g. OAUTH_ISSUER) from reaching
+      # production: every service and app wrangler.jsonc, plus apps' .env.production.
       - name: Fail if any production config still has a YOUR_ placeholder
         if: ${{ steps.resolve.outputs.environment == 'production' }}
         run: |
           node <<'EOF'
           const fs = require("node:fs");
           const services = ["public-api", "admin-api", "upload-api", "tiler-consumer"];
+          const apps = fs
+            .readdirSync("apps", { withFileTypes: true })
+            .filter((d) => d.isDirectory())
+            .map((d) => `apps/${d.name}`);
+          if (apps.length === 0) {
+            console.log("::error::no apps/* found - the guard would silently skip them.");
+            process.exit(1);
+          }
           let failed = false;
-          for (const service of services) {
-            const file = `services/${service}/wrangler.jsonc`;
+          for (const file of [...services.map((s) => `services/${s}/wrangler.jsonc`), ...apps.map((a) => `${a}/wrangler.jsonc`)]) {
             const stripped = fs
               .readFileSync(file, "utf8")
               .split("\n")
@@ -187,6 +195,28 @@ jobs:
               failed = true;
             } else {
               console.log(`${file}: env.production has no YOUR_ placeholders.`);
+            }
+          }
+          // Vite env files are baked into the bundle at build time.
+          for (const app of apps) {
+            const file = `${app}/.env.production`;
+            if (!fs.existsSync(file)) {
+              console.log(`::error::${file}: missing - every app builds with --mode production.`);
+              failed = true;
+              continue;
+            }
+            const hits = fs
+              .readFileSync(file, "utf8")
+              .split("\n")
+              .filter((line) => line.trim() && !line.trim().startsWith("#"))
+              .filter((line) => /YOUR_/i.test(line.slice(line.indexOf("=") + 1)));
+            if (hits.length > 0) {
+              for (const hit of hits) {
+                console.log(`::error::${file}: ${hit.trim()} still contains a YOUR_ placeholder. Replace it with the real value before deploying production - never with another fake tenant name.`);
+              }
+              failed = true;
+            } else {
+              console.log(`${file}: no YOUR_ placeholders.`);
             }
           }
           if (failed) process.exit(1);
@@ -285,6 +315,50 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
         run: pnpm --filter "@service/tiler-consumer" exec wrangler deploy --env "$TARGET_ENVIRONMENT"
+
+  # The two assets-only SPA Workers. Same gating as deploy-workers: needs
+  # resolve-environment (proceed, production guards) and deploys the exact SHA CI tested.
+  deploy-apps:
+    name: Deploy ${{ matrix.app }} (${{ needs.resolve-environment.outputs.environment }})
+    needs: resolve-environment
+    if: needs.resolve-environment.outputs.proceed == 'true'
+    environment: ${{ needs.resolve-environment.outputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [website, admin]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Deploys the commit CI verified; falls back to github.sha on dispatch.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: ./.github/actions/setup
+
+      - name: Fail if CLOUDFLARE_API_TOKEN is empty
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is empty for the $TARGET_ENVIRONMENT environment. It must be stored as an ENVIRONMENT secret on the '$TARGET_ENVIRONMENT' GitHub Environment (not a repository secret)."
+            exit 1
+          fi
+
+      # APP_MODE picks apps/<app>/.env.<env>; the build fails on an invalid config.
+      - name: Build ${{ matrix.app }} and its workspace dependencies
+        env:
+          APP_MODE: ${{ needs.resolve-environment.outputs.environment }}
+        run: pnpm exec turbo run build --filter="@app/${{ matrix.app }}..."
+
+      - name: Deploy ${{ matrix.app }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: pnpm --filter "@app/${{ matrix.app }}" exec wrangler deploy --env "$TARGET_ENVIRONMENT"
 
 # Before this can succeed: CLOUDFLARE_API_TOKEN must be an environment
 # secret on both dev and production (not a repo secret); production needs

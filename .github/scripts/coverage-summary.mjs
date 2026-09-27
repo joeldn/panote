@@ -27,7 +27,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const WORKSPACE_DIRS = ['packages', 'services'];
+const WORKSPACE_DIRS = ['apps', 'packages', 'services'];
 
 /** Marker used to find and update this comment instead of posting a new one. */
 const MARKER = '<!-- panote:coverage -->';
