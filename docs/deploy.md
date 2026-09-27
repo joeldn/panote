@@ -204,12 +204,13 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put R2_ACCESS_KEY_ID 
 pnpm --filter @service/tiler-consumer exec wrangler secret put R2_SECRET_ACCESS_KEY --env dev
 ```
 
-Repeat with `--env production` once production is provisioned. `public-api` needs no secrets, and
-`admin-api` reads R2 through the native binding, not the S3 API. `admin-api` does need
-`CF_ANALYTICS_TOKEN` for tour insights; see "Insights (unit B5)" below. `wrangler deploy --env <env> --secrets-file <file>` is the alternative
-to interactive `secret put` if scripting this. **Status: set for dev, outstanding for
-production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and
-`tiler-consumer`'s dev environments; production has neither yet.
+Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
+`admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
+for tour insights (see "Insights (unit B5)" below). `wrangler deploy --env <env> --secrets-file
+<file>` is the alternative to interactive `secret put` if scripting this. **Status: set for dev,
+outstanding for production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api`
+and `tiler-consumer`'s dev environments; production has neither yet. `CF_ANALYTICS_TOKEN` is
+outstanding for both.
 
 ---
 
@@ -676,8 +677,12 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
   Worker writes to it, so there is no provisioning command; the first `POST .../view` after
   deploying `public-api` creates it. AE keeps data for three months (Cloudflare's limit, not
   configurable). **Status: not yet deployed.**
-- **Secret.** `admin-api` needs an account API token with **Account → Account Analytics → Read**
-  and nothing else, created in the dashboard under My Profile → API Tokens:
+- **Secret.** `admin-api` needs a custom API token whose only permission is **Account → Account
+  Analytics → Read**, with Account Resources limited to the panote account. Cloudflare's AE SQL
+  API docs create it under My Profile → API Tokens → Create Token → Create Custom Token (a user
+  token). An account-owned token (Manage Account → Account API Tokens) lists Account Analytics as
+  supported and would survive user changes, but the AE docs don't mention it, so it is untested.
+  Put whichever you create into the secret:
   ```bash
   pnpm --filter @service/admin-api exec wrangler secret put CF_ANALYTICS_TOKEN --env dev
   ```
