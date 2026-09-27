@@ -64,7 +64,7 @@ describe('slug alias redirects', () => {
   it('308s a valid alias to the new slug, uncached', async () => {
     const res = await call('/s/old-name');
     expect(res.status).toBe(308);
-    expect(res.headers.get('Location')).toBe(`${ORIGIN}/s/new-name`);
+    expect(res.headers.get('Location')).toBe('/s/new-name');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(assets.fetch).not.toHaveBeenCalled();
   });
@@ -74,7 +74,7 @@ describe('slug alias redirects', () => {
     async (path) => {
       const res = await call(`${path}?pano=hall-1&x=2`);
       expect(res.status).toBe(308);
-      expect(res.headers.get('Location')).toBe(`${ORIGIN}/s/new-name/embed?pano=hall-1&x=2`);
+      expect(res.headers.get('Location')).toBe('/s/new-name/embed?pano=hall-1&x=2');
       expect(res.headers.get('Cache-Control')).toBe('no-store');
     },
   );
@@ -173,6 +173,6 @@ describe('routing through the assets router', () => {
     await putSlug('new-name', live(TOUR));
     const res = await SELF.fetch(`${ORIGIN}/s/old-name?pano=p1`, { redirect: 'manual' });
     expect(res.status).toBe(308);
-    expect(res.headers.get('Location')).toBe(`${ORIGIN}/s/new-name?pano=p1`);
+    expect(res.headers.get('Location')).toBe('/s/new-name?pano=p1');
   });
 });

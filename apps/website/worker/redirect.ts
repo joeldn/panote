@@ -27,14 +27,14 @@ async function readSlug(bucket: SlugReader, slug: string): Promise<SlugRecord | 
 }
 
 /**
- * Where a slug alias should 308 to, or null to fall through to the SPA.
+ * The relative path a slug alias should 308 to, or null to fall through to the SPA.
  * Only an unexpired alias whose target is still the SAME tour's live slug redirects.
  */
 export async function resolveSlugRedirect(
   url: URL,
   bucket: SlugReader,
   now: number = Date.now(),
-): Promise<URL | null> {
+): Promise<string | null> {
   const path = parseSlugPath(url.pathname);
   if (!path) return null;
   const record = await readSlug(bucket, path.slug);
@@ -44,7 +44,6 @@ export async function resolveSlugRedirect(
   const target = await readSlug(bucket, record.redirect);
   // A target slug released and claimed by another tour must never receive this traffic.
   if (target?.kind !== 'tour' || target.tourId !== record.tourId) return null;
-  const location = new URL(`/s/${record.redirect}${path.embed ? '/embed' : ''}`, url);
-  location.search = url.search;
-  return location;
+  // Relative, so the redirect never depends on the host the request arrived on.
+  return `/s/${record.redirect}${path.embed ? '/embed' : ''}${url.search}`;
 }

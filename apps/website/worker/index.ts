@@ -4,7 +4,7 @@ import { resolveSlugRedirect } from './redirect.js';
 export default {
   async fetch(request, env): Promise<Response> {
     if (request.method === 'GET' || request.method === 'HEAD') {
-      let location: URL | null = null;
+      let location: string | null = null;
       try {
         location = await resolveSlugRedirect(new URL(request.url), env.BUCKET);
       } catch (err) {
@@ -14,7 +14,7 @@ export default {
       if (location) {
         return new Response(null, {
           status: 308,
-          headers: { Location: location.href, 'Cache-Control': 'no-store' },
+          headers: { Location: location, 'Cache-Control': 'no-store' },
         });
       }
     }
