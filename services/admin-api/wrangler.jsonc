@@ -20,7 +20,11 @@
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
+        // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
+        "SLUG_ALIAS_DAYS": "30",
       },
+      // Daily sweep that releases expired slug aliases.
+      "triggers": { "crons": ["17 3 * * *"] },
     },
     "production": {
       // production is unprovisioned, see docs/deploy.md
@@ -35,7 +39,11 @@
         // only with the real tenant URL, never another fake name.
         "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.io",
+        // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
+        "SLUG_ALIAS_DAYS": "30",
       },
+      // Daily sweep that releases expired slug aliases.
+      "triggers": { "crons": ["17 3 * * *"] },
     },
   },
 }
