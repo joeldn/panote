@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tilePath, manifestUrl, parseManifest } from './manifest.js';
+import { tilePath, manifestUrl, previewUrl, parseManifest } from './manifest.js';
 
 describe('tilePath', () => {
   it('builds the tile URL from baseUrl, pano, level, face, x, y', () => {
@@ -16,6 +16,22 @@ describe('tilePath', () => {
 describe('manifestUrl', () => {
   it('builds the manifest URL', () => {
     expect(manifestUrl('/tiles/', 'church')).toBe('/tiles/church/manifest.json');
+  });
+});
+
+describe('previewUrl', () => {
+  it('omits the version segment when absent', () => {
+    expect(previewUrl('/tiles/', 'church')).toBe('/tiles/church/preview.webp');
+  });
+
+  it('inserts the version between pano and preview.webp when present', () => {
+    expect(previewUrl('/tiles/', 'church', 't1-abc123')).toBe(
+      '/tiles/church/t1-abc123/preview.webp',
+    );
+  });
+
+  it('encodes pano and version like tilePath', () => {
+    expect(previewUrl('/tiles/', 'my pano', 'v 1')).toBe('/tiles/my%20pano/v%201/preview.webp');
   });
 });
 
@@ -241,6 +257,25 @@ describe('parseManifest', () => {
 
     it('rejects a negative tilerVersion', () => {
       expect(() => parseManifest({ ...valid, tilerVersion: -1 })).toThrow(/manifest\.tilerVersion/);
+    });
+  });
+
+  describe('preview', () => {
+    it('returns a manifest with no preview field when absent (old manifests still parse)', () => {
+      const m = parseManifest(valid);
+      expect(m.preview).toBeUndefined();
+    });
+
+    it('accepts preview: true', () => {
+      expect(parseManifest({ ...valid, preview: true }).preview).toBe(true);
+    });
+
+    it('rejects preview: false', () => {
+      expect(() => parseManifest({ ...valid, preview: false })).toThrow(/manifest\.preview/);
+    });
+
+    it('rejects a non-boolean preview', () => {
+      expect(() => parseManifest({ ...valid, preview: 'yes' })).toThrow(/manifest\.preview/);
     });
   });
 });

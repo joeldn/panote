@@ -58,6 +58,7 @@ export const PanoManifestSummarySchema = z.object({
   version: z.string().optional(),
   format: z.enum(TILE_FORMATS),
   tileSize: z.number().int().positive(),
+  preview: z.literal(true).optional(),
 });
 export type PanoManifestSummary = z.infer<typeof PanoManifestSummarySchema>;
 

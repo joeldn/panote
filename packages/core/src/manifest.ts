@@ -14,6 +14,9 @@ export interface Manifest {
   // segment (tiles/<pano>/<version>/...) and the tiler build that wrote it.
   version?: string | undefined;
   tilerVersion?: number | undefined;
+  // Absent for a pano tiled before preview generation existed; present ones
+  // have a preview.webp (1024x512) alongside the tiles in the version dir.
+  preview?: true | undefined;
 }
 
 export function tilePath(
@@ -38,6 +41,13 @@ export function tilePath(
 
 export function manifestUrl(baseUrl: string, pano: string): string {
   return `${baseUrl}${encodeURIComponent(pano)}/manifest.json`;
+}
+
+// Mirrors tilePath's version-segment handling: preview.webp lives in the
+// version dir alongside the tiles, not next to the unversioned manifest.
+export function previewUrl(baseUrl: string, pano: string, version?: string): string {
+  const versionSegment = version !== undefined ? `${encodeURIComponent(version)}/` : '';
+  return `${baseUrl}${encodeURIComponent(pano)}/${versionSegment}preview.webp`;
 }
 
 // These bounds are derived, not provisional guesses — see docs/decisions.md.
@@ -143,6 +153,11 @@ export function parseManifest(raw: unknown): Manifest {
     }
     tilerVersion = m.tilerVersion;
   }
+  let preview: true | undefined;
+  if (m.preview !== undefined) {
+    if (m.preview !== true) throw new Error('manifest.preview must be true when present');
+    preview = true;
+  }
 
   return {
     pano,
@@ -154,5 +169,6 @@ export function parseManifest(raw: unknown): Manifest {
     format,
     ...(version !== undefined ? { version } : {}),
     ...(tilerVersion !== undefined ? { tilerVersion } : {}),
+    ...(preview !== undefined ? { preview } : {}),
   };
 }

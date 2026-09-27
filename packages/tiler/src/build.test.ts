@@ -24,12 +24,20 @@ import type { Manifest } from '@panote/core';
 // build() fails loudly instead of proceeding.
 const toBuffer = vi.fn();
 const metadata = vi.fn();
+// Shared across every sharp()/resize()/toFile() call, so a test can tell the
+// face pyramid's calls apart from the preview's (dims, args, output path).
+const resizeCalls: unknown[][] = [];
+const toFileCalls: string[] = [];
+const sharpCalls: unknown[][] = [];
 
 function chainable(): Record<string, unknown> {
   const self: Record<string, unknown> = {
     removeAlpha: () => self,
     raw: () => self,
-    resize: () => self,
+    resize: (...args: unknown[]) => {
+      resizeCalls.push(args);
+      return self;
+    },
     extract: () => self,
     clone: () => self,
     webp: () => self,
@@ -37,19 +45,28 @@ function chainable(): Record<string, unknown> {
     png: () => self,
     metadata,
     toBuffer,
-    toFile: vi.fn().mockResolvedValue(undefined),
+    toFile: (path: string) => {
+      toFileCalls.push(path);
+      return Promise.resolve(undefined);
+    },
   };
   return self;
 }
 
 vi.mock('sharp', () => ({
-  default: vi.fn(() => chainable()),
+  default: vi.fn((...args: unknown[]) => {
+    sharpCalls.push(args);
+    return chainable();
+  }),
 }));
 
 describe('build', () => {
   const dirs: string[] = [];
   afterEach(async () => {
     await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+    resizeCalls.length = 0;
+    toFileCalls.length = 0;
+    sharpCalls.length = 0;
   });
 
   async function tmp(): Promise<string> {
@@ -269,6 +286,16 @@ describe('build', () => {
       const manifest = await readManifest(outDir, 'ok-pano');
       expect(manifest.version).toBe('t1-abc123');
       expect(manifest.tilerVersion).toBe(TILER_OUTPUT_VERSION);
+      expect(manifest.preview).toBe(true);
+      expect(resizeCalls).toContainEqual([1024, 512, { fit: 'fill' }]);
+      expect(toFileCalls.some((p) => p.endsWith('ok-pano/preview.webp'))).toBe(true);
+      // The preview's sharp() call must decode at the source's native
+      // dims (WIDTH/HEIGHT), not the (unrelated) 512px face size.
+      const previewSharpCall = sharpCalls.find((args) => {
+        const opts = args[1] as { raw?: { width: number; height: number } } | undefined;
+        return opts?.raw?.width === WIDTH && opts.raw.height === HEIGHT;
+      });
+      expect(previewSharpCall).toBeDefined();
     }, 20_000);
 
     // Same real rendering pipeline as above; same timeout treatment.
@@ -285,6 +312,7 @@ describe('build', () => {
       const manifest = await readManifest(outDir, 'ok-pano-unversioned');
       expect(manifest.version).toBeUndefined();
       expect(manifest.tilerVersion).toBeUndefined();
+      expect(manifest.preview).toBe(true);
     }, 20_000);
   });
 
