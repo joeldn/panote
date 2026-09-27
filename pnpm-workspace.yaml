@@ -46,6 +46,11 @@ catalog:
   # `allowBuilds` below.
   sharp: 0.34.2
 
+  # --- Frontend (packages/ui, packages/web-kit; apps/* from unit C2) ---
+  # SPA flow (Authorization Code + PKCE). Pulls in browser-tabs-lock, whose
+  # postinstall is only a console message - explicitly ignored in `allowBuilds`.
+  '@auth0/auth0-spa-js': 2.27.0
+
   # --- Linting / formatting ---
   eslint: 10.8.1
   '@eslint/js': 10.0.1
@@ -110,3 +115,5 @@ allowBuilds:
   esbuild: true
   sharp: true
   workerd: true
+  # Its postinstall only prints a message; never run it.
+  browser-tabs-lock: false
