@@ -1,13 +1,12 @@
 import { AuthRequiredError, createAdminApi, type AdminApi } from '@internal/web-kit';
-import { createContext, useContext, useMemo } from 'react';
+import { useMemo } from 'react';
 
 import { useConfig } from './config-context.js';
+import { useOptionalSession } from './session.js';
 
-/** The signed-in admin API. Until sign-in (unit C3) provides one, every call needs sign-in. */
-export const AdminApiContext = createContext<AdminApi | null>(null);
-
+/** The signed-in session's API; outside a session every call needs sign-in. */
 export function useAdminApi(): AdminApi {
-  const provided = useContext(AdminApiContext);
+  const session = useOptionalSession();
   const { apiBase } = useConfig();
   const signedOut = useMemo(
     () =>
@@ -17,5 +16,5 @@ export function useAdminApi(): AdminApi {
       }),
     [apiBase],
   );
-  return provided ?? signedOut;
+  return session?.api ?? signedOut;
 }

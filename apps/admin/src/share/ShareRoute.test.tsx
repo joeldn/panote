@@ -1,11 +1,26 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { ApiError, AuthRequiredError, loadConfig, type AdminApi } from '@internal/web-kit';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { createMemoryRouter, Outlet, RouterProvider, type RouteObject } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AdminApiContext } from '../admin-api.js';
 import { ConfigContext } from '../config-context.js';
-import { routes } from '../routes.js';
+import { SessionContext } from '../session.js';
+import { ShareRoute } from './ShareRoute.js';
+
+// The share routes alone, under a stand-in editor: the real tree's guard is tested elsewhere.
+const routes: RouteObject[] = [
+  {
+    path: 't/:tourId',
+    element: <Outlet />,
+    children: [
+      { index: true, element: <p>Editor</p> },
+      ...(['link', 'privacy', 'embed'] as const).map((tab) => ({
+        path: `share/${tab}`,
+        element: <ShareRoute tab={tab} />,
+      })),
+    ],
+  },
+];
 
 const config = loadConfig({
   VITE_SITE_ORIGIN: 'https://panote.io',
@@ -71,9 +86,9 @@ function renderShare(path: string, api: AdminApi = fakeApi()) {
   const router = createMemoryRouter(routes, { basename: '/app', initialEntries: [path] });
   render(
     <ConfigContext value={config}>
-      <AdminApiContext value={api}>
+      <SessionContext value={{ user: { sub: 'u1' }, api, signOut: async () => {} }}>
         <RouterProvider router={router} />
-      </AdminApiContext>
+      </SessionContext>
     </ConfigContext>,
   );
   return { api, router };
@@ -241,6 +256,22 @@ describe('share route', () => {
     await clickPublish();
     expect(screen.getByRole('alert').textContent).toBe(
       'Some panos can’t be published yet: Courtyard (still processing).',
+    );
+  });
+
+  it('asks to sign in again when there is no session', async () => {
+    render(
+      <ConfigContext value={config}>
+        <RouterProvider
+          router={createMemoryRouter(routes, {
+            basename: '/app',
+            initialEntries: ['/app/t/tour-1/share/link'],
+          })}
+        />
+      </ConfigContext>,
+    );
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      'Sign in again to share this tour.',
     );
   });
 
