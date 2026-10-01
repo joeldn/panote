@@ -60,11 +60,14 @@ export function ErrorBanner({
   docs,
   failures,
   busy,
+  blocked,
   onRetry,
 }: {
   docs: EditorDocs;
   failures: Failures;
   busy: boolean;
+  /** A conflict is open: saving waits until it's resolved from the conflict banner. */
+  blocked: boolean;
   onRetry: () => void;
 }) {
   const rows = (Object.entries(failures) as Array<[DocKey, DocFailure]>).filter(
@@ -85,7 +88,14 @@ export function ErrorBanner({
         </ul>
       </div>
       <div className="ed-banner__actions">
-        <Button variant="primary" size="sm" onClick={onRetry} busy={busy}>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={onRetry}
+          busy={busy}
+          disabled={blocked}
+          title={blocked ? 'Resolve the conflict first' : undefined}
+        >
           Try again
         </Button>
       </div>
@@ -96,9 +106,13 @@ export function ErrorBanner({
 export function Notices({
   notices,
   onDismiss,
+  busy,
+  onRepublish,
 }: {
   notices: EditorNotice[];
   onDismiss: (id: string) => void;
+  busy: boolean;
+  onRepublish: () => void;
 }) {
   return (
     <>
@@ -116,6 +130,11 @@ export function Notices({
               </Link>
             )}
           </p>
+          {n.action === 'republish' && (
+            <Button variant="primary" size="sm" onClick={onRepublish} busy={busy}>
+              Try again
+            </Button>
+          )}
           <button
             type="button"
             className="ed-icon-btn"

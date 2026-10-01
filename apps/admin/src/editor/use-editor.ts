@@ -27,7 +27,13 @@ import {
 
 export type EditorApi = Pick<
   AdminApi,
-  'getTourWithConfigs' | 'getTour' | 'getPano' | 'putTour' | 'putPanoConfig' | 'publishTour'
+  | 'getTourWithConfigs'
+  | 'getTour'
+  | 'getPano'
+  | 'putTour'
+  | 'putPanoConfig'
+  | 'createPanoConfig'
+  | 'publishTour'
 >;
 
 export type LoadState =
@@ -42,6 +48,8 @@ export interface EditorNotice {
   text: string;
   /** In-editor route (relative to the tour), e.g. `share/link`. */
   link?: { to: string; label: string };
+  /** A button on the notice; `republish` retries publishing the saved tour. */
+  action?: 'republish';
 }
 
 export type Failures = Partial<Record<DocKey, DocFailure>>;
@@ -105,20 +113,28 @@ function publishNotice(
       return {
         id: 'publish',
         tone: 'warn',
-        text: `Saved. The share link wasn’t updated because some panos can’t be published yet: ${names.join(', ')}.`,
+        text: `Saved. The share link wasn’t updated because some panos can’t be published yet: ${names.join(', ')}. Try again once they’re ready.`,
+        action: 'republish',
       };
     }
     case 'failed':
       return {
         id: 'publish',
         tone: 'warn',
-        text: `Saved, but the share link couldn’t be updated (${out.message}). It updates on your next save.`,
+        text: `Saved, but the share link couldn’t be updated (${out.message}).`,
+        action: 'republish',
       };
   }
 }
 
 /** Load, edit, save (one conditional PUT per dirty doc), publish, and resolve conflicts. */
-export function useEditor(api: EditorApi, tourId: string, storage = browserStorage()) {
+export function useEditor(
+  api: EditorApi,
+  tourId: string,
+  /** Auth0 sub: parked drafts are per user. */
+  user: string,
+  storage = browserStorage(),
+) {
   const [attempt, setAttempt] = useState(0);
   // Keyed by what was loaded, so a new tourId (or a retry) reads as loading without a reset.
   const loadKey = `${tourId}#${attempt}`;
@@ -126,7 +142,15 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
   const load: LoadState = loaded?.key === loadKey ? loaded.state : { status: 'loading' };
   const [docs, setDocs] = useState<EditorDocs | null>(null);
   const docsRef = useRef<EditorDocs | null>(null);
-  const [failures, setFailures] = useState<Failures>({});
+  const [failures, setFailuresState] = useState<Failures>({});
+  const failuresRef = useRef<Failures>({});
+  const setFailures = useCallback((next: Failures | ((f: Failures) => Failures)) => {
+    failuresRef.current = typeof next === 'function' ? next(failuresRef.current) : next;
+    setFailuresState(failuresRef.current);
+  }, []);
+  const [publishing, setPublishing] = useState(false);
+  // False once a re-auth redirect is going ahead, so it doesn't trip the unload prompt.
+  const unloadGuardRef = useRef(true);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
@@ -155,11 +179,12 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
         const res = await api.getTourWithConfigs(tourId);
         if (cancelled) return;
         if (res.status !== 'ok') {
+          if (storage) clearDraft(storage, user, tourId);
           setLoaded({ key, state: { status: 'not-found' } });
           return;
         }
         let fresh = fromServer(res.data);
-        const draft = storage ? readDraft(storage, tourId) : null;
+        const draft = storage ? readDraft(storage, user, tourId) : null;
         if (draft) {
           const applied = applyDraft(fresh, draft);
           fresh = applied.docs;
@@ -177,7 +202,7 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
               text: `Some unsaved changes were dropped because ${describeScenes(fresh, applied.discarded)} changed elsewhere while you were signed out.`,
             });
           }
-          clearDraft(storage!, tourId);
+          clearDraft(storage!, user, tourId);
         }
         dispatch({ type: 'load', docs: fresh });
         publishRef.current = res.data.publish ?? null;
@@ -192,42 +217,91 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
     return () => {
       cancelled = true;
     };
-  }, [api, tourId, storage, dispatch, notify, loadKey]);
+  }, [api, tourId, user, storage, dispatch, notify, loadKey]);
 
-  useBeforeSignIn(() => {
-    if (storage && docsRef.current) writeDraft(storage, docsRef.current);
+  useBeforeSignIn({
+    prepare: () => {
+      if (!docsRef.current) return null;
+      const written = storage ? writeDraft(storage, user, docsRef.current) : 'failed';
+      if (written !== 'failed') return null;
+      return 'Your unsaved changes to this tour couldn’t be kept while you sign in (browser storage is full or blocked), so they would be lost.';
+    },
+    proceed: () => {
+      unloadGuardRef.current = false;
+    },
   });
 
-  const save = useCallback(async () => {
-    const current = docsRef.current;
-    if (!current || savingRef.current) return;
-    const plan = planSave(current);
-    if (isEmptyPlan(plan)) return;
-    savingRef.current = true;
-    setSaving(true);
-    try {
-      const out = await runSave(api, tourId, plan);
-      dispatch({ type: 'saved', ...(out.tour && { tour: out.tour }), configs: out.configs });
-      setFailures(out.failures);
-      if (Object.keys(out.failures).length > 0) return;
-      setSavedAt(new Date());
-      dismiss('draft');
-      // Publish failures never turn a successful save into a failed one.
+  const dirtyCount = docs ? dirtyKeys(docs).length : 0;
+  const ready = load.status === 'ready';
+  useEffect(() => {
+    if (!dirtyCount) return;
+    unloadGuardRef.current = true;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (unloadGuardRef.current) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirtyCount]);
+  // Nothing unsaved: a parked draft (e.g. from an aborted redirect) is stale.
+  useEffect(() => {
+    if (ready && dirtyCount === 0 && storage) clearDraft(storage, user, tourId);
+  }, [ready, dirtyCount, storage, user, tourId]);
+
+  const republishWith = useCallback(
+    async (fallback: EditorDocs) => {
       const wasPublished = publishRef.current !== null;
-      const published = await runPublish(api, tourId);
-      if (published.kind === 'ok') {
-        const { slug, visibility, publishedAt } = published.publish;
-        publishRef.current = { slug, visibility, publishedAt };
-        setPublish(publishRef.current);
+      setPublishing(true);
+      try {
+        const published = await runPublish(api, tourId);
+        if (published.kind === 'ok') {
+          const { slug, visibility, publishedAt } = published.publish;
+          publishRef.current = { slug, visibility, publishedAt };
+          setPublish(publishRef.current);
+        }
+        const notice = publishNotice(published, docsRef.current ?? fallback, wasPublished);
+        if (notice) notify(notice);
+        else dismiss('publish');
+      } finally {
+        setPublishing(false);
       }
-      const notice = publishNotice(published, docsRef.current ?? current, wasPublished);
-      if (notice) notify(notice);
-      else dismiss('publish');
-    } finally {
-      savingRef.current = false;
-      setSaving(false);
-    }
-  }, [api, tourId, dispatch, notify, dismiss]);
+    },
+    [api, tourId, notify, dismiss],
+  );
+
+  const hasConflict = () => Object.values(failuresRef.current).some((f) => f?.kind === 'conflict');
+
+  /** `resolving` is only for the conflict banner's overwrite; otherwise a conflict blocks saving. */
+  const save = useCallback(
+    async ({ resolving = false } = {}) => {
+      const current = docsRef.current;
+      if (!current || savingRef.current) return;
+      if (!resolving && hasConflict()) return;
+      const plan = planSave(current);
+      if (isEmptyPlan(plan)) return;
+      savingRef.current = true;
+      setSaving(true);
+      try {
+        const out = await runSave(api, tourId, plan);
+        dispatch({ type: 'saved', ...(out.tour && { tour: out.tour }), configs: out.configs });
+        setFailures(out.failures);
+        if (Object.keys(out.failures).length > 0) return;
+        setSavedAt(new Date());
+        dismiss('draft');
+        if (storage) clearDraft(storage, user, tourId);
+        // Publish failures never turn a successful save into a failed one.
+        await republishWith(current);
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
+      }
+    },
+    [api, tourId, user, storage, dispatch, dismiss, setFailures, republishWith],
+  );
+
+  /** The publish notice's "Try again": publishes the already-saved tour. */
+  const republish = useCallback(async () => {
+    if (docsRef.current) await republishWith(docsRef.current);
+  }, [republishWith]);
 
   /** Fetch the server's copy of one document: its ETag and contents. */
   const fetchDoc = useCallback(
@@ -266,8 +340,18 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
       (k) => failures[k]?.kind === 'conflict',
     );
     try {
-      for (const key of keys)
-        dispatch({ type: 'replace-doc', key, doc: (await fetchDoc(key)).doc });
+      for (const key of keys) {
+        if (key === 'tour') {
+          // The other copy may list scenes this editor never loaded: fetch their configs too.
+          const res = await api.getTourWithConfigs(tourId);
+          if (res.status !== 'ok') throw new Error('This tour no longer exists.');
+          const fresh = fromServer(res.data);
+          dispatch({ type: 'replace-doc', key, doc: fresh.tour });
+          dispatch({ type: 'add-scenes', scenes: fresh.scenes });
+        } else {
+          dispatch({ type: 'replace-doc', key, doc: (await fetchDoc(key)).doc });
+        }
+      }
       setFailures((f) => {
         const next = { ...f };
         for (const k of keys) delete next[k];
@@ -276,7 +360,7 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
     } catch (e) {
       notify({ id: 'conflict-error', tone: 'warn', text: (e as Error).message });
     }
-  }, [failures, fetchDoc, dispatch, notify]);
+  }, [api, tourId, failures, fetchDoc, dispatch, notify, setFailures]);
 
   /** 412 recovery: keep local edits and retry with the fresh ETag (never `*` for an existing doc). */
   const overwriteConflicts = useCallback(async () => {
@@ -298,7 +382,7 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
       return;
     }
     dismiss('conflict-error');
-    await save();
+    await save({ resolving: true });
   }, [failures, fetchDoc, dispatch, notify, dismiss, save]);
 
   const dirty = docs ? dirtyKeys(docs) : [];
@@ -317,6 +401,8 @@ export function useEditor(api: EditorApi, tourId: string, storage = browserStora
     reloadConflicts,
     overwriteConflicts,
     publish,
+    republish,
+    publishing,
     notices,
     dismiss,
   };

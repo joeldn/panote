@@ -8,8 +8,8 @@ import {
 import { panoKey, type DocKey, type EditorDocs } from './model.js';
 import { planSave } from './save.js';
 
-// Unsaved edits parked in localStorage across a re-auth redirect, keyed by tourId
-// and stamped with each document's ETag so a changed server copy is never overwritten.
+// Unsaved edits parked in localStorage across a re-auth redirect, keyed by user and
+// tourId and stamped with each document's ETag so a changed server copy is never overwritten.
 
 export type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -20,12 +20,22 @@ export interface EditorDraft {
   configs: Record<string, { etag: string | null; config: SceneConfig }>;
 }
 
-export const draftKey = (tourId: string): string => `panote:editor-draft:${tourId}`;
+const PREFIX = 'panote:editor-draft:';
 
-/** Store the dirty documents; returns false when there was nothing to store. */
-export function writeDraft(storage: DraftStorage, docs: EditorDocs, now = new Date()): boolean {
+/** `user` is the Auth0 sub, so one browser profile never restores another user's edits. */
+export const draftKey = (user: string, tourId: string): string => `${PREFIX}${user}:${tourId}`;
+
+export type DraftWrite = 'clean' | 'stored' | 'failed';
+
+/** Store the dirty documents. `failed` means storage refused them (quota, blocked). */
+export function writeDraft(
+  storage: DraftStorage,
+  user: string,
+  docs: EditorDocs,
+  now = new Date(),
+): DraftWrite {
   const plan = planSave(docs);
-  if (!plan.tour && plan.configs.length === 0) return false;
+  if (!plan.tour && plan.configs.length === 0) return 'clean';
   const draft: EditorDraft = {
     v: 1,
     savedAt: now.toISOString(),
@@ -35,26 +45,26 @@ export function writeDraft(storage: DraftStorage, docs: EditorDocs, now = new Da
     ),
   };
   try {
-    storage.setItem(draftKey(docs.tourId), JSON.stringify(draft));
-    return true;
+    storage.setItem(draftKey(user, docs.tourId), JSON.stringify(draft));
+    return 'stored';
   } catch {
-    return false;
+    return 'failed';
   }
 }
 
-export function clearDraft(storage: DraftStorage, tourId: string): void {
+export function clearDraft(storage: DraftStorage, user: string, tourId: string): void {
   try {
-    storage.removeItem(draftKey(tourId));
+    storage.removeItem(draftKey(user, tourId));
   } catch {
     // Storage unavailable: nothing was stored either.
   }
 }
 
 /** The stored draft, or null if absent or unreadable (an unreadable one is dropped). */
-export function readDraft(storage: DraftStorage, tourId: string): EditorDraft | null {
+export function readDraft(storage: DraftStorage, user: string, tourId: string): EditorDraft | null {
   let raw: string | null;
   try {
-    raw = storage.getItem(draftKey(tourId));
+    raw = storage.getItem(draftKey(user, tourId));
   } catch {
     return null;
   }
@@ -74,7 +84,7 @@ export function readDraft(storage: DraftStorage, tourId: string): EditorDraft | 
     }
     return { v: 1, savedAt: d.savedAt, tour, configs: d.configs };
   } catch {
-    clearDraft(storage, tourId);
+    clearDraft(storage, user, tourId);
     return null;
   }
 }
@@ -110,4 +120,19 @@ export function applyDraft(docs: EditorDocs, draft: EditorDraft): DraftApplied {
     }
   }
   return { docs: { ...docs, tour, scenes }, restored, discarded };
+}
+
+/** Drop every parked draft in this browser (on sign-out). */
+export function sweepDrafts(storage?: Pick<Storage, 'length' | 'key' | 'removeItem'>): void {
+  try {
+    const store = storage ?? window.localStorage;
+    const keys: string[] = [];
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k?.startsWith(PREFIX)) keys.push(k);
+    }
+    for (const k of keys) store.removeItem(k);
+  } catch {
+    // Storage unavailable: nothing is parked there either.
+  }
 }

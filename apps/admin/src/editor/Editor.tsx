@@ -48,8 +48,8 @@ const toViewerHotspot = (h: Hotspot): ViewerHotspot => {
 /** Route element for `/app/t/:tourId` (screens 04 and 13). */
 export function Editor() {
   const { tourId = '' } = useParams();
-  const { api } = useSession();
-  const editor = useEditor(api, tourId);
+  const { api, user } = useSession();
+  const editor = useEditor(api, tourId, user.sub ?? 'anonymous');
   const { load } = editor;
   const ready = load.status === 'ready';
   useEffect(() => {
@@ -85,20 +85,17 @@ export function Editor() {
 
 function EditorMessage({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <section className="placeholder" role={children ? 'alert' : 'status'}>
-      <h1>{title}</h1>
-      {children}
-    </section>
+    <main className="app-shell__main">
+      <section className="placeholder" role={children ? 'alert' : 'status'}>
+        <h1>{title}</h1>
+        {children}
+      </section>
+    </main>
   );
 }
 
+// The tab-close prompt lives in useEditor (the re-auth redirect has to disarm it).
 function useUnsavedGuards(dirty: boolean, tourId: string) {
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [dirty]);
   // Share and insights open over the editor; anything else unmounts it.
   const inside = new RegExp(`/t/${tourId}(/(share/[a-z]+|insights))?/?$`);
   return useBlocker(
@@ -161,7 +158,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [failedLoad, setFailedLoad] = useState<string | null>(null);
-  const frame = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLElement>(null);
   const { dispatch, dirty } = editor;
   const tour = docs.tour.current;
   const settings = tour.settings ?? DEFAULT_TOUR_SETTINGS;
@@ -187,6 +184,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
+        // Commit a field that is still being typed in (inline titles commit on blur).
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        // A no-op while a conflict is open: that is resolved from the conflict banner.
         void editor.save();
       } else if (e.key === 'Escape') {
         setPlacing(false);
@@ -235,7 +235,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const conflictBusy = editor.saving;
 
   return (
-    <div ref={frame} className="ed">
+    <main ref={frame} className="ed">
       <title>{`${tour.title} · Editor · panote`}</title>
       {cfg && currentId ? (
         <PanoStage
@@ -498,9 +498,15 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           docs={docs}
           failures={editor.failures}
           busy={editor.saving}
+          blocked={editor.conflicts.length > 0}
           onRetry={() => void editor.save()}
         />
-        <Notices notices={editor.notices} onDismiss={editor.dismiss} />
+        <Notices
+          notices={editor.notices}
+          onDismiss={editor.dismiss}
+          busy={editor.publishing}
+          onRepublish={() => void editor.republish()}
+        />
       </div>
 
       <ConfirmModal
@@ -546,6 +552,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         onCancel={() => blocker.reset?.()}
       />
       <Outlet />
-    </div>
+    </main>
   );
 }

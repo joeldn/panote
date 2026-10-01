@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
+import { fakeAuth, renderAdmin, USER } from '../__fixtures__/auth.js';
 import { FakeServer, viewerFactory, type FakeViewer } from '../__fixtures__/editor-server.js';
 import { draftKey } from './draft.js';
 import { StageFactoryContext } from './stage-factory.js';
@@ -53,6 +53,14 @@ async function rename(ui: ReturnType<typeof within>, label: RegExp, value: strin
 }
 
 const lastViewer = () => viewers[viewers.length - 1]!;
+const DRAFT = draftKey(USER.sub, 't1');
+
+/** True when a tab close would show the browser's "leave site?" prompt. */
+const unloadPrompts = () => {
+  const e = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(e);
+  return e.defaultPrevented;
+};
 
 describe('editor: load and missing panos', () => {
   it('loads the tour with every config in one request and marks a missing pano', async () => {
@@ -65,12 +73,16 @@ describe('editor: load and missing panos', () => {
     fireEvent.click(ui.getByRole('button', { name: /^Missing pano/ }));
     expect(await ui.findByRole('heading', { name: 'Missing pano' })).toBeTruthy();
     expect(ui.getByRole('button', { name: 'Remove from tour' })).toBeTruthy();
+    // Full-screen: the app shell's own bar isn't rendered (or focusable) behind it.
+    expect(document.querySelector('.app-shell__bar')).toBeNull();
   });
 
   it('shows a not-found state for an unknown tour', async () => {
     server.tour = null;
+    localStorage.setItem(DRAFT, '{"v":1}');
     const { ui } = openTab();
     expect(await ui.findByRole('heading', { name: 'Tour not found' })).toBeTruthy();
+    expect(localStorage.getItem(DRAFT)).toBeNull();
   });
 });
 
@@ -188,12 +200,15 @@ describe('editor: save', () => {
     const { ui } = openTab('/app/t/t1', auth);
     await loaded(ui);
     await rename(ui, /Tour title: Old town/, 'Unsaved title');
+    expect(unloadPrompts()).toBe(true);
     server.unauthorized = true;
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
     const signIn = await screen.findByRole('button', { name: /Google/ });
     fireEvent.click(signIn);
     await waitFor(() => expect(auth.signIn).toHaveBeenCalled());
-    const stored = JSON.parse(localStorage.getItem(draftKey('t1'))!) as {
+    // The redirect itself must not trip the unsaved-changes prompt.
+    expect(unloadPrompts()).toBe(false);
+    const stored = JSON.parse(localStorage.getItem(DRAFT)!) as {
       tour: { etag: string; doc: { title: string } };
     };
     expect(stored.tour).toMatchObject({ etag: server.tour!.etag, doc: { title: 'Unsaved title' } });
@@ -204,12 +219,177 @@ describe('editor: save', () => {
     expect(await back.ui.findByRole('button', { name: /Tour title: Unsaved title/ })).toBeTruthy();
     expect(back.ui.getByText(/Restored your unsaved changes/)).toBeTruthy();
     expect(back.ui.getByRole('button', { name: 'Save' })).toBeTruthy();
-    expect(localStorage.getItem(draftKey('t1'))).toBeNull();
+    expect(localStorage.getItem(DRAFT)).toBeNull();
+  });
+
+  it('creates a missing config create-only; a concurrent create gets the conflict UI', async () => {
+    server.missing.set('hall', { deleting: false, hasOriginal: true });
+    const a = openTab();
+    const b = openTab();
+    await loaded(a.ui);
+    await loaded(b.ui);
+    for (const t of [a, b]) {
+      fireEvent.click(t.ui.getByRole('button', { name: /^Untitled pano/ }));
+    }
+    await rename(a.ui, /Pano name: Untitled pano/, 'Hall (A)');
+    fireEvent.click(a.ui.getByRole('button', { name: 'Save' }));
+    await a.ui.findByText('Saved');
+    const create = server.writes().find((w) => w.path === '/api/admin/panos/hall/config')!;
+    expect(create).toMatchObject({ ifNoneMatch: '*', ifMatch: null });
+    const etagA = server.configs.get('hall')!.etag;
+
+    await rename(b.ui, /Pano name: Untitled pano/, 'Hall (B)');
+    fireEvent.click(b.ui.getByRole('button', { name: 'Save' }));
+    const banner = await b.ui.findByRole('alert');
+    expect(banner.textContent).toContain('changed elsewhere');
+    // B's create did not overwrite A's.
+    expect(server.configs.get('hall')!.body.title).toBe('Hall (A)');
+
+    fireEvent.click(within(banner).getByRole('button', { name: 'Overwrite' }));
+    await b.ui.findByText('Saved');
+    const last = server
+      .writes()
+      .filter((w) => w.path === '/api/admin/panos/hall/config')
+      .pop();
+    expect(last).toMatchObject({ ifMatch: `"${etagA}"`, ifNoneMatch: null });
+    expect(server.configs.get('hall')!.body.title).toBe('Hall (B)');
+  });
+
+  it('reloading a tour conflict loads configs for scenes added elsewhere and keeps local edits', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Pano name: Square/, 'Square (local)');
+    await rename(ui, /Tour title: Old town/, 'Local title');
+    // Another device adds a pano to the tour.
+    server.setConfig('cellar', { title: 'Cellar', hotspots: [] });
+    server.setTour({
+      ...server.tour!.body,
+      scenes: [...(server.tour!.body.scenes as object[]), { panoId: 'cellar' }],
+    });
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    const banner = await ui.findByRole('alert');
+    expect(banner.textContent).toContain('Tour details');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Reload' }));
+    expect(await ui.findByRole('button', { name: /^Cellar/ })).toBeTruthy();
+    expect(ui.getByRole('button', { name: /Tour title: Old town/ })).toBeTruthy();
+    // The square config saved fine before the conflict, so it is the server's now.
+    expect(server.configs.get('square')!.body.title).toBe('Square (local)');
+    fireEvent.click(ui.getByRole('button', { name: /^Cellar/ }));
+    expect(await ui.findByRole('button', { name: /Pano name: Cellar/ })).toBeTruthy();
+  });
+
+  it('keeps local dirty configs when reloading a tour conflict', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Local title');
+    server.brokenConfigs.add('square');
+    await rename(ui, /Pano name: Square/, 'Square (unsaved)');
+    server.setTour({ ...server.tour!.body, title: 'Remote title' });
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    const alerts = await ui.findAllByRole('alert');
+    const conflict = alerts.find((a) => a.textContent?.includes('changed elsewhere'))!;
+    fireEvent.click(within(conflict).getByRole('button', { name: 'Reload' }));
+    expect(await ui.findByRole('button', { name: /Tour title: Remote title/ })).toBeTruthy();
+    expect(ui.getByRole('button', { name: /Pano name: Square \(unsaved\)/ })).toBeTruthy();
+    expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
+  });
+
+  it('blocks Ctrl+S and the error banner retry while a conflict is open', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    server.brokenConfigs.add('square');
+    await rename(ui, /Pano name: Square/, 'Square 2');
+    await rename(ui, /Tour title: Old town/, 'Mine');
+    server.setTour({ ...server.tour!.body, title: 'Theirs' });
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText(/This tour changed elsewhere/);
+    const retry = ui.getByRole('button', { name: 'Try again' }) as HTMLButtonElement;
+    expect(retry.disabled).toBe(true);
+    const before = server.writes().length;
+    fireEvent.keyDown(document, { key: 's', ctrlKey: true });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(server.writes().length).toBe(before);
+  });
+
+  it('Ctrl+S commits a title that is still being typed', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /Tour title: Old town/ }));
+    const input = ui.getByRole('textbox', { name: 'Tour title' });
+    input.focus();
+    fireEvent.change(input, { target: { value: 'Typed, not entered' } });
+    fireEvent.keyDown(document, { key: 's', metaKey: true });
+    await ui.findByText('Saved');
+    expect(server.tour!.body.title).toBe('Typed, not entered');
+  });
+
+  it('offers Try again on a publish that failed after a save', async () => {
+    const scenes = [{ panoId: 'church', reason: 'not-ready' }];
+    server.publishScript = () =>
+      new Response(JSON.stringify({ error: 'scenes not publishable', scenes }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Renamed');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText(/Church \(still processing\)/);
+    expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
+    server.publishScript = null;
+    fireEvent.click(ui.getByRole('button', { name: 'Try again' }));
+    expect(await ui.findByText(/now live for anyone with the link/)).toBeTruthy();
+    expect(server.writes().filter((w) => w.method === 'POST')).toHaveLength(2);
+    expect(server.writes().filter((w) => w.method === 'PUT')).toHaveLength(1);
+  });
+
+  it('warns instead of redirecting when the draft can’t be stored, then lets you continue', async () => {
+    const auth = fakeAuth();
+    const { ui } = openTab('/app/t/t1', auth);
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Unsaved title');
+    server.unauthorized = true;
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: /Google/ }));
+      const modal = screen.getByRole('dialog', { name: 'Your session has ended' });
+      expect((await within(modal).findByRole('alert')).textContent).toContain(
+        'couldn’t be kept while you sign in',
+      );
+      expect(auth.signIn).not.toHaveBeenCalled();
+      expect(unloadPrompts()).toBe(true);
+      fireEvent.click(within(modal).getByRole('button', { name: /Google/ }));
+      await waitFor(() => expect(auth.signIn).toHaveBeenCalled());
+    } finally {
+      setItem.mockRestore();
+    }
+  });
+
+  it('clears the parked draft after a successful save and sweeps drafts on sign-out', async () => {
+    const auth = fakeAuth();
+    localStorage.setItem(draftKey('google-oauth2|someone-else', 't9'), '{}');
+    const { ui } = openTab('/app/t/t1', auth);
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Edited');
+    localStorage.setItem(DRAFT, '{"v":1}');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect(localStorage.getItem(DRAFT)).toBeNull();
+
+    fireEvent.click(ui.getByRole('button', { name: /^Account:/ }));
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Sign out' }));
+    await waitFor(() => expect(auth.signOut).toHaveBeenCalled());
+    expect(Object.keys(localStorage).filter((k) => k.startsWith('panote:editor-draft:'))).toEqual(
+      [],
+    );
   });
 
   it('drops a parked draft whose doc changed on the server meanwhile', async () => {
     localStorage.setItem(
-      draftKey('t1'),
+      DRAFT,
       JSON.stringify({
         v: 1,
         savedAt: '2026-10-01T00:00:00Z',

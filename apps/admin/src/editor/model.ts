@@ -145,7 +145,8 @@ export type EditorAction =
   | { type: 'link/remove'; from: string; to: string }
   | { type: 'saved'; tour?: { etag: string; sent: TourDoc }; configs: SavedConfigs }
   | { type: 'etag'; key: DocKey; etag: string | null }
-  | { type: 'replace-doc'; key: DocKey; doc: TourState | SceneState };
+  | { type: 'replace-doc'; key: DocKey; doc: TourState | SceneState }
+  | { type: 'add-scenes'; scenes: Record<string, SceneState> };
 
 export type SavedConfigs = Record<string, { etag: string; sent: SceneConfig }>;
 
@@ -297,6 +298,12 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
       const s = docs.scenes[panoId];
       if (s?.kind !== 'config') return docs;
       return { ...docs, scenes: { ...docs.scenes, [panoId]: { ...s, etag: action.etag } } };
+    }
+    case 'add-scenes': {
+      // Only scenes this editor doesn't know yet; local (possibly dirty) configs stay.
+      const scenes = { ...docs.scenes };
+      for (const [panoId, scene] of Object.entries(action.scenes)) scenes[panoId] ??= scene;
+      return { ...docs, scenes };
     }
     case 'replace-doc': {
       if (action.key === 'tour') return { ...docs, tour: action.doc as TourState };
