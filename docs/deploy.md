@@ -360,9 +360,12 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --
 ```
 
 `ALERT_EMAIL_TO` is the recipient of the DLQ alert email (see "Tiling failure marker and alerting"
-below). It's a secret only to keep the owner's personal address out of the repo; it must be a
-verified Email Routing destination address on the account. Unset, the consumer skips the email with
-a warning and everything else works.
+below). It's a secret only to keep the owner's personal address out of the repo; it must be
+byte-identical to a verified Email Routing destination address on the account — a Gmail `+tag`
+variant counts as a *different* address, and a mismatch makes `send()` fail with
+`E_RECIPIENT_NOT_ALLOWED`, since `panote.io` isn't onboarded to Email Sending and only verified
+destinations are allowed. Unset, the consumer skips the email with a warning and everything else
+works.
 
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
@@ -372,8 +375,9 @@ interactive `secret put` if scripting this. **Status: set for dev, outstanding f
 `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
 environments; production has neither yet. `CF_ANALYTICS_TOKEN` and `CF_PURGE_TOKEN` are set on
 `admin-api`'s dev environment, outstanding for production. `ALERT_EMAIL_TO` is set on
-`tiler-consumer`'s dev environment (the owner's Gmail, a verified Email Routing destination),
-outstanding for production.
+`tiler-consumer`'s dev environment, to the owner's verified Email Routing destination (a `+tag`
+Gmail variant — must be byte-identical to the verified address; not written here), outstanding
+for production.
 
 ### CDN purge on delete (unit B6)
 
@@ -820,9 +824,12 @@ fresh-upload case above — the pano can simply be deleted again.
   rejects an old-scheme key outright.
 
   **Backlog/log check: closed, inconclusive.** Tried to confirm whether that backlog was actually
-  processed via the Workers Observability API, but it showed no queue-consumer invocations at all —
-  not even ones known to have run — so it appears blind to queue-consumer events on this account.
-  There's nothing more to learn this way; the question is closed without an answer, not resolved.
+  processed via the Workers Observability API's *events* view, but it fails on queue-consumer
+  events with a zod validation error on `$workers.requestId`/`outcome` — fields a queue-consumer
+  invocation apparently doesn't populate the way a `fetch` handler does. The *calculations* view,
+  grouped by `$metadata.message`, does work for queue-consumer logs (used below to verify the DLQ
+  alert end to end), but that was only found afterward, with nothing left from the original
+  cut-over to look for. The backlog question itself stays closed without an answer, not resolved.
   To inspect the queue's current state directly:
   ```bash
   pnpm --filter @service/tiler-consumer exec wrangler queues info pano-uploads-dlq-dev
@@ -844,32 +851,38 @@ fresh-upload case above — the pano can simply be deleted again.
   Notifications (no alert type for this, per current docs). **This is code and config only — it
   does not touch `panote.io`'s DNS, MX or Email Routing settings**, which are the account-recovery
   mail path (see DNS section).
-  - **Unverified: sending with Email Routing only.** The account has Email Routing on `panote.io`
-    but has not been onboarded to Email Sending. The
+  - **Confirmed, 2026-10-01: sending with Email Routing only.** The account has Email Routing on
+    `panote.io` but has not been onboarded to Email Sending. The
     [limits page](https://developers.cloudflare.com/email-service/platform/limits/) says sends to
     verified destination addresses work "on any plan, including when only Email Routing is
-    configured", as long as the sender is on a routing domain, and don't count toward sending quotas.
-    Not yet confirmed live.
-  - **Unverified: same account.** This assumes `panote-tiler-consumer[-dev]` and the `panote.io`
-    zone (and its verified destination address) are in the same Cloudflare account. A send from
-    another account fails with `E_SENDER_NOT_VERIFIED`.
+    configured", as long as the sender is on a routing domain, and don't count toward sending
+    quotas — confirmed live by the Ops step 2 test below, which landed in the inbox with no
+    Email Sending onboarding done.
+  - **Confirmed, 2026-10-01: same account.** This assumed `panote-tiler-consumer[-dev]` and the
+    `panote.io` zone (and its verified destination address) are in the same Cloudflare account (a
+    send from another account fails with `E_SENDER_NOT_VERIFIED`) — also confirmed by the same
+    successful test.
   - **Ops step 1 — set the recipient.** **Status: set for dev, outstanding for production.**
     ```bash
     pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --env dev
     ```
-    Enter the owner's Gmail (already a verified Email Routing destination). Repeat with
-    `--env production` once production is provisioned.
-  - **Ops step 2 — verify after the next dev deploy.** **Status: outstanding.** Send a test message
-    straight to the DLQ and check Gmail, including spam. wrangler 4.120 has no command for sending a
-    queue message, so use the dashboard: Workers & Pages → Queues → `pano-uploads-dlq-dev` →
-    Messages → Send message, type JSON, body:
+    Enter the owner's verified Email Routing destination address exactly — on dev this is a `+tag`
+    Gmail variant, and it must be byte-identical to the verified address, or the send fails with
+    `E_RECIPIENT_NOT_ALLOWED`. Repeat with `--env production` once production is provisioned.
+  - **Ops step 2 — verify after the next dev deploy.** **Status: done, verified 2026-10-01.** Sent
+    a test message straight to the DLQ and checked the inbox. wrangler 4.120 has no command for
+    sending a queue message, so this used the dashboard: Workers & Pages → Queues →
+    `pano-uploads-dlq-dev` → Messages → Send message, type JSON, body:
     ```json
     { "object": { "key": "panos/alert-test/alert-test/original" }, "action": "PutObject" }
     ```
-    The key doesn't exist, so no marker is written (logged as skipped) and the message is acked.
-    Expect one email with subject `[panote] tiling failed permanently (1) - pano-uploads-dlq-dev`.
-    If none arrives, check the Worker's logs for `failed to send DLQ alert` and its error code
-    (`E_SENDER_NOT_VERIFIED`, `E_RECIPIENT_NOT_ALLOWED`, ...) or `skip DLQ alert`.
+    The key doesn't exist, so no marker was written (logged as skipped) and the message was acked.
+    The email arrived with subject `[panote] tiling failed permanently (1) - pano-uploads-dlq-dev`,
+    confirming the send path end to end on dev. Read via the Workers Observability
+    *calculations* view grouped by `$metadata.message` (see the backlog/log check note above for
+    why the *events* view doesn't work for this). If a future test doesn't arrive, check the
+    Worker's logs for `failed to send DLQ alert` and its error code (`E_SENDER_NOT_VERIFIED`,
+    `E_RECIPIENT_NOT_ALLOWED`, ...) or `skip DLQ alert`.
 - **Still unexercised live.** Unit B4 added the marker-write code and its unit tests (mocked/miniflare
   R2, no real Cloudflare Queues); it does not change the fact recorded in "Known unverified areas"
   below that an actual retry-to-DLQ delivery has never been observed against real Cloudflare.
