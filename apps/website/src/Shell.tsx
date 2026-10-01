@@ -1,21 +1,29 @@
 import { AccountMenu, Logo } from '@internal/ui';
-import { signInPath } from '@internal/web-kit';
 import type { ReactNode } from 'react';
-import { Link, Outlet } from 'react-router';
+import { Link, Outlet, useLocation } from 'react-router';
 
 import { useAccount } from './account.js';
 import { useAuthEnv } from './auth-context.js';
 import { SignInDialog } from './SignInDialog.js';
 
+// Opens the modal over the current page; an existing `next` (e.g. from the guard) is kept.
+function useSignInLink(): string {
+  const { pathname, search, hash } = useLocation();
+  const params = new URLSearchParams(search);
+  params.set('signin', '1');
+  return `${pathname}?${params.toString()}${hash}`;
+}
+
 function AccountNav() {
   const { auth, origins } = useAuthEnv();
+  const signInLink = useSignInLink();
   const account = useAccount();
   const myTours = `${origins.admin}/app/`;
 
   if (account.status === 'unknown') return null;
   if (account.status === 'signed-out') {
     return (
-      <Link to={signInPath()} className="app-shell__link">
+      <Link to={signInLink} className="app-shell__link">
         Sign in
       </Link>
     );

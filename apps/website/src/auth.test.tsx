@@ -57,10 +57,22 @@ describe('sign-in modal', () => {
     expect(router.state.location.search).toBe('?x=1');
   });
 
-  it('opens from the nav "Sign in" link', async () => {
-    renderSite('/terms');
-    fireEvent.click(await screen.findByRole('link', { name: 'Sign in' }));
+  it('opens from the nav "Sign in" link over the current page', async () => {
+    const { router } = renderSite('/s/my-tour?x=1');
+    const link = await screen.findByRole('link', { name: 'Sign in' });
+    expect(link.getAttribute('href')).toBe('/s/my-tour?x=1&signin=1');
+    fireEvent.click(link);
     expect(await screen.findByRole('dialog', { name: 'Sign in to panote' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/s/my-tour');
+    expect(screen.getByRole('heading', { name: 'Tour my-tour' })).toBeTruthy();
+  });
+
+  it('keeps an existing next on the "Sign in" link', async () => {
+    renderSite('/?next=%2Fapp%2Fnew%3Fresume%3D1');
+    const link = await screen.findByRole('link', { name: 'Sign in' });
+    const url = new URL(link.getAttribute('href')!, LOCAL.website);
+    expect(url.searchParams.get('signin')).toBe('1');
+    expect(url.searchParams.get('next')).toBe('/app/new?resume=1');
   });
 
   it('explains instead of offering buttons when auth is unconfigured', async () => {
