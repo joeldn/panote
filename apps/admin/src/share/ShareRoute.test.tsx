@@ -62,6 +62,7 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     createTour: fail,
     putTour: fail,
     putPanoConfig: fail,
+    createPanoConfig: fail,
     deleteTour: fail,
     deletePano: fail,
     publishTour: vi.fn(async () => ({

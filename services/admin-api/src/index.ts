@@ -30,6 +30,7 @@ import {
   tourIfMatch,
   tourViewEtag,
   updateConditional,
+  writeConditional,
 } from './conditional.js';
 import { deletePano } from './delete-pano.js';
 import { deleteTour } from './delete-tour.js';
@@ -185,9 +186,9 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
     panoId,
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
-  // 428 (missing If-Match) is checked before any state read, so it holds
-  // regardless of whether a tombstone or the pano even exists.
-  const onlyIf = updateConditional(c.req.header('If-Match'));
+  // 428 (no If-Match or If-None-Match) is checked before any state read, so it holds
+  // regardless of whether a tombstone or the pano even exists. `If-None-Match: *` = create-only.
+  const onlyIf = writeConditional(c.req.header('If-Match'), c.req.header('If-None-Match'));
   // A tombstone means an interrupted DELETE is still in flight for this
   // panoId - refuse to resurrect it out from under that delete.
   if (await c.env.BUCKET.head(deletingKey(sub, panoId))) {

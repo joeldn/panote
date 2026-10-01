@@ -1,9 +1,10 @@
 import { SignInModal } from '@internal/ui';
-import { signInPath, type AuthUser, type ConnectionId } from '@internal/web-kit';
+import { signInPath, sweepEditorDrafts, type AuthUser, type ConnectionId } from '@internal/web-kit';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
+import { cancelBeforeSignIn, runBeforeSignIn } from './before-sign-in.js';
 import { createSessionApi, SessionContext, type Session } from './session.js';
 import { Notice } from './Shell.js';
 
@@ -29,6 +30,7 @@ export function RequireAuth() {
   const [state, setState] = useState<GuardState>({ status: 'checking' });
   const [attempt, setAttempt] = useState(0);
   const [expired, setExpired] = useState(false);
+  const warnedRef = useRef(false);
 
   useEffect(() => {
     pathRef.current = path;
@@ -66,7 +68,16 @@ export function RequireAuth() {
   );
   const user = state.status === 'ready' ? state.user : null;
   const session = useMemo<Session | null>(
-    () => user && { user, api, signOut: () => auth.signOut(`${origins.website}/`) },
+    () =>
+      user && {
+        user,
+        api,
+        signOut: () => {
+          // Parked editor drafts belong to this user; don't leave them on a shared machine.
+          sweepEditorDrafts();
+          return auth.signOut(`${origins.website}/`);
+        },
+      },
     [user, api, auth, origins],
   );
 
@@ -108,7 +119,21 @@ export function RequireAuth() {
         title="Your session has ended"
         subtitle="Sign in again to continue."
         options={auth.connections}
-        onSignIn={(id) => auth.signIn({ connection: id as ConnectionId, returnTo: path })}
+        onSignIn={async (id) => {
+          // A screen that can't park its unsaved work stops the first attempt with a
+          // warning (shown in the modal); a second click signs in anyway.
+          const refusal = runBeforeSignIn({ force: warnedRef.current });
+          if (refusal && !warnedRef.current) {
+            warnedRef.current = true;
+            throw new Error(`${refusal} Choose a sign-in option again to continue anyway.`);
+          }
+          try {
+            await auth.signIn({ connection: id as ConnectionId, returnTo: path });
+          } catch (e) {
+            cancelBeforeSignIn();
+            throw e;
+          }
+        }}
         termsHref={`${origins.website}/terms`}
         privacyHref={`${origins.website}/privacy`}
       />

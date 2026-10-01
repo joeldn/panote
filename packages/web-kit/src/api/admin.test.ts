@@ -161,6 +161,16 @@ describe('createAdminApi', () => {
     expect(call(1).headers['If-Match']).toBe('*');
   });
 
+  it('createPanoConfig sends If-None-Match: * (no If-Match) and maps 412 to ConflictError', async () => {
+    const { api, call } = setup(json({ etag: 'e1' }), json({ error: 'conflict' }, 412));
+    await expect(api.createPanoConfig('p1', { title: 'A' })).resolves.toEqual({ etag: 'e1' });
+    expect(call().init.method).toBe('PUT');
+    expect(call().url).toBe('https://panote.test/api/admin/panos/p1/config');
+    expect(call().headers['If-None-Match']).toBe('*');
+    expect(call().headers['If-Match']).toBeUndefined();
+    await expect(api.createPanoConfig('p1', { title: 'B' })).rejects.toBeInstanceOf(ConflictError);
+  });
+
   it('PUT 412 throws ConflictError; other errors throw ApiError with status', async () => {
     const { api } = setup(
       json({ error: 'conflict' }, 412),

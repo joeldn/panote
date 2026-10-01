@@ -17,6 +17,7 @@
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
   "dependencies": {
+    "@internal/contracts": "workspace:*",
     "@internal/ui": "workspace:*",
     "@internal/web-kit": "workspace:*",
     "react": "catalog:",
