@@ -11,14 +11,18 @@ afterEach(cleanup);
 describe('admin routes', () => {
   it('renders the shell and the dashboard at /app/', async () => {
     renderAt('/app/');
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeTruthy();
+    expect(
+      await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
+    ).toBeTruthy();
     expect(screen.getByRole('img', { name: 'panote.io' })).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('opens the upload overlay over the dashboard', async () => {
     renderAt('/app/new');
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeTruthy();
+    expect(
+      await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
+    ).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'New pano' })).toBeTruthy();
   });
 

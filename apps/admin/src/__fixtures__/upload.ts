@@ -52,8 +52,14 @@ export function fakeBackend() {
     const method = init.method ?? 'GET';
     const headers = Object.fromEntries(new Headers(init.headers).entries());
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : null;
-    state.calls.push({ method, url, headers, body, cache: init.cache });
     const path = url.replace(/^https?:\/\/[^/]+/, '');
+    // The dashboard's own list reads (it sits under /app/new); not part of the upload.
+    if (method === 'GET' && /^\/api\/admin\/(tours|panos)(\?|$)/.test(path)) {
+      return path.startsWith('/api/admin/tours')
+        ? json({ tours: [], cursor: null })
+        : json({ panoIds: [], panos: [], cursor: null });
+    }
+    state.calls.push({ method, url, headers, body, cache: init.cache });
 
     if (url.startsWith(TILES)) {
       const next = state.manifests.length > 1 ? state.manifests.shift() : state.manifests[0];
