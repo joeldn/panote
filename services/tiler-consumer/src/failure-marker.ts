@@ -7,6 +7,7 @@ import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { putJson } from '@internal/worker-kit/r2-binding';
 
 export type FailureReason = 'dlq' | 'oversize' | 'unprocessable-key';
+export type MarkerOutcome = 'written' | 'skipped' | 'failed';
 
 // R2 event etags may arrive quoted (S3-style) or bare; R2Object.etag is
 // always bare - strip quotes from both sides before comparing.
@@ -20,7 +21,7 @@ export const writeFailureMarker = async (
   originalNotificationKey: string,
   reason: FailureReason,
   expectedEtag?: string,
-): Promise<void> => {
+): Promise<MarkerOutcome> => {
   let markerKey: string;
   try {
     markerKey = tileFailedKeyFromOriginalKey(originalNotificationKey);
@@ -29,7 +30,7 @@ export const writeFailureMarker = async (
     console.warn(
       `cannot derive tile-failed marker for ${originalNotificationKey}: ${e instanceof Error ? e.message : String(e)}`,
     );
-    return;
+    return 'skipped';
   }
   // Same input already validated above, so this cannot throw again.
   const panoId = panoIdFromOriginalKey(originalNotificationKey);
@@ -44,13 +45,13 @@ export const writeFailureMarker = async (
     console.warn(
       `skip tile-failed marker for ${originalNotificationKey}: HEAD failed (${e instanceof Error ? e.message : String(e)})`,
     );
-    return;
+    return 'skipped';
   }
   if (!head) {
     console.warn(
       `skip tile-failed marker for ${originalNotificationKey}: original no longer exists`,
     );
-    return;
+    return 'skipped';
   }
   // Cloudflare create events always carry object.eTag; a missing one can't
   // be proven current, so skip rather than fail open onto whatever's there.
@@ -58,13 +59,13 @@ export const writeFailureMarker = async (
     console.warn(
       `skip tile-failed marker for ${originalNotificationKey}: notification carried no eTag`,
     );
-    return;
+    return 'skipped';
   }
   if (bareEtag(head.etag) !== bareEtag(expectedEtag)) {
     console.warn(
       `skip tile-failed marker for ${originalNotificationKey}: original etag changed (superseded by a newer upload)`,
     );
-    return;
+    return 'skipped';
   }
 
   // Same-etag race: a concurrent success (duplicate delivery or identical
@@ -78,7 +79,7 @@ export const writeFailureMarker = async (
         console.warn(
           `skip tile-failed marker for ${originalNotificationKey}: a concurrent attempt already tiled this etag (manifest version ${expectedVersion})`,
         );
-        return;
+        return 'skipped';
       }
     }
   } catch (e) {
@@ -99,7 +100,7 @@ export const writeFailureMarker = async (
     console.error(
       `failed to write tile-failed marker ${markerKey}: ${e instanceof Error ? e.message : String(e)}`,
     );
-    return;
+    return 'failed';
   }
 
   // The original can be deleted between the pre-write HEAD above and the
@@ -107,9 +108,13 @@ export const writeFailureMarker = async (
   try {
     const postHead = await bucket.head(originalNotificationKey);
     if (!postHead) {
+      // A failed delete leaves an orphan marker behind, so report it as failed.
+      let cleared = true;
       await bucket.delete(markerKey).catch((e: unknown) => {
+        cleared = false;
         console.warn(`failed to clear a just-written marker ${markerKey}: ${String(e)}`);
       });
+      return cleared ? 'skipped' : 'failed';
     }
   } catch (e) {
     // The marker is already written; log only - there is nothing safe to
@@ -118,4 +123,5 @@ export const writeFailureMarker = async (
       `could not verify the original still exists after writing ${markerKey}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
+  return 'written';
 };
