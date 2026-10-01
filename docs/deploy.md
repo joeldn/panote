@@ -791,16 +791,16 @@ fresh-upload case above — the pano can simply be deleted again.
   ```
 - **Alerting — email per dead-lettered batch.** After acking every message in a DLQ batch, the
   consumer sends one plain-text email through a `send_email` binding (`ALERT_EMAIL`,
-  `services/tiler-consumer/src/alert.ts`). Subject `[panote] tiling failed permanently (N) — <queue>`;
+  `services/tiler-consumer/src/alert.ts`). Subject `[panote] tiling failed permanently (N) - <queue>`;
   the body lists each key (or the message id, for a message with no `object.key`), whether its
   tile-failed marker was written or skipped, the UTC time and the queue name. The sender is the
   `ALERT_EMAIL_FROM` var, `tiler-alerts@panote.io`: it has to be on an Email Routing domain and
   only `panote.io` has routing (`panote.dev` doesn't). The recipient is the `ALERT_EMAIL_TO` secret.
   The binding is unrestricted in `wrangler.jsonc` (no `destination_address`) so the address stays
   out of the repo; Cloudflare still only delivers to verified Email Routing destinations. The send
-  never throws and never changes ack behaviour: a failure logs `failed to send DLQ alert` (with the
-  Cloudflare error code, never the recipient), and a missing secret or binding logs a warning and
-  skips. The main queue never sends. This uses the structured `send({ to, from, subject, text })`
+  never throws and never changes ack behaviour: a failure logs `failed to send DLQ alert` with only the
+  error's `code` and `name` (never its message, which may echo the recipient), and a missing
+  `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM` or binding logs a warning and skips. The main queue never sends. This uses the structured `send({ to, from, subject, text })`
   API ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)).
   Chosen over a Tail Worker (needs log-string matching) and over Workers Observability / Cloudflare
   Notifications (no alert type for this, per current docs). **This is code and config only — it
@@ -829,7 +829,7 @@ fresh-upload case above — the pano can simply be deleted again.
     { "object": { "key": "panos/alert-test/alert-test/original" }, "action": "PutObject" }
     ```
     The key doesn't exist, so no marker is written (logged as skipped) and the message is acked.
-    Expect one email with subject `[panote] tiling failed permanently (1) — pano-uploads-dlq-dev`.
+    Expect one email with subject `[panote] tiling failed permanently (1) - pano-uploads-dlq-dev`.
     If none arrives, check the Worker's logs for `failed to send DLQ alert` and its error code
     (`E_SENDER_NOT_VERIFIED`, `E_RECIPIENT_NOT_ALLOWED`, ...) or `skip DLQ alert`.
 - **Still unexercised live.** Unit B4 added the marker-write code and its unit tests (mocked/miniflare
@@ -973,3 +973,5 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
   can't list bucket objects without S3 credentials.
+- **The DLQ alert email has no volume throttle** (follow-up): it sends one email per DLQ batch,
+  so a burst of failures means a burst of emails.
