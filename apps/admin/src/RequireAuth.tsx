@@ -1,11 +1,10 @@
 import { SignInModal } from '@internal/ui';
-import { signInPath, type AuthUser, type ConnectionId } from '@internal/web-kit';
+import { signInPath, sweepEditorDrafts, type AuthUser, type ConnectionId } from '@internal/web-kit';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
-import { runBeforeSignIn } from './before-sign-in.js';
-import { sweepDrafts } from './editor/draft.js';
+import { cancelBeforeSignIn, runBeforeSignIn } from './before-sign-in.js';
 import { createSessionApi, SessionContext, type Session } from './session.js';
 import { Notice } from './Shell.js';
 
@@ -75,7 +74,7 @@ export function RequireAuth() {
         api,
         signOut: () => {
           // Parked editor drafts belong to this user; don't leave them on a shared machine.
-          sweepDrafts();
+          sweepEditorDrafts();
           return auth.signOut(`${origins.website}/`);
         },
       },
@@ -123,12 +122,17 @@ export function RequireAuth() {
         onSignIn={async (id) => {
           // A screen that can't park its unsaved work stops the first attempt with a
           // warning (shown in the modal); a second click signs in anyway.
-          const refusal = runBeforeSignIn();
+          const refusal = runBeforeSignIn({ force: warnedRef.current });
           if (refusal && !warnedRef.current) {
             warnedRef.current = true;
             throw new Error(`${refusal} Choose a sign-in option again to continue anyway.`);
           }
-          await auth.signIn({ connection: id as ConnectionId, returnTo: path });
+          try {
+            await auth.signIn({ connection: id as ConnectionId, returnTo: path });
+          } catch (e) {
+            cancelBeforeSignIn();
+            throw e;
+          }
         }}
         termsHref={`${origins.website}/terms`}
         privacyHref={`${origins.website}/privacy`}

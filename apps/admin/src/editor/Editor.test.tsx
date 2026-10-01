@@ -363,9 +363,26 @@ describe('editor: save', () => {
       expect(unloadPrompts()).toBe(true);
       fireEvent.click(within(modal).getByRole('button', { name: /Google/ }));
       await waitFor(() => expect(auth.signIn).toHaveBeenCalled());
+      // Continuing anyway also disarms the leave-page prompt.
+      expect(unloadPrompts()).toBe(false);
     } finally {
       setItem.mockRestore();
     }
+  });
+
+  it('re-arms the leave-page prompt if the sign-in redirect fails', async () => {
+    const auth = fakeAuth({
+      signIn: vi.fn(async () => Promise.reject(new Error('popup blocked'))),
+    });
+    const { ui } = openTab('/app/t/t1', auth);
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Unsaved title');
+    server.unauthorized = true;
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Google/ }));
+    const modal = screen.getByRole('dialog', { name: 'Your session has ended' });
+    expect((await within(modal).findByRole('alert')).textContent).toContain('popup blocked');
+    expect(unloadPrompts()).toBe(true);
   });
 
   it('clears the parked draft after a successful save and sweeps drafts on sign-out', async () => {

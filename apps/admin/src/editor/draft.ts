@@ -5,6 +5,8 @@ import {
   type TourDoc,
 } from '@internal/contracts';
 
+import { EDITOR_DRAFT_PREFIX } from '@internal/web-kit';
+
 import { panoKey, type DocKey, type EditorDocs } from './model.js';
 import { planSave } from './save.js';
 
@@ -20,10 +22,9 @@ export interface EditorDraft {
   configs: Record<string, { etag: string | null; config: SceneConfig }>;
 }
 
-const PREFIX = 'panote:editor-draft:';
-
 /** `user` is the Auth0 sub, so one browser profile never restores another user's edits. */
-export const draftKey = (user: string, tourId: string): string => `${PREFIX}${user}:${tourId}`;
+export const draftKey = (user: string, tourId: string): string =>
+  `${EDITOR_DRAFT_PREFIX}${user}:${tourId}`;
 
 export type DraftWrite = 'clean' | 'stored' | 'failed';
 
@@ -120,19 +121,4 @@ export function applyDraft(docs: EditorDocs, draft: EditorDraft): DraftApplied {
     }
   }
   return { docs: { ...docs, tour, scenes }, restored, discarded };
-}
-
-/** Drop every parked draft in this browser (on sign-out). */
-export function sweepDrafts(storage?: Pick<Storage, 'length' | 'key' | 'removeItem'>): void {
-  try {
-    const store = storage ?? window.localStorage;
-    const keys: string[] = [];
-    for (let i = 0; i < store.length; i++) {
-      const k = store.key(i);
-      if (k?.startsWith(PREFIX)) keys.push(k);
-    }
-    for (const k of keys) store.removeItem(k);
-  } catch {
-    // Storage unavailable: nothing is parked there either.
-  }
 }

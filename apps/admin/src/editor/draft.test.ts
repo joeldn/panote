@@ -1,14 +1,8 @@
 import type { TourWithConfigsOk } from '@internal/contracts';
+import { sweepEditorDrafts } from '@internal/web-kit';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import {
-  applyDraft,
-  draftKey,
-  readDraft,
-  sweepDrafts,
-  writeDraft,
-  type DraftStorage,
-} from './draft.js';
+import { applyDraft, draftKey, readDraft, writeDraft, type DraftStorage } from './draft.js';
 import { dirtyKeys, editorReducer, fromServer, type EditorDocs } from './model.js';
 
 const ME = 'google-oauth2|me';
@@ -64,7 +58,7 @@ describe('editor drafts', () => {
     writeDraft(localStorage, ME, edited());
     writeDraft(localStorage, OTHER, edited());
     localStorage.setItem('panote.currentTour', 't1');
-    sweepDrafts(localStorage);
+    sweepEditorDrafts(localStorage);
     expect(localStorage.length).toBe(1);
     expect(localStorage.getItem('panote.currentTour')).toBe('t1');
   });

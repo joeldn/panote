@@ -229,6 +229,9 @@ export function useEditor(
     proceed: () => {
       unloadGuardRef.current = false;
     },
+    cancel: () => {
+      unloadGuardRef.current = true;
+    },
   });
 
   const dirtyCount = docs ? dirtyKeys(docs).length : 0;
