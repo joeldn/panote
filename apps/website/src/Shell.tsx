@@ -1,4 +1,5 @@
 import { AccountMenu, cx, Logo } from '@internal/ui';
+import { sweepEditorDrafts } from '@internal/web-kit';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, Outlet, useLocation } from 'react-router';
 
@@ -39,7 +40,11 @@ function AccountNav() {
       <AccountMenu
         user={account.user}
         items={[{ label: 'My tours', icon: 'fa-solid fa-layer-group', href: myTours }]}
-        onSignOut={() => auth.signOut(`${origins.website}/`)}
+        onSignOut={() => {
+          // Same origin as the admin app: drop its parked editor drafts too.
+          sweepEditorDrafts();
+          return auth.signOut(`${origins.website}/`);
+        }}
       />
     </div>
   );

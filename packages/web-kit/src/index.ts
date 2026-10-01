@@ -121,3 +121,4 @@ export {
   type AppOrigins,
   type ReturnTarget,
 } from './app-links.js';
+export { EDITOR_DRAFT_PREFIX, sweepEditorDrafts } from './drafts.js';
