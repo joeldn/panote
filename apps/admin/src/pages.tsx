@@ -1,4 +1,4 @@
-import { Outlet, useParams } from 'react-router';
+import { useParams } from 'react-router';
 
 import { Placeholder } from './Shell.js';
 
