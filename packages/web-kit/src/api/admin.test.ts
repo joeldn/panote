@@ -312,3 +312,45 @@ describe('publish routes', () => {
     expect(publishErrorOf(new Error('network'))).toBeNull();
   });
 });
+
+describe('getInsights', () => {
+  const insights = {
+    days: 14,
+    from: '2026-09-18T00:00:00.000Z',
+    to: '2026-10-01T12:00:00.000Z',
+    totalViews: 3,
+    avgDwellMs: null,
+    daily: [{ date: '2026-10-01', views: 3 }],
+    byPano: [{ panoId: 'p1', views: 3 }],
+    topHotspots: [],
+  };
+
+  it('GETs the 14-day window by default and validates the result', async () => {
+    const { api, call } = setup(json(insights), json(insights));
+    await expect(api.getInsights('t1')).resolves.toEqual({ status: 'ok', data: insights });
+    expect(call(0).url).toBe('https://panote.test/api/admin/tours/t1/insights?days=14');
+    expect(call(0).init.method).toBe('GET');
+    await api.getInsights('t1', 7);
+    expect(call(1).url).toBe('https://panote.test/api/admin/tours/t1/insights?days=7');
+  });
+
+  it('maps the 502 to unavailable and a 404 to not-found', async () => {
+    const { api } = setup(
+      json({ error: 'analytics unavailable' }, 502),
+      json({ error: 'not found' }, 404),
+    );
+    await expect(api.getInsights('t1')).resolves.toEqual({ status: 'unavailable' });
+    await expect(api.getInsights('t1')).resolves.toEqual({ status: 'not-found' });
+  });
+
+  it('throws on any other failure or a drifted body', async () => {
+    const { api } = setup(
+      json({ error: 'bad gateway' }, 502),
+      json({ error: 'boom' }, 500),
+      json({ ...insights, totalViews: -1 }),
+    );
+    await expect(api.getInsights('t1')).rejects.toBeInstanceOf(ApiError);
+    await expect(api.getInsights('t1')).rejects.toBeInstanceOf(ApiError);
+    await expect(api.getInsights('t1')).rejects.toBeInstanceOf(ApiSchemaError);
+  });
+});
