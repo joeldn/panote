@@ -1,4 +1,4 @@
-import { Outlet, useParams } from 'react-router';
+import { useParams } from 'react-router';
 
 import { Placeholder } from './Shell.js';
 
@@ -9,14 +9,7 @@ export { Dashboard } from './dashboard/Dashboard.js';
 
 export { NewPanoOverlay as UploadOverlay } from './upload/UploadOverlay.js';
 
-export function Editor() {
-  const { tourId } = useParams();
-  return (
-    <Placeholder title={`Editor ${tourId ?? ''}`}>
-      <Outlet />
-    </Placeholder>
-  );
-}
+export { Editor } from './editor/Editor.js';
 
 export function Preview() {
   const { tourId } = useParams();

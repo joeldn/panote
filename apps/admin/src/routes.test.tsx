@@ -2,9 +2,15 @@ import { cleanup, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderAdmin } from './__fixtures__/auth.js';
+import { FakeServer } from './__fixtures__/editor-server.js';
 
 // Signed in (the default fake auth): the guard lets every route through.
-const renderAt = (path: string) => renderAdmin(path);
+const renderAt = (path: string) => {
+  const server = new FakeServer();
+  server.setTour({ tourId: 'tour-1', title: 'Tour one', scenes: [] });
+  return renderAdmin(path, { fetch: server.fetch });
+};
+const editorShown = () => screen.findByRole('button', { name: /Tour title: Tour one/ });
 
 afterEach(cleanup);
 
@@ -28,7 +34,7 @@ describe('admin routes', () => {
 
   it.each(['link', 'privacy', 'embed'])('opens the %s share tab over the editor', async (tab) => {
     renderAt(`/app/t/tour-1/share/${tab}`);
-    expect(await screen.findByRole('heading', { name: 'Editor tour-1' })).toBeTruthy();
+    expect(await editorShown()).toBeTruthy();
     expect(await screen.findByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
   });
 

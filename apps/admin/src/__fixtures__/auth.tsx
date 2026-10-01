@@ -1,6 +1,12 @@
 import { render } from '@testing-library/react';
-import { loadConfig, type Auth, type AppOrigins, type FetchLike } from '@internal/web-kit';
-import { StrictMode } from 'react';
+import {
+  loadConfig,
+  type Auth,
+  type AppConfig,
+  type AppOrigins,
+  type FetchLike,
+} from '@internal/web-kit';
+import { StrictMode, type ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { vi } from 'vitest';
 
@@ -32,7 +38,7 @@ export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
 }
 
 // The share route reads VITE_SITE_ORIGIN for its links.
-export const TEST_CONFIG = loadConfig({
+export const TEST_CONFIG: AppConfig = loadConfig({
   VITE_SITE_ORIGIN: 'https://panote.dev',
   VITE_CDN_BASE: 'https://cdn.panote.dev/',
   VITE_AUTH0_DOMAIN: 'panote-dev.au.auth0.com',
@@ -45,15 +51,17 @@ export interface RenderOptions {
   fetch?: FetchLike;
   origins?: AppOrigins;
   strict?: boolean;
-  /** Upload seams (XHR, tiles base); the default has no tiles base, so uploads can't start. */
+  /** Upload seams: the PUT XHR, the tiles base and the pending-file store. */
   upload?: UploadEnv;
+  /** Wraps the router, e.g. to provide a test viewer factory. */
+  wrap?: (tree: ReactNode) => ReactNode;
 }
 
 export function renderAdmin(path: string, opts: RenderOptions = {}) {
   const auth = opts.auth ?? fakeAuth();
   const assign = vi.fn<(url: string) => void>();
   const router = createMemoryRouter(routes, { basename: '/app', initialEntries: [path] });
-  const tree = (
+  const app = (
     <AuthEnvContext
       value={{
         auth,
@@ -63,13 +71,14 @@ export function renderAdmin(path: string, opts: RenderOptions = {}) {
         ...(opts.fetch && { fetch: opts.fetch }),
       }}
     >
-      <ConfigContext value={TEST_CONFIG}>
-        <UploadEnvContext value={opts.upload ?? {}}>
-          <RouterProvider router={router} />
-        </UploadEnvContext>
-      </ConfigContext>
+      <UploadEnvContext value={opts.upload ?? {}}>
+        <RouterProvider router={router} />
+      </UploadEnvContext>
     </AuthEnvContext>
   );
-  render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
-  return { auth, assign, router };
+  const tree = (
+    <ConfigContext value={TEST_CONFIG}>{opts.wrap ? opts.wrap(app) : app}</ConfigContext>
+  );
+  const { container } = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
+  return { auth, assign, router, container };
 }

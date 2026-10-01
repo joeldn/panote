@@ -1,9 +1,10 @@
 import { SignInModal } from '@internal/ui';
-import { signInPath, type AuthUser, type ConnectionId } from '@internal/web-kit';
+import { signInPath, sweepEditorDrafts, type AuthUser, type ConnectionId } from '@internal/web-kit';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
+import { cancelBeforeSignIn, runBeforeSignIn } from './before-sign-in.js';
 import {
   createSessionApi,
   createSessionUploadApi,
@@ -37,6 +38,7 @@ export function RequireAuth() {
   const [expired, setExpired] = useState(false);
   // Work that has to finish before the page leaves for Auth0 (see Session.holdSignIn).
   const [holds] = useState(() => new Set<Promise<unknown>>());
+  const warnedRef = useRef(false);
 
   useEffect(() => {
     pathRef.current = path;
@@ -89,7 +91,11 @@ export function RequireAuth() {
         upload,
         requestSignIn: () => setExpired(true),
         holdSignIn,
-        signOut: () => auth.signOut(`${origins.website}/`),
+        signOut: () => {
+          // Parked editor drafts belong to this user; don't leave them on a shared machine.
+          sweepEditorDrafts();
+          return auth.signOut(`${origins.website}/`);
+        },
       },
     [user, api, upload, holdSignIn, auth, origins],
   );
@@ -135,8 +141,21 @@ export function RequireAuth() {
         subtitle="Sign in again to continue."
         options={auth.connections}
         onSignIn={async (id) => {
-          await Promise.allSettled([...holds]);
-          await auth.signIn({ connection: id as ConnectionId, returnTo: path });
+          // A screen that can't park its unsaved work stops the first attempt with a
+          // warning (shown in the modal); a second click signs in anyway.
+          const refusal = runBeforeSignIn({ force: warnedRef.current });
+          if (refusal && !warnedRef.current) {
+            warnedRef.current = true;
+            throw new Error(`${refusal} Choose a sign-in option again to continue anyway.`);
+          }
+          try {
+            // Held work (an upload's file stash) must land before the page leaves.
+            await Promise.allSettled([...holds]);
+            await auth.signIn({ connection: id as ConnectionId, returnTo: path });
+          } catch (e) {
+            cancelBeforeSignIn();
+            throw e;
+          }
         }}
         termsHref={`${origins.website}/terms`}
         privacyHref={`${origins.website}/privacy`}

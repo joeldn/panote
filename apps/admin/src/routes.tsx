@@ -29,18 +29,19 @@ export const routes: RouteObject[] = [
               { path: 'new', element: <UploadOverlay /> },
             ],
           },
-          {
-            path: 't/:tourId',
-            element: <Editor />,
-            children: [
-              { path: 'share/link', element: <ShareModal tab="link" /> },
-              { path: 'share/privacy', element: <ShareModal tab="privacy" /> },
-              { path: 'share/embed', element: <ShareModal tab="embed" /> },
-              { path: 'insights', element: <InsightsModal /> },
-            ],
-          },
           { path: 't/:tourId/preview', element: <Preview /> },
           { path: '*', element: <NotFound /> },
+        ],
+      },
+      // Full-screen with its own top bar, so outside Shell (whose bar would sit behind it).
+      {
+        path: 't/:tourId',
+        element: <Editor />,
+        children: [
+          { path: 'share/link', element: <ShareModal tab="link" /> },
+          { path: 'share/privacy', element: <ShareModal tab="privacy" /> },
+          { path: 'share/embed', element: <ShareModal tab="embed" /> },
+          { path: 'insights', element: <InsightsModal /> },
         ],
       },
     ],

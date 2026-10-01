@@ -59,6 +59,12 @@ export function fakeBackend() {
         ? json({ tours: [], cursor: null })
         : json({ panoIds: [], panos: [], cursor: null });
     }
+    // The editor's own load of the tour (it sits under /app/t/:id); not part of the upload.
+    if (method === 'GET' && /\?include=configs$/.test(path)) {
+      return path.startsWith('/api/admin/tours/tour-1')
+        ? json({ tour: state.tour, etag: state.tourEtag, configs: {} })
+        : json({ error: 'not found' }, 404);
+    }
     state.calls.push({ method, url, headers, body, cache: init.cache });
 
     if (url.startsWith(TILES)) {
@@ -92,6 +98,8 @@ export function fakeBackend() {
       return json({ error: 'config not found', deleting: false, hasOriginal: true }, 404);
     }
     if (method === 'PUT' && /^\/api\/admin\/panos\/[^/]+\/config$/.test(path)) {
+      if (headers['if-none-match'] === '*' && state.hasConfig)
+        return json({ error: 'conflict' }, 412);
       state.hasConfig = true;
       return json({ etag: 'c1' });
     }

@@ -133,3 +133,4 @@ export {
   type ReturnTarget,
 } from './app-links.js';
 export { MAX_TOUR_SCENES } from '@internal/contracts';
+export { EDITOR_DRAFT_PREFIX, sweepEditorDrafts } from './drafts.js';

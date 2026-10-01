@@ -103,12 +103,17 @@ describe('account nav', () => {
     expect(screen.getByRole('menu').textContent).toContain('maya@example.com');
   });
 
-  it('signs out back to the website home', async () => {
+  it('signs out back to the website home, dropping parked editor drafts', async () => {
+    localStorage.setItem('panote:editor-draft:google-oauth2|1:t1', '{}');
+    localStorage.setItem('panote.currentTour', 't1');
     const auth = signedIn();
     renderSite('/', auth);
     fireEvent.click(await screen.findByRole('button', { name: /Account/ }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
     expect(auth.signOut).toHaveBeenCalledWith(`${LOCAL.website}/`);
+    expect(localStorage.getItem('panote:editor-draft:google-oauth2|1:t1')).toBeNull();
+    expect(localStorage.getItem('panote.currentTour')).toBe('t1');
+    localStorage.clear();
   });
 
   it('falls back to "Sign in" if the session check fails', async () => {
