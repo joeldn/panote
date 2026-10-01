@@ -207,6 +207,18 @@ describe('createAdminApi', () => {
     await expect(api.deletePano('p1')).rejects.toMatchObject({ status: 500 });
   });
 
+  it('PATCHes visibility and surfaces a 409 as ApiError', async () => {
+    const { api, call } = setup(
+      json({ visibility: 'public' }),
+      json({ error: 'not published' }, 409),
+    );
+    await expect(api.setVisibility('t1', 'public')).resolves.toEqual({ visibility: 'public' });
+    expect(call().url).toBe('https://panote.test/api/admin/tours/t1/visibility');
+    expect(call().init.method).toBe('PATCH');
+    expect(call().init.body).toBe('{"visibility":"public"}');
+    await expect(api.setVisibility('t1', 'unlisted')).rejects.toMatchObject({ status: 409 });
+  });
+
   it('maps a 401 on any route to AuthRequiredError', async () => {
     const { api } = setup(
       json({ error: 'unauthorized' }, 401),

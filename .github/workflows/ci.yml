@@ -177,6 +177,14 @@ jobs:
           pnpm --filter "@app/admin" exec wrangler deploy
           --dry-run --env dev --outdir /tmp/deploy-dry-run/admin
 
+      # Dev builds must never be indexable (docs/deploy.md, Frontends).
+      - name: Check dev builds are noindex
+        run: |
+          for app in website admin; do
+            grep -qx '  X-Robots-Tag: noindex, nofollow' "apps/$app/dist/_headers"
+            grep -qx 'Disallow: /' "apps/$app/dist/robots.txt"
+          done
+
       # The production build validates apps/*/.env.production (no deploy needed).
       - name: Build apps for production
         env:
@@ -185,6 +193,13 @@ jobs:
           pnpm exec turbo run build
           --filter="@app/website"
           --filter="@app/admin"
+
+      - name: Check production builds are indexable
+        run: |
+          for app in website admin; do
+            if grep -q 'X-Robots-Tag' "apps/$app/dist/_headers"; then exit 1; fi
+            grep -qx 'Allow: /' "apps/$app/dist/robots.txt"
+          done
 
   # Runs in parallel with `gate`, not after it. `pnpm test:coverage` is a
   # superset of `pnpm test` for the Node-side packages (same tests, plus

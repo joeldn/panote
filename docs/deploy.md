@@ -131,8 +131,59 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
 the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
 Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CSP would block.
-The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Dev builds add
-`X-Robots-Tag: noindex` on every path; production stays indexable.
+The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Off production every path
+also gets `X-Robots-Tag: noindex, nofollow` (see Search engines below).
+
+**Search engines.** panote.dev must never be indexed; panote.io stays indexable (unlisted tours
+add their own `<meta name="robots" content="noindex">`, D5). The signal is the build mode
+(`APP_MODE`, see Config): `isIndexable(mode)` in `@internal/web-kit/build` is true only for
+`production`, and `buildHeadersFile` adds the header unless it is passed `indexable: true`, so a
+missing or new mode fails safe to noindex. Production has to be explicit: `deploy.yml` sets
+`APP_MODE=production` for production deploys, and the Vite configs reject any mode other than
+`dev`/`production`.
+
+- `_headers` (`/*`, inherited by the embed rule): `X-Robots-Tag: noindex, nofollow` on dev, absent
+  on production. Both apps.
+- `robots.txt`: each app's build writes `dist/robots.txt` as a real file, so it never falls back
+  to the SPA's `index.html`. Dev: `User-agent: *` / `Disallow: /`; production: `Allow: /`. On the
+  zone only the website's copy is reachable (admin's routes stop at `/app`); admin's covers its
+  `workers.dev` URL. `Disallow` alone doesn't keep a URL out of the index (it can still be indexed
+  from links), so the header is the real guard.
+- The website's `/s/*` script: `_headers` doesn't apply to Worker-generated responses, so the
+  script sets the header itself on the 308 and on whatever `env.ASSETS.fetch` returns, unless the
+  wrangler var `INDEXABLE` is `"true"` (dev `"false"`, production `"true"`; missing counts as dev).
+- API Workers: not tagged in code. There is no shared response helper in `worker-kit`
+  (`upload-api` isn't even on Hono), they return JSON, and the zone rule below covers them.
+- CI's `deploy-dry-run` job checks the real dev and production builds' `_headers` and
+  `robots.txt`.
+
+**Zone-wide guard (MANUAL, dev zone only).** Covers everything the code doesn't: the API Workers,
+`cdn.panote.dev` (R2 tiles and covers) and any future hostname on the zone. It doesn't reach
+`*.workers.dev`, which the code covers. Never create this on panote.io.
+
+1. Cloudflare dashboard → account → zone **panote.dev** → **Rules** → **Overview** →
+   **Create rule** → **Response Header Transform Rule** (older dashboards: **Rules** →
+   **Transform Rules** → **Modify Response Header** → **Create rule**).
+2. Rule name: `noindex everything on panote.dev`.
+3. If incoming requests match: **All incoming requests**.
+4. Then: **Modify response header** → **Set static**, header name `X-Robots-Tag`, value
+   `noindex, nofollow`. (Set, not Add, so it doesn't duplicate the header the apps already send.)
+5. **Deploy**.
+
+Post-deploy checks (each `grep` should print `x-robots-tag: noindex, nofollow` unless noted):
+
+- `curl -sI https://panote.dev/ | grep -i x-robots-tag`
+- `curl -sI https://panote.dev/app/ | grep -i x-robots-tag`
+- `curl -sI https://panote.dev/s/<old-slug> | grep -iE '^(HTTP|location|x-robots-tag)'`
+  (the 308, from the script)
+- `curl -sI https://panote.dev/s/<live-slug> | grep -i x-robots-tag`
+- `curl -s https://panote.dev/robots.txt` → `User-agent: *` / `Disallow: /` (not HTML), and
+  `curl -sI https://panote.dev/robots.txt | grep -i content-type` → `text/plain`.
+- After the zone rule: `curl -sI https://panote.dev/api/tours/x/stats | grep -i x-robots-tag` and
+  `curl -sI https://cdn.panote.dev/pub/x | grep -i x-robots-tag` (R2's 404; use a real tile URL
+  if the error response doesn't show it).
+- Production, once it exists: `curl -sI https://panote.io/ | grep -i x-robots-tag` prints
+  nothing, and `curl -s https://panote.io/robots.txt` shows `Allow: /`.
 
 CSP notes for the D units:
 
@@ -287,7 +338,9 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content \
 ```
 
 **Status: set for dev, outstanding for production** — `pano-content-dev`'s CORS ruleset is set
-from `infra/r2/cors.json`; `pano-content` doesn't exist yet.
+from `infra/r2/cors.json`; `pano-content` doesn't exist yet. Rollback: this command always
+replaces the whole ruleset, so undoing a bad change is just re-running it with the previous
+`cors.json` (from git history).
 
 **Dev-only variant.** `infra/r2/cors.dev.json` is `cors.json` plus `http://localhost:5173` and
 `http://localhost:5174` on both rules, so the local Vite app can hit presigned URLs directly. It
@@ -360,9 +413,12 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --
 ```
 
 `ALERT_EMAIL_TO` is the recipient of the DLQ alert email (see "Tiling failure marker and alerting"
-below). It's a secret only to keep the owner's personal address out of the repo; it must be a
-verified Email Routing destination address on the account. Unset, the consumer skips the email with
-a warning and everything else works.
+below). It's a secret only to keep the owner's personal address out of the repo; it must be
+byte-identical to a verified Email Routing destination address on the account — a Gmail `+tag`
+variant counts as a *different* address, and a mismatch makes `send()` fail with
+`E_RECIPIENT_NOT_ALLOWED`, since `panote.io` isn't onboarded to Email Sending and only verified
+destinations are allowed. Unset, the consumer skips the email with a warning and everything else
+works.
 
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
@@ -370,8 +426,11 @@ for tour insights (see "Insights (unit B5)" below) and the optional `CF_PURGE_TO
 purge on delete" below). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
 interactive `secret put` if scripting this. **Status: set for dev, outstanding for production** —
 `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
-environments; production has neither yet. `CF_ANALYTICS_TOKEN` is outstanding for both;
-`CF_PURGE_TOKEN` is set for dev only; `ALERT_EMAIL_TO` is outstanding for both.
+environments; production has neither yet. `CF_ANALYTICS_TOKEN` and `CF_PURGE_TOKEN` are set on
+`admin-api`'s dev environment, outstanding for production. `ALERT_EMAIL_TO` is set on
+`tiler-consumer`'s dev environment, to the owner's verified Email Routing destination (a `+tag`
+Gmail variant — must be byte-identical to the verified address; not written here), outstanding
+for production.
 
 ### CDN purge on delete (unit B6)
 
@@ -504,7 +563,10 @@ services' placeholders. Before this workflow can succeed:
   on 2026-09-26, so `DEV_AUTO_DEPLOY` is now `true` and dev deploys automatically after `CI`
   succeeds on `main`. Before that, `tiler-consumer` couldn't attach to `pano-uploads-dev` (the
   old pano-viewer `pano-tiler-dev` Worker held the slot), so an auto-deploy triggered before the
-  cut-over would have failed on every `CI` success on `main`.
+  cut-over would have failed on every `CI` success on `main`. **Known gap (accepted):** auto-deploy
+  has no pre-deploy check specific to `tiler-consumer`/queue-consumer changes — a change there
+  deploys straight to the live dev queue on the next green `CI` run on `main`, same as any other
+  service.
 
 ---
 
@@ -812,8 +874,16 @@ fresh-upload case above — the pano can simply be deleted again.
   already had a consumer or a backlog inherited from pano-viewer) was never run. If there was a
   backlog of old, percent-encoded-owner-scheme messages, the consumer would have acked each one with
   a warning and written no marker: only `tileFailedKeyFromOriginalKey` runs on the DLQ path, and it
-  rejects an old-scheme key outright. Nothing needs doing about it now, but those messages are gone
-  and would only show up in that deploy's Worker logs. To inspect the queue's current state:
+  rejects an old-scheme key outright.
+
+  **Backlog/log check: closed, inconclusive.** Tried to confirm whether that backlog was actually
+  processed via the Workers Observability API's *events* view, but it fails on queue-consumer
+  events with a zod validation error on `$workers.requestId`/`outcome` — fields a queue-consumer
+  invocation apparently doesn't populate the way a `fetch` handler does. The *calculations* view,
+  grouped by `$metadata.message`, does work for queue-consumer logs (used below to verify the DLQ
+  alert end to end), but that was only found afterward, with nothing left from the original
+  cut-over to look for. The backlog question itself stays closed without an answer, not resolved.
+  To inspect the queue's current state directly:
   ```bash
   pnpm --filter @service/tiler-consumer exec wrangler queues info pano-uploads-dlq-dev
   ```
@@ -834,32 +904,38 @@ fresh-upload case above — the pano can simply be deleted again.
   Notifications (no alert type for this, per current docs). **This is code and config only — it
   does not touch `panote.io`'s DNS, MX or Email Routing settings**, which are the account-recovery
   mail path (see DNS section).
-  - **Unverified: sending with Email Routing only.** The account has Email Routing on `panote.io`
-    but has not been onboarded to Email Sending. The
+  - **Confirmed, 2026-10-01: sending with Email Routing only.** The account has Email Routing on
+    `panote.io` but has not been onboarded to Email Sending. The
     [limits page](https://developers.cloudflare.com/email-service/platform/limits/) says sends to
     verified destination addresses work "on any plan, including when only Email Routing is
-    configured", as long as the sender is on a routing domain, and don't count toward sending quotas.
-    Not yet confirmed live.
-  - **Unverified: same account.** This assumes `panote-tiler-consumer[-dev]` and the `panote.io`
-    zone (and its verified destination address) are in the same Cloudflare account. A send from
-    another account fails with `E_SENDER_NOT_VERIFIED`.
-  - **Ops step 1 — set the recipient.** **Status: outstanding (dev and production).**
+    configured", as long as the sender is on a routing domain, and don't count toward sending
+    quotas — confirmed live by the Ops step 2 test below, which landed in the inbox with no
+    Email Sending onboarding done.
+  - **Confirmed, 2026-10-01: same account.** This assumed `panote-tiler-consumer[-dev]` and the
+    `panote.io` zone (and its verified destination address) are in the same Cloudflare account (a
+    send from another account fails with `E_SENDER_NOT_VERIFIED`) — also confirmed by the same
+    successful test.
+  - **Ops step 1 — set the recipient.** **Status: set for dev, outstanding for production.**
     ```bash
     pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --env dev
     ```
-    Enter the owner's Gmail (already a verified Email Routing destination). Repeat with
-    `--env production` once production is provisioned.
-  - **Ops step 2 — verify after the next dev deploy.** **Status: outstanding.** Send a test message
-    straight to the DLQ and check Gmail, including spam. wrangler 4.120 has no command for sending a
-    queue message, so use the dashboard: Workers & Pages → Queues → `pano-uploads-dlq-dev` →
-    Messages → Send message, type JSON, body:
+    Enter the owner's verified Email Routing destination address exactly — on dev this is a `+tag`
+    Gmail variant, and it must be byte-identical to the verified address, or the send fails with
+    `E_RECIPIENT_NOT_ALLOWED`. Repeat with `--env production` once production is provisioned.
+  - **Ops step 2 — verify after the next dev deploy.** **Status: done, verified 2026-10-01.** Sent
+    a test message straight to the DLQ and checked the inbox. wrangler 4.120 has no command for
+    sending a queue message, so this used the dashboard: Workers & Pages → Queues →
+    `pano-uploads-dlq-dev` → Messages → Send message, type JSON, body:
     ```json
     { "object": { "key": "panos/alert-test/alert-test/original" }, "action": "PutObject" }
     ```
-    The key doesn't exist, so no marker is written (logged as skipped) and the message is acked.
-    Expect one email with subject `[panote] tiling failed permanently (1) - pano-uploads-dlq-dev`.
-    If none arrives, check the Worker's logs for `failed to send DLQ alert` and its error code
-    (`E_SENDER_NOT_VERIFIED`, `E_RECIPIENT_NOT_ALLOWED`, ...) or `skip DLQ alert`.
+    The key doesn't exist, so no marker was written (logged as skipped) and the message was acked.
+    The email arrived with subject `[panote] tiling failed permanently (1) - pano-uploads-dlq-dev`,
+    confirming the send path end to end on dev. Read via the Workers Observability
+    *calculations* view grouped by `$metadata.message` (see the backlog/log check note above for
+    why the *events* view doesn't work for this). If a future test doesn't arrive, check the
+    Worker's logs for `failed to send DLQ alert` and its error code (`E_SENDER_NOT_VERIFIED`,
+    `E_RECIPIENT_NOT_ALLOWED`, ...) or `skip DLQ alert`.
 - **Still unexercised live.** Unit B4 added the marker-write code and its unit tests (mocked/miniflare
   R2, no real Cloudflare Queues); it does not change the fact recorded in "Known unverified areas"
   below that an actual retry-to-DLQ delivery has never been observed against real Cloudflare.
@@ -899,7 +975,7 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
   ```
   Repeat with `--env production` once production is provisioned. Until it's set, the insights
   route returns `502 { error: 'analytics unavailable' }` (the rest of `admin-api` is unaffected).
-  **Status: outstanding for dev and production.**
+  **Status: set for dev, outstanding for production.**
 - **Vars.** `CF_ACCOUNT_ID` (`12e2809e05de8a2bf20b815fd394ec9a`) and `AE_DATASET` are plain vars
   in both `admin-api` env blocks; `AE_DATASET` must match `public-api`'s `EVENTS` dataset for the
   same env. Nothing to do beyond deploying.
@@ -984,15 +1060,19 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
   with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's
   presigned-URL docs — not yet verified in dev, since B3's dev E2E is outstanding. **content-length
-  is not signed and its enforcement by R2 is unverified** — R2's docs document content-type
-  restriction but never mention content-length, and aws4fetch treats both as unsignable by
-  default. The size cap (150 MiB) is instead enforced as input validation on the presign request
-  itself, backstopped by the tiler's existing byte (`MAX_ORIGINAL_BYTES` var,
+  is not signed, and R2 does not enforce it** — content-length isn't part of the signature, so a
+  PUT with a body size different from what was presigned for still succeeds. The 150 MiB size cap
+  is therefore enforced only at presign (input validation on the presign request in `upload-api`)
+  and in the tiler, which backstops it with its own byte (`MAX_ORIGINAL_BYTES` var,
   `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel (`packages/tiler/src/pyramid.ts:43`)
   caps.
-- **A tile 404 from the CDN is edge-cached for 4h** (`text/html`, `max-age=14400`). Low risk in
-  practice since the viewer only requests tiles after the manifest exists, but worth knowing if a
-  tile is ever requested before its manifest is written.
+- **Fixed, live in dev (unit O1).** A tile 404 used to be edge-cached for 4h (`text/html`,
+  `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
+  `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge
+  TTL instead (plan: `docs/wave6-plan.md` section 3.5, unit O1), added via the dashboard (Rules →
+  Cache Rules; not scriptable with wrangler). Verified live: a tile 404 returns
+  `cf-cache-status: BYPASS`, an existing tile still `HIT`, and `manifest.json` is unaffected —
+  still `DYNAMIC`, as it already was.
 - **`manifest.json` isn't edge-cached.** It comes back `cf-cache-status: DYNAMIC` — Cloudflare
   doesn't cache `.json` by default — so its `cache-control: max-age=30` has no effect at the edge;
   every manifest fetch hits R2 directly. Correct behavior, just not what the `max-age` might
