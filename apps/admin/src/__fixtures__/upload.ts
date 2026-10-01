@@ -92,6 +92,9 @@ export function fakeBackend() {
     if (method === 'GET' && path === '/api/admin/tours/tour-1') {
       return json({ tour: state.tour, etag: state.tourEtag }, 200, { etag: `"${state.tourEtag}"` });
     }
+    if (method === 'DELETE' && path === '/api/admin/tours/tour-1') {
+      return new Response(null, { status: 204 });
+    }
     if (method === 'PUT' && path === '/api/admin/tours/tour-1') {
       state.tour = body as typeof state.tour;
       state.tourEtag = 't2';
@@ -168,17 +171,25 @@ export function pngFile(name = 'Town_hall.png', width = 8000, height = 4000, siz
 }
 
 /** An in-memory stand-in for the IndexedDB pending-upload stash; it outlives a re-render. */
-export function fakePending(initial: File | null = null) {
+export function fakePending(initial: File | null = null, initialOwner: string | null = null) {
   let file = initial;
+  let owner = initialOwner;
   return {
-    stash: vi.fn(async (f: File) => {
+    stash: vi.fn(async (f: File, who: string) => {
       file = f;
+      owner = who;
       return true;
     }),
-    take: vi.fn(async () => {
-      const f = file;
+    // Same rule as web-kit's takePendingUpload: someone else's stash is dropped unused.
+    take: vi.fn(async (who: string | null) => {
+      const f = owner === null || owner === who ? file : null;
       file = null;
+      owner = null;
       return f;
+    }),
+    clear: vi.fn(async () => {
+      file = null;
+      owner = null;
     }),
     peek: () => file,
   };

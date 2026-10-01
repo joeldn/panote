@@ -35,6 +35,7 @@ function renderProvider() {
     api: createSessionApi(auth, () => {}, opts),
     upload: createSessionUploadApi(auth, () => {}, opts),
     requestSignIn: vi.fn(),
+    holdSignIn: vi.fn(),
     signOut: vi.fn(async () => {}),
   };
   const router = createMemoryRouter(

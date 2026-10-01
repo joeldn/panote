@@ -13,6 +13,7 @@ const NOW = 1_000_000_000;
 const raw = (over: Record<string, unknown> = {}) =>
   JSON.stringify({
     v: 1,
+    owner: 'u1',
     fileName: 'a.jpg',
     target: { kind: 'add', tourId: 'tour-1' },
     landed: { panoId: 'pano-1', mode: { kind: 'replace', baselineVersion: 't1-a' } },
@@ -27,7 +28,12 @@ afterEach(() => {
 
 describe('resume record', () => {
   it('round-trips through sessionStorage and clears', () => {
-    writeResumeRecord({ fileName: 'a.jpg', target: { kind: 'new-tour' }, landed: null });
+    writeResumeRecord({
+      owner: 'u1',
+      fileName: 'a.jpg',
+      target: { kind: 'new-tour' },
+      landed: null,
+    });
     expect(readResumeRecord()).toMatchObject({ fileName: 'a.jpg', target: { kind: 'new-tour' } });
     clearResumeRecord();
     expect(readResumeRecord()).toBeNull();
@@ -43,6 +49,8 @@ describe('resume record', () => {
   it.each([
     ['garbage', 'not json'],
     ['a wrong version', raw({ v: 2 })],
+    ['no owner', raw({ owner: undefined })],
+    ['an empty owner', raw({ owner: '' })],
     ['a bad target id', raw({ target: { kind: 'add', tourId: '../x' } })],
     ['an unknown target', raw({ target: { kind: 'other' } })],
     ['a bad landed panoId', raw({ landed: { panoId: 'a/b', mode: { kind: 'fresh' } } })],
@@ -61,7 +69,7 @@ describe('resume record', () => {
       throw new Error('denied');
     });
     expect(() =>
-      writeResumeRecord({ fileName: 'a', target: { kind: 'new-tour' }, landed: null }),
+      writeResumeRecord({ owner: 'u1', fileName: 'a', target: { kind: 'new-tour' }, landed: null }),
     ).not.toThrow();
     expect(readResumeRecord()).toBeNull();
   });

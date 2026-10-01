@@ -1,4 +1,4 @@
-import { ConflictError, type AdminApi } from '@internal/web-kit';
+import { ApiError, ConflictError, MAX_TOUR_SCENES, type AdminApi } from '@internal/web-kit';
 
 const MAX_TITLE = 100;
 
@@ -12,8 +12,27 @@ export function titleFromFileName(name: string, fallback: string): string {
   return base.slice(0, MAX_TITLE).trim() || fallback;
 }
 
+/** A finishing step failed with a message for the user; `retryable: false` = retry can't help. */
 export class FinalizeError extends Error {
   override name = 'FinalizeError';
+  constructor(
+    message: string,
+    readonly retryable = true,
+  ) {
+    super(message);
+  }
+}
+
+export const TOUR_FULL_MESSAGE = 'This tour already has the maximum number of panos.';
+const tourFull = () => new FinalizeError(TOUR_FULL_MESSAGE, false);
+
+type TourApi = Pick<AdminApi, 'getTour'>;
+
+/** Refuses up front (before any upload) when the tour can't take another pano. */
+export async function assertTourHasRoom(api: TourApi, tourId: string): Promise<void> {
+  const got = await api.getTour(tourId);
+  if (got.status !== 'ok') throw new FinalizeError('This tour no longer exists.', false);
+  if (got.data.tour.scenes.length >= MAX_TOUR_SCENES) throw tourFull();
 }
 
 /**
@@ -28,20 +47,23 @@ export async function addPanoToTour(
 ): Promise<void> {
   const pano = await api.getPano(panoId);
   if (pano.status === 'not-found') {
-    if (pano.deleting) throw new FinalizeError('This pano is being deleted.');
+    if (pano.deleting) throw new FinalizeError('This pano is being deleted.', false);
     await api.putPanoConfig(panoId, { title }, '*');
   }
   for (let attempt = 0; ; attempt++) {
     const got = await api.getTour(tourId);
-    if (got.status !== 'ok') throw new FinalizeError('This tour no longer exists.');
+    if (got.status !== 'ok') throw new FinalizeError('This tour no longer exists.', false);
     const { tour, etag } = got.data;
     if (tour.scenes.some((s) => s.panoId === panoId)) return;
+    if (tour.scenes.length >= MAX_TOUR_SCENES) throw tourFull();
     try {
       await api.putTour(tourId, { ...tour, scenes: [...tour.scenes, { panoId }] }, etag);
       return;
     } catch (e) {
       // Edited elsewhere in between: re-read and append to the newer tour.
       if (e instanceof ConflictError && attempt < 2) continue;
+      // The tour schema caps scenes (MAX_TOUR_SCENES); a 400 here is that cap.
+      if (e instanceof ApiError && e.status === 400) throw tourFull();
       throw e;
     }
   }

@@ -57,9 +57,16 @@ describe('chipModel', () => {
     expect(chipModel(active(ready, { finalize: { status: 'done' } }))?.title).toBe(
       'Ready at full resolution',
     );
-    const failed = active(ready, { finalize: { status: 'failed', auth: false, message: 'x' } });
-    expect(actions(failed)).toEqual(['retry-finalize']);
-    const signedOut = active(ready, { finalize: { status: 'failed', auth: true, message: 'x' } });
+    const fail = (auth: boolean, retryable = true): FinalizeState => ({
+      status: 'failed',
+      auth,
+      message: 'x',
+      retryable,
+    });
+    expect(actions(active(ready, { finalize: fail(false) }))).toEqual(['retry-finalize']);
+    // A full tour: retrying can't help, so there is nothing to press.
+    expect(actions(active(ready, { finalize: fail(false, false) }))).toEqual([]);
+    const signedOut = active(ready, { finalize: fail(true) });
     expect(actions(signedOut)).toEqual(['sign-in']);
   });
 

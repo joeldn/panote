@@ -3,6 +3,7 @@ import { isAuthError, UPLOAD_CONTENT_TYPES, validateUploadImage } from '@interna
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 
+import { FinalizeError } from './finalize.js';
 import { targetFromParams, type UploadTarget } from './resume-store.js';
 import { useUploads } from './upload-context.js';
 import { repickNotice } from './repick-notice.js';
@@ -28,10 +29,12 @@ const TITLES: Record<UploadTarget['kind'], string> = {
 
 type Status = { kind: 'idle' } | { kind: 'starting' } | { kind: 'error'; message: string };
 
-const startError = (e: unknown): string =>
-  isAuthError(e)
-    ? 'You’ve been signed out. Sign in again to continue.'
-    : 'Couldn’t start the upload. Please try again.';
+const startError = (e: unknown): string => {
+  if (isAuthError(e)) return 'You’ve been signed out. Sign in again to continue.';
+  // A tour that's gone or full: retrying won't help, so say exactly why.
+  if (e instanceof FinalizeError) return e.message;
+  return 'Couldn’t start the upload. Please try again.';
+};
 
 /** The upload overlay (design screen 03): a drop zone that validates and starts an upload. */
 export function UploadOverlay({ target, notice, resume, onClose, onStarted }: UploadOverlayProps) {

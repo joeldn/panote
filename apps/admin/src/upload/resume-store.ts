@@ -10,6 +10,8 @@ export type UploadTarget =
  */
 export interface ResumeRecord {
   v: 1;
+  /** The `sub` of the user it belongs to; another user signing in drops it. */
+  owner: string;
   fileName: string;
   target: UploadTarget;
   landed: { panoId: string; mode: UploadMode } | null;
@@ -66,6 +68,7 @@ export function parseResumeRecord(raw: string | null, now: number): ResumeRecord
     return null;
   }
   if (!isObj(v) || v.v !== 1 || typeof v.fileName !== 'string') return null;
+  if (typeof v.owner !== 'string' || v.owner.length === 0) return null;
   if (typeof v.savedAt !== 'number' || now - v.savedAt > RESUME_MAX_AGE_MS || v.savedAt > now) {
     return null;
   }
@@ -80,7 +83,14 @@ export function parseResumeRecord(raw: string | null, now: number): ResumeRecord
     if (!mode) return null;
     landed = { panoId: v.landed.panoId, mode };
   }
-  return { v: 1, fileName: v.fileName.slice(0, 200), target, landed, savedAt: v.savedAt };
+  return {
+    v: 1,
+    owner: v.owner,
+    fileName: v.fileName.slice(0, 200),
+    target,
+    landed,
+    savedAt: v.savedAt,
+  };
 }
 
 // sessionStorage: same tab only (the Auth0 redirect stays in the tab), gone when it closes.

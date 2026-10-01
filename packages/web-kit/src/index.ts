@@ -130,3 +130,4 @@ export {
   type AppOrigins,
   type ReturnTarget,
 } from './app-links.js';
+export { MAX_TOUR_SCENES } from '@internal/contracts';

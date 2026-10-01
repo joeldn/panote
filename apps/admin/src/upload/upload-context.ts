@@ -1,4 +1,9 @@
-import { stashPendingUpload, takePendingUpload, type XhrLike } from '@internal/web-kit';
+import {
+  clearPendingUpload,
+  stashPendingUpload,
+  takePendingUpload,
+  type XhrLike,
+} from '@internal/web-kit';
 import { createContext, useContext } from 'react';
 
 import type { ActiveUpload } from './chip-model.js';
@@ -39,13 +44,17 @@ export function useUploads(): Uploads {
 
 /** Where a File waits out a sign-in redirect (IndexedDB, shared with the website's origin). */
 export interface PendingUploadStore {
-  stash(file: File): Promise<boolean>;
-  take(): Promise<File | null>;
+  /** Keeps `file` for `owner` (a user `sub`) across the redirect. */
+  stash(file: File, owner: string): Promise<boolean>;
+  /** The file, unless it belongs to another user (then it is dropped). */
+  take(owner: string | null): Promise<File | null>;
+  clear(): Promise<void>;
 }
 
 export const idbPendingUploads: PendingUploadStore = {
-  stash: stashPendingUpload,
-  take: takePendingUpload,
+  stash: (file, owner) => stashPendingUpload(file, { owner }),
+  take: (owner) => takePendingUpload(owner === null ? {} : { owner }),
+  clear: () => clearPendingUpload(),
 };
 
 /** Test seams: the presigned PUT's XHR, the pending-file store, and the tiles base. */

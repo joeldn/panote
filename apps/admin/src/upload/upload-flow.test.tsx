@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { PROCESSING_TIMEOUT_MS, STATUS_POLL_MS } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderAdmin } from '../__fixtures__/auth.js';
+import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
 import {
   FakeXhr,
   fakeBackend,
@@ -21,9 +21,10 @@ const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
 const chip = () => screen.getByRole('region', { name: 'Upload status' });
 const chipTitle = () => within(chip()).getByRole('status').textContent;
 
-function setup(path = '/app/new', pending = fakePending()) {
+function setup(path = '/app/new', pending = fakePending(), auth = fakeAuth()) {
   const backend = fakeBackend();
   const app = renderAdmin(path, {
+    auth,
     fetch: backend.fetch,
     upload: { tilesBase: TILES, createXhr: () => new FakeXhr(), pending },
   });
@@ -192,23 +193,78 @@ describe('fresh upload from /app/new', () => {
     expect(backend.presigns()).toHaveLength(1);
   });
 
-  it('dismissing aborts the PUT; dismissing while processing stops the polls', async () => {
-    const { backend } = setup();
+  it('cancelling before anything landed aborts the PUT and deletes the empty new tour', async () => {
+    const { backend, router } = setup();
     await tick();
     await pick();
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
     fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
     await tick();
     expect(FakeXhr.last.aborted).toBe(true);
     expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
     expect(backend.manifestPolls()).toHaveLength(0);
+    // Re-read first: only a tour that still has no scenes is deleted.
+    const tail = backend.state.calls.slice(-2).map((c) => `${c.method} ${c.url}`);
+    expect(tail).toEqual(['GET /api/admin/tours/tour-1', 'DELETE /api/admin/tours/tour-1']);
+    expect(router.state.location.pathname).toBe('/app');
+  });
+
+  it('never deletes a tour that has scenes, or one the upload did not create', async () => {
+    const first = setup();
+    first.backend.state.tour.scenes = [{ panoId: 'other' }];
+    await tick();
+    await pick();
+    first.backend.state.tour.scenes = [{ panoId: 'other' }];
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
+    await tick();
+    expect(first.backend.state.calls.some((c) => c.method === 'DELETE')).toBe(false);
 
     cleanup();
-    const next = await uploadThroughPut();
+    const second = setup('/app/new?tour=tour-1');
+    await tick();
+    await pick();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
+    await tick();
+    expect(second.backend.state.calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('hiding the chip after the image landed still finishes: the pano reaches the tour', async () => {
+    const { backend } = await uploadThroughPut();
     await tick(1_000);
-    const polls = next.backend.manifestPolls().length;
-    fireEvent.click(within(chip()).getByRole('button', { name: 'Stop watching' }));
-    await tick(60_000);
-    expect(next.backend.manifestPolls()).toHaveLength(polls);
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(5_000);
+    expect(backend.writes().map((w) => w.url)).toEqual([
+      '/api/admin/panos/pano-1/config',
+      '/api/admin/tours/tour-1',
+    ]);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+  });
+
+  it('a hidden upload that then fails brings the chip back', async () => {
+    const { backend } = await uploadThroughPut();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    backend.state.tiling = 'failed';
+    await tick(STATUS_POLL_MS);
+    expect(chipTitle()).toBe('We couldn’t process this image');
+  });
+
+  it('a hidden upload does not block the next one', async () => {
+    const { backend, router } = await uploadThroughPut();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    await act(() => router.navigate('/new?tour=tour-1'));
+    expect(screen.getByRole('dialog', { name: 'Add pano' }).textContent).not.toContain(
+      'Another upload',
+    );
+    await pick(pngFile('Second.png'));
+    expect(backend.presigns()).toHaveLength(2);
+    expect(chipTitle()).toBe('Uploading panorama');
   });
 });
 
@@ -244,6 +300,18 @@ describe('editor links into /app/new', () => {
     expect(router.state.location.pathname).toBe('/app/t/tour-1');
   });
 
+  it('a full tour is refused before anything is uploaded', async () => {
+    const { backend } = setup('/app/new?tour=tour-1');
+    backend.state.tour.scenes = Array.from({ length: 100 }, (_, i) => ({ panoId: `p${i}` }));
+    await tick();
+    await pick();
+    expect(screen.getByRole('alert').textContent).toBe(
+      'This tour already has the maximum number of panos.',
+    );
+    expect(backend.presigns()).toHaveLength(0);
+    expect(FakeXhr.all).toHaveLength(0);
+  });
+
   it('Cancel goes back to the editor', async () => {
     const { router } = setup('/app/new?tour=tour-1');
     await tick();
@@ -259,6 +327,7 @@ describe('re-upload without the file in memory', () => {
       'panote.upload.resume',
       JSON.stringify({
         v: 1,
+        owner: 'google-oauth2|1',
         fileName: 'Town_hall.png',
         target: { kind: 'add', tourId: 'tour-1' },
         landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
@@ -390,6 +459,155 @@ describe('sign-in during an upload', () => {
     await tick();
     expect(screen.getByRole('alert').textContent).toBe('Use a JPG, PNG or WebP image.');
     expect(backend.state.calls).toEqual([]);
+  });
+
+  it('a different user signing in never gets the upload: record and stash are dropped unused', async () => {
+    const { backend, pending } = setup();
+    backend.state.presignStatus = 401;
+    await tick();
+    await pick();
+    expect(readResumeRecord()).toMatchObject({ owner: 'google-oauth2|1' });
+    expect(pending.stash).toHaveBeenCalledWith(expect.any(File), 'google-oauth2|1');
+
+    cleanup();
+    const other = fakeAuth({ getUser: vi.fn(async () => ({ sub: 'google-oauth2|2', name: 'B' })) });
+    const back = setup('/app/t/tour-1', pending, other);
+    await tick();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+    expect(back.backend.state.calls).toEqual([]);
+    expect(FakeXhr.all).toHaveLength(0);
+    expect(readResumeRecord()).toBeNull();
+    expect(pending.clear).toHaveBeenCalled();
+    expect(pending.peek()).toBeNull();
+  });
+
+  it('a different user does not resume polling a landed upload either', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Town_hall.png',
+        target: { kind: 'add', tourId: 'tour-1' },
+        landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+        savedAt: Date.now(),
+      }),
+    );
+    const other = fakeAuth({ getUser: vi.fn(async () => ({ sub: 'google-oauth2|2' })) });
+    const { backend } = setup('/app/t/tour-1', fakePending(), other);
+    await tick(5_000);
+    expect(backend.state.calls).toEqual([]);
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('the sign-in redirect waits until the file is stashed', async () => {
+    const { backend, auth, pending } = setup();
+    let finish!: (ok: boolean) => void;
+    pending.stash.mockImplementation(() => new Promise<boolean>((r) => (finish = r)));
+    backend.state.presignStatus = 401;
+    await tick();
+    await pick();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
+    await tick();
+    expect(auth.signIn).not.toHaveBeenCalled();
+    finish(true);
+    await tick();
+    expect(auth.signIn).toHaveBeenCalledWith({
+      connection: 'google-oauth2',
+      returnTo: '/app/t/tour-1',
+    });
+  });
+
+  it('dismissing the signed-out chip drops the record and the stash', async () => {
+    const { backend, pending } = setup();
+    backend.state.presignStatus = 401;
+    await tick();
+    await pick();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Dismiss' }));
+    await tick();
+    expect(readResumeRecord()).toBeNull();
+    expect(pending.peek()).toBeNull();
+  });
+
+  it('closing the re-pick prompt drops the record and the stash', async () => {
+    const { backend, pending } = setup();
+    backend.state.presignStatus = 401;
+    vi.mocked(pending.stash).mockResolvedValue(false);
+    await tick();
+    await pick();
+
+    cleanup();
+    setup('/app/t/tour-1', pending);
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await tick();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(readResumeRecord()).toBeNull();
+    expect(pending.clear).toHaveBeenCalled();
+  });
+
+  it('a resumed upload that times out forgets the record, so a reload does not run it again', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Town_hall.png',
+        target: { kind: 'add', tourId: 'tour-1' },
+        landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+        savedAt: Date.now(),
+      }),
+    );
+    setup('/app/t/tour-1');
+    await tick();
+    expect(readResumeRecord()).not.toBeNull();
+    await tick(PROCESSING_TIMEOUT_MS);
+    expect(chipTitle()).toBe('Still processing');
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('a resumed upload whose tiling fails forgets the record too', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Town_hall.png',
+        target: { kind: 'add', tourId: 'tour-1' },
+        landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+        savedAt: Date.now(),
+      }),
+    );
+    const { backend } = setup('/app/t/tour-1');
+    backend.state.tiling = 'failed';
+    await tick();
+    await tick(STATUS_POLL_MS);
+    expect(chipTitle()).toBe('We couldn’t process this image');
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('a resumed upload whose tour write fails for good forgets the record and offers no retry', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Town_hall.png',
+        target: { kind: 'add', tourId: 'tour-gone' },
+        landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+        savedAt: Date.now(),
+      }),
+    );
+    const { backend } = setup('/app/t/tour-gone');
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick();
+    await tick(1_000);
+    expect(chipTitle()).toBe('Couldn’t add the pano to your tour');
+    expect(within(chip()).getByText('This tour no longer exists.')).toBeTruthy();
+    expect(within(chip()).queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(readResumeRecord()).toBeNull();
   });
 
   it('a 401 creating the tour returns to /app/new?resume=upload and starts with the stashed file', async () => {

@@ -2,7 +2,6 @@ import './upload.css';
 
 import {
   createUploadDeps,
-  initialUploadState,
   isAuthError,
   refreshManifestCache,
   startUpload,
@@ -29,10 +28,20 @@ import { useAuthEnv } from '../auth-context.js';
 import { ConfigContext } from '../config-context.js';
 import { useSession } from '../session.js';
 
-import { chipModel, type ActiveUpload, type ChipActionId } from './chip-model.js';
-import { addPanoToTour, titleFromFileName } from './finalize.js';
+import {
+  chipModel,
+  type ActiveUpload,
+  type ChipActionId,
+  type FinalizeState,
+} from './chip-model.js';
+import { addPanoToTour, assertTourHasRoom, FinalizeError, titleFromFileName } from './finalize.js';
 import { repickNotice } from './repick-notice.js';
-import { clearResumeRecord, readResumeRecord, writeResumeRecord } from './resume-store.js';
+import {
+  clearResumeRecord,
+  readResumeRecord,
+  writeResumeRecord,
+  type UploadTarget,
+} from './resume-store.js';
 import {
   idbPendingUploads,
   UploadEnvContext,
@@ -50,33 +59,69 @@ type Source = Omit<UploadFileSource, 'file'> | UploadResumeSource;
 
 type Manifest = Extract<UploadState, { phase: 'ready' }>['manifest'];
 
-const isInFlight = (a: ActiveUpload | null): boolean => {
+type Landed = { panoId: string; mode: UploadMode };
+
+/** One upload. The chip shows the foreground job; a hidden one keeps working in the background. */
+interface Job {
+  key: number;
+  file: File | null;
+  fileName: string;
+  target: PanoTarget;
+  landed: Landed | null;
+  /** This upload created its tour (new-tour), so cancelling early may delete it again. */
+  createdTour: boolean;
+  machine: UploadState;
+  finalize: FinalizeState;
+  ctl: UploadController | null;
+}
+
+const toActive = (j: Job): ActiveUpload => ({
+  key: j.key,
+  fileName: j.fileName,
+  hasFile: j.file !== null,
+  target: j.target,
+  machine: j.machine,
+  landed: j.landed,
+  finalize: j.finalize,
+});
+
+const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null): boolean => {
   if (!a) return false;
   const p = a.machine.phase;
   if (p === 'preparing' || p === 'upload' || p === 'processing') return true;
   return p === 'ready' && a.finalize.status === 'running';
 };
 
+/** The image is in R2 and only server-side work (tiling, then the tour write) is left. */
+const isLandedWork = (j: Job): boolean =>
+  j.landed !== null &&
+  (j.machine.phase === 'processing' ||
+    (j.machine.phase === 'ready' && j.finalize.status !== 'done'));
+
 // A file re-picked for a failed or timed-out upload goes over the pano it already landed as.
-function retryOver(
-  c: { target: PanoTarget; landed: { panoId: string } | null } | null,
-  phase: UploadState['phase'] | undefined,
-  target: PanoTarget,
-): string | null {
-  if (!c?.landed || (phase !== 'failed' && phase !== 'timed-out')) return null;
+function retryOver(j: Job | null, target: PanoTarget): string | null {
+  const phase = j?.machine.phase;
+  if (!j?.landed || (phase !== 'failed' && phase !== 'timed-out')) return null;
   const same =
     target.kind === 'add'
-      ? c.target.kind === 'add' && c.target.tourId === target.tourId
-      : c.target.kind === 'replace' && c.target.panoId === target.panoId;
-  return same ? c.landed.panoId : null;
+      ? j.target.kind === 'add' && j.target.tourId === target.tourId
+      : j.target.kind === 'replace' && j.target.panoId === target.panoId;
+  return same ? j.landed.panoId : null;
 }
 
-const messageOf = (e: unknown): string =>
-  e instanceof Error && e.name === 'FinalizeError' ? e.message : 'Please try again.';
+const finalizeFailure = (e: unknown): Extract<FinalizeState, { status: 'failed' }> => {
+  if (isAuthError(e)) {
+    return { status: 'failed', auth: true, message: 'Sign in again.', retryable: true };
+  }
+  if (e instanceof FinalizeError) {
+    return { status: 'failed', auth: false, message: e.message, retryable: e.retryable };
+  }
+  return { status: 'failed', auth: false, message: 'Please try again.', retryable: true };
+};
 
 /**
- * Owns the one upload at a time: drives it with the web-kit upload machine (its
- * onChange is the chip's only state), finishes it, and resumes it after sign-in.
+ * Owns the uploads: drives each with the web-kit upload machine (its onChange is
+ * the chip's only state), finishes it, and resumes it after sign-in.
  */
 export function UploadProvider({ children }: { children: ReactNode }) {
   const session = useSession();
@@ -85,6 +130,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const uploadEnv = useContext(UploadEnvContext);
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const owner = session.user.sub ?? null;
 
   const tilesBase = uploadEnv.tilesBase ?? (config ? tilesBaseUrl(config) : null);
   const deps = useMemo<UploadDeps | null>(() => {
@@ -99,106 +145,161 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }, [tilesBase, session.upload, session.api, authEnv.fetch, uploadEnv.createXhr]);
 
   const [active, setActive] = useState<ActiveUpload | null>(null);
-  const [picker, setPicker] = useState<{ target: PanoTarget; resume: boolean } | null>(null);
-  const [repick, setRepick] = useState<Uploads['repick']>(null);
+  // What a sign-in redirect left behind, read once: it decides the first render.
+  const [boot] = useState(() => {
+    const rec = readResumeRecord();
+    if (!rec) return null;
+    if (rec.owner !== owner) return { kind: 'foreign' as const, rec };
+    if (rec.landed && rec.target.kind !== 'new-tour') return { kind: 'poll' as const, rec };
+    return { kind: 'repick' as const, rec };
+  });
+  const bootRepick = boot?.kind === 'repick' ? boot.rec : null;
+  const [picker, setPicker] = useState<{ target: PanoTarget; resume: boolean } | null>(() =>
+    bootRepick && bootRepick.target.kind !== 'new-tour'
+      ? { target: bootRepick.target, resume: true }
+      : null,
+  );
+  const [repick, setRepick] = useState<Uploads['repick']>(() =>
+    bootRepick
+      ? { target: bootRepick.target, fileName: bootRepick.fileName, reason: 'signed-out' }
+      : null,
+  );
   const [replaced, setReplaced] = useState<Record<string, string>>({});
   const [lastAdded, setLastAdded] = useState<Uploads['lastAdded']>(null);
 
-  const ctl = useRef<UploadController | null>(null);
+  const fg = useRef<Job | null>(null);
+  const jobs = useRef(new Set<Job>());
   const keyRef = useRef(0);
-  // What callbacks of the current upload need; `active` state lags a render behind.
-  const cur = useRef<{
-    key: number;
-    file: File | null;
-    fileName: string;
-    target: PanoTarget;
-    landed: { panoId: string; mode: UploadMode } | null;
-  } | null>(null);
   const pending = uploadEnv.pending ?? idbPendingUploads;
-  const live = useRef({ deps, session, tilesBase, fetch: authEnv.fetch, pending });
+  const live = useRef({ deps, session, tilesBase, fetch: authEnv.fetch, pending, owner, pathname });
   useEffect(() => {
-    live.current = { deps, session, tilesBase, fetch: authEnv.fetch, pending };
+    live.current = { deps, session, tilesBase, fetch: authEnv.fetch, pending, owner, pathname };
   });
+
   // One take per page load, shared: a second caller (StrictMode) gets the same answer.
   const taken = useRef<Promise<File | null> | null>(null);
   const takePendingFile = useCallback(() => {
-    taken.current ??= live.current.pending.take().catch(() => null);
+    taken.current ??= live.current.pending.take(live.current.owner).catch(() => null);
     return taken.current;
   }, []);
 
-  const update = useCallback((key: number, fn: (a: ActiveUpload) => ActiveUpload) => {
-    setActive((a) => (a && a.key === key ? fn(a) : a));
+  /** Mirror a job into the chip if it is the foreground one. */
+  const sync = useCallback((j: Job) => {
+    if (fg.current === j) setActive(toActive(j));
+  }, []);
+
+  /** Make a job the chip's again (a hidden one that now needs the user), if the chip is free. */
+  const surface = useCallback(
+    (j: Job) => {
+      if (fg.current === j) return;
+      if (fg.current) {
+        jobs.current.delete(j);
+        return;
+      }
+      fg.current = j;
+      sync(j);
+    },
+    [sync],
+  );
+
+  /** Survive a sign-in redirect: a record always, the file too if it hadn't landed yet. */
+  const persist = useCallback(
+    (fileName: string, target: UploadTarget, landed: Landed | null, file: File | null) => {
+      const { owner: who, pending: store, session: s } = live.current;
+      if (who === null) return;
+      writeResumeRecord({ owner: who, fileName, target, landed });
+      if (!landed && file) s.holdSignIn(store.stash(file, who).catch(() => false));
+    },
+    [],
+  );
+
+  const forget = useCallback(() => {
+    clearResumeRecord();
+    void live.current.pending.clear().catch(() => {});
   }, []);
 
   const finalize = useCallback(
-    async (key: number, panoId: string, manifest: Manifest) => {
-      const c = cur.current;
-      if (!c || c.key !== key) return;
-      update(key, (a) => ({ ...a, finalize: { status: 'running' } }));
+    async (j: Job, panoId: string, manifest: Manifest) => {
+      j.finalize = { status: 'running' };
+      sync(j);
       const { session: s, tilesBase: base, fetch } = live.current;
       try {
-        if (c.target.kind === 'replace') {
+        if (j.target.kind === 'replace') {
           // The CDN's max-age=30 copy would otherwise reload the old image.
-          if (base)
+          if (base) {
             await refreshManifestCache(base, panoId, fetch ? { fetch } : {}).catch(() => {});
+          }
           setReplaced((r) => ({ ...r, [panoId]: manifest.version ?? `${Date.now()}` }));
         } else {
-          const title = titleFromFileName(c.fileName, 'Untitled pano');
-          await addPanoToTour(s.api, c.target.tourId, panoId, title);
-          setLastAdded({ tourId: c.target.tourId, panoId });
+          const title = titleFromFileName(j.fileName, 'Untitled pano');
+          await addPanoToTour(s.api, j.target.tourId, panoId, title);
+          setLastAdded({ tourId: j.target.tourId, panoId });
         }
-        if (cur.current?.key !== key) return;
         clearResumeRecord();
-        update(key, (a) => ({ ...a, finalize: { status: 'done' } }));
+        j.finalize = { status: 'done' };
+        if (fg.current === j) sync(j);
+        else jobs.current.delete(j);
       } catch (e) {
-        if (cur.current?.key !== key) return;
-        const auth = isAuthError(e);
-        if (auth) writeResumeRecord({ fileName: c.fileName, target: c.target, landed: c.landed });
-        update(key, (a) => ({
-          ...a,
-          finalize: { status: 'failed', auth, message: messageOf(e) },
-        }));
+        j.finalize = finalizeFailure(e);
+        if (j.finalize.auth) persist(j.fileName, j.target, j.landed, null);
+        else clearResumeRecord();
+        if (fg.current === j) sync(j);
+        else surface(j);
       }
     },
-    [update],
+    [sync, surface, persist],
   );
 
   const onMachine = useCallback(
-    (key: number, s: UploadState) => {
-      const c = cur.current;
-      if (!c || c.key !== key) return;
-      if (s.phase === 'processing') c.landed = { panoId: s.panoId, mode: s.mode };
+    (j: Job, s: UploadState) => {
+      j.machine = s;
+      if (s.phase === 'processing') j.landed = { panoId: s.panoId, mode: s.mode };
       if (s.phase === 'failed' && s.stage === 'auth') {
         const landed = s.resumable && s.panoId ? { panoId: s.panoId, mode: s.resumable } : null;
-        writeResumeRecord({ fileName: c.fileName, target: c.target, landed });
-        // Not landed yet: the file itself has to wait out the redirect.
-        if (!landed && c.file) void live.current.pending.stash(c.file).catch(() => false);
+        persist(j.fileName, j.target, landed, j.file);
+      } else if (s.phase === 'failed' || s.phase === 'timed-out') {
+        // Done with, short of a user retry: a reload must not run it again.
+        clearResumeRecord();
       }
-      update(key, (a) => ({ ...a, machine: s, landed: c.landed }));
-      if (s.phase === 'ready') void finalize(key, s.panoId, s.manifest);
+      if (fg.current === j) sync(j);
+      else if (s.phase === 'failed' || s.phase === 'timed-out') surface(j);
+      else if (s.phase === 'cancelled') jobs.current.delete(j);
+      if (s.phase === 'ready') void finalize(j, s.panoId, s.manifest);
     },
-    [update, finalize],
+    [sync, surface, persist, finalize],
   );
 
   const run = useCallback(
-    (file: File | null, fileName: string, target: PanoTarget, source: Source) => {
+    (
+      file: File | null,
+      fileName: string,
+      target: PanoTarget,
+      source: Source,
+      createdTour = false,
+    ) => {
       const d = live.current.deps;
       if (!d) throw new Error('Uploads aren’t configured in this build.');
-      ctl.current?.cancel();
-      const key = ++keyRef.current;
-      const landed = 'resume' in source ? source.resume : null;
-      cur.current = { key, file, fileName, target, landed };
-      setActive({
-        key,
+      const prev = fg.current;
+      if (prev) {
+        prev.ctl?.cancel();
+        jobs.current.delete(prev);
+      }
+      const j: Job = {
+        key: ++keyRef.current,
+        file,
         fileName,
-        hasFile: file !== null,
         target,
-        machine: initialUploadState(),
-        landed,
+        landed: 'resume' in source ? source.resume : null,
+        createdTour,
+        machine: { phase: 'preparing', mode: null },
         finalize: { status: 'idle' },
-      });
-      const onChange = (s: UploadState) => onMachine(key, s);
-      ctl.current =
+        ctl: null,
+      };
+      fg.current = j;
+      jobs.current.add(j);
+      setActive(toActive(j));
+      const onChange = (s: UploadState) => onMachine(j, s);
+      j.ctl =
         'resume' in source
           ? startUpload(d, { ...source, onChange })
           : startUpload(d, { ...source, file: file as File, onChange });
@@ -214,100 +315,122 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
   const begin = useCallback<Uploads['begin']>(
     async (file, target) => {
-      if (isInFlight(active)) throw new Error('An upload is already in progress.');
-      if (!live.current.deps) throw new Error('Uploads aren’t configured in this build.');
+      if (isInFlight(fg.current)) throw new Error('An upload is already in progress.');
+      const { deps: d, session: s } = live.current;
+      if (!d) throw new Error('Uploads aren’t configured in this build.');
       let panoTarget: PanoTarget;
-      if (target.kind === 'new-tour') {
-        try {
+      try {
+        if (target.kind === 'new-tour') {
           const title = titleFromFileName(file.name, 'Untitled tour');
-          const { tourId } = await live.current.session.api.createTour({ title, scenes: [] });
+          const { tourId } = await s.api.createTour({ title, scenes: [] });
           panoTarget = { kind: 'add', tourId };
-        } catch (e) {
-          if (isAuthError(e)) {
-            writeResumeRecord({ fileName: file.name, target, landed: null });
-            void live.current.pending.stash(file).catch(() => false);
-          }
-          throw e;
+        } else {
+          if (target.kind === 'add') await assertTourHasRoom(s.api, target.tourId);
+          panoTarget = target;
         }
-      } else {
-        panoTarget = target;
+      } catch (e) {
+        if (isAuthError(e)) persist(file.name, target, null, file);
+        throw e;
       }
       clearResumeRecord();
       setRepick(null);
       setPicker(null);
-      run(
-        file,
-        file.name,
-        panoTarget,
-        sourceFor(panoTarget, retryOver(cur.current, active?.machine.phase, panoTarget)),
-      );
+      const over = retryOver(fg.current, panoTarget);
+      run(file, file.name, panoTarget, sourceFor(panoTarget, over), target.kind === 'new-tour');
       return { tourId: panoTarget.kind === 'add' ? panoTarget.tourId : null };
     },
-    [active, run],
+    [run, persist],
+  );
+
+  // Best effort: a tour this upload created and nothing landed in is removed again.
+  const discardEmptyTour = useCallback(
+    async (tourId: string) => {
+      const { api } = live.current.session;
+      try {
+        const got = await api.getTour(tourId);
+        if (got.status !== 'ok' || got.data.tour.scenes.length > 0) return;
+        await api.deleteTour(tourId);
+        if (live.current.pathname === `/t/${tourId}`) void navigate('/');
+      } catch {
+        // Left as an empty tour; the dashboard can delete it.
+      }
+    },
+    [navigate],
   );
 
   const dismiss = useCallback(() => {
-    ctl.current?.cancel();
-    ctl.current = null;
-    cur.current = null;
-    clearResumeRecord();
+    const j = fg.current;
+    fg.current = null;
     setActive(null);
-  }, []);
+    forget();
+    if (!j) return;
+    // Hidden, not stopped: tiling and the tour write carry on so the pano doesn't go missing.
+    if (isLandedWork(j)) return;
+    j.ctl?.cancel();
+    jobs.current.delete(j);
+    if (!j.landed && j.createdTour && j.target.kind === 'add') {
+      void discardEmptyTour(j.target.tourId);
+    }
+  }, [forget, discardEmptyTour]);
 
   const onAction = (id: ChipActionId) => {
-    const c = cur.current;
-    if (!c || !active) return;
+    const j = fg.current;
+    if (!j) return;
     switch (id) {
       case 'retry-poll':
-        ctl.current?.retryPoll();
+        j.ctl?.retryPoll();
         return;
       case 'retry-upload':
-        if (c.file)
-          run(c.file, c.fileName, c.target, sourceFor(c.target, c.landed?.panoId ?? null));
+        if (j.file) {
+          run(j.file, j.fileName, j.target, sourceFor(j.target, j.landed?.panoId ?? null));
+        }
         return;
       case 'retry-finalize':
-        if (active.machine.phase === 'ready') {
-          void finalize(c.key, active.machine.panoId, active.machine.manifest);
-        }
+        if (j.machine.phase === 'ready') void finalize(j, j.machine.panoId, j.machine.manifest);
         return;
       case 'sign-in':
         session.requestSignIn();
         return;
       case 'repick':
-        setRepick({ target: c.target, fileName: c.fileName, reason: 'retry' });
-        setPicker({ target: c.target, resume: false });
+        setRepick({ target: j.target, fileName: j.fileName, reason: 'retry' });
+        setPicker({ target: j.target, resume: false });
         return;
     }
   };
 
-  // After a sign-in redirect: resume polling an image that landed, or ask for the file again.
+  // After a sign-in redirect: resume polling an image that landed, or get the file back.
   useEffect(() => {
-    const rec = readResumeRecord();
-    if (!rec) return;
-    if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
-      run(null, rec.fileName, rec.target, { resume: rec.landed });
-      return;
+    if (!boot) return;
+    const { rec } = boot;
+    if (boot.kind === 'foreign') {
+      // Someone else's upload: drop it (and its file) without using either.
+      forget();
+    } else if (boot.kind === 'poll') {
+      if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
+        run(null, rec.fileName, rec.target, { resume: rec.landed });
+      }
+    } else if (rec.target.kind === 'new-tour' && pathname !== '/new') {
+      void navigate('/new?resume=upload');
     }
-    setRepick({ target: rec.target, fileName: rec.fileName, reason: 'signed-out' });
-    if (rec.target.kind !== 'new-tour') setPicker({ target: rec.target, resume: true });
-    else if (pathname !== '/new') void navigate('/new?resume=upload');
     // Runs once per mount: the record is the input, not the route.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Leaving the signed-in tree (sign-out) stops the upload; the record stays for a resume.
-  useEffect(
-    () => () => {
-      ctl.current?.cancel();
-      ctl.current = null;
-    },
-    [],
-  );
+  // Leaving the signed-in tree (sign-out) stops every upload; the record stays for a resume.
+  useEffect(() => {
+    const all = jobs.current;
+    return () => {
+      for (const j of all) j.ctl?.cancel();
+      all.clear();
+      fg.current = null;
+    };
+  }, []);
 
   // Background tabs throttle timers to a minute or more: poll as soon as the tab is back.
   useEffect(() => {
     const kick = () => {
-      if (document.visibilityState === 'visible') ctl.current?.pollNow();
+      if (document.visibilityState !== 'visible') return;
+      for (const j of jobs.current) j.ctl?.pollNow();
     };
     document.addEventListener('visibilitychange', kick);
     window.addEventListener('online', kick);
@@ -329,10 +452,12 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const tone = model?.tone;
   useEffect(() => {
     if (tone !== 'ready') return;
-    const t = setTimeout(
-      () => setActive((a) => (a?.key === cur.current?.key ? null : a)),
-      READY_CHIP_MS,
-    );
+    const t = setTimeout(() => {
+      const j = fg.current;
+      if (j) jobs.current.delete(j);
+      fg.current = null;
+      setActive(null);
+    }, READY_CHIP_MS);
     return () => clearTimeout(t);
   }, [tone]);
 
@@ -344,14 +469,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       pick: (target) => setPicker({ target, resume: false }),
       repick,
       clearRepick: () => {
-        clearResumeRecord();
+        forget();
         setRepick(null);
       },
       takePendingFile,
       reloadKeyFor: (panoId) => replaced[panoId],
       lastAdded,
     }),
-    [active, begin, repick, takePendingFile, replaced, lastAdded],
+    [active, begin, repick, forget, takePendingFile, replaced, lastAdded],
   );
 
   const closePicker = () => {

@@ -1,7 +1,13 @@
-import { ConflictError, type AdminApi } from '@internal/web-kit';
+import { ApiError, ConflictError, MAX_TOUR_SCENES, type AdminApi } from '@internal/web-kit';
 import { describe, expect, it, vi } from 'vitest';
 
-import { addPanoToTour, titleFromFileName } from './finalize.js';
+import {
+  addPanoToTour,
+  assertTourHasRoom,
+  FinalizeError,
+  TOUR_FULL_MESSAGE,
+  titleFromFileName,
+} from './finalize.js';
 
 type Api = Pick<AdminApi, 'getPano' | 'putPanoConfig' | 'getTour' | 'putTour'>;
 
@@ -96,5 +102,39 @@ describe('addPanoToTour', () => {
         'H',
       ),
     ).rejects.toThrow('being deleted');
+  });
+});
+
+describe('scene cap', () => {
+  const full = () =>
+    tourOk(Array.from({ length: MAX_TOUR_SCENES }, (_, i) => ({ panoId: `p${i}` })));
+
+  it('refuses to append to a full tour, without a retry', async () => {
+    const a = api({ getTour: vi.fn(async () => full()) });
+    const err = await addPanoToTour(a, 't1', 'new', 'H').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FinalizeError);
+    expect((err as FinalizeError).message).toBe(TOUR_FULL_MESSAGE);
+    expect((err as FinalizeError).retryable).toBe(false);
+    expect(a.putTour).not.toHaveBeenCalled();
+  });
+
+  it("maps the server's 400 on the tour PUT to the same message", async () => {
+    const putTour = vi.fn<Api['putTour']>().mockRejectedValue(new ApiError(400, { error: 'x' }));
+    const err = await addPanoToTour(api({ putTour }), 't1', 'p1', 'H').catch((e: unknown) => e);
+    expect(err).toMatchObject({ message: TOUR_FULL_MESSAGE, retryable: false });
+    expect(putTour).toHaveBeenCalledTimes(1);
+  });
+
+  it('assertTourHasRoom checks before any upload', async () => {
+    await expect(
+      assertTourHasRoom(api({ getTour: vi.fn(async () => full()) }), 't1'),
+    ).rejects.toThrow(TOUR_FULL_MESSAGE);
+    await expect(assertTourHasRoom(api(), 't1')).resolves.toBeUndefined();
+    await expect(
+      assertTourHasRoom(
+        api({ getTour: vi.fn(async () => ({ status: 'not-found' }) as const) }),
+        't1',
+      ),
+    ).rejects.toThrow('This tour no longer exists.');
   });
 });

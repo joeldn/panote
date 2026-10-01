@@ -7,7 +7,7 @@ export type FinalizeState =
   | { status: 'idle' }
   | { status: 'running' }
   | { status: 'done' }
-  | { status: 'failed'; auth: boolean; message: string };
+  | { status: 'failed'; auth: boolean; message: string; retryable: boolean };
 
 /** One upload as the provider tracks it; `machine` mirrors the upload machine's onChange. */
 export interface ActiveUpload {
@@ -52,7 +52,8 @@ const processing = (note: string): ChipModel => ({
   bar: 'indeterminate',
   note,
   actions: [],
-  dismissLabel: 'Stop watching',
+  // Hiding never stops the work: it finishes in the background (UploadProvider.dismiss).
+  dismissLabel: 'Hide (keeps processing)',
 });
 
 const failed = (title: string, note: string, actions: ChipModel['actions']): ChipModel => ({
@@ -116,9 +117,11 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
           ? failed(SIGNED_OUT, 'Your photo is processed. Sign in again to add it to your tour.', [
               { id: 'sign-in', label: 'Sign in' },
             ])
-          : failed('Couldn’t add the pano to your tour', f.message, [
-              { id: 'retry-finalize', label: 'Try again' },
-            ]);
+          : failed(
+              'Couldn’t add the pano to your tour',
+              f.message,
+              f.retryable ? [{ id: 'retry-finalize', label: 'Try again' }] : [],
+            );
       }
       if (f.status !== 'done') return processing('Almost there — adding it to your tour.');
       return {
