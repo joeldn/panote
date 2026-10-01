@@ -5,7 +5,7 @@ import { Link } from 'react-router';
 import { useAccount } from './account.js';
 import { useAuthEnv } from './auth-context.js';
 
-/** Admin route that reopens the upload picker (Q1); a dropped file can't survive sign-in. */
+/** Admin route that resumes an upload (Q1): a stashed dropped file, else the picker. */
 export const UPLOAD_RESUME_PATH = '/app/new?resume=upload';
 
 /**

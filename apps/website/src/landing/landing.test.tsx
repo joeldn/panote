@@ -1,4 +1,5 @@
 import type { ViewerFactory } from '@internal/ui';
+import type * as webKit from '@internal/web-kit';
 import { loadConfig, signInPath, type Auth } from '@internal/web-kit';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -9,6 +10,12 @@ import { AuthEnvContext } from '../auth-context.js';
 import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 import { StageFactoryContext } from '../tour/stage-factory.js';
+
+const stash = vi.hoisted(() => vi.fn<(file: File) => Promise<boolean>>(async () => true));
+vi.mock('@internal/web-kit', async (importOriginal) => ({
+  ...(await importOriginal<typeof webKit>()),
+  stashPendingUpload: stash,
+}));
 
 const RESUME = '/app/new?resume=upload';
 const CDN = 'https://cdn.test/';
@@ -23,6 +30,7 @@ const dropTarget = () => screen.getByRole('link', { name: /^Upload your first to
 
 afterEach(() => {
   cleanup();
+  stash.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -52,19 +60,42 @@ describe('landing', () => {
     fireEvent.click(dropTarget());
     const dialog = await screen.findByRole('dialog', { name: 'Sign in to panote' });
     expect(router.state.location.pathname).toBe('/');
+    expect(stash).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Continue with Google' }));
     expect(auth.signIn).toHaveBeenCalledWith({ connection: 'google-oauth2', returnTo: RESUME });
   });
 
-  it('starts sign-in when a file is dropped on the CTA', async () => {
+  it('stashes a dropped file, then starts sign-in (Q1)', async () => {
+    let stored!: (ok: boolean) => void;
+    stash.mockImplementationOnce(() => new Promise((resolve) => (stored = resolve)));
     const { router } = renderSite('/');
     await screen.findByRole('link', { name: 'Sign in' });
     const file = new File(['x'], 'pano.jpg', { type: 'image/jpeg' });
     fireEvent.dragOver(dropTarget(), { dataTransfer: { files: [file], types: ['Files'] } });
     expect(dropTarget().className).toContain('landing-drop--over');
     fireEvent.drop(dropTarget(), { dataTransfer: { files: [file], types: ['Files'] } });
+    expect(stash).toHaveBeenCalledWith(file);
+    // Navigation waits for the stash to finish.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    stored(true);
     expect(await screen.findByRole('dialog', { name: 'Sign in to panote' })).toBeTruthy();
     expect(new URLSearchParams(router.state.location.search).get('next')).toBe(RESUME);
+  });
+
+  it('still starts sign-in when the stash fails or nothing was dropped', async () => {
+    stash.mockResolvedValueOnce(false);
+    const { router } = renderSite('/');
+    await screen.findByRole('link', { name: 'Sign in' });
+    const file = new File(['x'], 'pano.gif', { type: 'image/gif' });
+    fireEvent.drop(dropTarget(), { dataTransfer: { files: [file], types: ['Files'] } });
+    expect(await screen.findByRole('dialog', { name: 'Sign in to panote' })).toBeTruthy();
+    expect(new URLSearchParams(router.state.location.search).get('next')).toBe(RESUME);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.drop(dropTarget(), { dataTransfer: { files: [], types: [] } });
+    expect(await screen.findByRole('dialog', { name: 'Sign in to panote' })).toBeTruthy();
+    expect(stash).toHaveBeenCalledTimes(1);
   });
 
   it('sends a signed-in upload straight to the admin app', async () => {

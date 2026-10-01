@@ -2,7 +2,7 @@ import './landing.css';
 
 import type { PublishedTour } from '@internal/contracts';
 import { LogoMark, PanoStage, cx } from '@internal/ui';
-import { tilesBaseUrl } from '@internal/web-kit';
+import { stashPendingUpload, tilesBaseUrl } from '@internal/web-kit';
 import {
   useContext,
   useEffect,
@@ -123,7 +123,7 @@ function HeroStage({ tour, tilesBase }: { tour: PublishedTour; tilesBase: string
   );
 }
 
-/** The hero CTA. A dropped file can't survive the sign-in redirect, so the admin app asks again. */
+/** The hero CTA. A dropped file waits in IndexedDB through sign-in; the admin upload takes it. */
 function DropTarget() {
   const [over, setOver] = useState(false);
   const onDragOver = (e: DragEvent<HTMLAnchorElement>) => {
@@ -133,7 +133,10 @@ function DropTarget() {
   const onDrop = (e: DragEvent<HTMLAnchorElement>) => {
     e.preventDefault();
     setOver(false);
-    e.currentTarget.click();
+    const link = e.currentTarget;
+    const file = e.dataTransfer.files[0];
+    // Navigate either way; without a stash the admin app just opens the picker.
+    void (file ? stashPendingUpload(file) : Promise.resolve(false)).then(() => link.click());
   };
 
   return (
