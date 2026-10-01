@@ -257,6 +257,15 @@ describe('ShareModal', () => {
     expect(screen.queryByRole('tab')).toBeNull();
   });
 
+  it('does not flag an empty draft when the tour has no slug yet', async () => {
+    const { props } = renderModal({ slug: null, slugRequired: true });
+    const input = screen.getByRole('textbox', { name: 'Custom link' });
+    await act(async () => fireEvent.blur(input));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(props.onCommitSlug).not.toHaveBeenCalled();
+  });
+
   it('gives visitors the link only: no tabs, banner or slug edit', () => {
     renderModal({ variant: 'visitor', tab: 'embed' });
     expect(screen.queryByRole('tab')).toBeNull();

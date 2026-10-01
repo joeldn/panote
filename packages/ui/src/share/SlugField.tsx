@@ -52,6 +52,8 @@ export function SlugField({ slug, prefix, onCommit, startEditing = false }: Slug
       setEditing(false);
       return;
     }
+    // Nothing typed yet for a tour that has no slug: not an error, keep waiting.
+    if (next === '' && slug === null) return;
     const check = checkSlug(next);
     if (!check.ok) {
       setDraft(next);
