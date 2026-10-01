@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { FetchLike } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -64,6 +64,9 @@ const lists = (tours: TourSummary[], panos: PanoSummary[] = [pano()]) => ({
 });
 
 const card = (title: string) => screen.getByRole('link', { name: title }).closest('article')!;
+
+// The first render in a cold worker can exceed the 1s default under a loaded `turbo test`.
+configure({ asyncUtilTimeout: 5000 });
 
 beforeEach(() => {
   window.localStorage.clear();
