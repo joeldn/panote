@@ -1,11 +1,17 @@
 import { SignInModal } from '@internal/ui';
 import { signInPath, sweepEditorDrafts, type AuthUser, type ConnectionId } from '@internal/web-kit';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
 import { cancelBeforeSignIn, runBeforeSignIn } from './before-sign-in.js';
-import { createSessionApi, SessionContext, type Session } from './session.js';
+import {
+  createSessionApi,
+  createSessionUploadApi,
+  SessionContext,
+  type Session,
+} from './session.js';
+import { UploadProvider } from './upload/UploadProvider.js';
 import { Notice } from './Shell.js';
 
 type GuardState =
@@ -30,6 +36,8 @@ export function RequireAuth() {
   const [state, setState] = useState<GuardState>({ status: 'checking' });
   const [attempt, setAttempt] = useState(0);
   const [expired, setExpired] = useState(false);
+  // Work that has to finish before the page leaves for Auth0 (see Session.holdSignIn).
+  const [holds] = useState(() => new Set<Promise<unknown>>());
   const warnedRef = useRef(false);
 
   useEffect(() => {
@@ -58,13 +66,21 @@ export function RequireAuth() {
     };
   }, [auth, origins, assign, attempt]);
 
-  const api = useMemo(
-    () =>
-      createSessionApi(auth, () => setExpired(true), {
-        baseUrl: env.apiBase,
-        ...(env.fetch && { fetch: env.fetch }),
-      }),
-    [auth, env.apiBase, env.fetch],
+  const [api, upload] = useMemo(() => {
+    const opts = { baseUrl: env.apiBase, ...(env.fetch && { fetch: env.fetch }) };
+    const onAuthError = () => setExpired(true);
+    return [
+      createSessionApi(auth, onAuthError, opts),
+      createSessionUploadApi(auth, onAuthError, opts),
+    ] as const;
+  }, [auth, env.apiBase, env.fetch]);
+  const holdSignIn = useCallback(
+    (work: Promise<unknown>) => {
+      holds.add(work);
+      const done = () => holds.delete(work);
+      work.then(done, done);
+    },
+    [holds],
   );
   const user = state.status === 'ready' ? state.user : null;
   const session = useMemo<Session | null>(
@@ -72,13 +88,16 @@ export function RequireAuth() {
       user && {
         user,
         api,
+        upload,
+        requestSignIn: () => setExpired(true),
+        holdSignIn,
         signOut: () => {
           // Parked editor drafts belong to this user; don't leave them on a shared machine.
           sweepEditorDrafts();
           return auth.signOut(`${origins.website}/`);
         },
       },
-    [user, api, auth, origins],
+    [user, api, upload, holdSignIn, auth, origins],
   );
 
   if (!auth.configured) {
@@ -112,7 +131,9 @@ export function RequireAuth() {
   }
   return (
     <SessionContext value={session}>
-      <Outlet />
+      <UploadProvider>
+        <Outlet />
+      </UploadProvider>
       <SignInModal
         open={expired}
         onClose={() => setExpired(false)}
@@ -128,6 +149,8 @@ export function RequireAuth() {
             throw new Error(`${refusal} Choose a sign-in option again to continue anyway.`);
           }
           try {
+            // Held work (an upload's file stash) must land before the page leaves.
+            await Promise.allSettled([...holds]);
             await auth.signIn({ connection: id as ConnectionId, returnTo: path });
           } catch (e) {
             cancelBeforeSignIn();

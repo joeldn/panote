@@ -87,7 +87,16 @@ function renderShare(path: string, api: AdminApi = fakeApi()) {
   const router = createMemoryRouter(routes, { basename: '/app', initialEntries: [path] });
   render(
     <ConfigContext value={config}>
-      <SessionContext value={{ user: { sub: 'u1' }, api, signOut: async () => {} }}>
+      <SessionContext
+        value={{
+          user: { sub: 'u1' },
+          api,
+          upload: { presign: vi.fn() },
+          requestSignIn: () => {},
+          holdSignIn: () => {},
+          signOut: async () => {},
+        }}
+      >
         <RouterProvider router={router} />
       </SessionContext>
     </ConfigContext>,

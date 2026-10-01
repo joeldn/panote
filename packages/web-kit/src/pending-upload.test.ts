@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MAX_UPLOAD_BYTES } from './api/upload.js';
 import {
+  clearPendingUpload,
   PENDING_UPLOAD_MAX_AGE_MS,
   stashPendingUpload,
   takePendingUpload,
@@ -91,6 +92,41 @@ describe('pending upload', () => {
     expect(await file?.text()).toBe('jpeg-bytes');
     expect(idb.stored()).toBeUndefined();
     expect(await takePendingUpload(opts)).toBeNull();
+  });
+
+  it('ties an admin stash to its user: anyone else gets nothing and the stash is dropped', async () => {
+    const idb = fakeIdb();
+    await stashPendingUpload(jpeg(), { indexedDB: idb.indexedDB, owner: 'user-a' });
+    expect(idb.stored()).toMatchObject({ owner: 'user-a' });
+    expect(await takePendingUpload({ indexedDB: idb.indexedDB, owner: 'user-b' })).toBeNull();
+    expect(idb.stored()).toBeUndefined();
+
+    await stashPendingUpload(jpeg(), { indexedDB: idb.indexedDB, owner: 'user-a' });
+    expect(await takePendingUpload({ indexedDB: idb.indexedDB })).toBeNull();
+    await stashPendingUpload(jpeg(), { indexedDB: idb.indexedDB, owner: 'user-a' });
+    expect((await takePendingUpload({ indexedDB: idb.indexedDB, owner: 'user-a' }))?.name).toBe(
+      'pano.jpg',
+    );
+  });
+
+  it('an unowned (landing page) stash goes to whoever signs in', async () => {
+    const idb = fakeIdb();
+    await stashPendingUpload(jpeg(), { indexedDB: idb.indexedDB });
+    expect(idb.stored()).not.toHaveProperty('owner');
+    expect((await takePendingUpload({ indexedDB: idb.indexedDB, owner: 'user-b' }))?.name).toBe(
+      'pano.jpg',
+    );
+  });
+
+  it('clearPendingUpload drops the stash and never throws', async () => {
+    const idb = fakeIdb();
+    await stashPendingUpload(jpeg(), { indexedDB: idb.indexedDB });
+    await clearPendingUpload({ indexedDB: idb.indexedDB });
+    expect(idb.stored()).toBeUndefined();
+    await expect(
+      clearPendingUpload({ indexedDB: fakeIdb({ failOpen: true }).indexedDB }),
+    ).resolves.toBeUndefined();
+    await expect(clearPendingUpload({})).resolves.toBeUndefined();
   });
 
   it('rebuilds a File when the browser hands back a plain Blob', async () => {
