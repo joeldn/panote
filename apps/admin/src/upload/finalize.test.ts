@@ -9,7 +9,7 @@ import {
   titleFromFileName,
 } from './finalize.js';
 
-type Api = Pick<AdminApi, 'getPano' | 'putPanoConfig' | 'getTour' | 'putTour'>;
+type Api = Pick<AdminApi, 'createPanoConfig' | 'getTour' | 'putTour'>;
 
 const tourOk = (scenes: Array<{ panoId: string }>, etag = 'e1') => ({
   status: 'ok' as const,
@@ -18,10 +18,7 @@ const tourOk = (scenes: Array<{ panoId: string }>, etag = 'e1') => ({
 
 function api(over: Partial<Api> = {}): Api {
   return {
-    getPano: vi.fn(
-      async () => ({ status: 'not-found', deleting: false, hasOriginal: true }) as const,
-    ),
-    putPanoConfig: vi.fn(async () => ({ etag: 'c1' })),
+    createPanoConfig: vi.fn(async () => ({ etag: 'c1' })),
     getTour: vi.fn(async () => tourOk([{ panoId: 'a' }])),
     putTour: vi.fn(async () => ({ etag: 'e2' })),
     ...over,
@@ -37,10 +34,10 @@ describe('titleFromFileName', () => {
 });
 
 describe('addPanoToTour', () => {
-  it('creates the missing config and appends the scene under If-Match', async () => {
+  it('creates the config (create-only) and appends the scene under If-Match', async () => {
     const a = api();
     await addPanoToTour(a, 't1', 'p1', 'Hall');
-    expect(a.putPanoConfig).toHaveBeenCalledWith('p1', { title: 'Hall' }, '*');
+    expect(a.createPanoConfig).toHaveBeenCalledWith('p1', { title: 'Hall' });
     expect(a.putTour).toHaveBeenCalledWith(
       't1',
       { tourId: 't1', title: 'T', scenes: [{ panoId: 'a' }, { panoId: 'p1' }] },
@@ -48,13 +45,29 @@ describe('addPanoToTour', () => {
     );
   });
 
-  it('is idempotent: an existing config and an already-listed scene are left alone', async () => {
+  it('is idempotent: a 412 (config exists) is fine, and a listed scene is left alone', async () => {
     const a = api({
-      getPano: vi.fn(async () => ({ status: 'ok', data: {} }) as never),
+      createPanoConfig: vi.fn<Api['createPanoConfig']>().mockRejectedValue(new ConflictError(null)),
       getTour: vi.fn(async () => tourOk([{ panoId: 'p1' }])),
     });
     await addPanoToTour(a, 't1', 'p1', 'Hall');
-    expect(a.putPanoConfig).not.toHaveBeenCalled();
+    expect(a.createPanoConfig).toHaveBeenCalledTimes(1);
+    expect(a.putTour).not.toHaveBeenCalled();
+  });
+
+  it('a 412 on the config still appends the scene', async () => {
+    const a = api({
+      createPanoConfig: vi.fn<Api['createPanoConfig']>().mockRejectedValue(new ConflictError(null)),
+    });
+    await addPanoToTour(a, 't1', 'p1', 'Hall');
+    expect(a.putTour).toHaveBeenCalledTimes(1);
+  });
+
+  it('other config failures stop before the tour write', async () => {
+    const a = api({
+      createPanoConfig: vi.fn<Api['createPanoConfig']>().mockRejectedValue(new ApiError(500, null)),
+    });
+    await expect(addPanoToTour(a, 't1', 'p1', 'Hall')).rejects.toBeInstanceOf(ApiError);
     expect(a.putTour).not.toHaveBeenCalled();
   });
 
@@ -92,10 +105,11 @@ describe('addPanoToTour', () => {
     ).rejects.toThrow('This tour no longer exists.');
     await expect(
       addPanoToTour(
+        // 409: a tombstone (delete in flight) refuses the config write.
         api({
-          getPano: vi.fn(
-            async () => ({ status: 'not-found', deleting: true, hasOriginal: true }) as const,
-          ),
+          createPanoConfig: vi
+            .fn<Api['createPanoConfig']>()
+            .mockRejectedValue(new ApiError(409, { error: 'pano is being deleted' })),
         }),
         't1',
         'p1',
