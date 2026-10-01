@@ -21,7 +21,8 @@ function workerAssets(mode: string): Plugin {
       const connectSrc = env.CSP_UPLOAD_ORIGIN ? [env.CSP_UPLOAD_ORIGIN] : [];
       await writeFile(
         resolve(ASSETS_DIR, '_headers'),
-        buildHeadersFile(config, { connectSrc, noindex: mode === 'dev' }),
+        // frame-src 'self': the share modal previews the site's /s/<slug>/embed (same origin).
+        buildHeadersFile(config, { connectSrc, frameSrc: ["'self'"], noindex: mode === 'dev' }),
       );
       await copyFile(resolve(ASSETS_DIR, 'app/index.html'), resolve(ASSETS_DIR, 'index.html'));
     },
