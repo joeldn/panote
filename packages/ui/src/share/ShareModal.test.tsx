@@ -249,6 +249,14 @@ describe('ShareModal', () => {
     expect(props.onCommitSlug).toHaveBeenCalledWith('fresh-link');
   });
 
+  it('shows loading and error states in place of the tabs', () => {
+    const { rerender, props } = renderModal({ loading: true });
+    expect(screen.getByRole('status').textContent).toBe('Loading…');
+    rerender(<ShareModal {...props} loading={false} error="This tour no longer exists." />);
+    expect(screen.getByRole('alert').textContent).toBe('This tour no longer exists.');
+    expect(screen.queryByRole('tab')).toBeNull();
+  });
+
   it('gives visitors the link only: no tabs, banner or slug edit', () => {
     renderModal({ variant: 'visitor', tab: 'embed' });
     expect(screen.queryByRole('tab')).toBeNull();

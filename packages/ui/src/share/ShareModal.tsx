@@ -51,6 +51,8 @@ export interface ShareModalProps {
   /** Unpublished tour that has to pick a slug first (publish said 409 slug lost/taken). */
   slugRequired?: boolean;
   loading?: boolean;
+  /** Replaces the body, e.g. when the tour could not be loaded. */
+  error?: ReactNode;
   /** Status line under the banner, e.g. a load error or where an old link now redirects. */
   notice?: ReactNode;
 }
@@ -98,7 +100,13 @@ export function ShareModal(props: ShareModalProps) {
   };
 
   let body: ReactNode;
-  if (props.loading) {
+  if (props.error) {
+    body = (
+      <p className="pn-share__status" role="alert">
+        {props.error}
+      </p>
+    );
+  } else if (props.loading) {
     body = (
       <p className="pn-share__status" role="status">
         Loading…
