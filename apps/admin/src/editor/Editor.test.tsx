@@ -59,6 +59,8 @@ describe('editor: load and missing panos', () => {
     const { ui } = openTab();
     await loaded(ui);
     expect(server.requests[0]?.path).toBe('/api/admin/tours/t1?include=configs');
+    // The dashboard's "Current" badge (plan C16).
+    expect(localStorage.getItem('panote.currentTour')).toBe('t1');
     expect(ui.getByText('Missing pano')).toBeTruthy();
     fireEvent.click(ui.getByRole('button', { name: /^Missing pano/ }));
     expect(await ui.findByRole('heading', { name: 'Missing pano' })).toBeTruthy();

@@ -20,6 +20,7 @@ import './editor.css';
 
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
+import { writeCurrentTour } from '../dashboard/current-tour.js';
 import { useSession } from '../session.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
@@ -50,6 +51,10 @@ export function Editor() {
   const { api } = useSession();
   const editor = useEditor(api, tourId);
   const { load } = editor;
+  const ready = load.status === 'ready';
+  useEffect(() => {
+    if (ready) writeCurrentTour(tourId);
+  }, [ready, tourId]);
 
   if (load.status === 'loading') {
     return <EditorMessage title="Loading tour…" />;
