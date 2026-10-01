@@ -42,6 +42,20 @@ export const updateConditional = (ifMatch: string | undefined): R2Conditional | 
   return { etagMatches: parsed.tags[0] ?? '' };
 };
 
+/**
+ * Like `updateConditional`, but `If-None-Match: *` (and no If-Match) means create-only:
+ * R2 fails the put if the key already exists, so two concurrent creates can't both win.
+ */
+export const writeConditional = (
+  ifMatch: string | undefined,
+  ifNoneMatch: string | undefined,
+): R2Conditional | undefined => {
+  if (ifNoneMatch === undefined) return updateConditional(ifMatch);
+  if (ifMatch) throw new WorkerError('send either If-Match or If-None-Match, not both', 400);
+  if (ifNoneMatch.trim() !== '*') throw new WorkerError('If-None-Match on a write must be *', 400);
+  return { etagDoesNotMatch: '*' };
+};
+
 /** True when an If-None-Match header (single, list or `*`) matches `etag`. */
 export const ifNoneMatchHits = (ifNoneMatch: string | undefined, etag: string): boolean => {
   if (!ifNoneMatch) return false;

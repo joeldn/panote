@@ -93,6 +93,44 @@ describe('admin panos routes', () => {
     expect(((await list.json()) as { panoIds: string[] }).panoIds).toContain(panoId);
   });
 
+  it('If-None-Match: * creates a config only once (create-vs-create race)', async () => {
+    const panoId = 'create-only-p1';
+    const put = (title: string) =>
+      SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+        method: 'PUT',
+        headers: { ...auth.headers, 'If-None-Match': '*' },
+        body: JSON.stringify({ panoId, title, hotspots: [] }),
+      });
+    const [a, b] = await Promise.all([put('First'), put('Second')]);
+    expect([a.status, b.status].sort()).toEqual([200, 412]);
+    const winner = a.status === 200 ? 'First' : 'Second';
+    const stored = await getJson<{ title: string }>(env.BUCKET, configKey(MY_SUB, panoId));
+    expect(stored?.value.title).toBe(winner);
+    // A later create-only write never overwrites it either.
+    expect((await put('Third')).status).toBe(412);
+    expect(
+      (await getJson<{ title: string }>(env.BUCKET, configKey(MY_SUB, panoId)))?.value.title,
+    ).toBe(winner);
+  });
+
+  it('rejects If-None-Match with a tag, or together with If-Match', async () => {
+    const panoId = 'create-only-bad-p1';
+    const body = JSON.stringify({ panoId, title: 'X', hotspots: [] });
+    const url = `https://x/api/admin/panos/${panoId}/config`;
+    const tagged = await SELF.fetch(url, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-None-Match': '"abc"' },
+      body,
+    });
+    expect(tagged.status).toBe(400);
+    const both = await SELF.fetch(url, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-None-Match': '*', 'If-Match': '*' },
+      body,
+    });
+    expect(both.status).toBe(400);
+  });
+
   it('412s on a stale conditional update', async () => {
     const panoId = 'stale-p1';
     // Seed the object first so there is an etag to be stale against.

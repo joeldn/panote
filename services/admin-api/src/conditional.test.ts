@@ -2,7 +2,28 @@ import { WorkerError } from '@internal/worker-kit';
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
-import { conditionalGet, guardedPut, updateConditional, type HeadAndPut } from './conditional.js';
+import {
+  conditionalGet,
+  guardedPut,
+  updateConditional,
+  writeConditional,
+  type HeadAndPut,
+} from './conditional.js';
+
+describe('writeConditional', () => {
+  it('maps If-None-Match: * to create-only and otherwise defers to If-Match', () => {
+    expect(writeConditional(undefined, '*')).toEqual({ etagDoesNotMatch: '*' });
+    expect(writeConditional(undefined, ' * ')).toEqual({ etagDoesNotMatch: '*' });
+    expect(writeConditional('*', undefined)).toBeUndefined();
+    expect(writeConditional('"e1"', undefined)).toEqual({ etagMatches: 'e1' });
+    expect(() => writeConditional(undefined, undefined)).toThrow();
+  });
+
+  it('rejects a tagged If-None-Match or both headers together', () => {
+    expect(() => writeConditional(undefined, '"e1"')).toThrow(WorkerError);
+    expect(() => writeConditional('"e1"', '*')).toThrow(WorkerError);
+  });
+});
 
 describe('updateConditional', () => {
   it('throws (428) when If-Match is missing', () => {
