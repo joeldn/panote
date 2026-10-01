@@ -238,7 +238,7 @@ describe('session gone mid-session', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'load: ok' }));
     const dialog = await screen.findByRole('dialog', { name: 'Your session has ended' });
-    expect(dialog).toBeTruthy();
+    expect(dialog.textContent).toContain('Sign in again to continue.');
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
     expect(auth.signIn).toHaveBeenCalledWith({
       connection: 'google-oauth2',

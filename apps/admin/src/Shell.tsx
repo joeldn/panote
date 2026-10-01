@@ -48,7 +48,7 @@ export function Notice({ title, children }: { title: string; children: ReactNode
   return (
     <section className="placeholder" role="alert">
       <h1>{title}</h1>
-      <p>{children}</p>
+      {children}
     </section>
   );
 }

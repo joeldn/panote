@@ -73,18 +73,22 @@ export function RequireAuth() {
   if (!auth.configured) {
     return (
       <Notice title="Sign-in isn’t set up here">
-        This build has no Auth0 application configured, so it can’t sign you in.{' '}
-        <a href={`${origins.website}/`}>Back to the home page</a>
+        <p>
+          This build has no Auth0 application configured, so it can’t sign you in.{' '}
+          <a href={`${origins.website}/`}>Back to the home page</a>
+        </p>
       </Notice>
     );
   }
   if (state.status === 'error') {
     return (
       <Notice title="Couldn’t check your sign-in">
-        {state.message}{' '}
-        <button type="button" onClick={() => setAttempt((n) => n + 1)}>
-          Try again
-        </button>
+        <p>
+          {state.message}{' '}
+          <button type="button" onClick={() => setAttempt((n) => n + 1)}>
+            Try again
+          </button>
+        </p>
       </Notice>
     );
   }
@@ -102,7 +106,7 @@ export function RequireAuth() {
         open={expired}
         onClose={() => setExpired(false)}
         title="Your session has ended"
-        subtitle="Sign in again to carry on where you left off."
+        subtitle="Sign in again to continue."
         options={auth.connections}
         onSignIn={(id) => auth.signIn({ connection: id as ConnectionId, returnTo: path })}
         termsHref={`${origins.website}/terms`}
