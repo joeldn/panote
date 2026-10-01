@@ -35,6 +35,7 @@
     "@fontsource/schibsted-grotesk": "catalog:",
     "@fontsource/spline-sans-mono": "catalog:",
     "@fortawesome/fontawesome-free": "catalog:",
+    "@internal/contracts": "workspace:*",
     "@panote/viewer": "workspace:*"
   },
   "peerDependencies": {

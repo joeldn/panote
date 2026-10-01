@@ -5,6 +5,8 @@ export interface HeadersFileOptions {
   connectSrc?: readonly string[];
   /** `_headers` URL patterns any origin may frame (the website's embed route). */
   framable?: readonly string[];
+  /** Extra `frame-src` sources, e.g. `'self'` for admin's embed preview. */
+  frameSrc?: readonly string[];
   /** Adds `X-Robots-Tag: noindex` everywhere (dev builds). */
   noindex?: boolean;
 }
@@ -21,6 +23,7 @@ export function contentSecurityPolicy(
   config: Pick<AppConfig, 'cdnBase' | 'apiBase' | 'auth0'>,
   frameAncestors: string,
   extraConnectSrc: readonly string[] = [],
+  extraFrameSrc: readonly string[] = [],
 ): string {
   const cdn = originOf(config.cdnBase);
   const connect = new Set(['self', cdn, ...extraConnectSrc.map(originOf)]);
@@ -38,7 +41,7 @@ export function contentSecurityPolicy(
     // Hotspot video (HotspotMedia kind 'video'); media URLs outside the CDN stay blocked.
     `media-src 'self' ${cdn}`,
     `connect-src ${src(connect)}`,
-    'frame-src https://www.youtube-nocookie.com',
+    `frame-src ${[...extraFrameSrc, 'https://www.youtube-nocookie.com'].join(' ')}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -54,7 +57,7 @@ export function buildHeadersFile(
   config: Pick<AppConfig, 'cdnBase' | 'apiBase' | 'auth0'>,
   options: HeadersFileOptions = {},
 ): string {
-  const { connectSrc = [], framable = [], noindex = false } = options;
+  const { connectSrc = [], framable = [], frameSrc = [], noindex = false } = options;
   const common = [
     'X-Content-Type-Options: nosniff',
     'Referrer-Policy: strict-origin-when-cross-origin',
@@ -65,13 +68,13 @@ export function buildHeadersFile(
 
   const blocks = [
     block('/*', [
-      `Content-Security-Policy: ${contentSecurityPolicy(config, "'none'", connectSrc)}`,
+      `Content-Security-Policy: ${contentSecurityPolicy(config, "'none'", connectSrc, frameSrc)}`,
       ...common,
     ]),
     ...framable.map((pattern) =>
       block(pattern, [
         '! Content-Security-Policy',
-        `Content-Security-Policy: ${contentSecurityPolicy(config, '*', connectSrc)}`,
+        `Content-Security-Policy: ${contentSecurityPolicy(config, '*', connectSrc, frameSrc)}`,
       ]),
     ),
   ];

@@ -63,6 +63,13 @@ describe('createPublicApi', () => {
     });
     await api.recordView('t1');
     expect(fetch.mock.calls[2]?.[0]).toBe('/api/tours/t1/view');
+    expect(fetch.mock.calls[2]?.[1]).toEqual({ method: 'POST' });
+    await api.recordView('t1', { panoId: 'p1', surface: 'embed' });
+    expect(fetch.mock.calls[3]?.[1]).toEqual({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"panoId":"p1","surface":"embed"}',
+    });
   });
 
   it('rejects an invalid stats body and a bad tourId', async () => {
