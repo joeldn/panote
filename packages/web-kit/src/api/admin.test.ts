@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { json } from '../__fixtures__/helpers.js';
 import { AuthRequiredError } from '../auth.js';
-import { createAdminApi } from './admin.js';
+import { createAdminApi, publishErrorOf } from './admin.js';
 import { ApiError, ApiSchemaError, ConflictError } from './http.js';
 
 const status = {
@@ -216,5 +216,77 @@ describe('createAdminApi', () => {
     });
     await expect(api.listPanos()).rejects.toBeInstanceOf(AuthRequiredError);
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('publish routes', () => {
+  const published = {
+    slug: 'old-town',
+    visibility: 'unlisted',
+    url: '/s/old-town',
+    publishedAt: '2026-09-26T00:00:00.000Z',
+  };
+
+  it('POSTs publish with the request body and validates the result', async () => {
+    const { api, call } = setup(json(published), json(published));
+    await expect(api.publishTour('t1')).resolves.toEqual(published);
+    expect(call(0).url).toBe('https://panote.test/api/admin/tours/t1/publish');
+    expect(call(0).init.method).toBe('POST');
+    expect(call(0).init.body).toBe('{}');
+    expect(call(0).headers['If-Match']).toBeUndefined();
+    await api.publishTour('t1', { slug: 'old-town' });
+    expect(call(1).init.body).toBe('{"slug":"old-town"}');
+  });
+
+  it('PUTs a slug rename and PATCHes visibility', async () => {
+    const { api, call } = setup(
+      json({ slug: 'new-town', oldSlugRedirectsUntil: '2026-10-26T00:00:00.000Z' }),
+      json({ visibility: 'public' }),
+    );
+    await expect(api.renameSlug('t1', 'new-town')).resolves.toEqual({
+      slug: 'new-town',
+      oldSlugRedirectsUntil: '2026-10-26T00:00:00.000Z',
+    });
+    expect(call(0).url).toBe('https://panote.test/api/admin/tours/t1/slug');
+    expect(call(0).init.method).toBe('PUT');
+    expect(call(0).init.body).toBe('{"slug":"new-town"}');
+    await expect(api.setVisibility('t1', 'public')).resolves.toEqual({ visibility: 'public' });
+    expect(call(1).url).toBe('https://panote.test/api/admin/tours/t1/visibility');
+    expect(call(1).init.method).toBe('PATCH');
+    expect(call(1).init.body).toBe('{"visibility":"public"}');
+  });
+
+  it('DELETEs publish', async () => {
+    const { api, call } = setup(new Response(null, { status: 204 }));
+    await expect(api.unpublishTour('t1')).resolves.toBeUndefined();
+    expect(call().url).toBe('https://panote.test/api/admin/tours/t1/publish');
+    expect(call().init.method).toBe('DELETE');
+  });
+
+  it.each([
+    [409, { error: 'slug taken' }, { kind: 'slug-taken' }],
+    [409, { error: 'slug lost' }, { kind: 'slug-lost' }],
+    [409, { error: 'conflict' }, { kind: 'conflict' }],
+    [409, { error: 'not published' }, { kind: 'not-published' }],
+    [404, { error: 'not found' }, { kind: 'not-found' }],
+    [400, { error: 'reserved slug' }, { kind: 'slug-invalid', reason: 'reserved' }],
+    [400, { error: 'invalid slug' }, { kind: 'slug-invalid', reason: 'invalid' }],
+    [
+      422,
+      { error: 'scenes not publishable', scenes: [{ panoId: 'p1', reason: 'not-ready' }] },
+      { kind: 'unprocessable', scenes: [{ panoId: 'p1', reason: 'not-ready' }] },
+    ],
+  ])('classifies a %i %j', async (statusCode, body, expected) => {
+    const { api } = setup(json(body, statusCode));
+    const err = await api.renameSlug('t1', 'x-y-z').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(publishErrorOf(err)).toEqual(expected);
+  });
+
+  it('does not classify unrelated errors', async () => {
+    const { api } = setup(json({ error: 'boom' }, 500), json({ error: 'other' }, 409));
+    expect(publishErrorOf(await api.publishTour('t1').catch((e: unknown) => e))).toBeNull();
+    expect(publishErrorOf(await api.publishTour('t1').catch((e: unknown) => e))).toBeNull();
+    expect(publishErrorOf(new Error('network'))).toBeNull();
   });
 });

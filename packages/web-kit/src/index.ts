@@ -30,12 +30,14 @@ export {
 } from './api/http.js';
 export {
   createAdminApi,
+  publishErrorOf,
   type AdminApi,
   type AdminApiOptions,
   type ConditionalQuery,
   type GetResult,
   type ListQuery,
   type PanoNotFound,
+  type PublishError,
   type SceneConfigInput,
   type TourDocInput,
 } from './api/admin.js';

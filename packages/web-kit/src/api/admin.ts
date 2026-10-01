@@ -1,9 +1,17 @@
 import {
+  NotPublishedSchema,
   PANO_PATTERN,
   PanoConfigNotFoundSchema,
   PanosListOkSchema,
   PanoStatusOnlyOkSchema,
   PanoWithStatusOkSchema,
+  PublishConflictSchema,
+  PublishOkSchema,
+  PublishUnprocessableSchema,
+  SlugInvalidSchema,
+  SlugLostSchema,
+  SlugPutOkSchema,
+  SlugTakenSchema,
   TourNotFoundSchema,
   TourOkSchema,
   ToursListOkSchema,
@@ -11,11 +19,18 @@ import {
   type PanosListOk,
   type PanoStatus,
   type PanoWithStatusOk,
+  type PublishFailureReason,
+  type PublishOk,
+  type PublishRequest,
   type SceneConfigSchema,
+  type SlugPutOk,
   type TourDocSchema,
   type ToursListOk,
   type TourOk,
   type TourWithConfigsOk,
+  type Visibility,
+  VisibilityOkSchema,
+  type VisibilityOk,
 } from '@internal/contracts';
 import { z } from 'zod';
 
@@ -81,12 +96,52 @@ export interface AdminApi {
   ): Promise<{ etag: string }>;
   deleteTour(tourId: string): Promise<void>;
   deletePano(panoId: string): Promise<void>;
+  /** Idempotent; failures are an `ApiError`, classify them with `publishErrorOf`. */
+  publishTour(tourId: string, req?: PublishRequest): Promise<PublishOk>;
+  renameSlug(tourId: string, slug: string): Promise<SlugPutOk>;
+  setVisibility(tourId: string, visibility: Visibility): Promise<VisibilityOk>;
+  unpublishTour(tourId: string): Promise<void>;
+}
+
+/** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
+export type PublishError =
+  | { kind: 'slug-taken' | 'slug-lost' | 'conflict' | 'not-published' | 'not-found' }
+  | { kind: 'slug-invalid'; reason: 'invalid' | 'reserved' }
+  | { kind: 'unprocessable'; scenes: Array<{ panoId: string; reason: PublishFailureReason }> };
+
+/** Classify an error from the publish routes; null for anything else (network, 5xx, auth). */
+export function publishErrorOf(e: unknown): PublishError | null {
+  if (!(e instanceof ApiError) || e instanceof ConflictError) return null;
+  const is = (schema: z.ZodTypeAny) => schema.safeParse(e.body).success;
+  if (e.status === 404) return { kind: 'not-found' };
+  if (e.status === 409) {
+    if (is(SlugTakenSchema)) return { kind: 'slug-taken' };
+    if (is(SlugLostSchema)) return { kind: 'slug-lost' };
+    if (is(NotPublishedSchema)) return { kind: 'not-published' };
+    if (is(PublishConflictSchema)) return { kind: 'conflict' };
+  }
+  if (e.status === 400) {
+    const invalid = SlugInvalidSchema.safeParse(e.body);
+    if (invalid.success) {
+      return {
+        kind: 'slug-invalid',
+        reason: invalid.data.error === 'reserved slug' ? 'reserved' : 'invalid',
+      };
+    }
+  }
+  if (e.status === 422) {
+    const body = PublishUnprocessableSchema.safeParse(e.body);
+    if (body.success) return { kind: 'unprocessable', scenes: body.data.scenes };
+  }
+  return null;
 }
 
 const assertId = (id: string, name: string): string => {
   if (!PANO_PATTERN.test(id)) throw new TypeError(`${name} must match ${PANO_PATTERN}`);
   return id;
 };
+
+const tourPath = (tourId: string): string => `/api/admin/tours/${assertId(tourId, 'tourId')}`;
 
 const listPath = (path: string, q: ListQuery = {}): string => {
   const params = new URLSearchParams();
@@ -151,7 +206,7 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
   }
 
   async function write<S extends z.ZodTypeAny>(
-    method: 'PUT' | 'POST',
+    method: 'PUT' | 'POST' | 'PATCH',
     path: string,
     body: unknown,
     schema: S,
@@ -225,5 +280,12 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       ),
     deleteTour: async (tourId) => del(`/api/admin/tours/${assertId(tourId, 'tourId')}`),
     deletePano: async (panoId) => del(`/api/admin/panos/${assertId(panoId, 'panoId')}`),
+    publishTour: async (tourId, req = {}) =>
+      write('POST', `${tourPath(tourId)}/publish`, req, PublishOkSchema),
+    renameSlug: async (tourId, slug) =>
+      write('PUT', `${tourPath(tourId)}/slug`, { slug }, SlugPutOkSchema),
+    setVisibility: async (tourId, visibility) =>
+      write('PATCH', `${tourPath(tourId)}/visibility`, { visibility }, VisibilityOkSchema),
+    unpublishTour: async (tourId) => del(`${tourPath(tourId)}/publish`),
   };
 }
