@@ -1,10 +1,11 @@
 import { render } from '@testing-library/react';
-import type { Auth, AppOrigins, FetchLike } from '@internal/web-kit';
+import { loadConfig, type Auth, type AppOrigins, type FetchLike } from '@internal/web-kit';
 import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { vi } from 'vitest';
 
 import { AuthEnvContext } from '../auth-context.js';
+import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 
 export const LOCAL: AppOrigins = {
@@ -29,6 +30,15 @@ export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
   };
 }
 
+// The share route reads VITE_SITE_ORIGIN for its links.
+export const TEST_CONFIG = loadConfig({
+  VITE_SITE_ORIGIN: 'https://panote.dev',
+  VITE_CDN_BASE: 'https://cdn.panote.dev/',
+  VITE_AUTH0_DOMAIN: 'panote-dev.au.auth0.com',
+  VITE_AUTH0_CLIENT_ID: 'client',
+  VITE_AUTH0_AUDIENCE: 'https://api.panote.dev',
+});
+
 export interface RenderOptions {
   auth?: Auth;
   fetch?: FetchLike;
@@ -50,7 +60,9 @@ export function renderAdmin(path: string, opts: RenderOptions = {}) {
         ...(opts.fetch && { fetch: opts.fetch }),
       }}
     >
-      <RouterProvider router={router} />
+      <ConfigContext value={TEST_CONFIG}>
+        <RouterProvider router={router} />
+      </ConfigContext>
     </AuthEnvContext>
   );
   render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);

@@ -19,6 +19,21 @@ export {
 } from './PanoStage.js';
 export { SignInModal, type SignInModalProps, type SignInOption } from './SignInModal.js';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented.js';
+export {
+  DEFAULT_EMBED_HEIGHT,
+  EMBED_HEIGHTS,
+  embedSnippet,
+  embedSrc,
+  SHARE_TABS,
+  shareUrl,
+  socialTargets,
+  type EmbedHeight,
+  type EmbedScope,
+  type ShareTab,
+  type SocialTarget,
+} from './share/links.js';
+export { ShareModal, type ShareModalProps, type SharePano } from './share/ShareModal.js';
+export { SlugField, type SlugFieldProps } from './share/SlugField.js';
 export { useModalTitleId } from './use-modal-title-id.js';
 export { usePanoViewer } from './viewer-context.js';
 export { VISIBILITY_META, type Visibility } from './visibility.js';
