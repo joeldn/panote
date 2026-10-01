@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderAdmin } from '../__fixtures__/auth.js';
 import type { PanoSummary, TourSummary } from './types.js';
+import { resetResumedTombstones } from './use-dashboard.js';
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -64,7 +65,10 @@ const lists = (tours: TourSummary[], panos: PanoSummary[] = [pano()]) => ({
 
 const card = (title: string) => screen.getByRole('link', { name: title }).closest('article')!;
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  resetResumedTombstones();
+});
 afterEach(cleanup);
 
 describe('Dashboard', () => {
@@ -187,6 +191,20 @@ describe('Dashboard', () => {
       expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1);
     });
 
+    it('resumes once per page load, not once per dashboard mount', async () => {
+      const { fetch, calls } = server({
+        ...lists([tour()], [pano({ panoId: 'p-dead', deleting: true })]),
+        'DELETE /api/admin/panos/p-dead': () => noContent(),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1));
+      cleanup();
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1);
+    });
+
     it('offers "Finish deleting" when the resumed DELETE fails', async () => {
       let ok = false;
       const { fetch, calls } = server({
@@ -248,6 +266,8 @@ describe('Dashboard', () => {
     });
   });
 
+  const settings = { controls: 'top', showMap: true, showCompass: false, autoRotate: true };
+
   it('duplicates into a new unpublished tour without reusing the tourId', async () => {
     let tours = [tour()];
     const { fetch, calls } = server({
@@ -255,7 +275,13 @@ describe('Dashboard', () => {
       'GET /api/admin/tours': () => json({ tours, cursor: null }),
       'GET /api/admin/tours/t1': () =>
         json({
-          tour: { tourId: 't1', title: 'St Lawrence Jewry', scenes: [{ panoId: 'p1' }] },
+          tour: {
+            tourId: 't1',
+            title: 'St Lawrence Jewry',
+            scenes: [{ panoId: 'p1' }, { panoId: 'p2' }],
+            startPanoId: 'p2',
+            settings,
+          },
           etag: 'e1',
           publish: { slug: 'st-lawrence', visibility: 'public', publishedAt: '2026-09-01' },
         }),
@@ -274,8 +300,16 @@ describe('Dashboard', () => {
       string,
       unknown
     >;
-    expect(body).toEqual({ title: 'St Lawrence Jewry (copy)', scenes: [{ panoId: 'p1' }] });
+    expect(body).toEqual({
+      title: 'St Lawrence Jewry (copy)',
+      scenes: [{ panoId: 'p1' }, { panoId: 'p2' }],
+      startPanoId: 'p2',
+      settings,
+    });
     expect(card('St Lawrence Jewry (copy)').textContent).toContain('Draft');
+    expect(screen.getByRole('alert').textContent).toContain(
+      'changes to a scene’s points show in both',
+    );
   });
 
   describe('delete', () => {
@@ -323,6 +357,20 @@ describe('Dashboard', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Delete tour' }));
       expect((await within(dialog).findByRole('alert')).textContent).toContain(message);
       expect(screen.getByRole('link', { name: 'St Lawrence Jewry' })).toBeTruthy();
+    });
+
+    it('drops a deleted tour’s views from the total', async () => {
+      const { fetch } = server({
+        ...lists([tour(), tour({ tourId: 't2', title: 'Town Hall' })]),
+        'DELETE /api/admin/tours/t1': () => noContent(),
+      });
+      renderAdmin('/app/', { fetch });
+      const totals = () => document.querySelector('.dash__totals')!.textContent;
+      await waitFor(() => expect(totals()).toContain('total views4.4k'));
+      fireEvent.click(screen.getByRole('button', { name: 'Delete “St Lawrence Jewry”' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Delete tour' }));
+      await waitFor(() => expect(totals()).toContain('total views12'));
+      expect(totals()).toContain('tours1');
     });
 
     it('treats a 404 as already deleted', async () => {

@@ -14,6 +14,16 @@ const MAX_PAGES = 50;
 const STATS_CONCURRENCY = 6;
 const MAX_TITLE = 200;
 const COPY_SUFFIX = ' (copy)';
+export const SHARED_PANOS_NOTE =
+  'The copy uses the same panos, so changes to a scene’s points show in both tours.';
+
+// Each tombstone is resumed automatically at most once per page load (plan 3.1), not per mount.
+const resumed = new Set<string>();
+
+/** Test-only: forget which tombstones this page load already resumed. */
+export function resetResumedTombstones(): void {
+  resumed.clear();
+}
 
 type Page<T> = { items: T[]; cursor: string | null };
 
@@ -101,8 +111,6 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
   const [stuck, setStuck] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  // Each tombstone is resumed automatically at most once per page load (plan 3.1).
-  const resumed = useRef(new Set<string>());
   const statsRequested = useRef(new Set<string>());
 
   const resumeDeletes = useCallback(
@@ -124,10 +132,8 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
   const applyPanos = useCallback(
     (list: PanoSummary[]) => {
       setPanos(new Map(list.filter((p) => !p.deleting).map((p) => [p.panoId, p])));
-      const fresh = list
-        .filter((p) => p.deleting && !resumed.current.has(p.panoId))
-        .map((p) => p.panoId);
-      fresh.forEach((id) => resumed.current.add(id));
+      const fresh = list.filter((p) => p.deleting && !resumed.has(p.panoId)).map((p) => p.panoId);
+      fresh.forEach((id) => resumed.add(id));
       void resumeDeletes(fresh);
     },
     [resumeDeletes],
@@ -231,6 +237,7 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
         return;
       }
       await refreshTours();
+      setNotice(`Duplicated “${tour.title}”. ${SHARED_PANOS_NOTE}`);
     },
     [api, refreshTours],
   );

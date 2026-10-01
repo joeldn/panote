@@ -16,7 +16,10 @@ import { TourCard } from './TourCard.js';
 import { useDashboard, type Dashboard as DashboardData } from './use-dashboard.js';
 
 function Totals({ dash }: { dash: DashboardData }) {
-  const known = Object.values(dash.views).filter((v): v is number => v !== null);
+  // Only tours still listed, so a deleted tour's views drop out of the total.
+  const known = dash.tours
+    .map((t) => dash.views[t.tourId])
+    .filter((v): v is number => typeof v === 'number');
   const items = [
     [String(dash.tours.length), 'tours'],
     [dash.panos ? String(dash.panos.size) : '–', 'panos'],

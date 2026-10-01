@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 import { fallbackHue } from './cover.js';
 import { writeCurrentTour } from './current-tour.js';
 import { formatCount, plural, relativeTime } from './format.js';
+import { SHARED_PANOS_NOTE } from './use-dashboard.js';
 
 export interface TourCardProps {
   tour: TourSummary;
@@ -149,7 +150,7 @@ export function TourCard({
             <button
               type="button"
               className="dash-card__action"
-              title="Duplicate"
+              title={`Duplicate. ${SHARED_PANOS_NOTE}`}
               aria-label={`Duplicate “${tour.title}”`}
               aria-busy={duplicating || undefined}
               disabled={duplicating}
