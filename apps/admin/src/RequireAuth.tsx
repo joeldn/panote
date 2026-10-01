@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
+import { runBeforeSignIn } from './before-sign-in.js';
 import { createSessionApi, SessionContext, type Session } from './session.js';
 import { Notice } from './Shell.js';
 
@@ -108,7 +109,10 @@ export function RequireAuth() {
         title="Your session has ended"
         subtitle="Sign in again to continue."
         options={auth.connections}
-        onSignIn={(id) => auth.signIn({ connection: id as ConnectionId, returnTo: path })}
+        onSignIn={(id) => {
+          runBeforeSignIn();
+          return auth.signIn({ connection: id as ConnectionId, returnTo: path });
+        }}
         termsHref={`${origins.website}/terms`}
         privacyHref={`${origins.website}/privacy`}
       />
