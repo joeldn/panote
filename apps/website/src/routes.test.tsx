@@ -1,25 +1,19 @@
-import { cleanup, render, screen } from '@testing-library/react';
-import { createMemoryRouter, RouterProvider } from 'react-router';
+import { cleanup, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { routes } from './routes.js';
+import { renderSite } from './__fixtures__/auth.js';
 
-const renderAt = (path: string) =>
-  render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: [path] })} />);
+const renderAt = (path: string) => renderSite(path);
 
 afterEach(cleanup);
 
 describe('website routes', () => {
-  it('renders the shell and the landing page', () => {
+  it('renders the shell and the landing page', async () => {
     renderAt('/');
     expect(screen.getByRole('img', { name: 'panote.io' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Landing' })).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
-  });
-
-  it('opens the sign-in placeholder from ?signin=1', () => {
-    renderAt('/?signin=1');
-    expect(screen.getByRole('dialog').textContent).toContain('Sign-in');
+    expect(await screen.findByRole('link', { name: 'Sign in' })).toBeTruthy();
   });
 
   it.each(['/privacy', '/terms'])('renders %s', (path) => {

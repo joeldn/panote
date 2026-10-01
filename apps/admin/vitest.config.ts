@@ -6,7 +6,7 @@ export default mergeConfig(
   defineConfig({
     test: {
       name: '@app/admin',
-      coverage: { exclude: ['src/main.tsx'] },
+      coverage: { exclude: ['src/main.tsx', 'src/__fixtures__/**'] },
     },
   }),
 );
