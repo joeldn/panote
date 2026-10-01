@@ -40,12 +40,16 @@ export const sendDlqAlert = async (
       'Marker: written = tile-failed marker stored; skipped = original gone, superseded or',
       'unparseable (see the Worker logs); failed = the marker write errored.',
     ].join('\n');
-    await env.ALERT_EMAIL.send({
+    const result = await env.ALERT_EMAIL.send({
       to,
       from: env.ALERT_EMAIL_FROM,
       subject: `[panote] tiling failed permanently (${items.length}) - ${queue}`,
       text,
     });
+    const messageId = result && typeof result.messageId === 'string' ? result.messageId : 'unknown';
+    // repo lint policy allows only warn/error console methods, so a success
+    // note also goes through warn.
+    console.warn(`DLQ alert sent for ${queue} messageId=${messageId}`);
   } catch (e) {
     // code and name only: the error message may echo the recipient address.
     const { code, name } = (e ?? {}) as { code?: unknown; name?: unknown };
