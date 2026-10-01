@@ -1,5 +1,16 @@
 import { resolveSlugRedirect } from './redirect.js';
 
+// Same value as NOINDEX in @internal/web-kit, kept local so the script bundles nothing else.
+const NOINDEX = 'noindex, nofollow';
+
+// _headers doesn't cover Worker-generated responses, so off production the script tags them itself.
+function withRobots(response: Response, env: Env): Response {
+  if (env.INDEXABLE === 'true') return response;
+  const tagged = new Response(response.body, response);
+  tagged.headers.set('X-Robots-Tag', NOINDEX);
+  return tagged;
+}
+
 // Runs only for /s/* (assets.run_worker_first); every other path never reaches it.
 export default {
   async fetch(request, env): Promise<Response> {
@@ -12,12 +23,13 @@ export default {
         console.error('slug redirect lookup failed', err);
       }
       if (location) {
-        return new Response(null, {
+        const redirect = new Response(null, {
           status: 308,
           headers: { Location: location, 'Cache-Control': 'no-store' },
         });
+        return withRobots(redirect, env);
       }
     }
-    return env.ASSETS.fetch(request);
+    return withRobots(await env.ASSETS.fetch(request), env);
   },
 } satisfies ExportedHandler<Env>;

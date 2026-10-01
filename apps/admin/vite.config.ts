@@ -1,7 +1,7 @@
 import { copyFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { buildHeadersFile, loadConfig } from '@internal/web-kit/build';
+import { buildHeadersFile, isIndexable, loadConfig, robotsTxt } from '@internal/web-kit/build';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
@@ -19,11 +19,14 @@ function workerAssets(mode: string): Plugin {
       const env = loadEnv(mode, import.meta.dirname, '');
       const config = loadConfig(env);
       const connectSrc = env.CSP_UPLOAD_ORIGIN ? [env.CSP_UPLOAD_ORIGIN] : [];
+      const indexable = isIndexable(mode);
       await writeFile(
         resolve(ASSETS_DIR, '_headers'),
         // frame-src 'self': the share modal previews the site's /s/<slug>/embed (same origin).
-        buildHeadersFile(config, { connectSrc, frameSrc: ["'self'"], noindex: mode === 'dev' }),
+        buildHeadersFile(config, { connectSrc, frameSrc: ["'self'"], indexable }),
       );
+      // Only reachable on the workers.dev URL (the zone routes /robots.txt to the website).
+      await writeFile(resolve(ASSETS_DIR, 'robots.txt'), robotsTxt(indexable));
       await copyFile(resolve(ASSETS_DIR, 'app/index.html'), resolve(ASSETS_DIR, 'index.html'));
     },
   };

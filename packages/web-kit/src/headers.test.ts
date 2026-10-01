@@ -74,10 +74,13 @@ describe('buildHeadersFile', () => {
     expect(buildHeadersFile(loadConfig(env)).trimEnd().split('\n\n')).toHaveLength(1);
   });
 
-  it('adds noindex only when asked', () => {
-    expect(buildHeadersFile(loadConfig(env))).not.toContain('X-Robots-Tag');
-    expect(buildHeadersFile(loadConfig(env), { noindex: true })).toMatch(
-      /^\/\*\n(?: {2}.*\n)* {2}X-Robots-Tag: noindex\n/,
+  it('adds noindex on every path unless explicitly indexable', () => {
+    const framable = ['/s/:slug/embed'];
+    expect(buildHeadersFile(loadConfig(env), { framable })).toMatch(
+      /^\/\*\n(?: {2}.*\n)* {2}X-Robots-Tag: noindex, nofollow\n/,
+    );
+    expect(buildHeadersFile(loadConfig(env), { framable, indexable: true })).not.toContain(
+      'X-Robots-Tag',
     );
   });
 });

@@ -23,11 +23,12 @@ const putSlug = (slug: string, body: unknown) =>
 
 const assets = { fetch: vi.fn(async () => new Response('spa', { status: 200 })) };
 
-async function call(path: string, init?: RequestInit): Promise<Response> {
+async function call(path: string, init?: RequestInit, vars: Partial<Env> = {}): Promise<Response> {
   const request = new Request(`${ORIGIN}${path}`, init);
   return worker.fetch(request as Request<unknown, IncomingRequestCfProperties>, {
     ...env,
     ASSETS: assets as unknown as Fetcher,
+    ...vars,
   });
 }
 
@@ -160,12 +161,47 @@ describe('falls through to the SPA', () => {
   it('for a path deeper than the embed', () => fallsThrough('/s/old-name/embed/extra'));
 });
 
+describe('X-Robots-Tag', () => {
+  beforeEach(async () => {
+    await putSlug('old-name', alias('new-name'));
+    await putSlug('new-name', live(TOUR));
+  });
+
+  it('tags the 308 and the passed-through SPA on dev (INDEXABLE=false)', async () => {
+    expect(env.INDEXABLE).toBe('false');
+    expect((await call('/s/old-name')).headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+    const page = await call('/s/new-name');
+    expect(await page.text()).toBe('spa');
+    expect(page.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('fails safe when the var is missing', async () => {
+    const res = await call('/s/new-name', undefined, { INDEXABLE: undefined as unknown as string });
+    expect(res.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('leaves production responses untouched (INDEXABLE=true)', async () => {
+    const prod = { INDEXABLE: 'true' };
+    const redirect = await call('/s/old-name', undefined, prod);
+    expect(redirect.status).toBe(308);
+    expect(redirect.headers.get('X-Robots-Tag')).toBeNull();
+    expect((await call('/s/new-name', undefined, prod)).headers.get('X-Robots-Tag')).toBeNull();
+  });
+});
+
 describe('routing through the assets router', () => {
   it('serves non-/s paths from assets without running the script', async () => {
     await putSlug('privacy', alias('new-name'));
     const res = await SELF.fetch(`${ORIGIN}/privacy`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves the dev robots.txt as a file, not the SPA fallback', async () => {
+    const res = await SELF.fetch(`${ORIGIN}/robots.txt`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/plain');
+    expect(await res.text()).toBe('User-agent: *\nDisallow: /\n');
   });
 
   it('runs the script first for /s/*', async () => {

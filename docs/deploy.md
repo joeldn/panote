@@ -131,8 +131,59 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
 the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
 Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CSP would block.
-The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Dev builds add
-`X-Robots-Tag: noindex` on every path; production stays indexable.
+The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Off production every path
+also gets `X-Robots-Tag: noindex, nofollow` (see Search engines below).
+
+**Search engines.** panote.dev must never be indexed; panote.io stays indexable (unlisted tours
+add their own `<meta name="robots" content="noindex">`, D5). The signal is the build mode
+(`APP_MODE`, see Config): `isIndexable(mode)` in `@internal/web-kit/build` is true only for
+`production`, and `buildHeadersFile` adds the header unless it is passed `indexable: true`, so a
+missing or new mode fails safe to noindex. Production has to be explicit: `deploy.yml` sets
+`APP_MODE=production` for production deploys, and the Vite configs reject any mode other than
+`dev`/`production`.
+
+- `_headers` (`/*`, inherited by the embed rule): `X-Robots-Tag: noindex, nofollow` on dev, absent
+  on production. Both apps.
+- `robots.txt`: each app's build writes `dist/robots.txt` as a real file, so it never falls back
+  to the SPA's `index.html`. Dev: `User-agent: *` / `Disallow: /`; production: `Allow: /`. On the
+  zone only the website's copy is reachable (admin's routes stop at `/app`); admin's covers its
+  `workers.dev` URL. `Disallow` alone doesn't keep a URL out of the index (it can still be indexed
+  from links), so the header is the real guard.
+- The website's `/s/*` script: `_headers` doesn't apply to Worker-generated responses, so the
+  script sets the header itself on the 308 and on whatever `env.ASSETS.fetch` returns, unless the
+  wrangler var `INDEXABLE` is `"true"` (dev `"false"`, production `"true"`; missing counts as dev).
+- API Workers: not tagged in code. There is no shared response helper in `worker-kit`
+  (`upload-api` isn't even on Hono), they return JSON, and the zone rule below covers them.
+- CI's `deploy-dry-run` job checks the real dev and production builds' `_headers` and
+  `robots.txt`.
+
+**Zone-wide guard (MANUAL, dev zone only).** Covers everything the code doesn't: the API Workers,
+`cdn.panote.dev` (R2 tiles and covers) and any future hostname on the zone. It doesn't reach
+`*.workers.dev`, which the code covers. Never create this on panote.io.
+
+1. Cloudflare dashboard → account → zone **panote.dev** → **Rules** → **Overview** →
+   **Create rule** → **Response Header Transform Rule** (older dashboards: **Rules** →
+   **Transform Rules** → **Modify Response Header** → **Create rule**).
+2. Rule name: `noindex everything on panote.dev`.
+3. If incoming requests match: **All incoming requests**.
+4. Then: **Modify response header** → **Set static**, header name `X-Robots-Tag`, value
+   `noindex, nofollow`. (Set, not Add, so it doesn't duplicate the header the apps already send.)
+5. **Deploy**.
+
+Post-deploy checks (each `grep` should print `x-robots-tag: noindex, nofollow` unless noted):
+
+- `curl -sI https://panote.dev/ | grep -i x-robots-tag`
+- `curl -sI https://panote.dev/app/ | grep -i x-robots-tag`
+- `curl -sI https://panote.dev/s/<old-slug> | grep -iE '^(HTTP|location|x-robots-tag)'`
+  (the 308, from the script)
+- `curl -sI https://panote.dev/s/<live-slug> | grep -i x-robots-tag`
+- `curl -s https://panote.dev/robots.txt` → `User-agent: *` / `Disallow: /` (not HTML), and
+  `curl -sI https://panote.dev/robots.txt | grep -i content-type` → `text/plain`.
+- After the zone rule: `curl -sI https://panote.dev/api/tours/x/stats | grep -i x-robots-tag` and
+  `curl -sI https://cdn.panote.dev/pub/x | grep -i x-robots-tag` (R2's 404; use a real tile URL
+  if the error response doesn't show it).
+- Production, once it exists: `curl -sI https://panote.io/ | grep -i x-robots-tag` prints
+  nothing, and `curl -s https://panote.io/robots.txt` shows `Allow: /`.
 
 CSP notes for the D units:
 

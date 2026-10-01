@@ -1,4 +1,5 @@
 import type { AppConfig } from './config.js';
+import { NOINDEX } from './robots.js';
 
 export interface HeadersFileOptions {
   /** Extra `connect-src` origins, e.g. the R2 S3 endpoint presigned PUTs go to. */
@@ -7,8 +8,8 @@ export interface HeadersFileOptions {
   framable?: readonly string[];
   /** Extra `frame-src` sources, e.g. `'self'` for admin's embed preview. */
   frameSrc?: readonly string[];
-  /** Adds `X-Robots-Tag: noindex` everywhere (dev builds). */
-  noindex?: boolean;
+  /** Production only. Otherwise every path gets `X-Robots-Tag: noindex, nofollow` (fail safe). */
+  indexable?: boolean;
 }
 
 const PLACEHOLDER = /YOUR_/i;
@@ -57,11 +58,11 @@ export function buildHeadersFile(
   config: Pick<AppConfig, 'cdnBase' | 'apiBase' | 'auth0'>,
   options: HeadersFileOptions = {},
 ): string {
-  const { connectSrc = [], framable = [], frameSrc = [], noindex = false } = options;
+  const { connectSrc = [], framable = [], frameSrc = [], indexable = false } = options;
   const common = [
     'X-Content-Type-Options: nosniff',
     'Referrer-Policy: strict-origin-when-cross-origin',
-    ...(noindex ? ['X-Robots-Tag: noindex'] : []),
+    ...(indexable ? [] : [`X-Robots-Tag: ${NOINDEX}`]),
   ];
   const block = (pattern: string, lines: string[]) =>
     [pattern, ...lines.map((l) => `  ${l}`)].join('\n');
