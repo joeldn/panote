@@ -112,7 +112,7 @@ describe('fresh upload from /app/new', () => {
     const [config, tour] = backend.writes();
     expect(config).toMatchObject({
       url: '/api/admin/panos/pano-1/config',
-      headers: { 'if-match': '*' },
+      headers: { 'if-none-match': '*' },
       body: { title: 'Town hall' },
     });
     expect(tour).toMatchObject({
@@ -123,6 +123,15 @@ describe('fresh upload from /app/new', () => {
 
     await tick(READY_CHIP_MS);
     expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+  });
+
+  it('an existing config (412 on the create-only write) still adds the pano to the tour', async () => {
+    const { backend } = await uploadThroughPut();
+    backend.state.hasConfig = true;
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(1_000);
+    expect(chipTitle()).toBe('Ready at full resolution');
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
   });
 
   it('rejects a wrong type, an oversized file and too many pixels before any request', async () => {

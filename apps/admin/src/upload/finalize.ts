@@ -36,19 +36,24 @@ export async function assertTourHasRoom(api: TourApi, tourId: string): Promise<v
 }
 
 /**
- * Gives a freshly tiled pano its config (only if it has none) and appends it to
+ * Gives a freshly tiled pano a config (create-only) and appends it to
  * the tour under If-Match. Idempotent, so a retry or a resume after sign-in is safe.
  */
 export async function addPanoToTour(
-  api: Pick<AdminApi, 'getPano' | 'putPanoConfig' | 'getTour' | 'putTour'>,
+  api: Pick<AdminApi, 'createPanoConfig' | 'getTour' | 'putTour'>,
   tourId: string,
   panoId: string,
   title: string,
 ): Promise<void> {
-  const pano = await api.getPano(panoId);
-  if (pano.status === 'not-found') {
-    if (pano.deleting) throw new FinalizeError('This pano is being deleted.', false);
-    await api.putPanoConfig(panoId, { title }, '*');
+  try {
+    // Create-only (If-None-Match: *): never overwrites a config written in between.
+    await api.createPanoConfig(panoId, { title });
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) {
+      throw new FinalizeError('This pano is being deleted.', false);
+    }
+    // 412 (ConflictError): it already has a config, from a retry or the editor. Fine.
+    if (!(e instanceof ConflictError)) throw e;
   }
   for (let attempt = 0; ; attempt++) {
     const got = await api.getTour(tourId);
