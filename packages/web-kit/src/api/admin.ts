@@ -16,6 +16,9 @@ import {
   type ToursListOk,
   type TourOk,
   type TourWithConfigsOk,
+  type Visibility,
+  VisibilityOkSchema,
+  type VisibilityOk,
 } from '@internal/contracts';
 import { z } from 'zod';
 
@@ -81,12 +84,15 @@ export interface AdminApi {
   ): Promise<{ etag: string }>;
   deleteTour(tourId: string): Promise<void>;
   deletePano(panoId: string): Promise<void>;
+  setVisibility(tourId: string, visibility: Visibility): Promise<VisibilityOk>;
 }
 
 const assertId = (id: string, name: string): string => {
   if (!PANO_PATTERN.test(id)) throw new TypeError(`${name} must match ${PANO_PATTERN}`);
   return id;
 };
+
+const tourPath = (tourId: string): string => `/api/admin/tours/${assertId(tourId, 'tourId')}`;
 
 const listPath = (path: string, q: ListQuery = {}): string => {
   const params = new URLSearchParams();
@@ -151,7 +157,7 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
   }
 
   async function write<S extends z.ZodTypeAny>(
-    method: 'PUT' | 'POST',
+    method: 'PUT' | 'POST' | 'PATCH',
     path: string,
     body: unknown,
     schema: S,
@@ -225,5 +231,7 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       ),
     deleteTour: async (tourId) => del(`/api/admin/tours/${assertId(tourId, 'tourId')}`),
     deletePano: async (panoId) => del(`/api/admin/panos/${assertId(panoId, 'panoId')}`),
+    setVisibility: async (tourId, visibility) =>
+      write('PATCH', `${tourPath(tourId)}/visibility`, { visibility }, VisibilityOkSchema),
   };
 }
