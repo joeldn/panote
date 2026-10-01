@@ -23,3 +23,12 @@ body {
 .placeholder h1 {
   font-family: var(--fdisp);
 }
+
+.app-shell__bar {
+  justify-content: space-between;
+}
+
+.app-status {
+  padding: 48px 24px;
+  color: var(--ink-55);
+}

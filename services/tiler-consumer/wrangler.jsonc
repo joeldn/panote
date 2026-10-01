@@ -18,7 +18,7 @@
       // with the other services' dev/production workers_dev policy.
       "workers_dev": true,
       "observability": { "enabled": true },
-      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev ; wrangler secret put ALERT_EMAIL_TO --env dev
       "durable_objects": {
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
       },
@@ -66,14 +66,19 @@
         "MAX_ORIGINAL_BYTES": "157286400",
         "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         "R2_BUCKET": "pano-content-dev",
+        // Must be on an Email Routing domain; only panote.io has routing.
+        "ALERT_EMAIL_FROM": "tiler-alerts@panote.io",
       },
+      // DLQ alert email (src/alert.ts). Unrestricted on purpose: the recipient
+      // is the ALERT_EMAIL_TO secret, so no address lives in the repo.
+      "send_email": [{ "name": "ALERT_EMAIL" }],
     },
     "production": {
       // production is unprovisioned, see docs/deploy.md
       "name": "panote-tiler-consumer",
       "workers_dev": false,
       "observability": { "enabled": true },
-      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production
+      // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production ; wrangler secret put ALERT_EMAIL_TO --env production
       "durable_objects": {
         "bindings": [{ "name": "TILER", "class_name": "Tiler" }],
       },
@@ -110,7 +115,9 @@
         "MAX_ORIGINAL_BYTES": "157286400",
         "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         "R2_BUCKET": "pano-content",
+        "ALERT_EMAIL_FROM": "tiler-alerts@panote.io",
       },
+      "send_email": [{ "name": "ALERT_EMAIL" }],
     },
   },
 }

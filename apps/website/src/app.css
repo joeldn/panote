@@ -23,3 +23,23 @@ body {
 .placeholder h1 {
   font-family: var(--fdisp);
 }
+
+.app-shell__bar {
+  justify-content: space-between;
+}
+
+.app-shell__account {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-shell__link {
+  font: 500 14.5px var(--fbody);
+  color: var(--ink-70);
+  text-decoration: none;
+}
+
+.app-shell__link:hover {
+  color: var(--ink);
+}

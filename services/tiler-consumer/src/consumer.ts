@@ -2,6 +2,7 @@ import { Container } from '@cloudflare/containers';
 import { containerEnvVars } from './container-env.js';
 import { deriveUploadTarget } from './upload-prefix.js';
 import { writeFailureMarker } from './failure-marker.js';
+import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
 
 export class Tiler extends Container<Env> {
   override defaultPort = 8080;
@@ -46,19 +47,24 @@ const DLQ_QUEUE_NAMES = new Set(['pano-uploads-dlq-dev', 'pano-uploads-dlq']);
 // A dead-lettered message has already exhausted max_retries on the main
 // queue - nothing here is retried, only marked and acked.
 const handleDlqBatch = async (batch: MessageBatch<R2Event>, env: Env): Promise<void> => {
+  const dead: DeadLetteredItem[] = [];
   for (const msg of batch.messages) {
     // Defensive: the body should mirror the R2 event that fed the main
     // queue, but a malformed one must not throw.
     const key = msg.body?.object?.key;
     if (typeof key !== 'string') {
       console.error(`dead-lettered message ${msg.id} has no object.key`);
+      dead.push({ key: null, messageId: msg.id, marker: 'none' });
       msg.ack();
       continue;
     }
     console.error(`tile job dead-lettered for ${key} after exhausting retries`);
-    await writeFailureMarker(env.BUCKET, key, 'dlq', msg.body.object.eTag);
+    const marker = await writeFailureMarker(env.BUCKET, key, 'dlq', msg.body.object.eTag);
+    dead.push({ key, messageId: msg.id, marker });
     msg.ack();
   }
+  // After the loop, so every message is already acked whatever happens here.
+  await sendDlqAlert(env, batch.queue, dead);
 };
 
 const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promise<void> => {

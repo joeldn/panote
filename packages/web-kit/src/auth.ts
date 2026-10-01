@@ -120,6 +120,8 @@ export interface Auth {
 export interface CreateAuthOptions {
   /** Absolute callback URL, e.g. `${siteOrigin}/app/callback`; its origin bounds returnTo. */
   redirectUri: string;
+  /** The callback runs on another origin (local dev ports): keep the PKCE transaction in a cookie. */
+  crossOriginCallback?: boolean;
   createClient?: Auth0Factory;
 }
 
@@ -154,6 +156,7 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
       cacheLocation: 'localstorage',
       useRefreshTokens: true,
       useRefreshTokensFallback: false,
+      ...(opts.crossOriginCallback && { useCookiesForTransactions: true }),
     });
     const pending = client;
     // Forget a failed load (e.g. a chunk fetch) so the next call can retry.

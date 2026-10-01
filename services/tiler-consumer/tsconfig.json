@@ -7,6 +7,7 @@
     "src/container-env.ts",
     "src/r2io.ts",
     "src/failure-marker.ts",
+    "src/alert.ts",
     "src/env.d.ts",
     "env.d.ts",
     "../../packages/worker-kit/src/worker-configuration.d.ts"

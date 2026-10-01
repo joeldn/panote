@@ -23,7 +23,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` / `panote.io/api/tours/*` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/`; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` is `true` in `dev`
 (the `*.workers.dev` URL stays reachable for smoke tests even once routes are live — see the
@@ -115,9 +115,10 @@ endpoint for presigned PUTs, which only feeds the CSP and is not bundled). `pnpm
 `vite build --mode ${APP_MODE:-dev}`; `deploy.yml` sets `APP_MODE` to the target environment
 (declared in each app's `turbo.json`, so turbo passes it through and keys the cache on it). The
 build validates the env with `loadConfig` from `@internal/web-kit` and fails on a bad value.
-`YOUR_` placeholders parse, and auth then reports itself unconfigured: the dev SPA client id is
-`YOUR_DEV_SPA_CLIENT_ID` until the Auth0 dev SPA application exists (unit C3), and production's
-tenant domain and client id are placeholders until the production tenant exists. The
+`YOUR_` placeholders parse, and auth then reports itself unconfigured (the admin app shows "Sign-in
+isn't set up here" and the website's modal has no buttons): production's tenant domain and client
+id are placeholders until the production tenant exists. Dev uses the Auth0 dev SPA application
+(client id `DEXWa49LnwVmX8flff1kcxHpj8G0d9d2`, public). The
 production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 
 **Headers.** The build also emits `_headers` from the env (`buildHeadersFile` in
@@ -145,13 +146,35 @@ CSP notes for the D units:
   website's `/s/<slug>/embed` from `VITE_SITE_ORIGIN` (the same origin once deployed). Local dev has
   no `_headers`, so the cross-origin preview from `localhost:5173` isn't blocked there.
 
+**Sign-in (unit C3).** Auth0 SPA flow (Authorization Code + PKCE, `google-oauth2` only) with
+rotating refresh tokens cached in localStorage, so both apps share one session on `panote.dev`.
+The Auth0 dev SPA application allows callbacks `https://panote.dev/app/callback` and
+`http://localhost:5173/app/callback`, and logout URLs `https://panote.dev/`,
+`https://panote.dev/app/`, `http://localhost:5173/app/` and `http://localhost:5174/`; refresh-token
+rotation is on and the API `https://api.panote.dev` allows offline access.
+
+- The website's modal opens on any page with `?signin=1`; `next` (a path, query kept, e.g.
+  `/app/new?resume=1`) is where the callback lands, defaulting to `/app/`.
+- `/app/callback` is the only unguarded admin route. It sends `/app/...` targets through the router
+  and anything else to the website with a full navigation.
+- Every other admin route checks for a session first; signed out goes to
+  `/?signin=1&next=<current path>`. If the refresh token dies mid-session (or an API call 401s),
+  the admin app reopens sign-in in place and returns to the same page.
+- Sign-out goes through Auth0's `/v2/logout` back to the website's `/`.
+- CSP: `/authorize` and `/v2/logout` are top-level navigations, which CSP doesn't restrict; token
+  refreshes are `fetch` calls to `/oauth/token`, covered by the tenant in `connect-src`. There is no
+  silent-auth iframe (`useRefreshTokensFallback: false`), so no `frame-src` entry is needed. The
+  avatar is the user's initial, not the Google profile photo, so `img-src` stays as is.
+
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
 Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
 `http://localhost:5174/`. Both proxy `/api` to `https://panote.dev`, so the APIs stay
 same-origin. The two apps run on **different origins** locally (unlike deployed, where both are
 `panote.dev`), so an auth `returnTo` path like `/app/t/…` resolves against the admin origin
 (`:5173`), and a website sign-in that hands off to `/app/` has to use the admin dev server's
-origin. `_headers` doesn't apply under Vite; use `wrangler dev --env dev` on a built `dist/` to
+origin. Under `vite dev` the apps use those two origins for callbacks, logout and cross-app links,
+and keep the PKCE transaction in a cookie (shared across ports) rather than sessionStorage. Tokens
+still live in each origin's localStorage, so locally the website doesn't see the admin's session. `_headers` doesn't apply under Vite; use `wrangler dev --env dev` on a built `dist/` to
 check headers and SPA fallback.
 
 **Deploy.** `deploy.yml`'s `deploy-apps` matrix job (`website`, `admin`) `needs:
@@ -171,6 +194,9 @@ lands on `main`. After it, check:
 - `curl -i https://panote.dev/api/admin/panos` → still **401** without a token (route
   precedence), likewise `/api/tours/<id>/stats` still answers from `public-api`.
 - `curl -I https://panote.dev/s/x/embed` → `frame-ancestors *`; any other path → `'none'`.
+- Sign in with Google from `https://panote.dev/?signin=1` → lands on `/app/` with the account
+  menu; the access token is a JWT (three dot-separated parts) and `GET /api/admin/tours` with it
+  returns 200. Sign out returns to `https://panote.dev/`.
 
 Production is unprovisioned, like the rest (see Production status).
 
@@ -330,7 +356,13 @@ pnpm --filter @service/upload-api exec wrangler secret put R2_ACCESS_KEY_ID --en
 pnpm --filter @service/upload-api exec wrangler secret put R2_SECRET_ACCESS_KEY --env dev
 pnpm --filter @service/tiler-consumer exec wrangler secret put R2_ACCESS_KEY_ID --env dev
 pnpm --filter @service/tiler-consumer exec wrangler secret put R2_SECRET_ACCESS_KEY --env dev
+pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --env dev
 ```
+
+`ALERT_EMAIL_TO` is the recipient of the DLQ alert email (see "Tiling failure marker and alerting"
+below). It's a secret only to keep the owner's personal address out of the repo; it must be a
+verified Email Routing destination address on the account. Unset, the consumer skips the email with
+a warning and everything else works.
 
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
@@ -339,7 +371,7 @@ purge on delete" below). `wrangler deploy --env <env> --secrets-file <file>` is 
 interactive `secret put` if scripting this. **Status: set for dev, outstanding for production** —
 `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
 environments; production has neither yet. `CF_ANALYTICS_TOKEN` is outstanding for both;
-`CF_PURGE_TOKEN` is set for dev only.
+`CF_PURGE_TOKEN` is set for dev only; `ALERT_EMAIL_TO` is outstanding for both.
 
 ### CDN purge on delete (unit B6)
 
@@ -775,38 +807,60 @@ fresh-upload case above — the pano can simply be deleted again.
 - **New queue consumer.** The same Worker script now also consumes `pano-uploads-dlq[-dev]` (a
   second `queues.consumers` entry, `max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no
   `dead_letter_queue` of its own — a dead-lettered message is always acked, never retried further).
-  **Before deploying, check whether the DLQ already has a consumer and a backlog** — unlike
-  `pano-uploads[-dev]`, whose one existing consumer (pano-viewer's, then this repo's) is documented
-  above, nobody has verified `pano-uploads-dlq[-dev]`'s consumer state; it was inherited from
-  pano-viewer along with the bucket and main queue (see the top of this doc), so it may already have
-  pano-viewer's own consumer attached, or a backlog of messages pano-viewer dead-lettered under the
-  *old, percent-encoded* owner scheme (see the pre-cut-over check in the first dev deploy checklist
-  above) rather than the current base64url one:
+  **Status: deployed in dev.** The DLQ consumer was attached to `pano-uploads-dlq-dev` by the
+  2026-09-26 12:12 UTC dev deploy. The pre-deploy check this doc used to ask for (whether the DLQ
+  already had a consumer or a backlog inherited from pano-viewer) was never run. If there was a
+  backlog of old, percent-encoded-owner-scheme messages, the consumer would have acked each one with
+  a warning and written no marker: only `tileFailedKeyFromOriginalKey` runs on the DLQ path, and it
+  rejects an old-scheme key outright. Nothing needs doing about it now, but those messages are gone
+  and would only show up in that deploy's Worker logs. To inspect the queue's current state:
   ```bash
   pnpm --filter @service/tiler-consumer exec wrangler queues info pano-uploads-dlq-dev
   ```
-  If a consumer is already attached, remove it first the same way the `pano-uploads-dev` cut-over
-  did. If there's a backlog, inspect it before deploying — only `tileFailedKeyFromOriginalKey` runs
-  on the DLQ path (`deriveUploadTarget` is never called there; it's only used by the main-queue
-  handler), and it rejects an old-scheme key outright (logged, acked, no marker), so old messages
-  are harmless but won't tell you anything useful about *current* failures. **Status: not yet
-  deployed or checked.**
-- **Alerting — manual step, mechanism unverified.** The plan calls for "a Cloudflare notification or
-  observability alert on DLQ-consumer error logs." A previous version of this doc named a specific
-  dashboard path (Notifications → a "Workers" alert type on error-level logs); that path could not be
-  confirmed against current Cloudflare docs and is likely wrong or renamed — **do not follow it
-  as written**. Candidate mechanisms, none yet evaluated against the current product:
-  - A Workers Observability alert, if the account's Observability product exposes one on log level —
-    check the dashboard's Observability section for this Worker directly.
-  - A **Tail Worker** (`tail_consumers` in `wrangler.jsonc`) attached to `panote-tiler-consumer[-dev]`,
-    which receives every `console.error`/`console.warn` call and can forward matches anywhere (a
-    webhook, another queue, email via a binding).
-  - An **OTLP/Logpush export** to a third-party observability tool with its own alerting (Cloudflare
-    Logpush → e.g. Grafana/Datadog/Honeycomb), if one is already in use elsewhere.
-  Nothing in this repo can create any of these, and none has been created by hand; this is tracked as
-  outstanding, unverified work, the same way the Cache Rule / Auth0 SPA app / API tokens are tracked
-  as outstanding one-time provisioning above.
-- **Still unexercised live.** This PR adds the marker-write code and its unit tests (mocked/miniflare
+- **Alerting — email per dead-lettered batch.** After acking every message in a DLQ batch, the
+  consumer sends one plain-text email through a `send_email` binding (`ALERT_EMAIL`,
+  `services/tiler-consumer/src/alert.ts`). Subject `[panote] tiling failed permanently (N) - <queue>`;
+  the body lists each key (or the message id, for a message with no `object.key`), whether its
+  tile-failed marker was written or skipped, the UTC time and the queue name. The sender is the
+  `ALERT_EMAIL_FROM` var, `tiler-alerts@panote.io`: it has to be on an Email Routing domain and
+  only `panote.io` has routing (`panote.dev` doesn't). The recipient is the `ALERT_EMAIL_TO` secret.
+  The binding is unrestricted in `wrangler.jsonc` (no `destination_address`) so the address stays
+  out of the repo; Cloudflare still only delivers to verified Email Routing destinations. The send
+  never throws and never changes ack behaviour: a failure logs `failed to send DLQ alert` with only the
+  error's `code` and `name` (never its message, which may echo the recipient), and a missing
+  `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM` or binding logs a warning and skips. The main queue never sends. This uses the structured `send({ to, from, subject, text })`
+  API ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)).
+  Chosen over a Tail Worker (needs log-string matching) and over Workers Observability / Cloudflare
+  Notifications (no alert type for this, per current docs). **This is code and config only — it
+  does not touch `panote.io`'s DNS, MX or Email Routing settings**, which are the account-recovery
+  mail path (see DNS section).
+  - **Unverified: sending with Email Routing only.** The account has Email Routing on `panote.io`
+    but has not been onboarded to Email Sending. The
+    [limits page](https://developers.cloudflare.com/email-service/platform/limits/) says sends to
+    verified destination addresses work "on any plan, including when only Email Routing is
+    configured", as long as the sender is on a routing domain, and don't count toward sending quotas.
+    Not yet confirmed live.
+  - **Unverified: same account.** This assumes `panote-tiler-consumer[-dev]` and the `panote.io`
+    zone (and its verified destination address) are in the same Cloudflare account. A send from
+    another account fails with `E_SENDER_NOT_VERIFIED`.
+  - **Ops step 1 — set the recipient.** **Status: outstanding (dev and production).**
+    ```bash
+    pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --env dev
+    ```
+    Enter the owner's Gmail (already a verified Email Routing destination). Repeat with
+    `--env production` once production is provisioned.
+  - **Ops step 2 — verify after the next dev deploy.** **Status: outstanding.** Send a test message
+    straight to the DLQ and check Gmail, including spam. wrangler 4.120 has no command for sending a
+    queue message, so use the dashboard: Workers & Pages → Queues → `pano-uploads-dlq-dev` →
+    Messages → Send message, type JSON, body:
+    ```json
+    { "object": { "key": "panos/alert-test/alert-test/original" }, "action": "PutObject" }
+    ```
+    The key doesn't exist, so no marker is written (logged as skipped) and the message is acked.
+    Expect one email with subject `[panote] tiling failed permanently (1) - pano-uploads-dlq-dev`.
+    If none arrives, check the Worker's logs for `failed to send DLQ alert` and its error code
+    (`E_SENDER_NOT_VERIFIED`, `E_RECIPIENT_NOT_ALLOWED`, ...) or `skip DLQ alert`.
+- **Still unexercised live.** Unit B4 added the marker-write code and its unit tests (mocked/miniflare
   R2, no real Cloudflare Queues); it does not change the fact recorded in "Known unverified areas"
   below that an actual retry-to-DLQ delivery has never been observed against real Cloudflare.
 - **Multipart etag format unverified — and the app itself never triggers it.** The same-etag race
@@ -947,3 +1001,5 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
   can't list bucket objects without S3 credentials.
+- **The DLQ alert email has no volume throttle** (follow-up): it sends one email per DLQ batch,
+  so a burst of failures means a burst of emails.

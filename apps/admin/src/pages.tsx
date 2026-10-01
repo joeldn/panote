@@ -14,7 +14,6 @@ export function Dashboard() {
 }
 
 export const UploadOverlay = () => <p role="dialog">Upload</p>;
-export const Callback = () => <Placeholder title="Signing in" />;
 
 export function Editor() {
   const { tourId } = useParams();
