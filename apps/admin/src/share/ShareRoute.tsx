@@ -29,7 +29,12 @@ const REASONS: Record<string, string> = {
 };
 
 const formatDate = (iso: string): string =>
-  new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  new Date(iso).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
 
 /** User-facing copy for a publish-route failure (plan 3.2 error table). */
 function publishMessage(err: PublishError, panos: SharePano[]): string {
@@ -113,6 +118,13 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
   const panos = tour?.panos ?? [];
   const setPublish = (publish: Published) =>
     setState((s) => (s.status === 'ready' ? { ...s, tour: { ...s.tour, publish } } : s));
+  // Merges into the latest publish state, not the one this render captured.
+  const patchPublish = (patch: Partial<Published>) =>
+    setState((s) =>
+      s.status === 'ready' && s.tour.publish
+        ? { ...s, tour: { ...s.tour, publish: { ...s.tour.publish, ...patch } } }
+        : s,
+    );
 
   // Turns a publish-route failure into an Error whose message the modal shows inline.
   const asUserError = (e: unknown): Error => {
@@ -126,7 +138,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
     try {
       if (tour.publish) {
         const res = await api.renameSlug(tourId, slug);
-        setPublish({ ...tour.publish, slug: res.slug });
+        patchPublish({ slug: res.slug });
         const old = tour.publish.slug;
         setNotice(
           res.oldSlugRedirectsUntil && old !== res.slug
@@ -140,7 +152,10 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
         setNotice(null);
       }
     } catch (e) {
-      throw asUserError(e);
+      const error = asUserError(e);
+      // Also at route level: a blur from a tab click unmounts the field before this lands.
+      setNotice(`Couldn’t change the link: ${error.message}`);
+      throw error;
     }
   };
 
@@ -148,7 +163,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
     if (!tour?.publish) return;
     try {
       const res = await api.setVisibility(tourId, visibility);
-      setPublish({ ...tour.publish, visibility: res.visibility });
+      patchPublish({ visibility: res.visibility });
     } catch (e) {
       throw asUserError(e);
     }

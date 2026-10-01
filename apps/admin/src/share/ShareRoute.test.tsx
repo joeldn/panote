@@ -107,7 +107,10 @@ describe('share route', () => {
     await editSlug('New Town');
     expect(api.renameSlug).toHaveBeenCalledWith('tour-1', 'new-town');
     expect(screen.getByText('panote.io/s/new-town')).toBeTruthy();
-    expect(screen.getByText(/The old link \/s\/old-town redirects here until/)).toBeTruthy();
+    // Expiry is a UTC midnight; it must not render as the day before west of UTC.
+    expect(
+      screen.getByText(/The old link \/s\/old-town redirects here until .*31.*2026/),
+    ).toBeTruthy();
   });
 
   it('shows a 409 slug taken inline and keeps the old link', async () => {
@@ -116,6 +119,40 @@ describe('share route', () => {
     await editSlug('taken-link');
     expect(screen.getByRole('alert').textContent).toBe('That link is already taken. Try another.');
     expect(screen.getByText('panote.io/s/old-town')).toBeTruthy();
+  });
+
+  it('keeps a failed rename visible when the blur came from a tab switch', async () => {
+    let reject: (e: unknown) => void = () => {};
+    const renameSlug = vi.fn(
+      () =>
+        new Promise<never>((_, r) => {
+          reject = r;
+        }),
+    );
+    const { router } = renderShare('/app/t/tour-1/share/link', fakeApi({ renameSlug }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit custom link' }));
+    const input = screen.getByRole('textbox', { name: 'Custom link' });
+    fireEvent.change(input, { target: { value: 'taken-link' } });
+    fireEvent.blur(input);
+    fireEvent.click(screen.getByRole('tab', { name: 'Privacy' }));
+    await act(async () => reject(new ApiError(409, { error: 'slug taken' })));
+    expect(router.state.location.pathname).toBe('/app/t/tour-1/share/privacy');
+    expect(renameSlug).toHaveBeenCalledWith('tour-1', 'taken-link');
+    expect(
+      screen.getByText('Couldn’t change the link: That link is already taken. Try another.'),
+    ).toBeTruthy();
+  });
+
+  it('keeps a renamed slug when visibility changes afterwards', async () => {
+    const { api } = renderShare('/app/t/tour-1/share/link');
+    await editSlug('new-town');
+    fireEvent.click(screen.getByRole('tab', { name: 'Privacy' }));
+    const unlisted = await screen.findByRole('radio', { name: /Unlisted/ });
+    await act(async () => fireEvent.click(unlisted));
+    expect(api.setVisibility).toHaveBeenCalledWith('tour-1', 'unlisted');
+    fireEvent.click(screen.getByRole('tab', { name: 'Link' }));
+    expect(await screen.findByText('panote.io/s/new-town')).toBeTruthy();
+    expect(screen.getByText('Unlisted', { selector: 'b' })).toBeTruthy();
   });
 
   it('switches tabs in the URL, keeping ?pano=', async () => {
