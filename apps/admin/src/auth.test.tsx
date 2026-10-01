@@ -50,7 +50,9 @@ describe('route guard', () => {
     renderAdmin('/app/', { auth: fakeAuth({ isAuthenticated }) });
     expect((await screen.findByRole('alert')).textContent).toContain('chunk failed');
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeTruthy();
+    expect(
+      await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
+    ).toBeTruthy();
   });
 });
 
@@ -141,7 +143,9 @@ describe('callback', () => {
         { redirectUri: 'http://localhost:5173/app/callback', createClient: async () => client },
       );
       const { assign } = renderAdmin('/app/callback?code=c&state=s', { auth });
-      expect(await screen.findByRole('heading', { name: 'Dashboard' })).toBeTruthy();
+      expect(
+        await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
+      ).toBeTruthy();
       expect(assign).not.toHaveBeenCalled();
     },
   );
