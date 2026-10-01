@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AccountMenu } from './AccountMenu.js';
@@ -27,6 +27,28 @@ describe('SignInModal', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('popup blocked');
     const btn = screen.getByRole('button', { name: 'Continue with Google' });
     expect((btn as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('re-enables the buttons when the page is restored from bfcache', () => {
+    render(
+      <SignInModal
+        open
+        onClose={() => {}}
+        options={[google]}
+        onSignIn={() => new Promise<void>(() => {})}
+      />,
+    );
+    const btn = screen.getByRole('button', { name: 'Continue with Google' }) as HTMLButtonElement;
+    fireEvent.click(btn);
+    expect(btn.disabled).toBe(true);
+    const show = (persisted: boolean) =>
+      act(() => {
+        window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted }));
+      });
+    show(false);
+    expect(btn.disabled).toBe(true);
+    show(true);
+    expect(btn.disabled).toBe(false);
   });
 
   it('shows the unavailable message when no connection is enabled', () => {

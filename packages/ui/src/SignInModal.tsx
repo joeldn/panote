@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { LogoMark } from './Logo.js';
 import { Modal } from './Modal.js';
@@ -55,6 +55,15 @@ export function SignInModal({
       setError(null);
     }
   }
+
+  // Back from Auth0 via bfcache, the page comes back mid-redirect: re-enable the buttons.
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setPending(null);
+    };
+    window.addEventListener('pageshow', onShow);
+    return () => window.removeEventListener('pageshow', onShow);
+  }, []);
 
   const start = async (id: string) => {
     setError(null);
