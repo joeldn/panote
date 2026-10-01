@@ -54,6 +54,12 @@ export {
   type PublishedTourResult,
 } from './api/published.js';
 export {
+  PENDING_UPLOAD_MAX_AGE_MS,
+  stashPendingUpload,
+  takePendingUpload,
+  type PendingUploadOptions,
+} from './pending-upload.js';
+export {
   createUploadApi,
   MAX_UPLOAD_BYTES,
   putFile,
