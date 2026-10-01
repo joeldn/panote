@@ -629,13 +629,33 @@ describe('DLQ alert email', () => {
   const withAlert = (
     send: (...args: unknown[]) => Promise<unknown>,
     to: string | null = RECIPIENT,
+    overrides: Record<string, unknown> = {},
   ) =>
-    ({ ...env, ALERT_EMAIL_TO: to ?? undefined, ALERT_EMAIL: { send } }) as unknown as typeof env;
+    ({
+      ...env,
+      ALERT_EMAIL_TO: to ?? undefined,
+      ALERT_EMAIL: { send },
+      ...overrides,
+    }) as unknown as typeof env;
+  const oneDlqMessage = (id: string) =>
+    createMessageBatch('pano-uploads-dlq-dev', [
+      {
+        id,
+        timestamp: new Date(),
+        body: { object: { key: `panos/u1/${id}/original`, size: 10 }, action: 'PutObject' },
+        attempts: 4,
+      },
+    ]);
 
   it('sends one email per batch listing every key, including a message with no object.key', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const send = vi.fn(async () => ({ messageId: 'm1' }));
+    // Filled in by the send mock: how many acks had landed by the time send ran.
+    let ackedAtSend = -1;
+    const send = vi.fn(async () => {
+      ackedAtSend = ackSpies.filter((s) => s.mock.calls.length === 1).length;
+      return { messageId: 'm1' };
+    });
     const keyA = 'panos/u1/alert-a/original';
     const keyB = 'panos/u1/alert-b/original';
     await env.BUCKET.put(keyA, 'a bytes');
@@ -661,6 +681,7 @@ describe('DLQ alert email', () => {
         attempts: 4,
       },
     ]);
+    const ackSpies = batch.messages.map((m) => vi.spyOn(m, 'ack'));
 
     await worker.queue(batch, withAlert(send), ctx);
     const result = await getQueueResult(batch, ctx);
@@ -671,12 +692,13 @@ describe('DLQ alert email', () => {
       'msg-alert-nokey',
     ]);
     expect(send).toHaveBeenCalledTimes(1);
+    expect(ackedAtSend).toBe(3);
     const [msg] = send.mock.calls[0] as unknown as [
       { to: string; from: string; subject: string; text: string },
     ];
     expect(msg.to).toBe(RECIPIENT);
     expect(msg.from).toBe('tiler-alerts@panote.io');
-    expect(msg.subject).toBe('[panote] tiling failed permanently (3) — pano-uploads-dlq-dev');
+    expect(msg.subject).toBe('[panote] tiling failed permanently (3) - pano-uploads-dlq-dev');
     expect(msg.text).toContain(`${keyA} (marker: written)`);
     expect(msg.text).toContain(`${keyB} (marker: skipped)`);
     expect(msg.text).toContain('msg-alert-nokey');
@@ -688,7 +710,8 @@ describe('DLQ alert email', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const send = vi.fn(async () => {
-      throw Object.assign(new Error('Recipient not in allowed list'), {
+      // The message echoes the address, so it must never reach the log.
+      throw Object.assign(new Error(`Recipient ${RECIPIENT} not in allowed list`), {
         code: 'E_RECIPIENT_NOT_ALLOWED',
       });
     });
@@ -716,7 +739,9 @@ describe('DLQ alert email', () => {
     expect(send).toHaveBeenCalledTimes(1);
     const logged = errorSpy.mock.calls.map((c) => c.map(String).join(' '));
     const sendError = logged.find((l) => l.includes('failed to send DLQ alert'));
-    expect(sendError).toContain('E_RECIPIENT_NOT_ALLOWED');
+    expect(sendError).toContain('code=E_RECIPIENT_NOT_ALLOWED');
+    expect(sendError).toContain('name=Error');
+    expect(sendError).not.toContain('not in allowed list');
     for (const line of logged) expect(line).not.toContain(RECIPIENT);
   });
 
@@ -740,6 +765,26 @@ describe('DLQ alert email', () => {
     expect(result.explicitAcks).toEqual(['msg-alert-no-to']);
     expect(send).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('skip DLQ alert'));
+  });
+
+  it.each([
+    ['the ALERT_EMAIL binding is missing', { ALERT_EMAIL: undefined }],
+    ['ALERT_EMAIL_FROM is unset', { ALERT_EMAIL_FROM: undefined }],
+  ])('does not send, and warns, when %s', async (_label, overrides) => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const send = vi.fn(async () => ({ messageId: 'm1' }));
+    const ctx = createExecutionContext();
+    const batch = oneDlqMessage('msg-alert-skip');
+
+    await expect(
+      worker.queue(batch, withAlert(send, RECIPIENT, overrides), ctx),
+    ).resolves.toBeUndefined();
+    const result = await getQueueResult(batch, ctx);
+
+    expect(result.explicitAcks).toEqual(['msg-alert-skip']);
+    expect(send).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ALERT_EMAIL_FROM'));
   });
 
   it('never sends from the main (non-DLQ) queue, even on a permanent failure', async () => {

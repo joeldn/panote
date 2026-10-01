@@ -108,10 +108,13 @@ export const writeFailureMarker = async (
   try {
     const postHead = await bucket.head(originalNotificationKey);
     if (!postHead) {
+      // A failed delete leaves an orphan marker behind, so report it as failed.
+      let cleared = true;
       await bucket.delete(markerKey).catch((e: unknown) => {
+        cleared = false;
         console.warn(`failed to clear a just-written marker ${markerKey}: ${String(e)}`);
       });
-      return 'skipped';
+      return cleared ? 'skipped' : 'failed';
     }
   } catch (e) {
     // The marker is already written; log only - there is nothing safe to

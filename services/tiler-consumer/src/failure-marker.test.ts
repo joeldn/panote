@@ -157,10 +157,37 @@ describe('writeFailureMarker', () => {
         return before;
       });
 
-      await writeFailureMarker(env.BUCKET, key, 'dlq', expectedEtag);
+      await expect(writeFailureMarker(env.BUCKET, key, 'dlq', expectedEtag)).resolves.toBe(
+        'skipped',
+      );
 
       expect(await env.BUCKET.get(tileFailedKeyFromOriginalKey(key))).toBeNull();
       headSpy.mockRestore();
+    });
+
+    it("reports 'failed' when clearing that just-written marker fails", async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const key = 'panos/ae-_vTXvv70/p-race-delete-fails/original';
+      await env.BUCKET.put(key, 'original bytes');
+      const expectedEtag = (await env.BUCKET.head(key))!.etag;
+      const realHead = env.BUCKET.head.bind(env.BUCKET);
+      const realDelete = env.BUCKET.delete.bind(env.BUCKET);
+      const headSpy = vi.spyOn(env.BUCKET, 'head').mockImplementationOnce(async (k: string) => {
+        const before = await realHead(k);
+        await realDelete(k);
+        return before;
+      });
+      const deleteSpy = vi.spyOn(env.BUCKET, 'delete').mockRejectedValue(new Error('delete boom'));
+      try {
+        await expect(writeFailureMarker(env.BUCKET, key, 'dlq', expectedEtag)).resolves.toBe(
+          'failed',
+        );
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('failed to clear'));
+      } finally {
+        headSpy.mockRestore();
+        deleteSpy.mockRestore();
+        warnSpy.mockRestore();
+      }
     });
 
     it('never throws even if the write itself rejects', async () => {

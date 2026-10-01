@@ -24,7 +24,7 @@ export const sendDlqAlert = async (
     const to = env.ALERT_EMAIL_TO;
     if (!to || !env.ALERT_EMAIL || !env.ALERT_EMAIL_FROM) {
       console.warn(
-        `skip DLQ alert for ${queue}: ALERT_EMAIL_TO or the ALERT_EMAIL binding is not set`,
+        `skip DLQ alert for ${queue}: ALERT_EMAIL_TO, ALERT_EMAIL_FROM or the ALERT_EMAIL binding is not set`,
       );
       return;
     }
@@ -43,13 +43,14 @@ export const sendDlqAlert = async (
     await env.ALERT_EMAIL.send({
       to,
       from: env.ALERT_EMAIL_FROM,
-      subject: `[panote] tiling failed permanently (${items.length}) — ${queue}`,
+      subject: `[panote] tiling failed permanently (${items.length}) - ${queue}`,
       text,
     });
   } catch (e) {
-    const code = (e as { code?: unknown } | null)?.code;
+    // code and name only: the error message may echo the recipient address.
+    const { code, name } = (e ?? {}) as { code?: unknown; name?: unknown };
     console.error(
-      `failed to send DLQ alert for ${queue}${typeof code === 'string' ? ` (${code})` : ''}: ${e instanceof Error ? e.message : String(e)}`,
+      `failed to send DLQ alert for ${queue}: code=${typeof code === 'string' ? code : 'unknown'} name=${typeof name === 'string' ? name : 'unknown'}`,
     );
   }
 };
