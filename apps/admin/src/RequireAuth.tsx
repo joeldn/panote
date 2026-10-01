@@ -4,7 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
-import { createSessionApi, SessionContext, type Session } from './session.js';
+import {
+  createSessionApi,
+  createSessionUploadApi,
+  SessionContext,
+  type Session,
+} from './session.js';
+import { UploadProvider } from './upload/UploadProvider.js';
 import { Notice } from './Shell.js';
 
 type GuardState =
@@ -56,18 +62,25 @@ export function RequireAuth() {
     };
   }, [auth, origins, assign, attempt]);
 
-  const api = useMemo(
-    () =>
-      createSessionApi(auth, () => setExpired(true), {
-        baseUrl: env.apiBase,
-        ...(env.fetch && { fetch: env.fetch }),
-      }),
-    [auth, env.apiBase, env.fetch],
-  );
+  const [api, upload] = useMemo(() => {
+    const opts = { baseUrl: env.apiBase, ...(env.fetch && { fetch: env.fetch }) };
+    const onAuthError = () => setExpired(true);
+    return [
+      createSessionApi(auth, onAuthError, opts),
+      createSessionUploadApi(auth, onAuthError, opts),
+    ] as const;
+  }, [auth, env.apiBase, env.fetch]);
   const user = state.status === 'ready' ? state.user : null;
   const session = useMemo<Session | null>(
-    () => user && { user, api, signOut: () => auth.signOut(`${origins.website}/`) },
-    [user, api, auth, origins],
+    () =>
+      user && {
+        user,
+        api,
+        upload,
+        requestSignIn: () => setExpired(true),
+        signOut: () => auth.signOut(`${origins.website}/`),
+      },
+    [user, api, upload, auth, origins],
   );
 
   if (!auth.configured) {
@@ -101,7 +114,9 @@ export function RequireAuth() {
   }
   return (
     <SessionContext value={session}>
-      <Outlet />
+      <UploadProvider>
+        <Outlet />
+      </UploadProvider>
       <SignInModal
         open={expired}
         onClose={() => setExpired(false)}

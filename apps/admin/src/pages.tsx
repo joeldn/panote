@@ -13,7 +13,7 @@ export function Dashboard() {
   );
 }
 
-export const UploadOverlay = () => <p role="dialog">Upload</p>;
+export { NewPanoOverlay as UploadOverlay } from './upload/UploadOverlay.js';
 
 export function Editor() {
   const { tourId } = useParams();

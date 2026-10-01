@@ -58,7 +58,9 @@ describe('callback', () => {
   it('finishes the redirect and navigates in-app, keeping the query (Q1 resume flag)', async () => {
     const auth = fakeAuth({ handleCallback: vi.fn(async () => '/app/new?resume=upload') });
     const { assign, router } = renderAdmin('/app/callback?code=c&state=s', { auth, strict: true });
-    expect((await screen.findByRole('dialog')).textContent).toBe('Upload');
+    expect(await screen.findByRole('dialog', { name: 'New pano' })).toBeTruthy();
+    // Nothing stashed (no IndexedDB in jsdom), so it asks for the photo again.
+    expect(await screen.findByText(/Choose your photo again/)).toBeTruthy();
     // The code is single-use, so StrictMode's double effect must not redeem it twice.
     expect(auth.handleCallback).toHaveBeenCalledTimes(1);
     expect(router.state.location.search).toBe('?resume=upload');

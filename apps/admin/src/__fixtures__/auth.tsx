@@ -6,6 +6,7 @@ import { vi } from 'vitest';
 
 import { AuthEnvContext } from '../auth-context.js';
 import { routes } from '../routes.js';
+import { UploadEnvContext, type UploadEnv } from '../upload/upload-context.js';
 
 export const LOCAL: AppOrigins = {
   website: 'http://localhost:5174',
@@ -34,6 +35,8 @@ export interface RenderOptions {
   fetch?: FetchLike;
   origins?: AppOrigins;
   strict?: boolean;
+  /** Upload seams (XHR, tiles base); the default has no tiles base, so uploads can't start. */
+  upload?: UploadEnv;
 }
 
 export function renderAdmin(path: string, opts: RenderOptions = {}) {
@@ -50,7 +53,9 @@ export function renderAdmin(path: string, opts: RenderOptions = {}) {
         ...(opts.fetch && { fetch: opts.fetch }),
       }}
     >
-      <RouterProvider router={router} />
+      <UploadEnvContext value={opts.upload ?? {}}>
+        <RouterProvider router={router} />
+      </UploadEnvContext>
     </AuthEnvContext>
   );
   render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
