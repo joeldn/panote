@@ -58,13 +58,13 @@ describe('sign-in modal', () => {
   });
 
   it('opens from the nav "Sign in" link over the current page', async () => {
-    const { router } = renderSite('/s/my-tour?x=1');
+    const { router } = renderSite('/terms?x=1');
     const link = await screen.findByRole('link', { name: 'Sign in' });
-    expect(link.getAttribute('href')).toBe('/s/my-tour?x=1&signin=1');
+    expect(link.getAttribute('href')).toBe('/terms?x=1&signin=1');
     fireEvent.click(link);
     expect(await screen.findByRole('dialog', { name: 'Sign in to panote' })).toBeTruthy();
-    expect(router.state.location.pathname).toBe('/s/my-tour');
-    expect(screen.getByRole('heading', { name: 'Tour my-tour' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/terms');
+    expect(screen.getByRole('heading', { name: 'Terms' })).toBeTruthy();
   });
 
   it('keeps an existing next on the "Sign in" link', async () => {
