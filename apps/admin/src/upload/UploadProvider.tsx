@@ -177,11 +177,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   });
 
   // One take per page load, shared: a second caller (StrictMode) gets the same answer.
+  // The user's own stash only comes back with their matching resume record; without
+  // one (the landing's `?resume=upload`), only an unowned landing stash is taken.
   const taken = useRef<Promise<File | null> | null>(null);
   const takePendingFile = useCallback(() => {
-    taken.current ??= live.current.pending.take(live.current.owner).catch(() => null);
+    const who = bootRepick ? live.current.owner : null;
+    taken.current ??= live.current.pending.take(who).catch(() => null);
     return taken.current;
-  }, []);
+  }, [bootRepick]);
 
   /** Mirror a job into the chip if it is the foreground one. */
   const sync = useCallback((j: Job) => {
@@ -203,10 +206,19 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   );
 
   /** Survive a sign-in redirect: a record always, the file too if it hadn't landed yet. */
+  // Which job's record/stash is saved; a background job finishing must not wipe another's.
+  const savedBy = useRef<number | null>(null);
   const persist = useCallback(
-    (fileName: string, target: UploadTarget, landed: Landed | null, file: File | null) => {
+    (
+      key: number,
+      fileName: string,
+      target: UploadTarget,
+      landed: Landed | null,
+      file: File | null,
+    ) => {
       const { owner: who, pending: store, session: s } = live.current;
       if (who === null) return;
+      savedBy.current = key;
       writeResumeRecord({ owner: who, fileName, target, landed });
       if (!landed && file) s.holdSignIn(store.stash(file, who).catch(() => false));
     },
@@ -214,9 +226,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   );
 
   const forget = useCallback(() => {
+    savedBy.current = null;
     clearResumeRecord();
     void live.current.pending.clear().catch(() => {});
   }, []);
+  /** `forget`, unless another job's record is the one saved. */
+  const forgetFor = useCallback(
+    (j: Job) => {
+      if (savedBy.current === null || savedBy.current === j.key) forget();
+    },
+    [forget],
+  );
 
   const finalize = useCallback(
     async (j: Job, panoId: string, manifest: Manifest) => {
@@ -235,19 +255,19 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           await addPanoToTour(s.api, j.target.tourId, panoId, title);
           setLastAdded({ tourId: j.target.tourId, panoId });
         }
-        clearResumeRecord();
+        forgetFor(j);
         j.finalize = { status: 'done' };
         if (fg.current === j) sync(j);
         else jobs.current.delete(j);
       } catch (e) {
         j.finalize = finalizeFailure(e);
-        if (j.finalize.auth) persist(j.fileName, j.target, j.landed, null);
-        else clearResumeRecord();
+        if (j.finalize.auth) persist(j.key, j.fileName, j.target, j.landed, null);
+        else forgetFor(j);
         if (fg.current === j) sync(j);
         else surface(j);
       }
     },
-    [sync, surface, persist],
+    [sync, surface, persist, forgetFor],
   );
 
   const onMachine = useCallback(
@@ -256,17 +276,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       if (s.phase === 'processing') j.landed = { panoId: s.panoId, mode: s.mode };
       if (s.phase === 'failed' && s.stage === 'auth') {
         const landed = s.resumable && s.panoId ? { panoId: s.panoId, mode: s.resumable } : null;
-        persist(j.fileName, j.target, landed, j.file);
+        persist(j.key, j.fileName, j.target, landed, j.file);
       } else if (s.phase === 'failed' || s.phase === 'timed-out') {
         // Done with, short of a user retry: a reload must not run it again.
-        clearResumeRecord();
+        forgetFor(j);
       }
       if (fg.current === j) sync(j);
       else if (s.phase === 'failed' || s.phase === 'timed-out') surface(j);
       else if (s.phase === 'cancelled') jobs.current.delete(j);
       if (s.phase === 'ready') void finalize(j, s.panoId, s.manifest);
     },
-    [sync, surface, persist, finalize],
+    [sync, surface, persist, forgetFor, finalize],
   );
 
   const run = useCallback(
@@ -329,17 +349,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           panoTarget = target;
         }
       } catch (e) {
-        if (isAuthError(e)) persist(file.name, target, null, file);
+        if (isAuthError(e)) persist(-1, file.name, target, null, file);
         throw e;
       }
-      clearResumeRecord();
+      forget();
       setRepick(null);
       setPicker(null);
       const over = retryOver(fg.current, panoTarget);
       run(file, file.name, panoTarget, sourceFor(panoTarget, over), target.kind === 'new-tour');
       return { tourId: panoTarget.kind === 'add' ? panoTarget.tourId : null };
     },
-    [run, persist],
+    [run, persist, forget],
   );
 
   // Best effort: a tour this upload created and nothing landed in is removed again.
@@ -403,8 +423,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (!boot) return;
     const { rec } = boot;
     if (boot.kind === 'foreign') {
-      // Someone else's upload: drop it (and its file) without using either.
-      forget();
+      // Someone else's record: drop it. Their stash is left to take()'s owner check.
+      clearResumeRecord();
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
         run(null, rec.fileName, rec.target, { resume: rec.landed });

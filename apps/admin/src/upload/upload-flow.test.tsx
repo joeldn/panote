@@ -254,6 +254,22 @@ describe('fresh upload from /app/new', () => {
     expect(chipTitle()).toBe('We couldn’t process this image');
   });
 
+  it("a hidden upload finishing does not wipe another upload's saved sign-in state", async () => {
+    const { backend, router, pending } = await uploadThroughPut();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    backend.state.presignStatus = 401;
+    await act(() => router.navigate('/new?tour=tour-1'));
+    await pick(pngFile('Second.png'));
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Second.png' });
+
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(5_000);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Second.png' });
+    expect(pending.peek()?.name).toBe('Second.png');
+  });
+
   it('a hidden upload does not block the next one', async () => {
     const { backend, router } = await uploadThroughPut();
     fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
@@ -428,6 +444,8 @@ describe('sign-in during an upload', () => {
     await pick();
     expect(back.backend.presigns()).toHaveLength(1);
     expect(readResumeRecord()).toBeNull();
+    // Starting clears any stash along with the record.
+    expect(pending.clear).toHaveBeenCalled();
     expect(chipTitle()).toBe('Uploading panorama');
   });
 
@@ -461,13 +479,14 @@ describe('sign-in during an upload', () => {
     expect(backend.state.calls).toEqual([]);
   });
 
-  it('a different user signing in never gets the upload: record and stash are dropped unused', async () => {
+  it('a different user signing in never gets the upload: the record is dropped, the stash refused', async () => {
     const { backend, pending } = setup();
     backend.state.presignStatus = 401;
     await tick();
     await pick();
     expect(readResumeRecord()).toMatchObject({ owner: 'google-oauth2|1' });
     expect(pending.stash).toHaveBeenCalledWith(expect.any(File), 'google-oauth2|1');
+    pending.clear.mockClear();
 
     cleanup();
     const other = fakeAuth({ getUser: vi.fn(async () => ({ sub: 'google-oauth2|2', name: 'B' })) });
@@ -478,8 +497,25 @@ describe('sign-in during an upload', () => {
     expect(back.backend.state.calls).toEqual([]);
     expect(FakeXhr.all).toHaveLength(0);
     expect(readResumeRecord()).toBeNull();
-    expect(pending.clear).toHaveBeenCalled();
-    expect(pending.peek()).toBeNull();
+    // The stash is left to take()'s owner check, which never hands it to this user.
+    expect(pending.clear).not.toHaveBeenCalled();
+    expect(await pending.take('google-oauth2|2')).toBeNull();
+  });
+
+  it('an owned stash with no resume record never starts by itself from ?resume=upload', async () => {
+    const stale = pngFile('Old.png');
+    const { backend, pending } = setup(
+      '/app/new?resume=upload',
+      fakePending(stale, 'google-oauth2|1'),
+    );
+    await tick();
+    // Only an unowned (landing) stash may start without a matching record.
+    expect(pending.take).toHaveBeenCalledWith(null);
+    expect(screen.getByRole('dialog', { name: 'New pano' }).textContent).toContain(
+      'Choose your photo again to upload it.',
+    );
+    expect(backend.state.calls).toEqual([]);
+    expect(FakeXhr.all).toHaveLength(0);
   });
 
   it('a different user does not resume polling a landed upload either', async () => {
