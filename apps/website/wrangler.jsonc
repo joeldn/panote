@@ -22,6 +22,8 @@
       "observability": { "enabled": true },
       // Read-only by convention: the script only ever gets slugs/<slug>.json.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
+      // Anything but "true" makes the /s/* script add X-Robots-Tag (docs/deploy.md).
+      "vars": { "INDEXABLE": "false" },
     },
     "production": {
       // production is unprovisioned, see docs/deploy.md
@@ -30,6 +32,7 @@
       "routes": [{ "pattern": "panote.io/*", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
+      "vars": { "INDEXABLE": "true" },
     },
   },
 }
