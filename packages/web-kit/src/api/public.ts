@@ -78,3 +78,20 @@ export async function fetchManifest(
   if (!res.ok) throw new ApiError(res.status, body);
   return parseWith(ManifestSchema, url, body);
 }
+
+/**
+ * Re-fetch the manifest into the browser HTTP cache (`cache: 'reload'`). The CDN sends it with
+ * max-age=30, so after a replace the viewer's plain fetch would otherwise reuse the old copy.
+ */
+export async function refreshManifestCache(
+  tilesBase: string,
+  panoId: string,
+  opts: FetchManifestOptions = {},
+): Promise<void> {
+  const doFetch: FetchLike = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const init: RequestInit = { cache: 'reload' };
+  if (opts.signal) init.signal = opts.signal;
+  const res = await doFetch(manifestUrl(tilesBase, panoId), init);
+  // Read it fully: a cancelled body may never be committed to the cache.
+  await res.arrayBuffer();
+}

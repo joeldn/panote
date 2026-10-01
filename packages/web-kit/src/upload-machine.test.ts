@@ -499,6 +499,75 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     expect(ctl.getState().phase).toBe('failed');
   });
 
+  it('pollNow polls the manifest at once, e.g. when a backgrounded tab is shown again', async () => {
+    const h = harness();
+    h.manifests = [null];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.deps.fetchManifest).toHaveBeenCalledTimes(1);
+    // The next poll is 1.5s away; the tab comes back and kicks it now.
+    h.manifests = [manifest('t1-a')];
+    ctl.pollNow();
+    await flush();
+    expect(h.deps.fetchManifest).toHaveBeenCalledTimes(2);
+    expect(ctl.getState().phase).toBe('ready');
+    ctl.pollNow();
+    await flush();
+    expect(h.deps.fetchManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it('pollNow times out a throttled tab whose timers never fired', async () => {
+    const h = harness();
+    h.manifests = [null];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    // Timers stalled (background throttling): only wall-clock time moves on.
+    vi.setSystemTime(Date.now() + PROCESSING_TIMEOUT_MS);
+    ctl.pollNow();
+    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', panoId: 'p1' });
+  });
+
+  it('pollNow does not double up an in-flight manifest request', async () => {
+    const h = harness();
+    const pending = deferred<Manifest | null>();
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    vi.mocked(h.deps.fetchManifest).mockImplementation(() => pending.promise);
+    await vi.advanceTimersByTimeAsync(1_000);
+    ctl.pollNow();
+    ctl.pollNow();
+    expect(h.deps.fetchManifest).toHaveBeenCalledTimes(1);
+    pending.resolve(manifest('t1-a'));
+    await flush();
+    expect(ctl.getState().phase).toBe('ready');
+  });
+
+  it('resume: an image that already landed only polls, with no presign or PUT', async () => {
+    const h = harness();
+    h.manifests = [manifest('t1-old'), manifest('t1-new')];
+    const phases: string[] = [];
+    const ctl = startUpload(h.deps, {
+      resume: { panoId: 'p9', mode: { kind: 'replace', baselineVersion: 't1-old' } },
+      onChange: (s) => phases.push(s.phase),
+    });
+    await flush();
+    expect(ctl.getState()).toMatchObject({ phase: 'processing', panoId: 'p9' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ctl.getState().phase).toBe('processing');
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(ctl.getState()).toMatchObject({ phase: 'ready', panoId: 'p9' });
+    expect(h.deps.presign).not.toHaveBeenCalled();
+    expect(h.deps.put).not.toHaveBeenCalled();
+    expect(phases).toEqual(['preparing', 'processing', 'ready']);
+  });
+
   it('cancel aborts the PUT and stops everything', async () => {
     const h = harness();
     const ctl = startUpload(h.deps, { file: file() });

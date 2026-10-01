@@ -2,7 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { json, manifest } from '../__fixtures__/helpers.js';
 import { ApiError, ApiSchemaError } from './http.js';
-import { createPublicApi, fetchManifest } from './public.js';
+import { createPublicApi, fetchManifest, refreshManifestCache } from './public.js';
+
+describe('refreshManifestCache', () => {
+  it('re-fetches the manifest with cache: reload and reads the whole body', async () => {
+    const res = json(manifest('t1-b'));
+    const fetch = vi.fn(async () => res);
+    await refreshManifestCache('https://cdn.test/tiles/', 'p1', { fetch });
+    expect(fetch).toHaveBeenCalledWith('https://cdn.test/tiles/p1/manifest.json', {
+      cache: 'reload',
+    });
+    expect(res.bodyUsed).toBe(true);
+  });
+});
 
 describe('fetchManifest', () => {
   it('reads <tiles>/<panoId>/manifest.json with cache: no-store', async () => {

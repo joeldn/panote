@@ -42,6 +42,7 @@ export {
 export {
   createPublicApi,
   fetchManifest,
+  refreshManifestCache,
   TourStatsSchema,
   type FetchManifestOptions,
   type PublicApi,
@@ -91,6 +92,8 @@ export {
   STATUS_POLL_MS,
   uploadReducer,
   type StartUploadOptions,
+  type UploadFileSource,
+  type UploadResumeSource,
   type Timers,
   type UploadController,
   type UploadDeps,
@@ -101,6 +104,13 @@ export {
   type UploadState,
 } from './upload-machine.js';
 export { createUploadDeps, type UploadDepsOptions } from './upload-deps.js';
+export {
+  MAX_UPLOAD_PIXELS,
+  readImageSize,
+  validateUploadImage,
+  type ImageSize,
+  type ImageValidationError,
+} from './image-size.js';
 export {
   ADMIN_BASE,
   appOrigins,
