@@ -1,4 +1,4 @@
-import { ManifestSchema, PANO_PATTERN, type Manifest } from '@internal/contracts';
+import { ManifestSchema, PANO_PATTERN, type Manifest, type ViewBeacon } from '@internal/contracts';
 import { manifestUrl } from '@panote/core';
 import { z } from 'zod';
 
@@ -21,7 +21,8 @@ export interface PublicApiOptions {
 
 export interface PublicApi {
   getStats(tourId: string): Promise<TourStats>;
-  recordView(tourId: string): Promise<TourStats>;
+  /** `view` (first shown pano, page vs embed) feeds Insights; omitting it still counts. */
+  recordView(tourId: string, view?: ViewBeacon): Promise<TourStats>;
   like(tourId: string): Promise<TourStats>;
 }
 
@@ -44,7 +45,17 @@ export function createPublicApi(opts: PublicApiOptions = {}): PublicApi {
 
   return {
     getStats: async (tourId) => call(tourPath(tourId, 'stats'), { method: 'GET' }),
-    recordView: async (tourId) => call(tourPath(tourId, 'view'), { method: 'POST' }),
+    recordView: async (tourId, view) =>
+      call(
+        tourPath(tourId, 'view'),
+        view
+          ? {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(view),
+            }
+          : { method: 'POST' },
+      ),
     like: async (tourId) => {
       const headers: Record<string, string> = {};
       const id = opts.clientId?.();
