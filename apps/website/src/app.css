@@ -43,3 +43,161 @@ body {
 .app-shell__link:hover {
   color: var(--ink);
 }
+
+.app-shell__actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.app-shell__sections {
+  display: flex;
+  gap: 30px;
+}
+
+.app-shell__cta {
+  font: 500 14px var(--fbody);
+  letter-spacing: 0.01em;
+  color: var(--paper);
+  background: var(--ink);
+  padding: 10px 18px;
+  border-radius: var(--r-pill);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.app-shell__cta:hover {
+  background: #000;
+}
+
+/* On the landing the bar floats over the hero pano. */
+.app-shell__bar--overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 18px 30px;
+  transition:
+    background 0.2s,
+    box-shadow 0.2s;
+}
+
+.app-shell__bar--scrolled {
+  background: rgba(250, 248, 244, 0.82);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 1px 0 var(--ink-08);
+}
+
+[id] {
+  scroll-margin-top: 84px;
+}
+
+.site-footer {
+  border-top: 1px solid rgba(26, 24, 21, 0.12);
+}
+
+.site-footer__cols {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 54px 30px 46px;
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 30px;
+}
+
+.site-footer__blurb {
+  font: 400 14px/1.6 var(--fbody);
+  color: var(--ink-55);
+  max-width: 30ch;
+  margin: 14px 0 0;
+}
+
+.site-footer__cols nav,
+.site-footer__cols > div:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.site-footer__label {
+  font: 500 12px var(--fmono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-40);
+  margin-bottom: 4px;
+}
+
+.site-footer__cols a {
+  font: 500 14px var(--fbody);
+  color: rgba(26, 24, 21, 0.66);
+  text-decoration: none;
+}
+
+.site-footer a:hover {
+  color: var(--ink);
+}
+
+.site-footer__bottom {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 30px 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  border-top: 1px solid var(--ink-08);
+  font: 400 13px var(--fmono);
+  color: var(--ink-40);
+}
+
+.site-footer__legal {
+  display: flex;
+  gap: 22px;
+}
+
+.site-footer__legal a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@media (max-width: 600px) {
+  .app-shell__bar,
+  .app-shell__bar--overlay {
+    padding: 14px 16px;
+  }
+
+  .app-shell__sections {
+    display: none;
+  }
+
+  .app-shell__actions {
+    gap: 12px;
+  }
+
+  .app-shell__cta {
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .site-footer__cols {
+    grid-template-columns: 1fr 1fr;
+    padding: 40px 20px 32px;
+  }
+
+  .site-footer__cols > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .site-footer__bottom {
+    padding: 20px 20px 32px;
+  }
+}
+
+@media (max-width: 600px) {
+  /* "My tours" is also in the account menu. */
+  .app-shell__account > .app-shell__link {
+    display: none;
+  }
+}
