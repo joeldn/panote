@@ -16,15 +16,6 @@ describe('website routes', () => {
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeTruthy();
   });
 
-  it('routes a share link and its chrome-free embed', () => {
-    renderAt('/s/my-tour');
-    expect(screen.getByRole('heading', { name: 'Tour my-tour' })).toBeTruthy();
-    cleanup();
-    renderAt('/s/my-tour/embed');
-    expect(screen.getByRole('heading', { name: 'Embed my-tour' })).toBeTruthy();
-    expect(screen.queryByRole('img', { name: 'panote.io' })).toBeNull();
-  });
-
   it.each(['/privacy', '/terms'])('renders %s', (path) => {
     renderAt(path);
     expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();

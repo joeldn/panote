@@ -64,8 +64,9 @@ export class TourPublisher extends DurableObject<Env> {
     return this.serial(() => setVisibility(this.env.BUCKET, sub, tourId, visibility, this.clock()));
   }
 
-  async unpublish(sub: string, tourId: string): Promise<void> {
-    if (!(await this.owns(sub, tourId, true))) return;
+  // Returns the keys to purge; the Worker purges them so this queue stays fast.
+  async unpublish(sub: string, tourId: string): Promise<string[]> {
+    if (!(await this.owns(sub, tourId, true))) return [];
     return this.serial(() => unpublish(this.env.BUCKET, sub, tourId));
   }
 }

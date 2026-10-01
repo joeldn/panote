@@ -50,8 +50,9 @@ anonymous).
 
 ## Frontends
 
-`apps/website` and `apps/admin` are Vite + React SPAs, each deployed as an **assets-only Worker**
-(Workers Static Assets, no `main` script yet) on the same host as the APIs. Why not Pages, and why
+`apps/website` and `apps/admin` are Vite + React SPAs, each deployed as a Worker with **static
+assets** on the same host as the APIs. Admin is assets-only; the website also has a small `main`
+script that only runs for `/s/*` (slug redirects, below). Why not Pages, and why
 build-time config: `docs/decisions.md`.
 
 | App | Script (dev / production) | Route (dev / production) | Vite `base` / output |
@@ -60,7 +61,8 @@ build-time config: `docs/decisions.md`.
 | `apps/admin` | `panote-admin-dev` / `panote-admin` | `panote.dev/app` + `panote.dev/app/*` / same on `panote.io` | `/app/` → `dist/app/` |
 
 Both: `assets.not_found_handling: "single-page-application"`, `observability.enabled: true` in
-both env blocks, `workers_dev` `true` in dev and `false` in production, no bindings, no secrets.
+both env blocks, `workers_dev` `true` in dev and `false` in production, no secrets. Admin has no
+bindings; the website has `BUCKET` (R2, `pano-content-dev` / `pano-content`) and `ASSETS`.
 
 **Route precedence.** The website's `panote.dev/*` overlaps every other route on the host.
 Cloudflare resolves that by specificity: "When more than one route pattern could match a request
@@ -74,8 +76,29 @@ specificity (`/images/*` vs `/images*` on the same zone,
 no two routes here differ only by that slash. Admin uses `/app` + `/app/*` rather than the plan's
 `/app*`, which would also take `/apple`, `/application`, … from the website. Unmatched `/api/...`
 paths now reach the website and get `index.html` with a 200 (accepted for v1; unit W3 adds a
-404). The website's `/s/*` slug-redirect script (unit D5) will add a `main`, an R2 binding and
-`assets.run_worker_first` to `apps/website/wrangler.jsonc`, repeated per env block.
+404).
+
+**Website slug redirects (`/s/*`).** `apps/website/wrangler.jsonc` sets `main: worker/index.ts`
+and `assets.run_worker_first: ["/s/*"]` ([Static Assets binding →
+`run_worker_first`](https://developers.cloudflare.com/workers/static-assets/binding/#run_worker_first):
+an array of route patterns, `*` deep-matches, `!` negates). Every other path is served by the
+assets router and never invokes the script. For `/s/<slug>` and `/s/<slug>/embed[/]` the script
+reads `slugs/<slug>.json` through the `BUCKET` binding (it only ever reads that prefix; R2
+bindings can't be scoped, so read-only is by convention). An unexpired `redirect` alias whose
+target slug is still a live pointer to the **same** tourId gets a `308` to `/s/<new>` (or
+`/s/<new>/embed`) with the query string kept and `Cache-Control: no-store`. Anything else (live
+pointer, miss, expired alias, a target another tour holds, an invalid slug, an R2 error) falls
+through to `env.ASSETS.fetch`, i.e. the SPA, which then shows the tour or its "This tour isn't
+available" placeholder. `_headers` still applies to responses served through `env.ASSETS.fetch`
+(checked under `wrangler dev`: CSP, `frame-ancestors` per path, nosniff). `wrangler types --env
+dev` omits the inherited `ASSETS` binding, so `worker/assets.d.ts` declares it.
+The `Location` is relative (`/s/<new-slug>`, query kept).
+Post-deploy checks (dev; production the same on `panote.io`):
+- `curl -sI https://panote.dev/s/<old-slug>` on a renamed tour: `308`,
+  `Location: /s/<new-slug>`, `Cache-Control: no-store`.
+- `curl -sI https://panote.dev/s/<live-slug>`: `200` with `frame-ancestors 'none'` in the CSP.
+- `curl -sI https://panote.dev/s/<live-slug>/embed` (and `/embed/`): `200` with `frame-ancestors *`.
+  These two confirm `_headers` still applies to responses that pass through the script.
 
 **Admin's assets layout.** Assets build into `dist/app/` so `/app/assets/…` maps onto files, but
 the Worker's assets root is `dist/`. Workers' SPA fallback always serves the *root*
@@ -100,7 +123,7 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 
 **Headers.** The build also emits `_headers` from the env (`buildHeadersFile` in
 `@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
-`style-src 'self'`, `img-src 'self' <cdn> data: blob:`, `connect-src 'self' <cdn> <auth0 domain>`
+`style-src 'self'`, `img-src 'self' <cdn> data: blob:`, `media-src 'self' <cdn>`, `connect-src 'self' <cdn> <auth0 domain>`
 (admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com`,
 `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
 `strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
@@ -111,13 +134,15 @@ Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CS
 The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Dev builds add
 `X-Robots-Tag: noindex` on every path; production stays indexable.
 
-CSP gaps the D units must close when they land (the scaffold doesn't hit them yet):
+CSP notes for the D units:
 
-- The viewer's info-hotspots UI injects a `<style>` element, which `style-src 'self'` blocks: move
-  it to a stylesheet, or allow it by hash/nonce.
-- Hotspot video from the CDN needs `media-src` with the CDN origin (it falls back to
-  `default-src 'self'` today).
-- The admin share modal's embed preview iframe needs `frame-src 'self'` (only YouTube is allowed).
+- The viewer's vanilla info-hotspots UI (`@panote/viewer/ui`) injects a `<style>` element, which
+  `style-src 'self'` blocks. The apps don't use it: the React viewer chrome in `@internal/ui`
+  (`styles/viewer.css`) replaces it. Inline `style` set from JS (CSSOM) is not affected.
+- Hotspot media: video and images load only from `'self'` and the CDN (`media-src`/`img-src`),
+  YouTube only via `www.youtube-nocookie.com` (`frame-src`). The public viewer renders media on any
+  other host (or media that fails to load) as an "Open image/video ↗" link instead.
+- Still open: the admin share modal's embed preview iframe needs `frame-src 'self'` (unit D6).
 
 **Sign-in (unit C3).** Auth0 SPA flow (Authorization Code + PKCE, `google-oauth2` only) with
 rotating refresh tokens cached in localStorage, so both apps share one session on `panote.dev`.
@@ -333,11 +358,39 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put R2_SECRET_ACCESS_
 
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
-for tour insights (see "Insights (unit B5)" below). `wrangler deploy --env <env> --secrets-file
-<file>` is the alternative to interactive `secret put` if scripting this. **Status: set for dev,
-outstanding for production** — `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api`
-and `tiler-consumer`'s dev environments; production has neither yet. `CF_ANALYTICS_TOKEN` is
-outstanding for both.
+for tour insights (see "Insights (unit B5)" below) and the optional `CF_PURGE_TOKEN` (see "CDN
+purge on delete" below). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
+interactive `secret put` if scripting this. **Status: set for dev, outstanding for production** —
+`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
+environments; production has neither yet. `CF_ANALYTICS_TOKEN` is outstanding for both;
+`CF_PURGE_TOKEN` is set for dev only.
+
+### CDN purge on delete (unit B6)
+
+After a pano delete (tiles swept), a tour delete, or an unpublish, `admin-api` calls
+`POST /zones/<CDN_ZONE_ID>/purge_cache` from `ctx.waitUntil`, so the `204` never waits on it.
+A pano delete purges by prefix (`cdn.panote.dev/tiles/<panoId>/`); a tour delete batches every
+pano it removed into one prefix request (100 max each); unpublish purges `pub/tours/<tourId>.json`
+and the removed `slugs/<slug>.json` by URL. It's best-effort: a non-2xx, a network error or the 5s
+timeout is logged (`cdn purge failed …`, status and Cloudflare error codes only) and nothing is
+retried. With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs
+`cdn purge skipped` and does nothing. Free plan limits are per account: 5 prefix requests/min,
+bucket 25, so a burst of single-pano deletes past that gets `429`s and those tiles stay cached
+until their TTL. Dev and production share that one account-wide prefix-purge budget.
+
+Ops steps, per environment:
+
+1. Create an API token (My Profile → API Tokens → Custom token) with **Zone → Cache Purge →
+   Purge**, scoped to the one zone (`panote.dev` for dev, `panote.io` for production).
+2. `pnpm --filter @service/admin-api exec wrangler secret put CF_PURGE_TOKEN --env dev`
+3. Set `CDN_ZONE_ID` in `services/admin-api/wrangler.jsonc` to the zone's id (dashboard: the
+   zone's Overview → API → Zone ID), then redeploy. Dev's is `2196d8dead0322ad69307711fc72b5d3`.
+4. Check: fetch a tile twice until `cf-cache-status: HIT`, delete its pano, and the next fetch is a
+   `MISS`/`404`.
+
+**Status: set for dev, outstanding for production** — the dev `CDN_ZONE_ID` is set and
+`CF_PURGE_TOKEN` has been set on dev, so purges go live in dev with the next deploy (step 4 not yet
+run). Production has no token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
 
 ---
 
@@ -639,7 +692,8 @@ browser that already fetched one can keep serving it for up to a year after dele
 already has a tile URL keeps access to it until a cache purge, full stop. In practice a deleted
 pano's tile URLs can't be *discovered* once the manifest's ~30s cache expires, since a client would
 need a stale manifest it already had cached to read them from. A Cloudflare cache purge by prefix
-or URL is the only way to revoke access sooner; automated purge on delete is deferred.
+or URL is the only way to revoke access sooner; `admin-api` now does that on delete, best-effort
+(see "CDN purge on delete" above). A browser's own cached copy is out of its reach.
 
 One sweep of `tiles/<panoId>/` is enough to catch every tile a still-in-flight tiler job writes,
 because every tile/manifest write precedes that job's own last HEAD of the original
@@ -839,7 +893,9 @@ production provisioning below is still outstanding. Every `production` env block
 `wrangler.jsonc` is deliberately declared-but-unprovisioned — the config exists so Wave 5
 doesn't have to reverse-engineer it, but none of it is live. Before a production deploy can
 succeed: run every "outstanding" step in One-time provisioning above with `production` in place
-of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, and —
+of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, replace
+`admin-api`'s `YOUR_PANOTE_IO_ZONE_ID` (production deploys fail on any `YOUR_` placeholder until
+then) and set its `CF_PURGE_TOKEN` (see "CDN purge on delete"), and —
 only once all of that is actually done — set the repository variable `PRODUCTION_PROVISIONED` to
 the literal string `true`. The `production` GitHub Environment itself is already provisioned (a
 required reviewer, a main-only branch policy, and `CLOUDFLARE_API_TOKEN` — see GitHub setup
@@ -892,7 +948,8 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   already cached kept returning `200` (`cf-cache-status: HIT`) after its pano was deleted, because
   tiles are `public, max-age=31536000, immutable` and nothing purges the edge cache on delete (see
   "Deleted panos" above for the existing note on this). True revocation needs a Cloudflare cache
-  purge by URL or prefix — deferred to Wave 6 / ops.
+  purge by URL or prefix — B6 adds a best-effort purge on delete (see "CDN purge on delete" for
+  its status).
 - **Hardened (pending dev verification): the presigned upload PUT now pins content-type.**
   `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
   with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's

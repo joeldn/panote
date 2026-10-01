@@ -1,0 +1,159 @@
+/* Screen 05 page layout. The viewer chrome itself is styled in @internal/ui (viewer.css). */
+
+.tour-page {
+  position: fixed;
+  inset: 0;
+  background: #0d0c0a;
+  font-family: var(--fbody);
+}
+
+/* Top bar: logo, breadcrumb pill, stats. Only its children take pointer events. */
+.pn-stage__overlay > .tour-bar {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  right: 84px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+.tour-bar > * {
+  pointer-events: auto;
+}
+.tour-bar__home {
+  display: flex;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+}
+.tour-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 14px;
+  border-radius: 11px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+.tour-crumbs__tour {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-55);
+}
+.tour-crumbs__sep {
+  font-size: 9px;
+  color: var(--ink-40);
+}
+.tour-crumbs__scene {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--ink);
+}
+.tour-stats {
+  display: flex;
+  gap: 8px;
+}
+.tour-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 9px 12px;
+  border-radius: 11px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  color: var(--ink);
+  font: 500 13px var(--fmono);
+}
+.tour-chip > i {
+  color: var(--accent);
+  font-size: 12px;
+}
+.tour-chip--like {
+  cursor: pointer;
+}
+.tour-chip--like > i {
+  color: var(--ink-40);
+}
+.tour-chip--like[aria-pressed='true'] > i {
+  color: var(--accent);
+}
+.tour-chip--like:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pn-stage__overlay > .tour-compass {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+}
+.tour-view--embed .pn-controls--top {
+  top: 16px;
+}
+.pn-stage__overlay > .tour-embed-brand {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  padding: 6px 10px;
+  border-radius: var(--r-pill);
+  background: var(--cbg);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 12px;
+}
+.tour-embed-brand .pn-logo__word {
+  font-size: 14px;
+}
+
+/* Unavailable placeholder (also the embed placeholder). */
+.tour-unavailable {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.tour-unavailable__card {
+  max-width: 360px;
+  text-align: center;
+}
+.tour-unavailable__icon {
+  font-size: 26px;
+  color: var(--ink-40);
+}
+.tour-unavailable__title {
+  margin: 14px 0 8px;
+  font: 400 24px/1.2 var(--fdisp);
+  letter-spacing: -0.015em;
+}
+.tour-unavailable__body {
+  margin: 0 0 18px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-62);
+}
+.tour-unavailable__brand {
+  position: absolute;
+  left: 18px;
+  top: 16px;
+  color: inherit;
+  text-decoration: none;
+}
+
+@media (max-width: 600px) {
+  .tour-stats .tour-chip:first-child {
+    display: none;
+  }
+  .tour-crumbs__tour,
+  .tour-crumbs__sep {
+    display: none;
+  }
+}

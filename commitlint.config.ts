@@ -57,6 +57,8 @@ const config: UserConfig = {
         'repo',
         'ci',
         'deps',
+        // docs/deploy.md (runbook and provisioning record)
+        'deploy',
       ],
     ],
     // Changesets pastes long release notes into commit bodies; wrapping them

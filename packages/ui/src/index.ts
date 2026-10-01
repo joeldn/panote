@@ -22,3 +22,11 @@ export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmente
 export { useModalTitleId } from './use-modal-title-id.js';
 export { usePanoViewer } from './viewer-context.js';
 export { VISIBILITY_META, type Visibility } from './visibility.js';
+export { Compass } from './viewer/Compass.js';
+export { FloorLinks, type FloorLinksProps } from './viewer/FloorLinks.js';
+export { HotspotMarkers, type HotspotMarkersProps } from './viewer/HotspotMarkers.js';
+export { HotspotPanel, type HotspotPanelProps } from './viewer/HotspotPanel.js';
+export { SceneMap, type SceneMapEntry, type SceneMapProps } from './viewer/SceneMap.js';
+export type { ViewerHotspot, ViewerLinkArrow, ViewerMedia } from './viewer/types.js';
+export { useViewerFrame } from './viewer/use-render.js';
+export { ViewerControls, type ViewerControlsProps } from './viewer/ViewerControls.js';
