@@ -1,8 +1,18 @@
+import { loadConfig } from '@internal/web-kit';
 import { cleanup, render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { ConfigContext } from './config-context.js';
 import { routes } from './routes.js';
+
+const ENV = {
+  VITE_SITE_ORIGIN: 'https://panote.dev',
+  VITE_CDN_BASE: 'https://cdn.panote.dev/',
+  VITE_AUTH0_DOMAIN: 'panote-dev.au.auth0.com',
+  VITE_AUTH0_CLIENT_ID: 'client',
+  VITE_AUTH0_AUDIENCE: 'https://api.panote.dev',
+};
 
 const renderAt = (path: string) =>
   render(
@@ -28,9 +38,18 @@ describe('admin routes', () => {
   });
 
   it.each(['link', 'privacy', 'embed'])('opens the %s share tab over the editor', (tab) => {
-    renderAt(`/app/t/tour-1/share/${tab}`);
+    render(
+      <ConfigContext value={loadConfig(ENV)}>
+        <RouterProvider
+          router={createMemoryRouter(routes, {
+            basename: '/app',
+            initialEntries: [`/app/t/tour-1/share/${tab}`],
+          })}
+        />
+      </ConfigContext>,
+    );
     expect(screen.getByRole('heading', { name: 'Editor tour-1' })).toBeTruthy();
-    expect(screen.getByRole('dialog').textContent).toBe(`Share: ${tab}`);
+    expect(screen.getByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
   });
 
   it('routes insights, preview and the Auth0 callback', () => {

@@ -30,6 +30,6 @@ export function Preview() {
   return <Placeholder title={`Preview ${tourId ?? ''}`} />;
 }
 
-export const ShareModal = ({ tab }: { tab: ShareTab }) => <p role="dialog">Share: {tab}</p>;
+export { ShareRoute as ShareModal } from './share/ShareRoute.js';
 export const InsightsModal = () => <p role="dialog">Insights</p>;
 export const NotFound = () => <Placeholder title="Page not found" />;
