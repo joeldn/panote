@@ -241,8 +241,8 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
   const phase = (): UploadPhase => state.phase;
   let pollAbort = new AbortController();
   const handles = new Set<unknown>();
-  // Set while polling: runs the manifest poll now instead of at its next backoff slot.
-  let kickManifest: (() => void) | null = null;
+  // Set while polling: runs both polls now instead of at their next scheduled slot.
+  let kickPolls: (() => void) | null = null;
   let resolveSettled!: (s: UploadState) => void;
   const settled = new Promise<UploadState>((r) => (resolveSettled = r));
 
@@ -270,7 +270,7 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
     for (const h of handles) timers.clearTimeout(h);
     handles.clear();
     pollAbort.abort();
-    kickManifest = null;
+    kickPolls = null;
   }
 
   function startPolling(): void {
@@ -301,17 +301,13 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
       manifestTimer = later(() => void pollManifest(), delay);
     };
 
-    kickManifest = () => {
-      if (signal.aborted || manifestInFlight) return;
-      if (manifestTimer !== null) {
-        timers.clearTimeout(manifestTimer);
-        handles.delete(manifestTimer);
-      }
-      void pollManifest();
-    };
+    let statusTimer: unknown = null;
+    let statusInFlight = false;
 
     const pollStatus = async (): Promise<void> => {
       if (signal.aborted) return;
+      statusTimer = null;
+      statusInFlight = true;
       try {
         const { tiling } = await deps.getPanoStatus(panoId);
         if (signal.aborted) return;
@@ -321,13 +317,32 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
         // Polling can't continue without a session; the image itself is safe.
         if (isAuthError(e)) dispatch({ type: 'auth-required', message: messageOf(e) });
         else dispatch({ type: 'tick', at: timers.now() });
+      } finally {
+        statusInFlight = false;
       }
       if (signal.aborted || phase() !== 'processing') return;
-      later(() => void pollStatus(), STATUS_POLL_MS);
+      statusTimer = later(() => void pollStatus(), STATUS_POLL_MS);
+    };
+
+    const cancelTimer = (h: unknown): void => {
+      if (h === null) return;
+      timers.clearTimeout(h);
+      handles.delete(h);
+    };
+    kickPolls = () => {
+      if (signal.aborted) return;
+      if (!manifestInFlight) {
+        cancelTimer(manifestTimer);
+        void pollManifest();
+      }
+      if (!statusInFlight) {
+        cancelTimer(statusTimer);
+        void pollStatus();
+      }
     };
 
     manifestTimer = later(() => void pollManifest(), MANIFEST_POLL_INITIAL_MS);
-    later(() => void pollStatus(), STATUS_POLL_MS);
+    statusTimer = later(() => void pollStatus(), STATUS_POLL_MS);
     // Fires even if a poll request hangs; the reducer compares timestamps.
     later(() => dispatch({ type: 'tick', at: timers.now() }), PROCESSING_TIMEOUT_MS);
   }
@@ -399,7 +414,7 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
       if (phase() !== 'processing') return;
       // A throttled timeout timer may be late; the reducer compares timestamps.
       dispatch({ type: 'tick', at: timers.now() });
-      kickManifest?.();
+      kickPolls?.();
     },
     cancel: () => {
       stopPolling();

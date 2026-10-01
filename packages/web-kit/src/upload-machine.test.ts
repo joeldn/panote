@@ -519,6 +519,39 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     expect(h.deps.fetchManifest).toHaveBeenCalledTimes(2);
   });
 
+  it('pollNow also checks the status route at once (a failure shows without waiting 15s)', async () => {
+    const h = harness();
+    h.manifests = [null];
+    h.statuses = ['failed'];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.deps.getPanoStatus).not.toHaveBeenCalled();
+    ctl.pollNow();
+    await flush();
+    expect(h.deps.getPanoStatus).toHaveBeenCalledTimes(1);
+    expect(ctl.getState()).toMatchObject({ phase: 'failed', stage: 'tiling' });
+  });
+
+  it('pollNow restarts the status interval instead of adding a second one', async () => {
+    const h = harness();
+    h.manifests = [null];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(5_000);
+    ctl.pollNow();
+    await flush();
+    expect(h.deps.getPanoStatus).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(STATUS_POLL_MS - 1);
+    expect(h.deps.getPanoStatus).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.deps.getPanoStatus).toHaveBeenCalledTimes(2);
+  });
+
   it('pollNow times out a throttled tab whose timers never fired', async () => {
     const h = harness();
     h.manifests = [null];
