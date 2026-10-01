@@ -1,4 +1,4 @@
-import type { PublishedTour } from '@internal/contracts';
+import type { PublishedTour, ViewBeacon } from '@internal/contracts';
 import {
   Compass,
   FloorLinks,
@@ -20,7 +20,7 @@ import { Link, useSearchParams } from 'react-router';
 import './tour.css';
 
 import { useConfig } from '../config-context.js';
-import { trackViewerEvent } from './analytics.js';
+import { useViewerAnalytics } from './analytics.js';
 import { StageFactoryContext } from './stage-factory.js';
 import { StatsChips } from './StatsChips.js';
 import { Unavailable } from './Unavailable.js';
@@ -94,8 +94,16 @@ function PointsLayer({
 }
 
 // Mounted only once a scene is shown, so an unavailable tour never records a view.
-function TourStats({ tourId, visible }: { tourId: string; visible: boolean }) {
-  const stats = useTourStats(tourId);
+function TourStats({
+  tourId,
+  visible,
+  view,
+}: {
+  tourId: string;
+  visible: boolean;
+  view: ViewBeacon;
+}) {
+  const stats = useTourStats(tourId, view);
   return visible ? <StatsChips {...stats} /> : null;
 }
 
@@ -122,6 +130,8 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
   const [failed, setFailed] = useState(false);
   // Set once a scene is on screen; a view is only counted from then on.
   const [shown, setShown] = useState(false);
+  const surface = embed ? 'embed' : 'page';
+  const trackViewerEvent = useViewerAnalytics(tour.tourId, surface, shown);
 
   if (!scene || failed || (single && !requestedOk)) return <Unavailable embed={embed} />;
 
@@ -160,11 +170,9 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
         aria-label={`${tour.title}: ${vt.titles[panoId] ?? ''}`}
         onSceneChange={(id) => {
           setShown(true);
-          trackViewerEvent({ type: 'scene', tourId: tour.tourId, panoId: id });
+          trackViewerEvent({ type: 'scene', panoId: id });
         }}
-        onHotspotOpen={(hotspotId) =>
-          trackViewerEvent({ type: 'hotspot', tourId: tour.tourId, panoId, hotspotId })
-        }
+        onHotspotOpen={(hotspotId) => trackViewerEvent({ type: 'hotspot', panoId, hotspotId })}
         onLoadError={(err) => {
           console.error('pano load failed', err);
           // Nothing on screen yet (e.g. the manifest 404s): same placeholder as a missing tour.
@@ -192,10 +200,12 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
                 {vt.titles[panoId]}
               </span>
             </nav>
-            {shown && <TourStats tourId={tour.tourId} visible />}
+            {shown && <TourStats tourId={tour.tourId} visible view={{ panoId, surface }} />}
           </div>
         )}
-        {embed && shown && <TourStats tourId={tour.tourId} visible={false} />}
+        {embed && shown && (
+          <TourStats tourId={tour.tourId} visible={false} view={{ panoId, surface }} />
+        )}
         {embed && !single && (
           <a className="tour-embed-brand" href={`/s/${tour.slug}`} target="_blank" rel="noopener">
             <Logo />
