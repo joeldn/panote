@@ -71,19 +71,52 @@ describe('callback', () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith('http://localhost:5174/s/my-tour'));
   });
 
-  it('shows the Auth0 error with a way back to sign-in', async () => {
+  const authError = (error: string, description: string, appState?: unknown) =>
+    Object.assign(new Error(description), { error, error_description: description, appState });
+
+  it('headlines fixed copy for a known code and keeps the raw text in a disclosure', async () => {
+    const raw = 'User did not authorize the request <script>';
     const auth = fakeAuth({
-      handleCallback: vi.fn(async () => {
-        throw new Error('access_denied: user cancelled');
-      }),
+      handleCallback: vi.fn().mockRejectedValue(authError('access_denied', raw)),
     });
     renderAdmin('/app/callback?error=access_denied&state=s', { auth });
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain('Sign-in didn’t complete');
-    expect(alert.textContent).toContain('user cancelled');
+    const lead = alert.querySelector('p')!;
+    expect(lead.textContent).toContain('Sign-in was cancelled');
+    expect(lead.textContent).not.toContain(raw);
+    expect(alert.querySelector('details')!.textContent).toContain(raw);
     expect(screen.getByRole('link', { name: 'Try again' }).getAttribute('href')).toBe(
       'http://localhost:5174/?signin=1',
     );
+  });
+
+  it.each([
+    ['state_mismatch', 'expired or was already used'],
+    ['login_required', 'expired before it finished'],
+    ['something_new', 'Something went wrong'],
+  ])('maps %s to fixed copy', async (code, copy) => {
+    const auth = fakeAuth({ handleCallback: vi.fn().mockRejectedValue(authError(code, 'raw')) });
+    renderAdmin('/app/callback?state=s', { auth });
+    expect((await screen.findByRole('alert')).querySelector('p')!.textContent).toContain(copy);
+  });
+
+  it('Try again keeps the original destination from the error appState', async () => {
+    const err = authError('access_denied', 'denied', { returnTo: '/app/t/abc?pano=p1' });
+    renderAdmin('/app/callback?state=s', {
+      auth: fakeAuth({ handleCallback: vi.fn().mockRejectedValue(err) }),
+    });
+    const href = (await screen.findByRole('link', { name: 'Try again' })).getAttribute('href')!;
+    expect(new URL(href).searchParams.get('next')).toBe('/app/t/abc?pano=p1');
+  });
+
+  it('re-validates the appState destination before reusing it', async () => {
+    const err = authError('access_denied', 'denied', { returnTo: '//evil.example/x' });
+    renderAdmin('/app/callback?state=s', {
+      auth: fakeAuth({ handleCallback: vi.fn().mockRejectedValue(err) }),
+    });
+    const href = (await screen.findByRole('link', { name: 'Try again' })).getAttribute('href')!;
+    expect(new URL(href).searchParams.get('next')).toBe('/app/');
   });
 
   it.each(['https://evil.example/x', '//evil.example/x', '/\\evil.example'])(
