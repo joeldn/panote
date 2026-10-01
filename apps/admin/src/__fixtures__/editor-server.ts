@@ -14,6 +14,7 @@ export interface Recorded {
   method: string;
   path: string;
   ifMatch: string | null;
+  ifNoneMatch: string | null;
   body: unknown;
 }
 
@@ -33,6 +34,8 @@ export class FakeServer {
   publish: { slug: string; visibility: 'public' | 'unlisted'; publishedAt: string } | null = null;
   publishScript: PublishScript | null = null;
   requests: Recorded[] = [];
+  /** Config PUTs for these panoIds fail with a 500. */
+  brokenConfigs = new Set<string>();
   /** Answers every request with 401 while set (a session that died mid-edit). */
   unauthorized = false;
   private n = 0;
@@ -59,8 +62,9 @@ export class FakeServer {
     const method = init.method ?? 'GET';
     const headers = (init.headers ?? {}) as Record<string, string>;
     const ifMatch = headers['If-Match'] ?? null;
+    const ifNoneMatch = headers['If-None-Match'] ?? null;
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
-    this.requests.push({ method, path: url.pathname + url.search, ifMatch, body });
+    this.requests.push({ method, path: url.pathname + url.search, ifMatch, ifNoneMatch, body });
     if (this.unauthorized) return json({ error: 'unauthorized' }, 401);
 
     const tourMatch = /^\/api\/admin\/tours\/([^/]+)(\/publish)?$/.exec(url.pathname);
@@ -122,9 +126,16 @@ export class FakeServer {
       return json({ config: c.body, etag: c.etag, status });
     }
     if (panoMatch && panoMatch[2] && method === 'PUT') {
-      if (!ifMatch) return json({ error: 'If-Match required' }, 428);
       const panoId = panoMatch[1]!;
-      if (stale(this.configs.get(panoId))) return json({ error: 'conflict' }, 412);
+      if (this.brokenConfigs.has(panoId)) return json({ error: 'boom' }, 500);
+      // Same rules as admin-api: If-None-Match: * is create-only, If-Match: * unconditional.
+      if (ifNoneMatch !== null) {
+        if (ifMatch !== null || ifNoneMatch !== '*') return json({ error: 'bad' }, 400);
+        if (this.configs.has(panoId)) return json({ error: 'conflict' }, 412);
+      } else {
+        if (!ifMatch) return json({ error: 'If-Match required' }, 428);
+        if (stale(this.configs.get(panoId))) return json({ error: 'conflict' }, 412);
+      }
       const doc = { etag: this.nextEtag(), body: { ...(body as object), panoId } };
       this.configs.set(panoId, doc);
       this.missing.delete(panoId);

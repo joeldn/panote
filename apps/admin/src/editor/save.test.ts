@@ -25,6 +25,7 @@ const docsAfter = (...actions: EditorAction[]): EditorDocs =>
 const fakeApi = (over: Partial<SaveApi> = {}): SaveApi => ({
   putTour: vi.fn(async () => ({ etag: 'te2' })),
   putPanoConfig: vi.fn(async (panoId: string) => ({ etag: `${panoId}-2` })),
+  createPanoConfig: vi.fn(async (panoId: string) => ({ etag: `${panoId}-1` })),
   publishTour: vi.fn(async () => ({
     slug: 'old-town',
     visibility: 'unlisted' as const,
@@ -43,18 +44,18 @@ describe('runSave', () => {
       { type: 'tour/title', title: 'Old town 2' },
     );
     const out = await runSave(api, 't1', planSave(docs));
-    expect(api.putPanoConfig).toHaveBeenCalledTimes(2);
+    expect(api.putPanoConfig).toHaveBeenCalledTimes(1);
     expect(api.putPanoConfig).toHaveBeenCalledWith(
       'a',
       expect.objectContaining({ title: 'Plaza' }),
       'ea',
     );
-    // An untitled original has no config yet: created unconditionally.
-    expect(api.putPanoConfig).toHaveBeenCalledWith(
+    // An untitled original has no config yet: created create-only, never with If-Match: *.
+    expect(api.createPanoConfig).toHaveBeenCalledWith(
       'new',
       expect.objectContaining({ title: 'Cellar' }),
-      '*',
     );
+    expect(api.putPanoConfig).not.toHaveBeenCalledWith('new', expect.anything(), '*');
     expect(api.putTour).toHaveBeenCalledTimes(1);
     expect(api.putTour).toHaveBeenCalledWith(
       't1',

@@ -16,7 +16,10 @@ import {
 
 import { isSceneDirty, isTourDirty, panoKey, type DocKey, type EditorDocs } from './model.js';
 
-export type SaveApi = Pick<AdminApi, 'putTour' | 'putPanoConfig' | 'publishTour'>;
+export type SaveApi = Pick<
+  AdminApi,
+  'putTour' | 'putPanoConfig' | 'createPanoConfig' | 'publishTour'
+>;
 
 export interface SavePlan {
   tour: { doc: TourDoc; etag: string } | null;
@@ -67,7 +70,7 @@ const firstIssue = (issues: { path: (string | number)[]; message: string }[]): s
 };
 
 /**
- * PUT every planned document with its own If-Match (a missing config uses `*`),
+ * PUT every planned document with its own If-Match (a missing config is create-only),
  * configs first, then the tour. Never throws: each document reports its own result.
  */
 export async function runSave(api: SaveApi, tourId: string, plan: SavePlan): Promise<SaveOutcome> {
@@ -81,7 +84,11 @@ export async function runSave(api: SaveApi, tourId: string, plan: SavePlan): Pro
         return;
       }
       try {
-        const res = await api.putPanoConfig(panoId, config, etag ?? '*');
+        // No stored config yet: create-only, so a concurrent create 412s instead of being overwritten.
+        const res =
+          etag === null
+            ? await api.createPanoConfig(panoId, config)
+            : await api.putPanoConfig(panoId, config, etag);
         out.configs[panoId] = { etag: res.etag, sent: config };
       } catch (e) {
         out.failures[key] = failureOf(e);
