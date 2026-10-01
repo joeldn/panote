@@ -64,6 +64,12 @@ describe('buildHeadersFile', () => {
     );
   });
 
+  it('adds extra frame-src sources only when asked', () => {
+    expect(buildHeadersFile(loadConfig(env))).not.toContain("frame-src 'self'");
+    const file = buildHeadersFile(loadConfig(env), { frameSrc: ["'self'"] });
+    expect(file).toContain("frame-src 'self' https://www.youtube-nocookie.com;");
+  });
+
   it('emits a single block with no framable paths', () => {
     expect(buildHeadersFile(loadConfig(env)).trimEnd().split('\n\n')).toHaveLength(1);
   });

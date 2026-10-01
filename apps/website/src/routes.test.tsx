@@ -1,4 +1,4 @@
-import { cleanup, screen } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { renderSite } from './__fixtures__/auth.js';
@@ -10,8 +10,8 @@ afterEach(cleanup);
 describe('website routes', () => {
   it('renders the shell and the landing page', async () => {
     renderAt('/');
-    expect(screen.getByRole('img', { name: 'panote.io' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Landing' })).toBeTruthy();
+    expect(within(screen.getByRole('banner')).getByRole('img', { name: 'panote.io' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toContain('Free.');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeTruthy();
   });

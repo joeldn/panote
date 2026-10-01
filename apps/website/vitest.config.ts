@@ -6,6 +6,7 @@ export default mergeConfig(
   defineConfig({
     test: {
       name: '@app/website',
+      setupFiles: ['src/__fixtures__/setup.ts'],
       coverage: { exclude: ['src/main.tsx', 'src/__fixtures__/**'] },
     },
   }),
