@@ -15,14 +15,7 @@ export function Dashboard() {
 
 export const UploadOverlay = () => <p role="dialog">Upload</p>;
 
-export function Editor() {
-  const { tourId } = useParams();
-  return (
-    <Placeholder title={`Editor ${tourId ?? ''}`}>
-      <Outlet />
-    </Placeholder>
-  );
-}
+export { Editor } from './editor/Editor.js';
 
 export function Preview() {
   const { tourId } = useParams();

@@ -1,10 +1,17 @@
 import { render } from '@testing-library/react';
-import type { Auth, AppOrigins, FetchLike } from '@internal/web-kit';
-import { StrictMode } from 'react';
+import {
+  loadConfig,
+  type Auth,
+  type AppConfig,
+  type AppOrigins,
+  type FetchLike,
+} from '@internal/web-kit';
+import { StrictMode, type ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { vi } from 'vitest';
 
 import { AuthEnvContext } from '../auth-context.js';
+import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 
 export const LOCAL: AppOrigins = {
@@ -29,18 +36,28 @@ export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
   };
 }
 
+export const TEST_CONFIG: AppConfig = loadConfig({
+  VITE_SITE_ORIGIN: 'https://panote.test',
+  VITE_CDN_BASE: 'https://cdn.panote.test/',
+  VITE_AUTH0_DOMAIN: 'tenant.auth0.com',
+  VITE_AUTH0_CLIENT_ID: 'client',
+  VITE_AUTH0_AUDIENCE: 'https://api.panote.test',
+});
+
 export interface RenderOptions {
   auth?: Auth;
   fetch?: FetchLike;
   origins?: AppOrigins;
   strict?: boolean;
+  /** Wraps the router, e.g. to provide a test viewer factory. */
+  wrap?: (tree: ReactNode) => ReactNode;
 }
 
 export function renderAdmin(path: string, opts: RenderOptions = {}) {
   const auth = opts.auth ?? fakeAuth();
   const assign = vi.fn<(url: string) => void>();
   const router = createMemoryRouter(routes, { basename: '/app', initialEntries: [path] });
-  const tree = (
+  const app = (
     <AuthEnvContext
       value={{
         auth,
@@ -53,6 +70,9 @@ export function renderAdmin(path: string, opts: RenderOptions = {}) {
       <RouterProvider router={router} />
     </AuthEnvContext>
   );
-  render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
-  return { auth, assign, router };
+  const tree = (
+    <ConfigContext value={TEST_CONFIG}>{opts.wrap ? opts.wrap(app) : app}</ConfigContext>
+  );
+  const { container } = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
+  return { auth, assign, router, container };
 }
