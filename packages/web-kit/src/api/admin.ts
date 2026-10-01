@@ -94,6 +94,8 @@ export interface AdminApi {
     config: SceneConfigInput,
     ifMatch: string,
   ): Promise<{ etag: string }>;
+  /** Create-only (`If-None-Match: *`): throws `ConflictError` if the config already exists. */
+  createPanoConfig(panoId: string, config: SceneConfigInput): Promise<{ etag: string }>;
   deleteTour(tourId: string): Promise<void>;
   deletePano(panoId: string): Promise<void>;
   /** Idempotent; failures are an `ApiError`, classify them with `publishErrorOf`. */
@@ -278,6 +280,13 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
         EtagOkSchema,
         ifMatch,
       ),
+    createPanoConfig: async (panoId, config) => {
+      const path = `/api/admin/panos/${assertId(panoId, 'panoId')}/config`;
+      const res = await send('PUT', path, { body: config, headers: { 'If-None-Match': '*' } });
+      if (res.res.status === 412) throw new ConflictError(res.body);
+      if (!res.res.ok) throw new ApiError(res.res.status, res.body);
+      return parseWith(EtagOkSchema, res.url, res.body);
+    },
     deleteTour: async (tourId) => del(`/api/admin/tours/${assertId(tourId, 'tourId')}`),
     deletePano: async (panoId) => del(`/api/admin/panos/${assertId(panoId, 'panoId')}`),
     publishTour: async (tourId, req = {}) =>
