@@ -17,6 +17,8 @@ export interface Session {
   upload: UploadApi;
   /** Opens the "session ended" sign-in prompt. */
   requestSignIn(): void;
+  /** Holds the sign-in redirect until `work` settles, e.g. stashing a file that must survive it. */
+  holdSignIn(work: Promise<unknown>): void;
   signOut(): Promise<void>;
 }
 

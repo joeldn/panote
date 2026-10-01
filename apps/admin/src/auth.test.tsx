@@ -275,10 +275,12 @@ describe('session gone mid-session', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Your session has ended' });
     expect(dialog.textContent).toContain('Sign in again to continue.');
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }));
-    expect(auth.signIn).toHaveBeenCalledWith({
-      connection: 'google-oauth2',
-      returnTo: '/app/t/abc?pano=p2',
-    });
+    await waitFor(() =>
+      expect(auth.signIn).toHaveBeenCalledWith({
+        connection: 'google-oauth2',
+        returnTo: '/app/t/abc?pano=p2',
+      }),
+    );
   });
 
   it('prompts on an API 401 too', async () => {

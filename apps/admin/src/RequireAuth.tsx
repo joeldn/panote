@@ -1,6 +1,6 @@
 import { SignInModal } from '@internal/ui';
 import { signInPath, type AuthUser, type ConnectionId } from '@internal/web-kit';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
@@ -35,6 +35,8 @@ export function RequireAuth() {
   const [state, setState] = useState<GuardState>({ status: 'checking' });
   const [attempt, setAttempt] = useState(0);
   const [expired, setExpired] = useState(false);
+  // Work that has to finish before the page leaves for Auth0 (see Session.holdSignIn).
+  const [holds] = useState(() => new Set<Promise<unknown>>());
 
   useEffect(() => {
     pathRef.current = path;
@@ -70,6 +72,14 @@ export function RequireAuth() {
       createSessionUploadApi(auth, onAuthError, opts),
     ] as const;
   }, [auth, env.apiBase, env.fetch]);
+  const holdSignIn = useCallback(
+    (work: Promise<unknown>) => {
+      holds.add(work);
+      const done = () => holds.delete(work);
+      work.then(done, done);
+    },
+    [holds],
+  );
   const user = state.status === 'ready' ? state.user : null;
   const session = useMemo<Session | null>(
     () =>
@@ -78,9 +88,10 @@ export function RequireAuth() {
         api,
         upload,
         requestSignIn: () => setExpired(true),
+        holdSignIn,
         signOut: () => auth.signOut(`${origins.website}/`),
       },
-    [user, api, upload, auth, origins],
+    [user, api, upload, holdSignIn, auth, origins],
   );
 
   if (!auth.configured) {
@@ -123,7 +134,10 @@ export function RequireAuth() {
         title="Your session has ended"
         subtitle="Sign in again to continue."
         options={auth.connections}
-        onSignIn={(id) => auth.signIn({ connection: id as ConnectionId, returnTo: path })}
+        onSignIn={async (id) => {
+          await Promise.allSettled([...holds]);
+          await auth.signIn({ connection: id as ConnectionId, returnTo: path });
+        }}
         termsHref={`${origins.website}/terms`}
         privacyHref={`${origins.website}/privacy`}
       />
