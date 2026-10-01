@@ -17,5 +17,5 @@ export function Preview() {
 }
 
 export { ShareRoute as ShareModal } from './share/ShareRoute.js';
-export const InsightsModal = () => <p role="dialog">Insights</p>;
+export { InsightsRoute as InsightsModal } from './insights/InsightsRoute.js';
 export const NotFound = () => <Placeholder title="Page not found" />;
