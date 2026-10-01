@@ -107,10 +107,10 @@ describe('Dashboard', () => {
     await screen.findByRole('link', { name: 'Gone pano' });
     const img = (title: string) => card(title).querySelector('img');
     expect(img('St Lawrence Jewry')?.getAttribute('src')).toBe(
-      'https://cdn.panote.test/tiles/p1/t1-abc/preview.webp',
+      'https://cdn.panote.dev/tiles/p1/t1-abc/preview.webp',
     );
     expect(img('No preview')?.getAttribute('src')).toBe(
-      'https://cdn.panote.test/tiles/p2/0/pz/0-0.jpg',
+      'https://cdn.panote.dev/tiles/p2/0/pz/0-0.jpg',
     );
     expect(within(card('Gone pano')).getByTestId('cover-fallback')).toBeTruthy();
     expect(within(card('Empty')).getByTestId('cover-fallback')).toBeTruthy();

@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react';
-import type { AppConfig, Auth, AppOrigins, FetchLike } from '@internal/web-kit';
+import { loadConfig, type Auth, type AppOrigins, type FetchLike } from '@internal/web-kit';
 import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { vi } from 'vitest';
@@ -11,20 +11,6 @@ import { routes } from '../routes.js';
 export const LOCAL: AppOrigins = {
   website: 'http://localhost:5174',
   admin: 'http://localhost:5173',
-};
-
-export const TEST_CONFIG: AppConfig = {
-  siteOrigin: 'https://panote.test',
-  cdnBase: 'https://cdn.panote.test/',
-  apiBase: '',
-  auth0: {
-    domain: 'panote-test.auth0.com',
-    clientId: 'client',
-    audience: 'https://api.panote.test',
-    connections: ['google-oauth2'],
-    configured: true,
-  },
-  showcaseSlug: null,
 };
 
 export const USER = { sub: 'google-oauth2|1', name: 'Maya Larsson', email: 'maya@example.com' };
@@ -44,12 +30,20 @@ export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
   };
 }
 
+// The share route reads VITE_SITE_ORIGIN for its links.
+export const TEST_CONFIG = loadConfig({
+  VITE_SITE_ORIGIN: 'https://panote.dev',
+  VITE_CDN_BASE: 'https://cdn.panote.dev/',
+  VITE_AUTH0_DOMAIN: 'panote-dev.au.auth0.com',
+  VITE_AUTH0_CLIENT_ID: 'client',
+  VITE_AUTH0_AUDIENCE: 'https://api.panote.dev',
+});
+
 export interface RenderOptions {
   auth?: Auth;
   fetch?: FetchLike;
   origins?: AppOrigins;
   strict?: boolean;
-  config?: AppConfig;
 }
 
 export function renderAdmin(path: string, opts: RenderOptions = {}) {
@@ -57,19 +51,19 @@ export function renderAdmin(path: string, opts: RenderOptions = {}) {
   const assign = vi.fn<(url: string) => void>();
   const router = createMemoryRouter(routes, { basename: '/app', initialEntries: [path] });
   const tree = (
-    <ConfigContext value={opts.config ?? TEST_CONFIG}>
-      <AuthEnvContext
-        value={{
-          auth,
-          origins: opts.origins ?? LOCAL,
-          assign,
-          apiBase: '',
-          ...(opts.fetch && { fetch: opts.fetch }),
-        }}
-      >
+    <AuthEnvContext
+      value={{
+        auth,
+        origins: opts.origins ?? LOCAL,
+        assign,
+        apiBase: '',
+        ...(opts.fetch && { fetch: opts.fetch }),
+      }}
+    >
+      <ConfigContext value={TEST_CONFIG}>
         <RouterProvider router={router} />
-      </AuthEnvContext>
-    </ConfigContext>
+      </ConfigContext>
+    </AuthEnvContext>
   );
   render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
   return { auth, assign, router };
