@@ -3,7 +3,7 @@ import { isAuthError, UPLOAD_CONTENT_TYPES, validateUploadImage } from '@interna
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 
-import type { UploadTarget } from './resume-store.js';
+import { targetFromParams, type UploadTarget } from './resume-store.js';
 import { useUploads } from './upload-context.js';
 import { repickNotice } from './repick-notice.js';
 
@@ -153,11 +153,16 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
   );
 }
 
-/** `/app/new`: a new tour from one pano. `?resume=upload` is where sign-in from the landing returns. */
+/**
+ * `/app/new`: a new tour from one pano, or (from the editor) `?tour=<id>[&replace=<panoId>]`.
+ * `?resume=upload` is where sign-in from the landing returns.
+ */
 export function NewPanoOverlay() {
   const uploads = useUploads();
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  const target = targetFromParams(params);
+  const tour = target.kind === 'new-tour' ? null : params.get('tour');
   const lost = uploads.repick?.target.kind === 'new-tour' ? uploads.repick : null;
   const resume =
     params.get('resume') === 'upload' || lost
@@ -170,14 +175,16 @@ export function NewPanoOverlay() {
       : undefined;
   return (
     <UploadOverlay
-      target={{ kind: 'new-tour' }}
+      key={`${target.kind}:${tour ?? ''}`}
+      target={target}
       resume={resume}
       onClose={() => {
         uploads.clearRepick();
-        void navigate('/');
+        void navigate(tour ? `/t/${tour}` : '/');
       }}
       onStarted={({ tourId }) => {
-        if (tourId) void navigate(`/t/${tourId}`);
+        const to = tourId ?? tour;
+        if (to) void navigate(`/t/${to}`);
       }}
     />
   );

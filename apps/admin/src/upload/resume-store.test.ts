@@ -5,6 +5,7 @@ import {
   parseResumeRecord,
   readResumeRecord,
   RESUME_MAX_AGE_MS,
+  targetFromParams,
   writeResumeRecord,
 } from './resume-store.js';
 
@@ -63,5 +64,17 @@ describe('resume record', () => {
       writeResumeRecord({ fileName: 'a', target: { kind: 'new-tour' }, landed: null }),
     ).not.toThrow();
     expect(readResumeRecord()).toBeNull();
+  });
+});
+
+describe('targetFromParams', () => {
+  const t = (q: string) => targetFromParams(new URLSearchParams(q));
+  it('maps the editor links, ignoring bad ids', () => {
+    expect(t('')).toEqual({ kind: 'new-tour' });
+    expect(t('resume=upload')).toEqual({ kind: 'new-tour' });
+    expect(t('tour=tour-1')).toEqual({ kind: 'add', tourId: 'tour-1' });
+    expect(t('tour=tour-1&replace=p9')).toEqual({ kind: 'replace', panoId: 'p9' });
+    expect(t('tour=../x&replace=p9')).toEqual({ kind: 'new-tour' });
+    expect(t('tour=tour-1&replace=a/b')).toEqual({ kind: 'add', tourId: 'tour-1' });
   });
 });

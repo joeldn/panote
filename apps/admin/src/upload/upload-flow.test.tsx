@@ -212,6 +212,47 @@ describe('fresh upload from /app/new', () => {
   });
 });
 
+describe('editor links into /app/new', () => {
+  it('?tour= adds the uploaded pano to that tour and returns to its editor', async () => {
+    const { backend, router } = setup('/app/new?tour=tour-1');
+    await tick();
+    expect(screen.getByRole('dialog', { name: 'Add pano' })).toBeTruthy();
+    await pick();
+    expect(backend.state.calls.some((c) => c.url === '/api/admin/tours')).toBe(false);
+    expect(backend.presigns()[0]?.body).toEqual({ contentType: 'image/png', size: 2000 });
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+
+    backend.state.manifests = [manifest('t1-abc')];
+    FakeXhr.last.respond(200);
+    await tick(1_000);
+    expect(chipTitle()).toBe('Ready at full resolution');
+    expect(backend.writes().map((w) => w.url)).toEqual([
+      '/api/admin/panos/pano-1/config',
+      '/api/admin/tours/tour-1',
+    ]);
+  });
+
+  it('?tour=&replace= replaces that pano with a manifest.version baseline', async () => {
+    const { backend, router } = setup('/app/new?tour=tour-1&replace=pano-9');
+    backend.state.manifests = [manifest('t1-old', 'pano-9')];
+    await tick();
+    expect(screen.getByRole('dialog', { name: 'Replace image' })).toBeTruthy();
+    await pick();
+    const order = backend.state.calls.map((c) => (c.url.startsWith(TILES) ? 'manifest' : c.url));
+    expect(order).toEqual(['manifest', '/api/upload-url']);
+    expect(backend.presigns()[0]?.body).toMatchObject({ panoId: 'pano-9' });
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+  });
+
+  it('Cancel goes back to the editor', async () => {
+    const { router } = setup('/app/new?tour=tour-1');
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await tick();
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+  });
+});
+
 describe('re-upload without the file in memory', () => {
   it('a resumed upload that times out re-uploads a re-picked file over the same pano', async () => {
     sessionStorage.setItem(

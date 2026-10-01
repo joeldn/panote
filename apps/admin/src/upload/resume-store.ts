@@ -47,6 +47,15 @@ function parseMode(v: unknown): UploadMode | null {
   return null;
 }
 
+/** `/app/new?tour=<id>` adds to that tour, `&replace=<panoId>` replaces that pano's image. */
+export function targetFromParams(params: URLSearchParams): UploadTarget {
+  const tour = params.get('tour');
+  const replace = params.get('replace');
+  if (tour === null || !ID.test(tour)) return { kind: 'new-tour' };
+  if (replace !== null && ID.test(replace)) return { kind: 'replace', panoId: replace };
+  return { kind: 'add', tourId: tour };
+}
+
 /** Validates a stored record field by field; anything off reads as "no record". */
 export function parseResumeRecord(raw: string | null, now: number): ResumeRecord | null {
   if (!raw) return null;
