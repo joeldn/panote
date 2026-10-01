@@ -31,7 +31,7 @@ describe('admin routes', () => {
   it.each(['link', 'privacy', 'embed'])('opens the %s share tab over the editor', async (tab) => {
     renderAt(`/app/t/tour-1/share/${tab}`);
     expect(await editorShown()).toBeTruthy();
-    expect(screen.getByRole('dialog').textContent).toBe(`Share: ${tab}`);
+    expect(await screen.findByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
   });
 
   it('routes insights and preview', async () => {

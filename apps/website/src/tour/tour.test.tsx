@@ -245,7 +245,10 @@ describe('/s/:slug', () => {
     renderAt('/s/old-town');
     expect(await screen.findByText('2.4k')).toBeTruthy();
     expect(calls('/api/tours/tour-a/view')).toHaveLength(1);
-    expect(calls('/api/tours/tour-a/view')[0]?.[1]).toMatchObject({ method: 'POST' });
+    expect(calls('/api/tours/tour-a/view')[0]?.[1]).toMatchObject({
+      method: 'POST',
+      body: JSON.stringify({ panoId: 'square', surface: 'page' }),
+    });
   });
 
   it('likes with a stable X-Client-Id and only once', async () => {
@@ -351,6 +354,9 @@ describe('/s/:slug/embed', () => {
     expect(screen.queryByRole('button', { name: 'Like this tour' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
     expect(calls('/api/tours/tour-a/view')).toHaveLength(1);
+    expect(calls('/api/tours/tour-a/view')[0]?.[1]?.body).toBe(
+      JSON.stringify({ panoId: 'square', surface: 'embed' }),
+    );
   });
 
   it('limits ?pano= to one scene with no nav links', async () => {
@@ -379,19 +385,43 @@ describe('/s/:slug/embed', () => {
   });
 });
 
-describe('analytics hook', () => {
-  it('receives scene and hotspot events', async () => {
-    const analytics = await import('./analytics.js');
-    const track = vi.spyOn(analytics, 'trackViewerEvent');
-    renderAt('/s/old-town');
+describe('analytics beacon', () => {
+  const beacons = () =>
+    sendBeacon.mock.calls.flatMap(([url, body]) => {
+      expect(url).toBe('/api/tours/tour-a/events');
+      return (JSON.parse(String(body)) as { events: unknown[] }).events;
+    });
+  const sendBeacon = vi.fn((_url: string, _body?: BodyInit | null) => true);
+  beforeEach(() => {
+    sendBeacon.mockClear();
+    Object.defineProperty(navigator, 'sendBeacon', { configurable: true, value: sendBeacon });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'sendBeacon');
+  });
+
+  it('sends scene, hotspot and dwell events when the page hides', async () => {
+    renderAt('/s/old-town/embed');
     await shown('square');
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
-    expect(track).toHaveBeenCalledWith({ type: 'scene', tourId: 'tour-a', panoId: 'square' });
-    expect(track).toHaveBeenCalledWith({
+    window.dispatchEvent(new Event('pagehide'));
+    const events = beacons();
+    expect(events).toContainEqual({ type: 'scene', panoId: 'square', surface: 'embed' });
+    expect(events).toContainEqual({
       type: 'hotspot',
-      tourId: 'tour-a',
       panoId: 'square',
       hotspotId: 'i1',
+      surface: 'embed',
     });
+    expect(calls('/events')).toHaveLength(0);
+  });
+
+  it('sends nothing for a tour that never shows a scene', async () => {
+    failLoads = true;
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderAt('/s/old-town');
+    await unavailable();
+    window.dispatchEvent(new Event('pagehide'));
+    expect(sendBeacon).not.toHaveBeenCalled();
   });
 });

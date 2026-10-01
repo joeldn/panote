@@ -464,6 +464,9 @@ importers:
       '@fortawesome/fontawesome-free':
         specifier: 'catalog:'
         version: 6.7.2
+      '@internal/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@panote/viewer':
         specifier: workspace:*
         version: link:../viewer

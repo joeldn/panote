@@ -36,12 +36,13 @@ export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
   };
 }
 
+// The share route reads VITE_SITE_ORIGIN for its links.
 export const TEST_CONFIG: AppConfig = loadConfig({
-  VITE_SITE_ORIGIN: 'https://panote.test',
-  VITE_CDN_BASE: 'https://cdn.panote.test/',
-  VITE_AUTH0_DOMAIN: 'tenant.auth0.com',
+  VITE_SITE_ORIGIN: 'https://panote.dev',
+  VITE_CDN_BASE: 'https://cdn.panote.dev/',
+  VITE_AUTH0_DOMAIN: 'panote-dev.au.auth0.com',
   VITE_AUTH0_CLIENT_ID: 'client',
-  VITE_AUTH0_AUDIENCE: 'https://api.panote.test',
+  VITE_AUTH0_AUDIENCE: 'https://api.panote.dev',
 });
 
 export interface RenderOptions {

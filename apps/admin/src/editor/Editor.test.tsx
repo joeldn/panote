@@ -426,7 +426,7 @@ describe('editor: points, connections, views and settings', () => {
     fireEvent.change(url, { target: { value: 'https://elsewhere.example/a.jpg' } });
     fireEvent.blur(url);
     expect((await p.findByRole('status')).textContent).toContain('isn’t on the panote CDN');
-    fireEvent.change(url, { target: { value: 'https://cdn.panote.test/media/a.jpg' } });
+    fireEvent.change(url, { target: { value: 'https://cdn.panote.dev/media/a.jpg' } });
     fireEvent.blur(url);
     await waitFor(() => expect(p.queryByRole('status')).toBeNull());
     fireEvent.change(url, { target: { value: 'not a url' } });
@@ -445,7 +445,7 @@ describe('editor: points, connections, views and settings', () => {
       body: '**Tall**',
       icon: 'church',
       size: 2,
-      media: { kind: 'image', url: 'https://cdn.panote.test/media/a.jpg' },
+      media: { kind: 'image', url: 'https://cdn.panote.dev/media/a.jpg' },
     });
   });
 
