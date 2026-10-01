@@ -649,7 +649,7 @@ describe('DLQ alert email', () => {
 
   it('sends one email per batch listing every key, including a message with no object.key', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     // Filled in by the send mock: how many acks had landed by the time send ran.
     let ackedAtSend = -1;
     const send = vi.fn(async () => {
@@ -704,6 +704,25 @@ describe('DLQ alert email', () => {
     expect(msg.text).toContain('msg-alert-nokey');
     expect(msg.text).toContain('Queue: pano-uploads-dlq-dev');
     expect(msg.text).toMatch(/Time \(UTC\): \d{4}-\d\d-\d\dT[\d:.]+Z/);
+    expect(warnSpy).toHaveBeenCalledWith('DLQ alert sent for pano-uploads-dlq-dev messageId=m1');
+    for (const call of warnSpy.mock.calls) expect(call.join(' ')).not.toContain(RECIPIENT);
+  });
+
+  it('logs the send as sent with messageId=unknown when send resolves without one', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const send = vi.fn(async () => ({}) as { messageId?: string });
+    const ctx = createExecutionContext();
+    const batch = oneDlqMessage('msg-alert-no-messageid');
+
+    await worker.queue(batch, withAlert(send), ctx);
+    const result = await getQueueResult(batch, ctx);
+
+    expect(result.explicitAcks).toEqual(['msg-alert-no-messageid']);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'DLQ alert sent for pano-uploads-dlq-dev messageId=unknown',
+    );
   });
 
   it('still acks every message when send throws, and logs the error without the recipient', async () => {
