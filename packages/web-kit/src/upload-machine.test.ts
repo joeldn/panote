@@ -11,6 +11,7 @@ import {
   isReadyManifest,
   PROCESSING_GIVE_UP_MS,
   PROCESSING_TIMEOUT_MS,
+  replacedVersionOf,
   SLOW_POLL_MS,
   startUpload,
   STATUS_POLL_MS,
@@ -75,6 +76,14 @@ describe('uploadReducer', () => {
     expect(
       uploadReducer(p, { type: 'manifest', manifest: manifest('t1-a'), at: 2_000 }),
     ).toMatchObject({ phase: 'ready' });
+  });
+
+  it('replacedVersionOf names the baseline a preview replaces, only once there is one', () => {
+    expect(replacedVersionOf({ kind: 'replace', baselineVersion: 't1-old' })).toBe('t1-old');
+    // An unversioned manifest is still tiles to replace.
+    expect(replacedVersionOf({ kind: 'replace', baselineVersion: '' })).toBe('');
+    expect(replacedVersionOf({ kind: 'replace', baselineVersion: null })).toBeUndefined();
+    expect(replacedVersionOf({ kind: 'fresh' })).toBeUndefined();
   });
 
   it('isReadyManifest treats an unversioned manifest as version ""', () => {

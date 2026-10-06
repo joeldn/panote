@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 describe('fresh upload from /app/new', () => {
-  it('creates the tour, presigns, PUTs with the pinned type, polls the manifest, then adds the pano', async () => {
+  it('creates the tour, presigns, PUTs with the pinned type, adds the pano once it lands, then polls', async () => {
     const { backend, router } = setup();
     await tick();
     const file = pngFile('Town_hall.png', 8000, 4000, 4000);
@@ -105,6 +105,9 @@ describe('fresh upload from /app/new', () => {
     backend.state.manifests = [null, manifest('t1-abc')];
     xhr.respond(200);
     await tick();
+    // The scene joins the tour the moment the image lands, before any tiles exist.
+    expect(backend.manifestPolls()).toHaveLength(0);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
     expect(chipTitle()).toBe('Processing on our side');
     expect(within(chip()).getByText('Working…')).toBeTruthy();
 
@@ -113,8 +116,10 @@ describe('fresh upload from /app/new', () => {
     await tick(1_500);
     expect(chipTitle()).toBe('Ready at full resolution');
 
-    // Readiness reads bypass the HTTP cache.
+    // Readiness reads bypass the HTTP cache; once ready, the viewer's copy is refreshed.
     expect(backend.manifestPolls().every((c) => c.cache === 'no-store')).toBe(true);
+    expect(backend.manifestRefreshes()).toHaveLength(1);
+    expect(backend.writes()).toHaveLength(2);
     const [config, tour] = backend.writes();
     expect(config).toMatchObject({
       url: '/api/admin/panos/pano-1/config',
@@ -232,6 +237,8 @@ describe('fresh upload from /app/new', () => {
     expect(FakeXhr.last.aborted).toBe(true);
     expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
     expect(backend.manifestPolls()).toHaveLength(0);
+    // Nothing landed, so nothing joined the tour.
+    expect(backend.writes()).toEqual([]);
     // Re-read first: only a tour that still has no scenes is deleted.
     const tail = backend.state.calls.slice(-2).map((c) => `${c.method} ${c.url}`);
     expect(tail).toEqual(['GET /api/admin/tours/tour-1', 'DELETE /api/admin/tours/tour-1']);
@@ -693,11 +700,10 @@ describe('sign-in during an upload', () => {
     await pick(pngFile('Second.png'));
     expect(chipTitle()).toBe('Uploading panorama');
 
-    // The hidden upload's tour write needs a sign-in: it waits behind the busy chip.
-    backend.state.getTourStatus = 401;
-    backend.state.manifests = [manifest('t1-abc')];
-    await tick(5_000);
-    expect(readResumeRecord()).toMatchObject({ fileName: 'Town_hall.png' });
+    // The hidden upload's status poll needs a sign-in: it waits behind the busy chip.
+    backend.state.statusStatus = 401;
+    await tick(STATUS_POLL_MS);
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Town_hall.png', appended: true });
 
     fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
     await tick();
@@ -936,12 +942,18 @@ describe('sign-in during an upload', () => {
 
   it('a 401 while polling resumes polling after sign-in, with no file and no re-upload', async () => {
     const { backend } = await uploadThroughPut();
+    // The scene went into the tour at landing, before the session ran out.
+    expect(backend.writes().map((w) => w.url)).toEqual([
+      '/api/admin/panos/pano-1/config',
+      '/api/admin/tours/tour-1',
+    ]);
     backend.state.statusStatus = 401;
     await tick(STATUS_POLL_MS);
     expect(chipTitle()).toBe('You’ve been signed out');
     expect(readResumeRecord()).toMatchObject({
       target: { kind: 'add', tourId: 'tour-1' },
       landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+      appended: true,
     });
     fireEvent.click(within(chip()).getByRole('button', { name: 'Sign in' }));
     await tick();
@@ -957,10 +969,170 @@ describe('sign-in during an upload', () => {
     await tick(1_000);
     expect(chipTitle()).toBe('Ready at full resolution');
     expect(back.backend.presigns()).toHaveLength(0);
-    expect(back.backend.writes().map((w) => w.url)).toEqual([
+    // Already appended: the resume only polls, so a scene removed meanwhile stays removed.
+    expect(back.backend.writes()).toEqual([]);
+    expect(readResumeRecord()).toBeNull();
+  });
+});
+
+describe('the scene joins its tour when the image lands', () => {
+  const LANDED = {
+    v: 1,
+    owner: 'google-oauth2|1',
+    fileName: 'Town_hall.png',
+    target: { kind: 'add', tourId: 'tour-1' },
+    landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+  };
+  const tourPuts = (b: ReturnType<typeof fakeBackend>) =>
+    b.writes().filter((w) => w.url === '/api/admin/tours/tour-1');
+
+  it('a reload with a landed record appends at once, while it tiles, then reloads at ready', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({ ...LANDED, savedAt: Date.now() }),
+    );
+    const { backend } = setup('/app/t/tour-1');
+    await tick();
+    expect(backend.manifestPolls()).toHaveLength(0);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(chipTitle()).toBe('Processing on our side');
+
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(1_000);
+    expect(chipTitle()).toBe('Ready at full resolution');
+    expect(tourPuts(backend)).toHaveLength(1);
+    expect(backend.manifestRefreshes()).toHaveLength(1);
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('a background record appends at once too; one already appended only polls', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume.bg',
+      JSON.stringify([
+        { ...LANDED, savedAt: Date.now() },
+        {
+          ...LANDED,
+          fileName: 'Old.png',
+          landed: { panoId: 'pano-old', mode: { kind: 'fresh' } },
+          appended: true,
+          savedAt: Date.now(),
+        },
+      ]),
+    );
+    const { backend } = setup('/app/t/tour-1');
+    await tick();
+    // pano-old was appended before the reload (and may have been removed since).
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(backend.writes().map((w) => w.url)).toEqual([
       '/api/admin/panos/pano-1/config',
       '/api/admin/tours/tour-1',
     ]);
-    expect(readResumeRecord()).toBeNull();
+    // pano-1's slot is marked too, so another reload won't append it again.
+    const slots = JSON.parse(sessionStorage.getItem('panote.upload.resume.bg') ?? '[]') as Array<{
+      landed: { panoId: string };
+      appended?: boolean;
+    }>;
+    expect(slots.map((r) => [r.landed.panoId, r.appended])).toEqual([
+      ['pano-old', true],
+      ['pano-1', true],
+    ]);
+    // Hidden: the chip stays free, and both are still polled.
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+    await tick(1_000);
+    const polled = backend.manifestPolls().map((c) => c.url);
+    expect(polled.some((u) => u.includes('pano-1'))).toBe(true);
+    expect(polled.some((u) => u.includes('pano-old'))).toBe(true);
+  });
+
+  it('a 401 on the tour write at landing asks to sign in, and the resume appends', async () => {
+    const { backend } = setup();
+    await tick();
+    await pick();
+    backend.state.getTourStatus = 401;
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('You’ve been signed out');
+    expect(chip().textContent).toContain('Sign in again to add it to your tour.');
+    expect(backend.state.tour.scenes).toEqual([]);
+    const rec = readResumeRecord();
+    expect(rec).toMatchObject({ landed: { panoId: 'pano-1', mode: { kind: 'fresh' } } });
+    expect(rec).not.toHaveProperty('appended');
+
+    cleanup();
+    const back = setup('/app/t/tour-1');
+    await tick();
+    expect(back.backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(back.backend.presigns()).toHaveLength(0);
+    expect(chipTitle()).toBe('Processing on our side');
+    // A reload from here on only polls: a scene removed meanwhile stays removed.
+    expect(readResumeRecord()).toMatchObject({ landed: { panoId: 'pano-1' }, appended: true });
+    back.backend.state.manifests = [manifest('t1-abc')];
+    await tick(1_000);
+    expect(chipTitle()).toBe('Ready at full resolution');
+  });
+
+  it('a failed tour write while tiling offers Try again, which appends', async () => {
+    const { backend } = setup();
+    await tick();
+    await pick();
+    backend.state.getTourStatus = 500;
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('Couldn’t add the pano to your tour');
+
+    backend.state.getTourStatus = 200;
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Try again' }));
+    await tick();
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(chipTitle()).toBe('Processing on our side');
+  });
+
+  it('cancelling after landing leaves the scene, and the re-upload over it appends nothing new', async () => {
+    const { backend } = await uploadThroughPut();
+    expect(tourPuts(backend)).toHaveLength(1);
+    await tick(PROCESSING_TIMEOUT_MS);
+    expect(chipTitle()).toBe('Still processing');
+
+    // Re-upload cancels the stuck job and goes over the same pano.
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Re-upload' }));
+    await tick();
+    expect(backend.presigns()[1]?.body).toMatchObject({ panoId: 'pano-1' });
+    FakeXhr.last.respond(200);
+    await tick();
+    // Already in the tour: the idempotent append finds it there and writes no tour.
+    expect(tourPuts(backend)).toHaveLength(1);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(chipTitle()).toBe('Processing on our side');
+  });
+
+  it('a failed tiling keeps the scene in the tour', async () => {
+    const { backend } = await uploadThroughPut();
+    backend.state.tiling = 'failed';
+    await tick(STATUS_POLL_MS);
+    expect(chipTitle()).toBe('We couldn’t process this image');
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Dismiss' }));
+    await tick();
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(backend.state.calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('dismissing the signed-out chip of a tour write keeps the record, so sign-in still adds it', async () => {
+    const { backend } = setup();
+    await tick();
+    await pick();
+    backend.state.getTourStatus = 401;
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('You’ve been signed out');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Dismiss' }));
+    await tick();
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+    expect(readResumeRecord()).toMatchObject({ landed: { panoId: 'pano-1' } });
+
+    cleanup();
+    const back = setup('/app/t/tour-1');
+    await tick();
+    expect(back.backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
   });
 });

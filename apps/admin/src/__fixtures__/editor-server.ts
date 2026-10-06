@@ -162,6 +162,7 @@ export class FakeViewer {
   directionAtPixel = vi.fn(() => ({ ...this.pointAt }));
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
+  showPreview = vi.fn();
   dispose = vi.fn();
   onRender = () => () => {};
   project = () => ({ x: 0, y: 0, behind: false });

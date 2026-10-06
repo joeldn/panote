@@ -2,7 +2,10 @@ import type { UploadMode, UploadState } from '@internal/web-kit';
 
 import type { UploadTarget } from './resume-store.js';
 
-/** The tour/config writes after the image is ready (adding a pano only). */
+/**
+ * After the image lands: for an added pano, its config and tour write (run as soon as
+ * the PUT completes, while tiling goes on); for a replace, the reload once it's ready.
+ */
 export type FinalizeState =
   | { status: 'idle' }
   | { status: 'running' }
@@ -70,9 +73,24 @@ const failed = (title: string, note: string, actions: ChipModel['actions']): Chi
 
 const SIGNED_OUT = 'You’ve been signed out';
 
+const finalizeFailed = (f: Extract<FinalizeState, { status: 'failed' }>): ChipModel =>
+  f.auth
+    ? failed(SIGNED_OUT, 'Your photo is uploaded. Sign in again to add it to your tour.', [
+        { id: 'sign-in', label: 'Sign in' },
+      ])
+    : failed(
+        'Couldn’t add the pano to your tour',
+        f.message,
+        f.retryable ? [{ id: 'retry-finalize', label: 'Try again' }] : [],
+      );
+
 /** What the chip shows for an upload: copy, bar and the actions that apply. Pure. */
 export function chipModel(a: ActiveUpload): ChipModel | null {
   const m = a.machine;
+  // The tour write runs while tiling goes on: its failure is the one the user can act on.
+  if ((m.phase === 'processing' || m.phase === 'timed-out') && a.finalize.status === 'failed') {
+    return finalizeFailed(a.finalize);
+  }
   switch (m.phase) {
     case 'cancelled':
       return null;
@@ -115,17 +133,7 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
       };
     case 'ready': {
       const f = a.finalize;
-      if (f.status === 'failed') {
-        return f.auth
-          ? failed(SIGNED_OUT, 'Your photo is processed. Sign in again to add it to your tour.', [
-              { id: 'sign-in', label: 'Sign in' },
-            ])
-          : failed(
-              'Couldn’t add the pano to your tour',
-              f.message,
-              f.retryable ? [{ id: 'retry-finalize', label: 'Try again' }] : [],
-            );
-      }
+      if (f.status === 'failed') return finalizeFailed(f);
       if (f.status !== 'done') return processing('Almost there — adding it to your tour.');
       return {
         tone: 'ready',

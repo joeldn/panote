@@ -1,11 +1,18 @@
 import './upload.css';
 
+import type { StagePreview } from '@internal/ui';
 import {
   createUploadDeps,
+  decodePreview,
   isAuthError,
+  keepPreview,
+  probeMaxTextureSize,
   refreshManifestCache,
+  replacedVersionOf,
   startUpload,
   tilesBaseUrl,
+  type PreviewDecoder,
+  type PreviewKeeper,
   type UploadController,
   type UploadDeps,
   type UploadFileSource,
@@ -51,6 +58,7 @@ import {
   UploadEnvContext,
   UploadsContext,
   type PanoTarget,
+  type PendingUpload,
   type Uploads,
 } from './upload-context.js';
 import { UploadChip } from './UploadChip.js';
@@ -58,6 +66,13 @@ import { UploadOverlay } from './UploadOverlay.js';
 
 /** How long the "ready" chip stays up before it tidies itself away. */
 export const READY_CHIP_MS = 8_000;
+
+export const STILL_TILING_MESSAGE =
+  'This pano is still processing. You can replace its image once it’s ready.';
+
+// No Worker (jsdom, very old browsers): no preview, and nothing else changes.
+const defaultDecode: PreviewDecoder = (file, options) =>
+  typeof Worker === 'undefined' ? Promise.resolve(null) : decodePreview(file, options);
 
 type Source = Omit<UploadFileSource, 'file'> | UploadResumeSource;
 
@@ -71,6 +86,10 @@ interface Job {
   file: File | null;
   fileName: string;
   target: PanoTarget;
+  /** The pano this upload goes to, once known: the replace target, else the presigned id. */
+  panoId: string | null;
+  /** Fresh, or replace with its baseline version: known once the baseline is read. */
+  mode: UploadMode | null;
   landed: Landed | null;
   /** This upload created its tour (new-tour), so cancelling early may delete it again. */
   createdTour: boolean;
@@ -80,6 +99,12 @@ interface Job {
   waiting: boolean;
   machine: UploadState;
   finalize: FinalizeState;
+  /** Ready and wrapped up (reload key set, record cleared): no longer pending. */
+  done: boolean;
+  /** Set while the ready step runs, so it runs once. */
+  completing: boolean;
+  /** The picked file's local preview; null after a sign-in redirect (no file) or once done. */
+  preview: PreviewKeeper | null;
   ctl: UploadController | null;
 }
 
@@ -100,11 +125,30 @@ const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null)
   return p === 'ready' && a.finalize.status === 'running';
 };
 
-/** The image is in R2 and only server-side work (tiling, then the tour write) is left. */
+/**
+ * The image is in R2 and only server-side work (tiling, the tour write, the reload) is
+ * left. A failed tour write isn't: nothing retries it unless the user does, so a job
+ * dismissed in that state is dropped rather than kept hidden forever.
+ */
 const isLandedWork = (j: Job): boolean =>
   j.landed !== null &&
-  (j.machine.phase === 'processing' ||
-    (j.machine.phase === 'ready' && j.finalize.status !== 'done'));
+  j.finalize.status !== 'failed' &&
+  (j.machine.phase === 'processing' || (j.machine.phase === 'ready' && !j.done));
+
+/** Its tiler is (as far as we know) still working: a second replace would race it. */
+const isTiling = (j: Job): boolean => j.machine.phase === 'processing';
+
+const jobKey = (j: Job): string => `upload-${j.key}`;
+
+/** An upload's run options beyond its file and target. */
+interface RunOptions {
+  /** This upload created its tour (new-tour). */
+  createdTour?: boolean;
+  /** Run in the background: the chip (and whatever it shows) is left alone. */
+  bg?: boolean;
+  /** A resumed add whose config and tour write already went through. */
+  appended?: boolean;
+}
 
 // A file re-picked for a failed or timed-out upload goes over the pano it already landed as.
 function retryOver(j: Job | null, target: PanoTarget): string | null {
@@ -185,16 +229,37 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       ? { target: bootRepick.target, fileName: bootRepick.fileName, reason: 'signed-out' }
       : null,
   );
-  const [replaced, setReplaced] = useState<Record<string, string>>({});
+  const [reloadKeys, setReloadKeys] = useState<Record<string, string>>({});
   const [lastAdded, setLastAdded] = useState<Uploads['lastAdded']>(null);
+  // Bumped whenever any job changes, hidden ones included: previewFor/pendingFor read jobs.
+  const [rev, setRev] = useState(0);
+  const touch = useCallback(() => setRev((n) => n + 1), []);
 
   const fg = useRef<Job | null>(null);
   const jobs = useRef(new Set<Job>());
   const keyRef = useRef(0);
   const pending = uploadEnv.pending ?? idbPendingUploads;
-  const live = useRef({ deps, session, tilesBase, fetch: authEnv.fetch, pending, owner, pathname });
+  const live = useRef({
+    deps,
+    session,
+    tilesBase,
+    fetch: authEnv.fetch,
+    pending,
+    owner,
+    pathname,
+    uploadEnv,
+  });
   useEffect(() => {
-    live.current = { deps, session, tilesBase, fetch: authEnv.fetch, pending, owner, pathname };
+    live.current = {
+      deps,
+      session,
+      tilesBase,
+      fetch: authEnv.fetch,
+      pending,
+      owner,
+      pathname,
+      uploadEnv,
+    };
   });
 
   // One take per page load, shared: a second caller (StrictMode) gets the same answer.
@@ -208,9 +273,24 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }, [bootRepick]);
 
   /** Mirror a job into the chip if it is the foreground one. */
-  const sync = useCallback((j: Job) => {
-    if (fg.current === j) setActive(toActive(j));
-  }, []);
+  const sync = useCallback(
+    (j: Job) => {
+      if (fg.current === j) setActive(toActive(j));
+      touch();
+    },
+    [touch],
+  );
+
+  /** Forget a job for good: it stops counting as pending and its preview is freed. */
+  const drop = useCallback(
+    (j: Job) => {
+      jobs.current.delete(j);
+      j.preview?.dispose();
+      j.preview = null;
+      touch();
+    },
+    [touch],
+  );
 
   /** Make a job the chip's again (a hidden one that now needs the user), if the chip is free. */
   const surface = useCallback(
@@ -248,15 +328,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       landed: Landed | null,
       file: File | null,
       bg = false,
+      appended = false,
     ) => {
       const { owner: who, pending: store, session: s } = live.current;
       if (who === null) return;
+      const done = landed && appended ? { appended: true } : {};
       if (bg && landed && target.kind !== 'new-tour') {
-        writeBackgroundRecord({ owner: who, fileName, target, landed });
+        writeBackgroundRecord({ owner: who, fileName, target, landed, ...done });
         return;
       }
       savedBy.current = key;
-      writeResumeRecord({ owner: who, fileName, target, landed });
+      writeResumeRecord({ owner: who, fileName, target, landed, ...done });
       if (!landed && file) s.holdSignIn(store.stash(file, who).catch(() => false));
     },
     [],
@@ -277,55 +359,107 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     [forget],
   );
 
-  const finalize = useCallback(
+  const appendedOf = (j: Job): boolean => j.target.kind === 'add' && j.finalize.status === 'done';
+
+  /**
+   * The image is ready: reload whatever shows it. Runs once the scene is in the tour
+   * (an added pano) or straight away (a replace, which never touches the tour).
+   */
+  const complete = useCallback(
     async (j: Job, panoId: string, manifest: Manifest) => {
+      // A job dropped meanwhile (cancelled, or superseded by an upload over its pano) must
+      // not bump the reload key under whatever runs now.
+      if (j.done || j.completing || !jobs.current.has(j)) return;
+      // An added pano waits for its tour write; that write calls back here once it's in.
+      if (j.target.kind === 'add' && j.finalize.status !== 'done') return;
+      j.completing = true;
+      if (j.target.kind === 'replace') {
+        j.finalize = { status: 'running' };
+        sync(j);
+      }
+      const { tilesBase: base, fetch } = live.current;
+      // The CDN's max-age=30 copy would otherwise reload the old image (a replace),
+      // and an editor that looked before the tiles existed may hold a 404 (an add).
+      if (base) await refreshManifestCache(base, panoId, fetch ? { fetch } : {}).catch(() => {});
+      if (!jobs.current.has(j)) return;
+      setReloadKeys((r) => ({ ...r, [panoId]: manifest.version ?? `${Date.now()}` }));
+      forgetFor(j);
+      j.finalize = { status: 'done' };
+      j.done = true;
+      // The viewer keeps what it was shown until the tiles take over; the rest can go.
+      j.preview?.dispose();
+      j.preview = null;
+      if (fg.current === j) sync(j);
+      else drop(j);
+    },
+    [sync, drop, forgetFor],
+  );
+
+  /**
+   * An added pano's config (create-only) and tour append, run the moment the image lands
+   * so the scene is editable while it tiles. Idempotent: a resume or retry runs it again.
+   */
+  const append = useCallback(
+    async (j: Job) => {
+      if (j.target.kind !== 'add' || !j.landed) return;
+      if (j.finalize.status === 'running' || j.finalize.status === 'done') return;
+      const { tourId } = j.target;
+      const { panoId } = j.landed;
       j.finalize = { status: 'running' };
       sync(j);
-      const { session: s, tilesBase: base, fetch } = live.current;
       try {
-        if (j.target.kind === 'replace') {
-          // The CDN's max-age=30 copy would otherwise reload the old image.
-          if (base) {
-            await refreshManifestCache(base, panoId, fetch ? { fetch } : {}).catch(() => {});
-          }
-          setReplaced((r) => ({ ...r, [panoId]: manifest.version ?? `${Date.now()}` }));
-        } else {
-          const title = titleFromFileName(j.fileName, 'Untitled pano');
-          await addPanoToTour(s.api, j.target.tourId, panoId, title);
-          setLastAdded({ tourId: j.target.tourId, panoId });
-        }
-        forgetFor(j);
+        const title = titleFromFileName(j.fileName, 'Untitled pano');
+        await addPanoToTour(live.current.session.api, tourId, panoId, title);
         j.finalize = { status: 'done' };
-        if (fg.current === j) sync(j);
-        else jobs.current.delete(j);
+        setLastAdded({ tourId, panoId });
+        // A 401 elsewhere (a status poll) may have saved this job's record while the write
+        // was out: mark it appended, so the resume doesn't add back a scene removed since.
+        if (j.bg) {
+          if (readBackgroundRecords().some((r) => r.landed.panoId === panoId)) {
+            persist(j.key, j.fileName, j.target, j.landed, null, true, true);
+          }
+        } else if (savedBy.current === j.key) {
+          persist(j.key, j.fileName, j.target, j.landed, null, false, true);
+        }
+        sync(j);
+        if (j.machine.phase === 'ready') await complete(j, j.machine.panoId, j.machine.manifest);
       } catch (e) {
         j.finalize = finalizeFailure(e);
         if (j.finalize.auth) persist(j.key, j.fileName, j.target, j.landed, null, j.bg);
         else forgetFor(j);
         if (fg.current === j) sync(j);
-        else surface(j);
+        else if (jobs.current.has(j)) surface(j);
       }
     },
-    [sync, surface, persist, forgetFor],
+    [sync, surface, persist, forgetFor, complete],
   );
 
   const onMachine = useCallback(
     (j: Job, s: UploadState) => {
       j.machine = s;
+      if ('mode' in s && s.mode) j.mode = s.mode;
+      if ('panoId' in s && s.panoId !== null) j.panoId = s.panoId;
       if (s.phase === 'processing') j.landed = { panoId: s.panoId, mode: s.mode };
       if (s.phase === 'failed' && s.stage === 'auth') {
         const landed = s.resumable && s.panoId ? { panoId: s.panoId, mode: s.resumable } : null;
-        persist(j.key, j.fileName, j.target, landed, j.file, j.bg);
+        persist(j.key, j.fileName, j.target, landed, j.file, j.bg, appendedOf(j));
       } else if (s.phase === 'failed' || s.phase === 'timed-out') {
         // Done with, short of a user retry: a reload must not run it again.
         forgetFor(j);
       }
       if (fg.current === j) sync(j);
       else if (s.phase === 'failed' || s.phase === 'timed-out') surface(j);
-      else if (s.phase === 'cancelled') jobs.current.delete(j);
-      if (s.phase === 'ready') void finalize(j, s.panoId, s.manifest);
+      else if (s.phase === 'cancelled') drop(j);
+      else touch();
+      if (s.phase === 'cancelled') {
+        j.preview?.dispose();
+        j.preview = null;
+      }
+      // Landed: the scene joins its tour now, while it tiles (an added pano only).
+      if (s.phase === 'processing' && j.finalize.status === 'idle') void append(j);
+      if (s.phase === 'ready') void complete(j, s.panoId, s.manifest);
     },
-    [sync, surface, persist, forgetFor, finalize],
+    [sync, surface, persist, forgetFor, drop, touch, append, complete],
   );
 
   const run = useCallback(
@@ -334,28 +468,51 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       fileName: string,
       target: PanoTarget,
       source: Source,
-      createdTour = false,
-      /** Run in the background: the chip (and whatever it shows) is left alone. */
-      bg = false,
+      opts: RunOptions = {},
     ) => {
+      const { createdTour = false, bg = false, appended = false } = opts;
       const d = live.current.deps;
       if (!d) throw new Error('Uploads aren’t configured in this build.');
+      const resume = 'resume' in source ? source.resume : null;
+      const panoId =
+        resume?.panoId ?? ('replacePanoId' in source ? (source.replacePanoId ?? null) : null);
       const prev = fg.current;
+      // The same file again (Try again): its preview carries over rather than decoding twice.
+      let preview: PreviewKeeper | null = null;
+      if (prev && !bg && file && prev.file === file && prev.preview) {
+        preview = prev.preview;
+        prev.preview = null;
+      }
       if (prev && !bg) {
         prev.ctl?.cancel();
-        jobs.current.delete(prev);
+        drop(prev);
+      }
+      // One machine per pano: a hidden one still watching it (timed out, say) would take
+      // this upload's tiles for its own.
+      if (panoId !== null && !resume) {
+        for (const o of jobs.current) {
+          if (o.panoId !== panoId) continue;
+          o.ctl?.cancel();
+          drop(o);
+        }
       }
       const j: Job = {
         key: ++keyRef.current,
         file,
         fileName,
         target,
-        landed: 'resume' in source ? source.resume : null,
+        panoId,
+        mode: resume?.mode ?? null,
+        landed: resume,
         createdTour,
         bg,
         waiting: false,
         machine: { phase: 'preparing', mode: null },
-        finalize: { status: 'idle' },
+        finalize:
+          resume && appended && target.kind === 'add' ? { status: 'done' } : { status: 'idle' },
+        done: false,
+        completing: false,
+        preview,
         ctl: null,
       };
       jobs.current.add(j);
@@ -363,13 +520,30 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         fg.current = j;
         setActive(toActive(j));
       }
+      if (file && !preview) {
+        const { uploadEnv: env } = live.current;
+        const keeper = keepPreview(file, {
+          decode: env.decodePreview ?? defaultDecode,
+          maxTextureSize: env.maxTextureSize ?? probeMaxTextureSize(),
+        });
+        j.preview = keeper;
+        void keeper.ready.then((ok) => {
+          // Whichever job holds it now: Try again may have carried it over to a new one.
+          const owner = ok ? [...jobs.current].find((o) => o.preview === keeper) : undefined;
+          if (!owner) return;
+          // Full-size bitmaps stay up for the newest preview only; older ones re-decode their stash.
+          for (const o of jobs.current) if (o !== owner) o.preview?.release();
+          touch();
+        });
+      }
       const onChange = (s: UploadState) => onMachine(j, s);
       j.ctl =
         'resume' in source
           ? startUpload(d, { ...source, onChange })
           : startUpload(d, { ...source, file: file as File, onChange });
+      touch();
     },
-    [onMachine],
+    [onMachine, drop, touch],
   );
 
   const sourceFor = (target: PanoTarget, landedPanoId: string | null): Source => {
@@ -381,6 +555,15 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const begin = useCallback<Uploads['begin']>(
     async (file, target) => {
       if (isInFlight(fg.current)) throw new Error('An upload is already in progress.');
+      // Its tiler would race this one's, and the baseline (so the preview and the
+      // readiness check) would be the first upload's tiles. Timed-out jobs don't count:
+      // re-uploading over a stuck pano is the way out, and run() stops watching it.
+      if (target.kind === 'replace') {
+        const panoId = target.panoId;
+        if ([...jobs.current].some((j) => j.panoId === panoId && isTiling(j))) {
+          throw new Error(STILL_TILING_MESSAGE);
+        }
+      }
       const { deps: d, session: s } = live.current;
       if (!d) throw new Error('Uploads aren’t configured in this build.');
       let panoTarget: PanoTarget;
@@ -401,7 +584,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       setRepick(null);
       setPicker(null);
       const over = retryOver(fg.current, panoTarget);
-      run(file, file.name, panoTarget, sourceFor(panoTarget, over), target.kind === 'new-tour');
+      run(file, file.name, panoTarget, sourceFor(panoTarget, over), {
+        createdTour: target.kind === 'new-tour',
+      });
       return { tourId: panoTarget.kind === 'add' ? panoTarget.tourId : null };
     },
     [run, persist, forget],
@@ -427,17 +612,19 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const j = fg.current;
     release();
     // Only this job's record: a waiting job release() just showed may have saved its own.
-    if (j) forgetFor(j);
-    else forget();
+    // A tour write that needs a sign-in keeps it, so the next sign-in still adds the pano.
+    const needsSignIn = j?.finalize.status === 'failed' && j.finalize.auth;
+    if (j && !needsSignIn) forgetFor(j);
+    else if (!j) forget();
     if (!j) return;
     // Hidden, not stopped: tiling and the tour write carry on so the pano doesn't go missing.
     if (isLandedWork(j)) return;
     j.ctl?.cancel();
-    jobs.current.delete(j);
+    drop(j);
     if (!j.landed && j.createdTour && j.target.kind === 'add') {
       void discardEmptyTour(j.target.tourId);
     }
-  }, [release, forget, forgetFor, discardEmptyTour]);
+  }, [release, forget, forgetFor, discardEmptyTour, drop]);
 
   const onAction = (id: ChipActionId) => {
     const j = fg.current;
@@ -452,7 +639,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         }
         return;
       case 'retry-finalize':
-        if (j.machine.phase === 'ready') void finalize(j, j.machine.panoId, j.machine.manifest);
+        if (j.target.kind === 'add') void append(j);
+        else if (j.machine.phase === 'ready')
+          void complete(j, j.machine.panoId, j.machine.manifest);
         return;
       case 'sign-in':
         session.requestSignIn();
@@ -474,7 +663,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const background = (r: BackgroundRecord) => {
       if (r.target.kind !== 'new-tour' && live.current.deps) {
-        run(null, r.fileName, r.target, { resume: r.landed }, false, true);
+        run(null, r.fileName, r.target, { resume: r.landed }, { bg: true, appended: !!r.appended });
       }
     };
     for (const r of bootBg) {
@@ -494,7 +683,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       background(moved);
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
-        run(null, rec.fileName, rec.target, { resume: rec.landed });
+        run(null, rec.fileName, rec.target, { resume: rec.landed }, { appended: !!rec.appended });
+        // The record is this job's: its append marks it, and only it clears it.
+        savedBy.current = keyRef.current;
       }
     } else if (rec.target.kind === 'new-tour' && pathname !== '/new') {
       void navigate('/new?resume=upload');
@@ -507,7 +698,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const all = jobs.current;
     return () => {
-      for (const j of all) j.ctl?.cancel();
+      for (const j of all) {
+        j.ctl?.cancel();
+        j.preview?.dispose();
+      }
       all.clear();
       fg.current = null;
     };
@@ -527,13 +721,19 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const phase = active?.machine.phase;
+  // Closing the tab mid PUT loses the upload; mid tour write (any job, hidden ones too)
+  // it leaves the landed pano out of its tour.
   useEffect(() => {
-    if (phase !== 'preparing' && phase !== 'upload') return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    const warn = (e: BeforeUnloadEvent) => {
+      const phase = fg.current?.machine.phase;
+      const appending = [...jobs.current].some(
+        (j) => j.target.kind === 'add' && j.finalize.status === 'running',
+      );
+      if (phase === 'preparing' || phase === 'upload' || appending) e.preventDefault();
+    };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [phase]);
+  }, []);
 
   const model = active ? chipModel(active) : null;
   const tone = model?.tone;
@@ -541,14 +741,43 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (tone !== 'ready') return;
     const t = setTimeout(() => {
       const j = fg.current;
-      if (j) jobs.current.delete(j);
+      if (j) drop(j);
       release();
     }, READY_CHIP_MS);
     return () => clearTimeout(t);
-  }, [tone, release]);
+  }, [tone, release, drop]);
 
-  const value = useMemo<Uploads>(
-    () => ({
+  const value = useMemo<Uploads>(() => {
+    // Newest first: a retry's job supersedes the one it replaced.
+    const current = () => [...jobs.current].reverse().filter((j) => !j.done);
+    const previewFor = (panoId: string): StagePreview | null => {
+      const j = current().find((x) => x.panoId === panoId && x.machine.phase !== 'cancelled');
+      const keeper = j?.preview;
+      // A replace's preview waits for its baseline: without it the viewer can't tell
+      // the old tiles from the new ones.
+      if (!j?.mode || !keeper?.available) return null;
+      const replaces = replacedVersionOf(j.mode);
+      return {
+        panoId,
+        key: jobKey(j),
+        source: () => keeper.next(),
+        ...(replaces !== undefined && { replacesVersion: replaces }),
+      };
+    };
+    const pendingFor = (tourId: string): PendingUpload[] =>
+      current()
+        .reverse()
+        .filter((j) => j.target.tourId === tourId && j.machine.phase !== 'cancelled')
+        .map((j) => ({
+          key: jobKey(j),
+          target: j.target,
+          fileName: j.fileName,
+          panoId: j.panoId,
+          machine: j.machine,
+          finalize: j.finalize,
+          hasPreview: j.preview?.available ?? false,
+        }));
+    return {
       active,
       busy: isInFlight(active),
       begin,
@@ -559,11 +788,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         setRepick(null);
       },
       takePendingFile,
-      reloadKeyFor: (panoId) => replaced[panoId],
+      reloadKeyFor: (panoId) => reloadKeys[panoId],
       lastAdded,
-    }),
-    [active, begin, repick, forget, takePendingFile, replaced, lastAdded],
-  );
+      previewFor,
+      pendingFor,
+    };
+    // rev: the jobs behind previewFor and pendingFor changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, begin, repick, forget, takePendingFile, reloadKeys, lastAdded, rev]);
 
   const closePicker = () => {
     if (repick) value.clearRepick();

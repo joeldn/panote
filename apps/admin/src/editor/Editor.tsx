@@ -189,6 +189,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const scene = currentId ? docs.scenes[currentId] : undefined;
   const sceneConfig: ConfigState | null = scene?.kind === 'config' ? scene : null;
   const cfg = sceneConfig?.current ?? null;
+  const reloadKey = currentId ? (uploads.reloadKeyFor(currentId) ?? '') : '';
+  // A scene joins the tour as soon as its image lands, so its tiles may not exist yet:
+  // the note is for this pano at this reload key, and the reload once they're ready clears it.
+  const loadKey = `${currentId ?? ''}\n${reloadKey}`;
 
   const select = (panoId: string) => {
     setActivePoint(null);
@@ -259,14 +263,15 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           className="ed-stage"
           baseUrl={tilesBaseUrl(config)}
           panoId={currentId}
-          reloadKey={uploads.reloadKeyFor(currentId) ?? ''}
+          reloadKey={reloadKey}
+          preview={uploads.previewFor(currentId)}
           {...(cfg.initialView && { view: cfg.initialView })}
           north={cfg.north ?? 0}
           {...(createViewer && { createViewer })}
           onViewer={setViewer}
           onLoadError={(err) => {
             console.error('pano load failed', err);
-            setFailedLoad(currentId);
+            setFailedLoad(loadKey);
           }}
           aria-label={`${tour.title}: ${cfg.title}`}
         >
@@ -317,7 +322,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           )}
         </div>
       )}
-      {failedLoad === currentId && cfg && (
+      {failedLoad === loadKey && cfg && (
         <p className="ed-stage-note" role="status">
           This pano’s tiles aren’t ready yet. They appear once processing finishes.
         </p>

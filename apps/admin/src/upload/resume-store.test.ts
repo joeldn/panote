@@ -49,6 +49,15 @@ describe('resume record', () => {
     });
   });
 
+  it('keeps appended only as true, and only on a landed record', () => {
+    expect(parseResumeRecord(raw({ appended: true }), NOW)?.appended).toBe(true);
+    expect(parseResumeRecord(raw(), NOW)).not.toHaveProperty('appended');
+    expect(parseResumeRecord(raw({ appended: 'yes' }), NOW)).not.toHaveProperty('appended');
+    expect(parseResumeRecord(raw({ appended: true, landed: null }), NOW)).not.toHaveProperty(
+      'appended',
+    );
+  });
+
   it('keeps the tour a replace target belongs to', () => {
     const target = { kind: 'replace', panoId: 'p9', tourId: 'tour-2' };
     expect(parseResumeRecord(raw({ target }), NOW)?.target).toEqual(target);

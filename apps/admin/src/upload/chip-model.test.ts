@@ -70,6 +70,34 @@ describe('chipModel', () => {
     expect(actions(signedOut)).toEqual(['sign-in']);
   });
 
+  it('processing after the tour write still reads as processing; its failure shows at once', () => {
+    const processing: UploadState = {
+      phase: 'processing',
+      mode: { kind: 'fresh' },
+      panoId: 'p1',
+      startedAt: 0,
+    };
+    for (const status of ['running', 'done'] as const) {
+      expect(chipModel(active(processing, { finalize: { status } }))?.title).toBe(
+        'Processing on our side',
+      );
+    }
+    const failedWrite: FinalizeState = {
+      status: 'failed',
+      auth: false,
+      message: 'This tour no longer exists.',
+      retryable: true,
+    };
+    expect(chipModel(active(processing, { finalize: failedWrite }))).toMatchObject({
+      title: 'Couldn’t add the pano to your tour',
+      note: 'This tour no longer exists.',
+    });
+    const timedOut: UploadState = { ...processing, phase: 'timed-out', checking: true };
+    expect(actions(active(timedOut, { finalize: { ...failedWrite, auth: true } }))).toEqual([
+      'sign-in',
+    ]);
+  });
+
   it('timed-out offers a re-poll and a re-upload (a re-pick when the file is gone)', () => {
     const t: UploadState = {
       phase: 'timed-out',
