@@ -94,11 +94,14 @@ export {
 export {
   canRetryPoll,
   initialUploadState,
+  isPolling,
   isReadyManifest,
   isTerminal,
   MANIFEST_POLL_INITIAL_MS,
   MANIFEST_POLL_MAX_MS,
+  PROCESSING_GIVE_UP_MS,
   PROCESSING_TIMEOUT_MS,
+  SLOW_POLL_MS,
   startUpload,
   STATUS_POLL_MS,
   uploadReducer,
@@ -136,3 +139,25 @@ export {
 } from './app-links.js';
 export { MAX_TOUR_SCENES } from '@internal/contracts';
 export { EDITOR_DRAFT_PREFIX, sweepEditorDrafts } from './drafts.js';
+export { decodePreview, type DecodePreviewOptions, type WorkerLike } from './preview/client.js';
+export {
+  closePreview,
+  STASH_SIZE,
+  type DecodedPreview,
+  type PreviewStats,
+  type ResizeMethod,
+} from './preview/decode.js';
+export {
+  MAX_PATCH_SIZE,
+  PATCH_GUTTER,
+  PHONE_FULL_DECODE_MAX_PIXELS,
+  PREVIEW_TIERS,
+  previewSize,
+  readDeviceHints,
+  selectPreviewTier,
+  type DeviceHints,
+  type PreviewLimits,
+  type PreviewPatch,
+  type PreviewSource,
+  type PreviewTier,
+} from './preview/plan.js';

@@ -71,9 +71,33 @@ describe('chipModel', () => {
   });
 
   it('timed-out offers a re-poll and a re-upload (a re-pick when the file is gone)', () => {
-    const t = { phase: 'timed-out', mode: { kind: 'fresh' }, panoId: 'p1' } as UploadState;
+    const t: UploadState = {
+      phase: 'timed-out',
+      mode: { kind: 'fresh' },
+      panoId: 'p1',
+      startedAt: 0,
+      checking: true,
+    };
     expect(actions(active(t))).toEqual(['retry-poll', 'retry-upload']);
     expect(actions(active(t, { hasFile: false }))).toEqual(['retry-poll', 'repick']);
+  });
+
+  it('timed-out says it keeps checking until the give-up cap, then asks the user', () => {
+    const t: UploadState = {
+      phase: 'timed-out',
+      mode: { kind: 'fresh' },
+      panoId: 'p1',
+      startedAt: 0,
+      checking: true,
+    };
+    expect(chipModel(active(t))).toMatchObject({
+      title: 'Still processing',
+      note: 'Taking longer than usual — we’ll keep checking.',
+    });
+    expect(chipModel(active({ ...t, checking: false }))?.note).toBe(
+      'This is taking longer than usual. Check again, or upload the image again.',
+    );
+    expect(actions(active({ ...t, checking: false }))).toEqual(['retry-poll', 'retry-upload']);
   });
 
   it.each([

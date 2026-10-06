@@ -3,8 +3,12 @@ import type { Manifest, PanoStatus, TilingStatus } from '@internal/contracts';
 import type { UploadUrlOk } from './api/upload.js';
 import { isAuthError } from './auth.js';
 
-/** Processing gives up (timed-out, with retry) this long after the PUT completes. */
+/** Processing shows timed-out (still slow-polling) this long after the PUT completes. */
 export const PROCESSING_TIMEOUT_MS = 10 * 60_000;
+/** Timed-out stops polling for good this long after the PUT completes. */
+export const PROCESSING_GIVE_UP_MS = 60 * 60_000;
+/** Manifest and status poll interval once timed-out. */
+export const SLOW_POLL_MS = 30_000;
 /** How often the pano status route is checked for `tiling: 'failed'`. */
 export const STATUS_POLL_MS = 15_000;
 export const MANIFEST_POLL_INITIAL_MS = 1_000;
@@ -40,7 +44,14 @@ export type UploadState =
       /** Set when the image already landed: `retryPoll()` resumes polling with this mode. */
       resumable?: UploadMode;
     }
-  | { phase: 'timed-out'; mode: UploadMode; panoId: string }
+  | {
+      phase: 'timed-out';
+      mode: UploadMode;
+      panoId: string;
+      startedAt: number;
+      /** True while slow-polling; false once `PROCESSING_GIVE_UP_MS` has passed. */
+      checking: boolean;
+    }
   | { phase: 'cancelled'; panoId: string | null };
 
 export type UploadPhase = UploadState['phase'];
@@ -68,6 +79,10 @@ export const isTerminal = (s: UploadState): boolean =>
 /** Whether `retryPoll()` can pick this state back up. */
 export const canRetryPoll = (s: UploadState): boolean =>
   s.phase === 'timed-out' || (s.phase === 'failed' && s.resumable !== undefined);
+
+/** Whether the machine is polling: processing, or timed-out before the give-up cap. */
+export const isPolling = (s: UploadState): boolean =>
+  s.phase === 'processing' || (s.phase === 'timed-out' && s.checking);
 
 const panoIdOf = (s: UploadState): string | null => ('panoId' in s ? s.panoId : null);
 
@@ -126,7 +141,12 @@ export function uploadReducer(state: UploadState, event: UploadEvent): UploadSta
         return { phase: 'processing', mode: state.mode, panoId: state.panoId, startedAt: event.at };
       }
       return state;
-    case 'processing': {
+    case 'processing':
+    case 'timed-out': {
+      if (state.phase === 'timed-out' && event.type === 'retry-poll') {
+        return { phase: 'processing', mode: state.mode, panoId: state.panoId, startedAt: event.at };
+      }
+      if (state.phase === 'timed-out' && !state.checking) return state;
       if (event.type === 'manifest' && isReadyManifest(state.mode, event.manifest)) {
         return { phase: 'ready', panoId: state.panoId, manifest: event.manifest };
       }
@@ -147,19 +167,19 @@ export function uploadReducer(state: UploadState, event: UploadEvent): UploadSta
           resumable: state.mode,
         };
       }
-      if (
-        (event.type === 'manifest' || event.type === 'status' || event.type === 'tick') &&
-        event.at - state.startedAt >= PROCESSING_TIMEOUT_MS
-      ) {
-        return { phase: 'timed-out', mode: state.mode, panoId: state.panoId };
+      if (event.type !== 'manifest' && event.type !== 'status' && event.type !== 'tick') {
+        return state;
+      }
+      const elapsed = event.at - state.startedAt;
+      const { mode, panoId, startedAt } = state;
+      if (elapsed >= PROCESSING_GIVE_UP_MS) {
+        return { phase: 'timed-out', mode, panoId, startedAt, checking: false };
+      }
+      if (state.phase === 'processing' && elapsed >= PROCESSING_TIMEOUT_MS) {
+        return { phase: 'timed-out', mode, panoId, startedAt, checking: true };
       }
       return state;
     }
-    case 'timed-out':
-      if (event.type === 'retry-poll') {
-        return { phase: 'processing', mode: state.mode, panoId: state.panoId, startedAt: event.at };
-      }
-      return state;
     case 'failed':
       if (event.type === 'retry-poll' && state.resumable && state.panoId !== null) {
         const { resumable: mode, panoId } = state;
@@ -220,7 +240,7 @@ export interface UploadController {
   getState(): UploadState;
   /** From `timed-out`, or `failed` at stage `auth` after re-auth: poll again for a full window. */
   retryPoll(): void;
-  /** Poll right away, e.g. when a backgrounded tab (with throttled timers) is shown again. */
+  /** Poll right away while polling, e.g. when a backgrounded tab (throttled timers) is shown again. */
   pollNow(): void;
   cancel(): void;
   /** Settles with the terminal state: ready, failed or cancelled. */
@@ -231,7 +251,8 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
 
 /**
  * Presign, PUT with progress, then poll the manifest (backoff 1s→5s) and the
- * pano status (every 15s). Driven by XHR events and timers only, never rAF.
+ * pano status (every 15s). Once timed-out, both poll every 30s until the
+ * give-up cap. Driven by XHR events and timers only, never rAF.
  */
 export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadController {
   const timers = deps.timers ?? defaultTimers;
@@ -243,15 +264,19 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
   const handles = new Set<unknown>();
   // Set while polling: runs both polls now instead of at their next scheduled slot.
   let kickPolls: (() => void) | null = null;
+  // Set while polling: moves a poll that is in flight (maybe hung) onto the slow schedule.
+  let enterSlow: (() => void) | null = null;
   let resolveSettled!: (s: UploadState) => void;
   const settled = new Promise<UploadState>((r) => (resolveSettled = r));
 
   const dispatch = (event: UploadEvent): void => {
     const next = uploadReducer(state, event);
     if (next === state) return;
-    const wasPolling = state.phase === 'processing';
+    const wasPolling = isPolling(state);
+    const wasProcessing = state.phase === 'processing';
     state = next;
-    if (wasPolling && state.phase !== 'processing') stopPolling();
+    if (wasPolling && !isPolling(state)) stopPolling();
+    if (wasProcessing && isPolling(state) && state.phase === 'timed-out') enterSlow?.();
     if (isTerminal(state)) abort.abort();
     opts.onChange?.(state);
     if (isTerminal(state)) resolveSettled(state);
@@ -271,6 +296,7 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
     handles.clear();
     pollAbort.abort();
     kickPolls = null;
+    enterSlow = null;
   }
 
   function startPolling(): void {
@@ -278,50 +304,62 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
     const signal = pollAbort.signal;
     const panoId = (state as Extract<UploadState, { phase: 'processing' }>).panoId;
     let delay = MANIFEST_POLL_INITIAL_MS;
+    const slow = (): boolean => phase() === 'timed-out';
     let manifestTimer: unknown = null;
     let manifestInFlight = false;
+    // Bumped to drop an in-flight request; its result and cleanup are ignored.
+    let manifestGen = 0;
+    let manifestReq: AbortController | null = null;
 
     const pollManifest = async (): Promise<void> => {
       if (signal.aborted) return;
+      const gen = ++manifestGen;
+      const req = new AbortController();
+      const onStop = (): void => req.abort();
+      signal.addEventListener('abort', onStop, { once: true });
+      manifestReq = req;
       manifestTimer = null;
       manifestInFlight = true;
       try {
-        const manifest = await deps.fetchManifest(panoId, { signal });
-        if (signal.aborted) return;
+        const manifest = await deps.fetchManifest(panoId, { signal: req.signal });
+        if (req.signal.aborted || gen !== manifestGen) return;
         dispatch({ type: 'manifest', manifest, at: timers.now() });
       } catch {
-        if (signal.aborted) return;
+        if (req.signal.aborted || gen !== manifestGen) return;
         // A failed poll is not a failed upload; the timeout bounds retries.
         dispatch({ type: 'tick', at: timers.now() });
       } finally {
-        manifestInFlight = false;
+        signal.removeEventListener('abort', onStop);
+        if (gen === manifestGen) manifestInFlight = false;
       }
-      if (signal.aborted || phase() !== 'processing') return;
+      if (signal.aborted || gen !== manifestGen || !isPolling(state)) return;
       delay = Math.min(MANIFEST_POLL_MAX_MS, delay * MANIFEST_POLL_FACTOR);
-      manifestTimer = later(() => void pollManifest(), delay);
+      manifestTimer = later(() => void pollManifest(), slow() ? SLOW_POLL_MS : delay);
     };
 
     let statusTimer: unknown = null;
     let statusInFlight = false;
+    let statusGen = 0;
 
     const pollStatus = async (): Promise<void> => {
       if (signal.aborted) return;
+      const gen = ++statusGen;
       statusTimer = null;
       statusInFlight = true;
       try {
         const { tiling } = await deps.getPanoStatus(panoId);
-        if (signal.aborted) return;
+        if (signal.aborted || gen !== statusGen) return;
         dispatch({ type: 'status', tiling, at: timers.now() });
       } catch (e) {
-        if (signal.aborted) return;
+        if (signal.aborted || gen !== statusGen) return;
         // Polling can't continue without a session; the image itself is safe.
         if (isAuthError(e)) dispatch({ type: 'auth-required', message: messageOf(e) });
         else dispatch({ type: 'tick', at: timers.now() });
       } finally {
-        statusInFlight = false;
+        if (gen === statusGen) statusInFlight = false;
       }
-      if (signal.aborted || phase() !== 'processing') return;
-      statusTimer = later(() => void pollStatus(), STATUS_POLL_MS);
+      if (signal.aborted || gen !== statusGen || !isPolling(state)) return;
+      statusTimer = later(() => void pollStatus(), slow() ? SLOW_POLL_MS : STATUS_POLL_MS);
     };
 
     const cancelTimer = (h: unknown): void => {
@@ -341,10 +379,25 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
       }
     };
 
+    enterSlow = () => {
+      if (manifestInFlight) {
+        manifestGen++;
+        manifestReq?.abort();
+        manifestInFlight = false;
+        manifestTimer = later(() => void pollManifest(), SLOW_POLL_MS);
+      }
+      if (statusInFlight) {
+        statusGen++;
+        statusInFlight = false;
+        statusTimer = later(() => void pollStatus(), SLOW_POLL_MS);
+      }
+    };
+
     manifestTimer = later(() => void pollManifest(), MANIFEST_POLL_INITIAL_MS);
     statusTimer = later(() => void pollStatus(), STATUS_POLL_MS);
-    // Fires even if a poll request hangs; the reducer compares timestamps.
+    // Fire even if a poll request hangs; the reducer compares timestamps.
     later(() => dispatch({ type: 'tick', at: timers.now() }), PROCESSING_TIMEOUT_MS);
+    later(() => dispatch({ type: 'tick', at: timers.now() }), PROCESSING_GIVE_UP_MS);
   }
 
   const run = async (): Promise<void> => {
@@ -407,11 +460,13 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
     getState: () => state,
     retryPoll: () => {
       if (!canRetryPoll(state)) return;
+      // Slow polls may still be running from timed-out: replace them, never add more.
+      stopPolling();
       dispatch({ type: 'retry-poll', at: timers.now() });
       if (phase() === 'processing') startPolling();
     },
     pollNow: () => {
-      if (phase() !== 'processing') return;
+      if (!isPolling(state)) return;
       // A throttled timeout timer may be late; the reducer compares timestamps.
       dispatch({ type: 'tick', at: timers.now() });
       kickPolls?.();
