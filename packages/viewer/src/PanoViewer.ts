@@ -8,6 +8,8 @@ import {
   type Mat4,
 } from './render/projection.js';
 import { TileLayer } from './tile-layer.js';
+import { EquirectLayer, closePreviewSource, type PreviewSource } from './equirect-layer.js';
+import type { DrawItem } from './render/gl-renderer.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
@@ -45,6 +47,11 @@ export class PanoViewer implements ControlHost {
   // legitimately be in flight more than once — a superseded load is still
   // holding a layer that has to be torn down.
   private pendingLayers = new Set<TileLayer>();
+  private preview: EquirectLayer | undefined;
+  private previewPano: string | undefined;
+  // True once tiles for the preview's pano are on screen: it is then only an
+  // underlay, disposed at the next tiles-settled.
+  private previewUnderlay = false;
   private raf = 0;
   private dirty = true;
   private wasPending = false;
@@ -221,6 +228,8 @@ export class PanoViewer implements ControlHost {
     // screen before it was called.
     this.layer?.dispose();
     this.layer = layer;
+    if (this.preview && this.previewPano === pano) this.previewUnderlay = true;
+    else this.disposePreview();
     this.home = {
       yaw: this.target.yaw,
       pitch: this.target.pitch,
@@ -232,6 +241,43 @@ export class PanoViewer implements ControlHost {
     this.dirty = true;
     this.emitter.emit('ready', manifest);
     this.emitter.emit('scene-change', manifest.pano);
+  }
+
+  /** Show a local decode now, keeping the camera and superseding any load in flight.
+   *  A later load() of the same panoId keeps it under the tiles until tiles-settled. */
+  showPreview(panoId: string, source: PreviewSource): void {
+    if (this.disposed) {
+      closePreviewSource(source);
+      return;
+    }
+    // Built first: a source that throws leaves the viewer exactly as it was.
+    const preview = new EquirectLayer(this.renderer, source);
+    this.loadToken++;
+    this.disposePreview();
+    this.preview = preview;
+    this.previewPano = panoId;
+    this.layer?.dispose();
+    this.layer = undefined;
+    this.wasPending = false;
+    this.home = { ...this.target };
+    this.controls?.dispose();
+    this.controls = new Controls(this.renderer.canvas, this);
+    this.dirty = true;
+    this.emitter.emit('scene-change', panoId);
+  }
+
+  private disposePreview(): void {
+    this.preview?.dispose();
+    this.preview = undefined;
+    this.previewPano = undefined;
+    this.previewUnderlay = false;
+  }
+
+  // Painter's order is applied by the renderer, so the order here is free.
+  private drawList(): DrawItem[] {
+    const tiles = this.layer?.drawList() ?? [];
+    if (!this.preview) return tiles;
+    return [...this.preview.drawList(), ...tiles];
   }
 
   getFovLimits(): { min: number; max: number } {
@@ -432,10 +478,13 @@ export class PanoViewer implements ControlHost {
     this.layer?.update(this.viewProj, vfovDeg, fwd, this.renderer.canvas.height || 1);
 
     const pending = this.layer?.hasPending() ?? false;
-    if (this.wasPending && !pending) this.emitter.emit('tiles-settled', undefined);
+    if (this.wasPending && !pending) {
+      if (this.previewUnderlay) this.disposePreview();
+      this.emitter.emit('tiles-settled', undefined);
+    }
     this.wasPending = pending;
 
-    this.renderer.render(this.layer?.drawList() ?? []);
+    this.renderer.render(this.drawList());
     this.hotspots.update(
       this.viewProj,
       fwd,
@@ -485,9 +534,9 @@ export class PanoViewer implements ControlHost {
 
     // Only snapshot when there is something to draw; snapshotting an empty draw
     // list would crossfade from a black frame.
-    const drawList = this.layer?.drawList();
+    const drawList = this.drawList();
     let snap: HTMLDivElement | undefined;
-    if (drawList && drawList.length > 0) {
+    if (drawList.length > 0) {
       snap = document.createElement('div');
       snap.style.cssText =
         'position:absolute;inset:0;background-size:cover;background-position:center;' +
@@ -534,6 +583,7 @@ export class PanoViewer implements ControlHost {
     for (const pending of this.pendingLayers) pending.dispose();
     this.pendingLayers.clear();
     this.layer?.dispose();
+    this.disposePreview();
     this.hotspots.clear();
     this.renderCbs.clear();
     this.renderer.dispose();

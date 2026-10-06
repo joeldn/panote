@@ -89,6 +89,19 @@ describe('GLRenderer', () => {
 
       deleteBuffer: vi.fn(),
       deleteTexture: vi.fn(),
+
+      MAX_TEXTURE_SIZE: 8,
+      createBuffer: vi.fn(() => ({})),
+      bindBuffer: vi.fn(),
+      bufferData: vi.fn(),
+      createTexture: vi.fn(() => ({})),
+      bindTexture: vi.fn(),
+      texStorage2D: vi.fn(),
+      pixelStorei: vi.fn(),
+      texSubImage2D: vi.fn(),
+      generateMipmap: vi.fn(),
+      texParameteri: vi.fn(),
+      texParameterf: vi.fn(),
     };
     return { gl, loseContext };
   }
@@ -125,6 +138,54 @@ describe('GLRenderer', () => {
     expect(loseContext).not.toHaveBeenCalled();
     renderer.dispose();
     expect(loseContext).toHaveBeenCalledTimes(1);
+  });
+
+  describe('uploadTile', () => {
+    function setup() {
+      const { gl } = makeFakeGl();
+      (gl.getParameter as ReturnType<typeof vi.fn>).mockImplementation((p: unknown) =>
+        p === gl.MAX_TEXTURE_SIZE ? 8192 : 1,
+      );
+      const { container } = makeFakeDocumentAndContainer(gl);
+      return { gl, renderer: new GLRenderer(container as unknown as HTMLElement) };
+    }
+
+    // A 3×3 vertex grid: more than the 4 vertices of a cube tile quad.
+    const grid = () => {
+      const pos = new Float32Array(27).map((_, i) => i);
+      const uv = new Float32Array(18).map((_, i) => 100 + i);
+      const index = new Uint16Array([0, 3, 1, 1, 3, 4, 4, 5, 8]);
+      return { pos, uv, index };
+    };
+
+    it('reads MAX_TEXTURE_SIZE', () => {
+      expect(setup().renderer.maxTextureSize).toBe(8192);
+    });
+
+    it('interleaves every vertex of N-vertex geometry', () => {
+      const { gl, renderer } = setup();
+      const image = { width: 64, height: 32 } as unknown as HTMLCanvasElement;
+      renderer.uploadTile(grid(), image);
+      const vbo = gl.bufferData.mock.calls[0]![1] as Float32Array;
+      expect(vbo).toHaveLength(9 * 5);
+      expect([...vbo.slice(40, 45)]).toEqual([24, 25, 26, 116, 117]);
+      expect(gl.texStorage2D.mock.calls[0]!.slice(3)).toEqual([64, 32]);
+      expect(gl.texSubImage2D.mock.calls[0]![8]).toBe(image);
+    });
+
+    it('rejects geometry whose uv and pos disagree on the vertex count', () => {
+      const { renderer } = setup();
+      const g = { ...grid(), uv: new Float32Array(16) };
+      expect(() => renderer.uploadTile(g, {} as ImageBitmap)).toThrow(/vertex counts/);
+    });
+
+    it('frees the buffers and texture on removeTile', () => {
+      const { gl, renderer } = setup();
+      const h = renderer.uploadTile(grid(), { width: 4, height: 4 } as ImageBitmap);
+      renderer.removeTile(h);
+      expect(gl.deleteBuffer).toHaveBeenCalledTimes(2);
+      expect(gl.deleteTexture).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('does not throw when WEBGL_lose_context is unsupported', () => {

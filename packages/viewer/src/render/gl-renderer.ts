@@ -4,6 +4,9 @@ import type { TileGeometry } from '../tile-geometry.js';
 /** Opaque per-tile id. */
 export type TileHandle = number;
 
+/** Pixel sources the renderer can upload as a texture. */
+export type TileImage = ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
+
 /** One entry in the per-frame draw list. */
 export interface DrawItem {
   handle: TileHandle;
@@ -57,6 +60,7 @@ void main() {
 export class GLRenderer {
   readonly canvas: HTMLCanvasElement;
   readonly maxAnisotropy: number;
+  readonly maxTextureSize: number;
 
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
@@ -95,6 +99,8 @@ export class GLRenderer {
     this.maxAnisotropy = this.anisoExt
       ? gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
       : 1;
+
+    this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
     this.program = this.buildProgram(VERT_SRC, FRAG_SRC);
     this.uViewProj = this.getUniform('uViewProj');
@@ -158,11 +164,18 @@ export class GLRenderer {
     this.viewProj = viewProj;
   }
 
-  uploadTile(geom: TileGeometry, bitmap: ImageBitmap): TileHandle {
+  /** Upload N-vertex geometry and its texture. The image goes up unflipped, so
+   *  `geom.uv` must address its first row as v = 0. */
+  uploadTile(geom: TileGeometry, bitmap: TileImage): TileHandle {
     const gl = this.gl;
-    // Interleave pos (3) + uv (2) into one VBO: [px,py,pz,u,v] × 4.
-    const interleaved = new Float32Array(4 * 5);
-    for (let i = 0; i < 4; i++) {
+    const count = geom.pos.length / 3;
+    if (!Number.isInteger(count) || geom.uv.length !== count * 2) {
+      throw new Error('uploadTile: pos and uv describe different vertex counts');
+    }
+    if (count > 65536) throw new Error(`uploadTile: ${count} vertices exceed 16-bit indices`);
+    // Interleave pos (3) + uv (2) into one VBO: [px,py,pz,u,v] × N.
+    const interleaved = new Float32Array(count * 5);
+    for (let i = 0; i < count; i++) {
       interleaved[i * 5] = geom.pos[i * 3]!;
       interleaved[i * 5 + 1] = geom.pos[i * 3 + 1]!;
       interleaved[i * 5 + 2] = geom.pos[i * 3 + 2]!;
@@ -193,7 +206,8 @@ export class GLRenderer {
       bitmap.width,
       bitmap.height,
     );
-    // Bitmap was decoded with imageOrientation:'flipY' already — no unpack flip.
+    // Tile bitmaps are decoded with imageOrientation:'flipY' and their UVs flip v
+    // to match; other images upload unflipped and address row 0 as v = 0.
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texSubImage2D(
       gl.TEXTURE_2D,

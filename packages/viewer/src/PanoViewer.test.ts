@@ -35,6 +35,7 @@ vi.mock('./render/gl-renderer.js', () => {
       removeEventListener: vi.fn(),
     };
     nextHandle = 1;
+    maxTextureSize = 16384;
     dispose = vi.fn();
     uploadTile = vi.fn(() => this.nextHandle++);
     removeTile = vi.fn();
@@ -43,7 +44,7 @@ vi.mock('./render/gl-renderer.js', () => {
       this.canvas.height = Math.round(h * 2);
     }
     setCamera(): void {}
-    render(): void {}
+    render = vi.fn();
     snapshot(): string {
       return 'data:image/png;base64,';
     }
@@ -665,6 +666,223 @@ describe('PanoViewer', () => {
 
       expect(hotspotOpen).toHaveBeenCalledTimes(1);
       expect(hotspotOpen).toHaveBeenCalledWith('spot-1');
+    });
+  });
+
+  describe('local preview', () => {
+    type FakeRenderer = {
+      uploadTile: ReturnType<typeof vi.fn>;
+      removeTile: ReturnType<typeof vi.fn>;
+      render: ReturnType<typeof vi.fn>;
+      canvas: { addEventListener: ReturnType<typeof vi.fn> };
+    };
+    type Item = { handle: number; level: number };
+
+    const rendererOf = (viewer: PanoViewer): FakeRenderer =>
+      (viewer as unknown as { renderer: FakeRenderer }).renderer;
+    const lastDrawList = (viewer: PanoViewer): Item[] =>
+      rendererOf(viewer).render.mock.calls.at(-1)![0] as Item[];
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+    function tick(viewer: PanoViewer): void {
+      (viewer as unknown as { dirty: boolean }).dirty = true;
+      (viewer as unknown as { loop: () => void }).loop();
+    }
+
+    /** Two 1026×1024 patches with a 2 px gutter, over a 2048×1024 source. */
+    function source() {
+      const image = () => ({ width: 1026, height: 1024, close: vi.fn() }) as unknown as ImageBitmap;
+      return {
+        width: 2048,
+        height: 1024,
+        patches: [
+          { x: 0, y: 0, w: 1026, h: 1024, image: image() },
+          { x: 1022, y: 0, w: 1026, h: 1024, image: image() },
+        ],
+      };
+    }
+
+    const manifestFor = (pano: string) => ({
+      pano,
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: [...FACES],
+      quality: 82,
+      format: 'jpg',
+    });
+
+    /** Tiles answer at once, except URLs `hold` matches, which wait for release(). */
+    function stubTiles(hold: (url: string) => boolean = () => false) {
+      const held: (() => void)[] = [];
+      const body = { ok: true, status: 200, blob: () => Promise.resolve({}) };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          const m = /\/tiles\/([^/]+)\/manifest\.json$/.exec(url);
+          if (m) {
+            const json = () => Promise.resolve(manifestFor(m[1]!));
+            return Promise.resolve({ ok: true, status: 200, json });
+          }
+          if (!hold(url)) return Promise.resolve(body);
+          return new Promise((resolve) => held.push(() => resolve(body)));
+        }),
+      );
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => Promise.resolve({ close: vi.fn() })),
+      );
+      return { release: () => held.splice(0).forEach((r) => r()) };
+    }
+
+    it('draws the preview, keeps the camera and emits scene-change', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.setView({ yaw: 1.2, pitch: 0.3, fov: 50 });
+      const before = viewer.getView();
+      const sceneChange = vi.fn();
+      viewer.on('scene-change', sceneChange);
+
+      viewer.showPreview('pano-a', source());
+      tick(viewer);
+
+      expect(sceneChange).toHaveBeenCalledWith('pano-a');
+      expect(viewer.getView()).toEqual(before);
+      expect(lastDrawList(viewer)).toEqual([
+        { handle: 1, level: -1 },
+        { handle: 2, level: -1 },
+      ]);
+      viewer.dispose();
+    });
+
+    it('works with controls, hotspots, directionAtPixel and north as on tiles', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
+      viewer.showPreview('pano-a', source());
+      viewer.setView({ yaw: 0.5, pitch: 0.2 });
+      viewer.setNorth(0.5);
+      tick(viewer);
+
+      expect(rendererOf(viewer).canvas.addEventListener).toHaveBeenCalledWith(
+        'pointerdown',
+        expect.any(Function),
+      );
+      const centre = viewer.directionAtPixel(200, 400);
+      expect(centre.yaw).toBeCloseTo(0.5, 6);
+      expect(centre.pitch).toBeCloseTo(0.2, 6);
+      expect(viewer.heading()).toBeCloseTo(0, 6);
+
+      const style: Record<string, string> = {};
+      const el = { style, remove: vi.fn() } as unknown as HTMLElement;
+      const container = viewer.el as unknown as { appendChild: (e: unknown) => void };
+      container.appendChild = vi.fn();
+      viewer.addHotspot(el, { yaw: 0.5, pitch: 0.2 });
+      tick(viewer);
+      expect(style['visibility']).toBe('visible');
+      const [, x, y] = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)$/.exec(style['transform']!)!;
+      expect(Number(x)).toBeCloseTo(200, 3);
+      expect(Number(y)).toBeCloseTo(400, 3);
+      viewer.dispose();
+    });
+
+    it('keeps the view and a non-empty draw list across load(), then frees the preview once tiles settle', async () => {
+      const tiles = stubTiles((url) => url.includes('/0/'));
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.setView({ yaw: -0.8, pitch: 0.1, fov: 60 });
+      viewer.showPreview('pano-a', source());
+      const before = viewer.getView();
+      const settled = vi.fn();
+      viewer.on('tiles-settled', settled);
+      const renderer = rendererOf(viewer);
+
+      const load = viewer.load('pano-a');
+      for (let i = 0; i < 3; i++) {
+        await flush();
+        tick(viewer);
+        expect(lastDrawList(viewer).length).toBeGreaterThan(0);
+      }
+      tiles.release();
+      await load;
+      expect(viewer.getView()).toEqual(before);
+
+      // Swapped in, with the preview as an underlay until tiles-settled.
+      tick(viewer);
+      const swapped = lastDrawList(viewer);
+      expect(swapped.filter((d) => d.level === -1)).toHaveLength(2);
+      expect(swapped.filter((d) => d.level >= 0).length).toBeGreaterThanOrEqual(FACES.length);
+      expect(renderer.removeTile).not.toHaveBeenCalledWith(1);
+
+      for (let i = 0; i < 10 && settled.mock.calls.length === 0; i++) {
+        await flush();
+        tick(viewer);
+        expect(lastDrawList(viewer).length).toBeGreaterThan(0);
+      }
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(renderer.removeTile).toHaveBeenCalledWith(1);
+      expect(renderer.removeTile).toHaveBeenCalledWith(2);
+      expect(lastDrawList(viewer).some((d) => d.level === -1)).toBe(false);
+      expect(viewer.getView()).toEqual(before);
+      viewer.dispose();
+    });
+
+    it('drops the preview at the swap when a different pano loads', async () => {
+      stubTiles();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.showPreview('pano-a', source());
+      await viewer.load('pano-b');
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(2);
+      viewer.dispose();
+    });
+
+    it('replaces tiles already on screen, and supersedes a load in flight', async () => {
+      const tiles = stubTiles((url) => url.includes('/pano-b/'));
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await viewer.load('pano-a');
+      const renderer = rendererOf(viewer);
+      const tileHandles = renderer.uploadTile.mock.results.map((r) => r.value as number);
+      const pendingB = viewer.load('pano-b');
+      await flush();
+
+      viewer.showPreview('pano-c', source());
+      for (const h of tileHandles) expect(renderer.removeTile).toHaveBeenCalledWith(h);
+      tiles.release();
+      await pendingB;
+      tick(viewer);
+      expect(lastDrawList(viewer).every((d) => d.level === -1)).toBe(true);
+      expect(lastDrawList(viewer)).toHaveLength(2);
+      viewer.dispose();
+    });
+
+    it('leaves the viewer as it was when the source is rejected', async () => {
+      stubTiles();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await viewer.load('pano-a');
+      const layer = (viewer as unknown as { layer: unknown }).layer;
+      const sceneChange = vi.fn();
+      viewer.on('scene-change', sceneChange);
+      const bad = source();
+      (bad.patches[0]!.image as unknown as { width: number }).width = 5000;
+
+      expect(() => viewer.showPreview('pano-b', bad)).toThrow(/limit/);
+      expect((viewer as unknown as { layer: unknown }).layer).toBe(layer);
+      expect(sceneChange).not.toHaveBeenCalled();
+      viewer.dispose();
+    });
+
+    it('frees the preview textures on dispose, and closes a source shown after dispose', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.showPreview('pano-a', source());
+      viewer.dispose();
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(2);
+
+      const late = source();
+      viewer.showPreview('pano-a', late);
+      for (const p of late.patches) {
+        expect(
+          (p.image as unknown as { close: ReturnType<typeof vi.fn> }).close,
+        ).toHaveBeenCalled();
+      }
+      expect(rendererOf(viewer).uploadTile).toHaveBeenCalledTimes(2);
     });
   });
 });
