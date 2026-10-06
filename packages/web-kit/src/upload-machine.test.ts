@@ -7,8 +7,11 @@ import {
   canRetryPoll,
   initialUploadState,
   isTerminal,
+  isPolling,
   isReadyManifest,
+  PROCESSING_GIVE_UP_MS,
   PROCESSING_TIMEOUT_MS,
+  SLOW_POLL_MS,
   startUpload,
   STATUS_POLL_MS,
   uploadReducer,
@@ -84,12 +87,56 @@ describe('uploadReducer', () => {
     const p = processing({ kind: 'fresh' });
     const at = 1_000 + PROCESSING_TIMEOUT_MS;
     expect(uploadReducer(p, { type: 'tick', at: at - 1 })).toBe(p);
-    expect(uploadReducer(p, { type: 'tick', at })).toMatchObject({
+    expect(uploadReducer(p, { type: 'tick', at })).toEqual({
       phase: 'timed-out',
+      mode: { kind: 'fresh' },
       panoId: 'p1',
+      startedAt: 1_000,
+      checking: true,
     });
     expect(uploadReducer(p, { type: 'manifest', manifest: null, at })).toMatchObject({
       phase: 'timed-out',
+    });
+  });
+
+  it('timed-out keeps checking: a manifest is ready, a tiling failure fails', () => {
+    const t = uploadReducer(processing({ kind: 'fresh' }), {
+      type: 'tick',
+      at: 1_000 + PROCESSING_TIMEOUT_MS,
+    });
+    expect(isPolling(t)).toBe(true);
+    expect(uploadReducer(t, { type: 'manifest', manifest: null, at: 2_000_000 })).toBe(t);
+    expect(
+      uploadReducer(t, { type: 'manifest', manifest: manifest('t1-a'), at: 2_000_000 }),
+    ).toMatchObject({ phase: 'ready', panoId: 'p1' });
+    expect(uploadReducer(t, { type: 'status', tiling: 'failed', at: 2_000_000 })).toMatchObject({
+      phase: 'failed',
+      stage: 'tiling',
+    });
+    expect(uploadReducer(t, { type: 'auth-required', message: 'x' })).toMatchObject({
+      phase: 'failed',
+      stage: 'auth',
+      resumable: { kind: 'fresh' },
+    });
+  });
+
+  it('timed-out stops checking at the give-up cap, then ignores polls', () => {
+    const p = processing({ kind: 'replace', baselineVersion: 'v1' });
+    const t = uploadReducer(p, { type: 'tick', at: 1_000 + PROCESSING_TIMEOUT_MS });
+    // An unchanged version never reports ready, before or after the cap.
+    expect(uploadReducer(t, { type: 'manifest', manifest: manifest('v1'), at: 2_000_000 })).toBe(t);
+    const capAt = 1_000 + PROCESSING_GIVE_UP_MS;
+    expect(uploadReducer(t, { type: 'tick', at: capAt - 1 })).toBe(t);
+    const gaveUp = uploadReducer(t, { type: 'manifest', manifest: manifest('v1'), at: capAt });
+    expect(gaveUp).toMatchObject({ phase: 'timed-out', checking: false });
+    expect(isPolling(gaveUp)).toBe(false);
+    expect(isTerminal(gaveUp)).toBe(false);
+    expect(
+      uploadReducer(gaveUp, { type: 'manifest', manifest: manifest('v2'), at: capAt + 1 }),
+    ).toBe(gaveUp);
+    expect(uploadReducer(gaveUp, { type: 'retry-poll', at: 5 })).toMatchObject({
+      phase: 'processing',
+      startedAt: 5,
     });
   });
 
@@ -347,10 +394,15 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     expect(ctl.getState()).toMatchObject({ phase: 'ready', manifest: { version: 't1-new' } });
   });
 
-  it('replace-image with identical bytes (same version) times out after 10 minutes, then can re-poll', async () => {
+  it('replace-image with identical bytes never reaches ready and stops polling at the cap', async () => {
     const h = harness();
     h.manifests = [manifest('t1-same')];
-    const ctl = startUpload(h.deps, { file: file(), replacePanoId: 'p9' });
+    const phases: string[] = [];
+    const ctl = startUpload(h.deps, {
+      file: file(),
+      replacePanoId: 'p9',
+      onChange: (s) => phases.push(s.phase),
+    });
     await flush();
     h.put.resolve();
     await flush();
@@ -358,10 +410,25 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     await vi.advanceTimersByTimeAsync(PROCESSING_TIMEOUT_MS - 1);
     expect(ctl.getState().phase).toBe('processing');
     await vi.advanceTimersByTimeAsync(1);
-    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', panoId: 'p9' });
+    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', panoId: 'p9', checking: true });
 
+    // Slow polling: one manifest and one status check per 30s.
+    const m0 = vi.mocked(h.deps.fetchManifest).mock.calls.length;
+    const s0 = vi.mocked(h.deps.getPanoStatus).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(SLOW_POLL_MS * 4);
+    expect(vi.mocked(h.deps.fetchManifest).mock.calls.length - m0).toBe(4);
+    expect(vi.mocked(h.deps.getPanoStatus).mock.calls.length - s0).toBe(4);
+
+    await vi.advanceTimersByTimeAsync(PROCESSING_GIVE_UP_MS);
+    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', checking: false });
+    expect(phases).not.toContain('ready');
+    expect(vi.getTimerCount()).toBe(0);
     const polls = vi.mocked(h.deps.fetchManifest).mock.calls.length;
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(h.deps.fetchManifest).toHaveBeenCalledTimes(polls);
+    // Past the cap, pollNow does nothing; "Check again" (retryPoll) starts over.
+    ctl.pollNow();
+    await flush();
     expect(h.deps.fetchManifest).toHaveBeenCalledTimes(polls);
 
     ctl.retryPoll();
@@ -369,6 +436,78 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     h.manifests = [manifest('t1-later')];
     await vi.advanceTimersByTimeAsync(1_000);
     expect(ctl.getState().phase).toBe('ready');
+  });
+
+  it('a manifest that lands at minute 14 reaches ready on its own', async () => {
+    const h = harness();
+    h.manifests = [null];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(PROCESSING_TIMEOUT_MS);
+    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', checking: true });
+
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    h.manifests = [manifest('t1-a')];
+    expect(ctl.getState().phase).toBe('timed-out');
+    await vi.advanceTimersByTimeAsync(SLOW_POLL_MS);
+    expect(ctl.getState()).toMatchObject({ phase: 'ready', panoId: 'p1' });
+    await expect(ctl.settled).resolves.toMatchObject({ phase: 'ready' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a tiling failure at minute 20 fails from timed-out', async () => {
+    const h = harness();
+    h.manifests = [null];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(20 * 60_000 - SLOW_POLL_MS);
+    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', checking: true });
+    h.statuses = ['failed'];
+    await vi.advanceTimersByTimeAsync(SLOW_POLL_MS);
+    expect(ctl.getState()).toMatchObject({ phase: 'failed', stage: 'tiling', panoId: 'p1' });
+    await expect(ctl.settled).resolves.toMatchObject({ phase: 'failed' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('pollNow and retryPoll during slow polling never add timers', async () => {
+    const h = harness();
+    h.manifests = [null];
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(PROCESSING_TIMEOUT_MS + 5_000);
+    expect(ctl.getState().phase).toBe('timed-out');
+    // Manifest poll, status poll and the give-up tick.
+    expect(vi.getTimerCount()).toBe(3);
+
+    const m0 = vi.mocked(h.deps.fetchManifest).mock.calls.length;
+    const s0 = vi.mocked(h.deps.getPanoStatus).mock.calls.length;
+    ctl.pollNow();
+    ctl.pollNow();
+    await flush();
+    ctl.pollNow();
+    await flush();
+    expect(vi.mocked(h.deps.fetchManifest).mock.calls.length - m0).toBe(2);
+    expect(vi.getTimerCount()).toBe(3);
+    // The slow schedule restarts from the last kick instead of doubling up.
+    await vi.advanceTimersByTimeAsync(SLOW_POLL_MS - 1);
+    expect(vi.mocked(h.deps.fetchManifest).mock.calls.length - m0).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(vi.mocked(h.deps.fetchManifest).mock.calls.length - m0).toBe(3);
+    expect(vi.mocked(h.deps.getPanoStatus).mock.calls.length - s0).toBe(3);
+    expect(vi.getTimerCount()).toBe(3);
+
+    // "Check again" swaps slow polling for a fresh window: timeout tick, cap tick, two polls.
+    ctl.retryPoll();
+    expect(ctl.getState().phase).toBe('processing');
+    expect(vi.getTimerCount()).toBe(4);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(vi.getTimerCount()).toBe(4);
   });
 
   it('times out on wall-clock time even when a throttled timer fires late', async () => {
@@ -394,6 +533,30 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     await flush();
     await vi.advanceTimersByTimeAsync(PROCESSING_TIMEOUT_MS);
     expect(ctl.getState().phase).toBe('timed-out');
+  });
+
+  it('requests hung at the timeout are dropped and slow polling carries on', async () => {
+    const h = harness();
+    const signals: AbortSignal[] = [];
+    vi.mocked(h.deps.fetchManifest).mockImplementation((_id, o) => {
+      signals.push(o.signal);
+      return new Promise(() => {});
+    });
+    vi.mocked(h.deps.getPanoStatus).mockImplementation(() => new Promise(() => {}));
+    const ctl = startUpload(h.deps, { file: file() });
+    await flush();
+    h.put.resolve();
+    await flush();
+    await vi.advanceTimersByTimeAsync(PROCESSING_TIMEOUT_MS);
+    expect(ctl.getState()).toMatchObject({ phase: 'timed-out', checking: true });
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    // Manifest and status re-polls, plus the give-up tick.
+    expect(vi.getTimerCount()).toBe(3);
+
+    vi.mocked(h.deps.fetchManifest).mockResolvedValue(manifest('t1-a'));
+    await vi.advanceTimersByTimeAsync(SLOW_POLL_MS);
+    expect(ctl.getState().phase).toBe('ready');
   });
 
   it("fails when the status route reports tiling 'failed' (every 15s)", async () => {
