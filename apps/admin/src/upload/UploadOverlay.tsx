@@ -164,9 +164,11 @@ export function NewPanoOverlay() {
   const uploads = useUploads();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const target = targetFromParams(params);
-  const tour = target.kind === 'new-tour' ? null : params.get('tour');
-  const lost = uploads.repick?.target.kind === 'new-tour' ? uploads.repick : null;
+  // A sign-in redirect that lost the file: this overlay (not the provider's picker) asks again.
+  const lost = uploads.repick?.reason === 'signed-out' ? uploads.repick : null;
+  const target = lost?.target ?? targetFromParams(params);
+  const tour =
+    target.kind === 'add' ? target.tourId : target.kind === 'replace' ? params.get('tour') : null;
   const resume =
     params.get('resume') === 'upload' || lost
       ? {

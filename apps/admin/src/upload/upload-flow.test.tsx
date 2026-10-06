@@ -458,6 +458,49 @@ describe('sign-in during an upload', () => {
     expect(chipTitle()).toBe('Uploading panorama');
   });
 
+  it('a 401 checking the tour from /app/new?tour= comes back to a single Add pano dialog', async () => {
+    const { backend, pending } = setup('/app/new?tour=tour-1');
+    backend.state.getTourStatus = 401;
+    await tick();
+    const file = pngFile();
+    await pick(file);
+    expect(readResumeRecord()).toMatchObject({ target: { kind: 'add', tourId: 'tour-1' } });
+    expect(pending.peek()).toBe(file);
+
+    cleanup();
+    pending.take.mockImplementationOnce(async () => null);
+    const back = setup('/app/new?tour=tour-1', pending);
+    await tick();
+    // The provider's re-pick prompt and the route overlay used to stack here.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.getByRole('dialog', { name: 'Add pano' }).textContent).toContain(
+      'Choose it again to continue.',
+    );
+    expect(pending.take).toHaveBeenCalledTimes(1);
+
+    await pick(file);
+    expect(back.backend.presigns()).toHaveLength(1);
+    expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('the same return with the file stashed starts the upload at once', async () => {
+    const { backend, pending } = setup('/app/new?tour=tour-1');
+    backend.state.getTourStatus = 401;
+    await tick();
+    const file = pngFile();
+    await pick(file);
+
+    cleanup();
+    const back = setup('/app/new?tour=tour-1', pending);
+    await tick();
+    expect(pending.take).toHaveBeenCalledTimes(1);
+    expect(FakeXhr.last.body).toBe(file);
+    expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('/app/new?resume=upload starts at once with the file stashed on the landing', async () => {
     const file = pngFile('Harbour.png');
     const { backend, router } = setup('/app/new?resume=upload', fakePending(file));

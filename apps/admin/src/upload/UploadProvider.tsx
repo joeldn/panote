@@ -154,8 +154,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     return { kind: 'repick' as const, rec };
   });
   const bootRepick = boot?.kind === 'repick' ? boot.rec : null;
+  // On /app/new the route's own overlay takes the file back instead (one dialog, not two).
   const [picker, setPicker] = useState<{ target: PanoTarget; resume: boolean } | null>(() =>
-    bootRepick && bootRepick.target.kind !== 'new-tour'
+    bootRepick && bootRepick.target.kind !== 'new-tour' && pathname !== '/new'
       ? { target: bootRepick.target, resume: true }
       : null,
   );

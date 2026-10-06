@@ -46,6 +46,7 @@ export function fakeBackend() {
     presignStatus: 200,
     statusStatus: 200,
     createTourStatus: 201,
+    getTourStatus: 200,
   };
 
   const fetch: FetchLike = async (url, init = {}) => {
@@ -104,6 +105,7 @@ export function fakeBackend() {
       return json({ etag: 'c1' });
     }
     if (method === 'GET' && path === '/api/admin/tours/tour-1') {
+      if (state.getTourStatus !== 200) return json({ error: 'nope' }, state.getTourStatus);
       return json({ tour: state.tour, etag: state.tourEtag }, 200, { etag: `"${state.tourEtag}"` });
     }
     if (method === 'DELETE' && path === '/api/admin/tours/tour-1') {
