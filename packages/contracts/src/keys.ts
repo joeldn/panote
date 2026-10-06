@@ -53,19 +53,17 @@ const ORIGINAL_KEY_RE = /^panos\/([^/]+)\/([^/]+)\/original$/;
 const OWNER_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 
 // Shared by both exports below - parses and validates both segments once.
+// The errors never echo the key or the owner segment: callers log them, and
+// the owner is base64url(sub), which is reversible.
 const parseOriginalKey = (key: string): { owner: string; panoId: string } => {
   const match = ORIGINAL_KEY_RE.exec(key);
   if (!match) {
-    throw new Error(
-      `tile-failed marker requires panos/<owner>/<panoId>/original (got ${JSON.stringify(key)})`,
-    );
+    throw new Error('tile-failed marker requires panos/<owner>/<panoId>/original');
   }
   const owner = match[1]!;
   const panoId = match[2]!;
   if (!OWNER_SEGMENT_RE.test(owner)) {
-    throw new Error(
-      `tile-failed marker owner segment must match ${OWNER_SEGMENT_RE} (got ${JSON.stringify(owner)})`,
-    );
+    throw new Error(`tile-failed marker owner segment must match ${OWNER_SEGMENT_RE}`);
   }
   if (!PANO_PATTERN.test(panoId)) {
     throw new Error(

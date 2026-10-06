@@ -189,6 +189,19 @@ describe('keys', () => {
       );
     });
 
+    it.each([
+      ['an invalid owner charset', 'panos/secret@example.com/p1/original'],
+      ['an owner with a space', 'panos/secret owner/p1/original'],
+      ['a bad shape', 'panos/secretowner/p1/extra/original'],
+    ])('does not echo the key or owner segment on %s', (_label, key) => {
+      expect(() => tileFailedKeyFromOriginalKey(key)).toThrow(
+        expect.objectContaining({ message: expect.not.stringContaining('secret') }),
+      );
+      expect(() => panoIdFromOriginalKey(key)).toThrow(
+        expect.objectContaining({ message: expect.not.stringContaining('secret') }),
+      );
+    });
+
     it('throws on a panoId segment with an invalid charset', () => {
       expect(() => tileFailedKeyFromOriginalKey('panos/owner/bad panoid/original')).toThrow(
         /panoId segment/,

@@ -55,7 +55,10 @@ const LOG_PANO_RE = /^panos\/[^/]+\/([^/]+)\/original$/;
 export const panoIdForLog = (key: string): string => LOG_PANO_RE.exec(key)?.[1] ?? '<unparsed-key>';
 
 // Any `panos/<owner>/` prefix inside free text, e.g. an R2 key in an error.
-const OWNER_PREFIX_IN_TEXT_RE = /panos\/[^/\s]+\//g;
+// The owner match runs to the next `/` and may contain spaces (a malformed
+// owner can), but never crosses a line break, so it can't swallow more than
+// one line's worth of text looking for a slash.
+const OWNER_PREFIX_IN_TEXT_RE = /panos\/[^/\r\n]+\//g;
 
 /**
  * Strips the owner segment out of any `panos/<owner>/...` key in `text`,

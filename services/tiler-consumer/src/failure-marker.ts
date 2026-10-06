@@ -28,9 +28,12 @@ export const writeFailureMarker = async (
   let markerKey: string;
   try {
     markerKey = tileFailedKeyFromOriginalKey(originalNotificationKey);
-  } catch (e) {
-    // No owner/panoId to hang a marker off - nothing to write.
-    console.warn(`cannot derive tile-failed marker pano=${pano}: ${errorText(e)}`);
+  } catch {
+    // No owner/panoId to hang a marker off - nothing to write. A fixed
+    // reason only: the parse error describes the segments it rejected.
+    console.warn(
+      `cannot derive tile-failed marker pano=${pano}: key is not panos/<owner>/<panoId>/original with valid segments`,
+    );
     return 'skipped';
   }
   // Same input already validated above, so this cannot throw again.

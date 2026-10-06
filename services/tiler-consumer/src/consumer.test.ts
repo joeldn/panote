@@ -306,6 +306,42 @@ describe('queue()', () => {
  * Exercises the ack/retry decision directly by swapping `env.TILER.get` for
  * a fake stub whose `fetch` resolves with a response this suite controls.
  */
+// Owners that fail the charset check, through both the main queue (the
+// unprocessable-key path) and the DLQ: no console method may see them.
+describe('malformed owner segments never reach the logs', () => {
+  it.each([
+    ['pano-uploads-dev', 'an @', 'secret@example.com'],
+    ['pano-uploads-dev', 'a %', 'secret%owner'],
+    ['pano-uploads-dev', 'a space', 'secret owner'],
+    ['pano-uploads-dlq-dev', 'an @', 'secret@example.com'],
+    ['pano-uploads-dlq-dev', 'a %', 'secret%owner'],
+    ['pano-uploads-dlq-dev', 'a space', 'secret owner'],
+  ])('%s, owner with %s', async (queue, _label, owner) => {
+    const consoleSpies = spyOnAllConsole();
+    const ctx = createExecutionContext();
+    const key = `panos/${owner}/p1/original`;
+    const batch = createMessageBatch(queue, [
+      {
+        id: 'msg-bad-owner',
+        timestamp: new Date(),
+        body: { object: { key, size: 10, eTag: 'etag' }, action: 'PutObject' },
+        attempts: 1,
+      },
+    ]);
+
+    await worker.queue(batch, env, ctx);
+    const result = await getQueueResult(batch, ctx);
+
+    expect(result.explicitAcks).toEqual(['msg-bad-owner']);
+    for (const spy of consoleSpies)
+      for (const call of spy.mock.calls) expect(call.map(String).join(' ')).not.toContain('secret');
+    // Something was logged, naming the pano.
+    expect(
+      consoleSpies.some((spy) => spy.mock.calls.some((c) => String(c[0]).includes('pano=p1'))),
+    ).toBe(true);
+  });
+});
+
 describe('res.ok handling', () => {
   it('acks a 2xx container response without logging anything', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);

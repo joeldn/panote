@@ -387,6 +387,24 @@ describe('writeFailureMarker', () => {
       expect(text).not.toContain(OWNER);
     });
 
+    // Owners that fail the charset check. The contracts parse error used to
+    // echo the bare owner (no panos/ prefix, so redactOwner can't catch it).
+    it.each([
+      ['an @', 'secret@example.com'],
+      ['a %', 'secret%owner'],
+      ['a space', 'secret owner'],
+    ])('when the owner segment contains %s', async (_label, owner) => {
+      const spies = spyOnAllConsole();
+
+      await expect(
+        writeFailureMarker(env.BUCKET, `panos/${owner}/p1/original`, 'unprocessable-key'),
+      ).resolves.toBe('skipped');
+
+      const text = loggedText(spies);
+      expect(text).toContain('cannot derive tile-failed marker pano=p1');
+      expect(text).not.toContain('secret');
+    });
+
     it('when the key has no panoId to derive a marker from', async () => {
       const spies = spyOnAllConsole();
 

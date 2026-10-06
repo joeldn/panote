@@ -96,6 +96,26 @@ describe('redactOwner', () => {
     ).toBe('R2 DELETE panos/<owner>/p1/tile-failed -> 403; also panos/<owner>/p2/original');
   });
 
+  it('redacts an owner with spaces, @ or %, up to the next slash', () => {
+    expect(redactOwner('HEAD panos/a b/p1/original failed')).toBe(
+      'HEAD panos/<owner>/p1/original failed',
+    );
+    expect(redactOwner('panos/joel@example.com/p1/original')).toBe('panos/<owner>/p1/original');
+    expect(redactOwner('panos/secret%owner/p1/original')).toBe('panos/<owner>/p1/original');
+  });
+
+  it('stops at one segment: it redacts up to the first slash, not the last', () => {
+    expect(redactOwner('panos/a b/p1/original and tiles/p1/x')).toBe(
+      'panos/<owner>/p1/original and tiles/p1/x',
+    );
+  });
+
+  it('never runs across a line break looking for a slash', () => {
+    expect(redactOwner('panos/no slash here\nnext line /x')).toBe(
+      'panos/no slash here\nnext line /x',
+    );
+  });
+
   it('leaves owner-free tile keys alone', () => {
     expect(redactOwner('R2 PUT tiles/p1/t1-abc/0/px/0-0.webp -> 500')).toBe(
       'R2 PUT tiles/p1/t1-abc/0/px/0-0.webp -> 500',
