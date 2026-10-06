@@ -66,7 +66,7 @@ function renderProvider() {
 }
 
 async function replaceWith(file = pngFile('new.png')) {
-  act(() => probe.uploads?.pick({ kind: 'replace', panoId: 'pano-9' }));
+  act(() => probe.uploads?.pick({ kind: 'replace', panoId: 'pano-9', tourId: 'tour-1' }));
   expect(screen.getByRole('dialog', { name: 'Replace image' })).toBeTruthy();
   fireEvent.change(screen.getByTestId('upload-input'), { target: { files: [file] } });
   await tick();

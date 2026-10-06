@@ -2,7 +2,9 @@ import type { UploadMode } from '@internal/web-kit';
 
 /** Where an upload's pano goes: a new tour, an existing tour, or over an existing pano's image. */
 export type UploadTarget =
-  { kind: 'new-tour' } | { kind: 'add'; tourId: string } | { kind: 'replace'; panoId: string };
+  | { kind: 'new-tour' }
+  | { kind: 'add'; tourId: string }
+  | { kind: 'replace'; panoId: string; tourId: string };
 
 /**
  * What survives a sign-in redirect. The File can't, so `landed` (the image already
@@ -31,8 +33,14 @@ function parseTarget(v: unknown): UploadTarget | null {
   if (v.kind === 'add' && typeof v.tourId === 'string' && ID.test(v.tourId)) {
     return { kind: 'add', tourId: v.tourId };
   }
-  if (v.kind === 'replace' && typeof v.panoId === 'string' && ID.test(v.panoId)) {
-    return { kind: 'replace', panoId: v.panoId };
+  if (
+    v.kind === 'replace' &&
+    typeof v.panoId === 'string' &&
+    ID.test(v.panoId) &&
+    typeof v.tourId === 'string' &&
+    ID.test(v.tourId)
+  ) {
+    return { kind: 'replace', panoId: v.panoId, tourId: v.tourId };
   }
   return null;
 }
@@ -54,7 +62,9 @@ export function targetFromParams(params: URLSearchParams): UploadTarget {
   const tour = params.get('tour');
   const replace = params.get('replace');
   if (tour === null || !ID.test(tour)) return { kind: 'new-tour' };
-  if (replace !== null && ID.test(replace)) return { kind: 'replace', panoId: replace };
+  if (replace !== null && ID.test(replace)) {
+    return { kind: 'replace', panoId: replace, tourId: tour };
+  }
   return { kind: 'add', tourId: tour };
 }
 

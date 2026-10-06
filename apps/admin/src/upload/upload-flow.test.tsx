@@ -529,6 +529,26 @@ describe('sign-in during an upload', () => {
     expect(backend.state.calls).toEqual([]);
   });
 
+  it('a resumed replace goes back to the tour in its record, not the one in the URL', async () => {
+    const { backend, pending } = setup('/app/new?tour=tour-1&replace=pano-9');
+    backend.state.manifests = [manifest('t1-old', 'pano-9')];
+    backend.state.presignStatus = 401;
+    await tick();
+    const file = pngFile();
+    await pick(file);
+    expect(readResumeRecord()).toMatchObject({
+      target: { kind: 'replace', panoId: 'pano-9', tourId: 'tour-1' },
+    });
+
+    cleanup();
+    const back = setup('/app/new?tour=tour-2&replace=pano-9', pending);
+    back.backend.state.manifests = [manifest('t1-old', 'pano-9')];
+    await tick();
+    expect(FakeXhr.last.body).toBe(file);
+    expect(back.backend.presigns()[0]?.body).toMatchObject({ panoId: 'pano-9' });
+    expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
+  });
+
   it('a stashed file still goes through the type and size checks', async () => {
     const gif = new File(['GIF89a'], 'a.gif', { type: 'image/gif' });
     const { backend } = setup('/app/new?resume=upload', fakePending(gif));

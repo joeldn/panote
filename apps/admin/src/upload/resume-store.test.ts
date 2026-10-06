@@ -46,6 +46,11 @@ describe('resume record', () => {
     });
   });
 
+  it('keeps the tour a replace target belongs to', () => {
+    const target = { kind: 'replace', panoId: 'p9', tourId: 'tour-2' };
+    expect(parseResumeRecord(raw({ target }), NOW)?.target).toEqual(target);
+  });
+
   it.each([
     ['garbage', 'not json'],
     ['a wrong version', raw({ v: 2 })],
@@ -53,6 +58,11 @@ describe('resume record', () => {
     ['an empty owner', raw({ owner: '' })],
     ['a bad target id', raw({ target: { kind: 'add', tourId: '../x' } })],
     ['an unknown target', raw({ target: { kind: 'other' } })],
+    ['a replace with no tourId', raw({ target: { kind: 'replace', panoId: 'p9' } })],
+    [
+      'a replace with a bad tourId',
+      raw({ target: { kind: 'replace', panoId: 'p9', tourId: '../x' } }),
+    ],
     ['a bad landed panoId', raw({ landed: { panoId: 'a/b', mode: { kind: 'fresh' } } })],
     ['a bad mode', raw({ landed: { panoId: 'p', mode: { kind: 'replace' } } })],
     ['a stale record', raw({ savedAt: NOW - RESUME_MAX_AGE_MS - 1 })],
@@ -81,7 +91,11 @@ describe('targetFromParams', () => {
     expect(t('')).toEqual({ kind: 'new-tour' });
     expect(t('resume=upload')).toEqual({ kind: 'new-tour' });
     expect(t('tour=tour-1')).toEqual({ kind: 'add', tourId: 'tour-1' });
-    expect(t('tour=tour-1&replace=p9')).toEqual({ kind: 'replace', panoId: 'p9' });
+    expect(t('tour=tour-1&replace=p9')).toEqual({
+      kind: 'replace',
+      panoId: 'p9',
+      tourId: 'tour-1',
+    });
     expect(t('tour=../x&replace=p9')).toEqual({ kind: 'new-tour' });
     expect(t('tour=tour-1&replace=a/b')).toEqual({ kind: 'add', tourId: 'tour-1' });
   });
