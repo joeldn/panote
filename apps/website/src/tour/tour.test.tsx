@@ -1,10 +1,12 @@
 import type { ViewerFactory } from '@internal/ui';
-import { loadConfig } from '@internal/web-kit';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { loadConfig, type Auth } from '@internal/web-kit';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { fakeAuth, LOCAL } from '../__fixtures__/auth.js';
+import { AuthEnvContext } from '../auth-context.js';
 import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 import { StageFactoryContext } from './stage-factory.js';
@@ -101,8 +103,21 @@ const deferred = () => {
   const promise = new Promise<void>((r) => (resolve = r));
   return { promise, resolve };
 };
+// What `GET /api/admin/tours/tour-a` answers: a status, or a thrown network error.
+let adminTour: number | 'error';
+const ownerBody = {
+  tour: { tourId: 'tour-a', title: 'Old town', scenes: [{ panoId: 'square' }] },
+  etag: 'e1',
+  publish: null,
+};
 const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
+  if (url.startsWith('/api/admin/')) {
+    if (adminTour === 'error') throw new TypeError('network down');
+    if (adminTour === 200) return Response.json(ownerBody);
+    const error = adminTour === 404 ? 'not found' : 'forbidden';
+    return Response.json({ error }, { status: adminTour });
+  }
   if (url.startsWith(CDN)) {
     const key = url.slice(CDN.length);
     return key in objects ? Response.json(objects[key]) : new Response('', { status: 404 });
@@ -123,19 +138,29 @@ const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit
 });
 const calls = (suffix: string) => fetchMock.mock.calls.filter(([u]) => String(u).endsWith(suffix));
 
-function renderAt(path: string) {
+// Signed out unless a test passes `signedIn()`.
+function renderAt(path: string, auth: Auth = fakeAuth()) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
   render(
     <StrictMode>
       <ConfigContext value={config}>
-        <StageFactoryContext value={createViewer}>
-          <RouterProvider router={router} />
-        </StageFactoryContext>
+        <AuthEnvContext value={{ auth, origins: LOCAL }}>
+          <StageFactoryContext value={createViewer}>
+            <RouterProvider router={router} />
+          </StageFactoryContext>
+        </AuthEnvContext>
       </ConfigContext>
     </StrictMode>,
   );
   return router;
 }
+
+const signedIn = () =>
+  fakeAuth({
+    isAuthenticated: vi.fn(async () => true),
+    getUser: vi.fn(async () => ({ sub: 'google-oauth2|1', name: 'Ada' })),
+  });
+const adminCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/admin/'));
 
 const robots = () => document.head.querySelector('meta[name="robots"]')?.getAttribute('content');
 const shown = (panoId: string) =>
@@ -150,6 +175,7 @@ beforeEach(() => {
   failLoads = false;
   objects = { 'slugs/old-town.json': live, 'pub/tours/tour-a.json': bundle() };
   viewGate = null;
+  adminTour = 200;
   localStorage.clear();
   fetchMock.mockClear();
   vi.stubGlobal('fetch', fetchMock);
@@ -422,6 +448,103 @@ describe('/s/:slug/embed', () => {
     // The loading state is noindex too, so wait for the tour itself first.
     await shown('square');
     expect(robots()).toBe('noindex');
+  });
+});
+
+describe('visitor share', () => {
+  it('opens the Link-only sheet with the canonical public URL', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share this tour' });
+    expect(within(dialog).getByRole('status', { name: 'Share link' }).textContent).toBe(
+      'panote.test/s/old-town',
+    );
+    // Visitor variant: no Privacy/Embed tabs and no slug editing.
+    expect(within(dialog).queryByRole('tab')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Edit custom link' })).toBeNull();
+    const x = within(dialog).getByRole('link', { name: 'Share on X' });
+    expect(x.getAttribute('href')).toContain(encodeURIComponent('https://panote.test/s/old-town'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('is not offered in the embed', async () => {
+    renderAt('/s/old-town/embed');
+    await shown('square');
+    await viewRecorded();
+    expect(screen.getByRole('toolbar', { name: 'View' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+  });
+});
+
+describe('owner Edit', () => {
+  const editLink = () => screen.findByRole('link', { name: 'Edit' });
+
+  it('shows for the owner, linking to the admin editor', async () => {
+    const auth = signedIn();
+    renderAt('/s/old-town', auth);
+    expect((await editLink()).getAttribute('href')).toBe(`${LOCAL.admin}/app/t/tour-a`);
+    const [url, init] = adminCalls()[0] ?? [];
+    expect(url).toBe('/api/admin/tours/tour-a');
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer jwt-token' });
+  });
+
+  it('makes no admin call for an anonymous visitor', async () => {
+    const auth = fakeAuth();
+    renderAt('/s/old-town', auth);
+    await shown('square');
+    await viewRecorded();
+    await waitFor(() => expect(auth.isAuthenticated).toHaveBeenCalled());
+    // Let the signed-out account state settle before checking nothing followed it.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(adminCalls()).toHaveLength(0);
+    expect(auth.getAccessToken).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+  });
+
+  it.each([
+    ['a non-owner (403)', 403],
+    ['a missing tour (404)', 404],
+    ['a server error', 500],
+    ['a network error', 'error'],
+  ] as const)('stays hidden for %s', async (_label, status) => {
+    adminTour = status;
+    renderAt('/s/old-town', signedIn());
+    await shown('square');
+    await waitFor(() => expect(adminCalls().length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+  });
+
+  it('stays hidden when the token cannot be had', async () => {
+    const auth = signedIn();
+    vi.mocked(auth.getAccessToken).mockRejectedValue(new Error('login_required'));
+    renderAt('/s/old-town', auth);
+    await shown('square');
+    await waitFor(() => expect(auth.getAccessToken).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(adminCalls()).toHaveLength(0);
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+  });
+
+  it('never checks ownership, or shows Edit, in the embed', async () => {
+    const auth = signedIn();
+    renderAt('/s/old-town/embed', auth);
+    await shown('square');
+    await viewRecorded();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(auth.isAuthenticated).not.toHaveBeenCalled();
+    expect(adminCalls()).toHaveLength(0);
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
   });
 });
 
