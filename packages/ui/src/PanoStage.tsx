@@ -1,4 +1,4 @@
-import { PanoViewer, type View, type ViewerOptions } from '@panote/viewer';
+import { PanoViewer, type PreviewSource, type View, type ViewerOptions } from '@panote/viewer';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { cx } from './cx.js';
@@ -13,12 +13,47 @@ export type StageViewerOptions = Omit<
   'baseUrl' | 'initialView' | 'north' | 'autoRotate'
 >;
 
+/**
+ * A local decode to show for a pano before (or instead of) its tiles; see
+ * `PanoViewer.showPreview`.
+ */
+export interface StagePreview {
+  /** The pano this is a preview of. Ignored while another pano is on stage. */
+  panoId: string;
+  /**
+   * Identifies this preview, e.g. the upload job id. The stage compares
+   * `panoId` + `key`, not object identity: rebuilding the object with the same
+   * key (say on every status poll) does nothing, while a new key for the pano
+   * on stage shows the new preview and reloads.
+   */
+  key: string;
+  /**
+   * Builds a fresh source. The viewer takes ownership of what this returns and
+   * closes its bitmaps once they are uploaded, so a source can only be shown
+   * once: return a new decode on every call (e.g. from the stored WebP), not
+   * the same object twice. The stage calls it each time the preview has to go
+   * on screen: first show, a return to this pano, a remount or `baseUrl`
+   * change, or a reload that lands while an async call is still pending (that
+   * call's source is then closed unshown).
+   */
+  source: () => PreviewSource | Promise<PreviewSource>;
+  /**
+   * For a replace-image: the version of the manifest the new image replaces
+   * (`''` for an unversioned one). Leave it out for a new pano.
+   */
+  replacesVersion?: string;
+}
+
 export interface PanoStageProps {
   /** Tiles base, e.g. `tilesBaseUrl(config)`; changing it recreates the viewer. */
   baseUrl: string;
   /** Pano to show; null leaves the stage empty. */
   panoId: string | null;
-  /** Camera for each pano as it loads (a scene's `initialView`). Later changes don't move the camera. */
+  /**
+   * Camera for each pano as it loads (a scene's `initialView`). Applied on the
+   * first load and on a pano change only: a `reloadKey` reload or a new
+   * `preview` for the same pano keeps the camera where it is.
+   */
   view?: Partial<View>;
   /** Compass north offset for the current pano, radians. */
   north?: number;
@@ -28,6 +63,16 @@ export interface PanoStageProps {
    * once a replace-image upload is ready, so the stage picks up the new tiles.
    */
   reloadKey?: string | number;
+  /**
+   * Shown over the stage at once when its `panoId` is on stage, then the pano
+   * is loaded so its tiles take over. A new `key` is a new preview (shown, then
+   * reloaded); the same key again is a no-op. Dropping it (null) doesn't
+   * reload; the viewer disposes the preview itself once its tiles have
+   * settled. A preview that can't be shown goes to `onPreviewError` and the
+   * tiles load anyway. A tile load that fails (e.g. no manifest yet) goes to
+   * `onLoadError`, and the preview stays on screen.
+   */
+  preview?: StagePreview | null;
   /** Crossfade between panos with `transitionTo` instead of a plain `load`. */
   transition?: boolean;
   /** Read once when the viewer is created. */
@@ -35,7 +80,10 @@ export interface PanoStageProps {
   onViewer?: (viewer: PanoViewer | null) => void;
   onSceneChange?: (panoId: string) => void;
   onHotspotOpen?: (hotspotId: string) => void;
+  /** A tile load for `panoId` failed. Preview failures are not reported here. */
   onLoadError?: (error: unknown, panoId: string) => void;
+  /** `preview` could not be shown: its `source` threw or rejected, or the viewer refused it. */
+  onPreviewError?: (error: unknown, panoId: string) => void;
   /** Viewer chrome, rendered over the canvas with access to `usePanoViewer()`. */
   children?: ReactNode;
   className?: string;
@@ -50,6 +98,7 @@ export function PanoStage({
   baseUrl,
   panoId,
   reloadKey,
+  preview,
   view,
   north,
   autoRotate = false,
@@ -59,6 +108,7 @@ export function PanoStage({
   onSceneChange,
   onHotspotOpen,
   onLoadError,
+  onPreviewError,
   children,
   className,
   style,
@@ -69,13 +119,28 @@ export function PanoStage({
   const [viewer, setViewer] = useState<PanoViewer | null>(null);
 
   // Latest props for use inside long-lived effects without re-running them.
-  const latest = useRef({ view, north, autoRotate, options, createViewer, transition });
-  const callbacks = useRef({ onViewer, onSceneChange, onHotspotOpen, onLoadError });
+  const latest = useRef({ view, north, autoRotate, options, createViewer, transition, preview });
+  const callbacks = useRef({
+    onViewer,
+    onSceneChange,
+    onHotspotOpen,
+    onLoadError,
+    onPreviewError,
+  });
   useEffect(() => {
-    latest.current = { view, north, autoRotate, options, createViewer, transition };
-    callbacks.current = { onViewer, onSceneChange, onHotspotOpen, onLoadError };
+    latest.current = { view, north, autoRotate, options, createViewer, transition, preview };
+    callbacks.current = { onViewer, onSceneChange, onHotspotOpen, onLoadError, onPreviewError };
   });
 
+  // What the stage last loaded, to tell a pano change (apply the scene's view)
+  // from a reload of the same pano (keep the camera), and which preview this
+  // viewer has already been given (a source can only be shown once).
+  const loaded = useRef<{
+    viewer: PanoViewer;
+    panoId: string;
+    reloadKey: string | number | undefined;
+    previewKey: string | null;
+  } | null>(null);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -91,6 +156,7 @@ export function PanoStage({
     setViewer(v);
     callbacks.current.onViewer?.(v);
     return () => {
+      loaded.current = null;
       v.off('scene-change', onScene);
       v.off('hotspot-open', onHotspot);
       callbacks.current.onViewer?.(null);
@@ -99,28 +165,94 @@ export function PanoStage({
     };
   }, [baseUrl]);
 
-  const loadedOnce = useRef<PanoViewer | null>(null);
+  const stagePreviewKey =
+    preview && panoId !== null && preview.panoId === panoId ? preview.key : null;
+
   useEffect(() => {
-    if (!viewer || !panoId) return;
-    let current = true;
-    const { view: v, transition: fade } = latest.current;
-    const first = loadedOnce.current !== viewer;
-    loadedOnce.current = viewer;
-    let pending: Promise<void>;
-    if (fade && !first) {
-      pending = viewer.transitionTo(panoId, v);
-    } else {
-      if (v) viewer.setView(v);
-      pending = viewer.load(panoId);
+    if (!viewer) return;
+    if (!panoId) {
+      // Forget the last pano so coming back to it loads it again.
+      loaded.current = null;
+      return;
     }
-    pending.catch((err: unknown) => {
-      if (current) callbacks.current.onLoadError?.(err, panoId);
-    });
-    return () => {
-      current = false;
+    const prev = loaded.current;
+    const samePano = prev !== null && prev.viewer === viewer && prev.panoId === panoId;
+    const shownKey = samePano ? prev.previewKey : null;
+    const { view: v, transition: fade, preview: p } = latest.current;
+    const newPreview = p && stagePreviewKey !== null && stagePreviewKey !== shownKey ? p : null;
+    // A preview dropped with nothing else new: nothing to load.
+    if (samePano && prev.reloadKey === reloadKey && !newPreview) return;
+    const entry = { viewer, panoId, reloadKey, previewKey: shownKey };
+    loaded.current = entry;
+    // Each load gets a fresh entry, and a pano of null or viewer teardown
+    // clears it: a callback that finds another entry there was superseded and
+    // drops its result.
+    const live = () => loaded.current === entry;
+    const load = () => {
+      viewer.load(panoId).catch((err: unknown) => {
+        if (live()) callbacks.current.onLoadError?.(err, panoId);
+      });
     };
+
+    // Only the first load on a viewer and a pano change move the camera; a
+    // reload or a new preview of the pano on stage keeps it where it is.
+    const crossfade = fade && !samePano && prev?.viewer === viewer && !newPreview;
+    if (!samePano && v && !crossfade) viewer.setView(v);
+
+    if (!newPreview) {
+      if (crossfade) {
+        viewer.transitionTo(panoId, v).catch((err: unknown) => {
+          if (live()) callbacks.current.onLoadError?.(err, panoId);
+        });
+      } else {
+        load();
+      }
+      return;
+    }
+
+    // Whether or not the preview made it up, it's done with for this entry:
+    // report a failure, then load the tiles.
+    const previewFailed = (err: unknown) => {
+      callbacks.current.onPreviewError?.(err, panoId);
+      load();
+    };
+    const show = (source: PreviewSource) => {
+      if (!live()) {
+        closeSource(source);
+        return;
+      }
+      entry.previewKey = newPreview.key;
+      const opts =
+        newPreview.replacesVersion === undefined
+          ? {}
+          : { replacesVersion: newPreview.replacesVersion };
+      try {
+        viewer.showPreview(panoId, source, opts);
+      } catch (err) {
+        // The viewer closes a source it refuses, but make sure.
+        closeSource(source);
+        previewFailed(err);
+        return;
+      }
+      // showPreview cancels any load in flight, so the load follows it.
+      load();
+    };
+    const noSource = (err: unknown) => {
+      if (!live()) return;
+      entry.previewKey = newPreview.key;
+      previewFailed(err);
+    };
+    let made: PreviewSource | Promise<PreviewSource>;
+    try {
+      made = newPreview.source();
+    } catch (err) {
+      noSource(err);
+      return;
+    }
+    if ('then' in made) made.then(show, noSource);
+    else show(made);
     // reloadKey is a dependency only to re-run this load when it changes.
-  }, [viewer, panoId, reloadKey]);
+  }, [viewer, panoId, reloadKey, stagePreviewKey]);
 
   useEffect(() => {
     viewer?.setNorth(north ?? 0);
@@ -138,4 +270,10 @@ export function PanoStage({
       </PanoViewerContext.Provider>
     </div>
   );
+}
+
+function closeSource(source: PreviewSource): void {
+  for (const { image } of source.patches) {
+    if ('close' in image && typeof image.close === 'function') image.close();
+  }
 }

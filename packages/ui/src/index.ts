@@ -14,6 +14,7 @@ export { Modal, ModalHeader, type ModalHeaderProps, type ModalProps } from './Mo
 export {
   PanoStage,
   type PanoStageProps,
+  type StagePreview,
   type StageViewerOptions,
   type ViewerFactory,
 } from './PanoStage.js';
