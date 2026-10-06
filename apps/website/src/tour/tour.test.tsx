@@ -1,6 +1,6 @@
 import type { ViewerFactory } from '@internal/ui';
 import { loadConfig } from '@internal/web-kit';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -94,6 +94,13 @@ const createViewer: ViewerFactory = (_el, options) => {
 const lastViewer = () => viewers[viewers.length - 1]!;
 
 let objects: Record<string, unknown>;
+// When set, the view POST's body is held until the test resolves it.
+let viewGate: { promise: Promise<void>; resolve: () => void } | null;
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+};
 const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
   if (url.startsWith(CDN)) {
@@ -102,6 +109,11 @@ const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit
   }
   if (url.startsWith('/api/tours/tour-a/')) {
     const liked = url.endsWith('/like');
+    const gate = url.endsWith('/view') ? viewGate : null;
+    if (gate) {
+      const body = JSON.stringify({ views: 2400, likes: 7 });
+      return { ok: true, status: 200, text: () => gate.promise.then(() => body) } as Response;
+    }
     return Response.json(
       { views: 2400, likes: liked ? 8 : 7 },
       { status: init?.method ? 200 : 200 },
@@ -137,6 +149,7 @@ beforeEach(() => {
   viewers = [];
   failLoads = false;
   objects = { 'slugs/old-town.json': live, 'pub/tours/tour-a.json': bundle() };
+  viewGate = null;
   localStorage.clear();
   fetchMock.mockClear();
   vi.stubGlobal('fetch', fetchMock);
@@ -262,10 +275,7 @@ describe('/s/:slug', () => {
 
   it('likes with a stable X-Client-Id and only once', async () => {
     renderAt('/s/old-town');
-    const like = await screen.findByRole('button', { name: 'Like this tour' });
-    // Let the view POST land first, or its counts (likes 7) can overwrite the like's 8.
-    expect(await screen.findByText('2.4k')).toBeTruthy();
-    fireEvent.click(like);
+    fireEvent.click(await screen.findByRole('button', { name: 'Like this tour' }));
     await screen.findByRole('button', { name: 'Liked' });
     await waitFor(() => expect(calls('/api/tours/tour-a/like')).toHaveLength(1));
     const [call] = calls('/api/tours/tour-a/like');
@@ -275,6 +285,21 @@ describe('/s/:slug', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Liked' }));
     expect(calls('/api/tours/tour-a/like')).toHaveLength(1);
     expect(await screen.findByText('8')).toBeTruthy();
+  });
+
+  it('keeps the like count when the view response lands after the like', async () => {
+    viewGate = deferred();
+    renderAt('/s/old-town');
+    await viewRecorded();
+    fireEvent.click(screen.getByRole('button', { name: 'Like this tour' }));
+    expect(await screen.findByText('8')).toBeTruthy();
+    // Release the view response (likes 7) and let its whole promise chain settle.
+    await act(async () => {
+      viewGate?.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.getByText('8')).toBeTruthy();
+    expect(screen.queryByText('7')).toBeNull();
   });
 
   it('starts at ?pano= on the full viewer, keeping navigation', async () => {
