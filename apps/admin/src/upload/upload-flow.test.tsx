@@ -671,6 +671,40 @@ describe('sign-in during an upload', () => {
     expect(chipTitle()).toBe('We couldn’t process this image');
   });
 
+  it('a background upload clears its own record once it reaches its tour', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({ ...OLD_LANDED, savedAt: Date.now() }),
+    );
+    const { backend } = setup('/app/new?resume=upload', fakePending(pngFile('Harbour.png')));
+    await tick();
+    expect(bgRecords()).toHaveLength(1);
+    backend.state.manifests = [manifest('t1-abc', 'pano-old')];
+    await tick(5_000);
+    expect(backend.writes().map((w) => w.url)).toContain('/api/admin/tours/tour-1');
+    expect(bgRecords()).toEqual([]);
+  });
+
+  it("hiding the chip doesn't clear the sign-in record of the waiting upload it shows next", async () => {
+    const { backend, router } = await uploadThroughPut();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    await act(() => router.navigate('/new?tour=tour-1'));
+    await pick(pngFile('Second.png'));
+    expect(chipTitle()).toBe('Uploading panorama');
+
+    // The hidden upload's tour write needs a sign-in: it waits behind the busy chip.
+    backend.state.getTourStatus = 401;
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(5_000);
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Town_hall.png' });
+
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
+    await tick();
+    expect(within(chip()).getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Town_hall.png' });
+  });
+
   it('a resumed replace goes back to the tour in its record, not the one in the URL', async () => {
     const { backend, pending } = setup('/app/new?tour=tour-1&replace=pano-9');
     backend.state.manifests = [manifest('t1-old', 'pano-9')];

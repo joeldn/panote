@@ -426,7 +426,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const dismiss = useCallback(() => {
     const j = fg.current;
     release();
-    forget();
+    // Only this job's record: a waiting job release() just showed may have saved its own.
+    if (j) forgetFor(j);
+    else forget();
     if (!j) return;
     // Hidden, not stopped: tiling and the tour write carry on so the pano doesn't go missing.
     if (isLandedWork(j)) return;
@@ -435,7 +437,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (!j.landed && j.createdTour && j.target.kind === 'add') {
       void discardEmptyTour(j.target.tourId);
     }
-  }, [release, forget, discardEmptyTour]);
+  }, [release, forget, forgetFor, discardEmptyTour]);
 
   const onAction = (id: ChipActionId) => {
     const j = fg.current;
