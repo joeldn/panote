@@ -10,6 +10,7 @@ import {
   type PreviewSource,
 } from './equirect-layer.js';
 import type { TileGeometry } from './tile-geometry.js';
+import { sortDrawList } from './render/gl-renderer.js';
 import { dirFromYawPitch } from './project.js';
 
 const G = PREVIEW_GUTTER_PX;
@@ -234,7 +235,7 @@ describe('buildEquirectPatchGeometry', () => {
 });
 
 describe('EquirectLayer', () => {
-  it('uploads one texture per patch and draws them below level 0', () => {
+  it('uploads one texture per patch and draws them between level 0 and level 1', () => {
     const r = fakeRenderer();
     const layer = new EquirectLayer(r, gridSource(8000, 4000, 2, 1));
     expect(r.uploadTile).toHaveBeenCalledTimes(2);
@@ -242,7 +243,13 @@ describe('EquirectLayer', () => {
       { handle: 1, level: PREVIEW_LEVEL },
       { handle: 2, level: PREVIEW_LEVEL },
     ]);
-    expect(PREVIEW_LEVEL).toBeLessThan(0);
+    const order = sortDrawList([
+      { handle: 10, level: 1 },
+      ...layer.drawList(),
+      { handle: 11, level: 0 },
+      { handle: 12, level: 2 },
+    ]).map((d) => d.handle);
+    expect(order).toEqual([11, 1, 2, 10, 12]);
   });
 
   it('closes each bitmap once it is uploaded', () => {

@@ -49,8 +49,8 @@ export class PanoViewer implements ControlHost {
   private pendingLayers = new Set<TileLayer>();
   private preview: EquirectLayer | undefined;
   private previewPano: string | undefined;
-  // True once tiles for the preview's pano are on screen: it is then only an
-  // underlay, disposed at the next tiles-settled.
+  // True once tiles for the preview's pano are on screen: it then sits between
+  // level 0 and level 1, and is disposed at the next tiles-settled.
   private previewUnderlay = false;
   private raf = 0;
   private dirty = true;
@@ -244,7 +244,7 @@ export class PanoViewer implements ControlHost {
   }
 
   /** Show a local decode now, keeping the camera and superseding any load in flight.
-   *  A later load() of the same panoId keeps it under the tiles until tiles-settled. */
+   *  A later load() of the same panoId keeps it over level 0 until tiles-settled. */
   showPreview(panoId: string, source: PreviewSource): void {
     if (this.disposed) {
       closePreviewSource(source);

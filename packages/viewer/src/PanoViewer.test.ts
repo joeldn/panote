@@ -748,8 +748,8 @@ describe('PanoViewer', () => {
       expect(sceneChange).toHaveBeenCalledWith('pano-a');
       expect(viewer.getView()).toEqual(before);
       expect(lastDrawList(viewer)).toEqual([
-        { handle: 1, level: -1 },
-        { handle: 2, level: -1 },
+        { handle: 1, level: 0.5 },
+        { handle: 2, level: 0.5 },
       ]);
       viewer.dispose();
     });
@@ -803,11 +803,11 @@ describe('PanoViewer', () => {
       await load;
       expect(viewer.getView()).toEqual(before);
 
-      // Swapped in, with the preview as an underlay until tiles-settled.
+      // Swapped in: the preview paints over level 0 and under finer levels until tiles-settled.
       tick(viewer);
       const swapped = lastDrawList(viewer);
-      expect(swapped.filter((d) => d.level === -1)).toHaveLength(2);
-      expect(swapped.filter((d) => d.level >= 0).length).toBeGreaterThanOrEqual(FACES.length);
+      expect(swapped.filter((d) => d.level === 0.5)).toHaveLength(2);
+      expect(swapped.filter((d) => d.level === 0).length).toBeGreaterThanOrEqual(FACES.length);
       expect(renderer.removeTile).not.toHaveBeenCalledWith(1);
 
       for (let i = 0; i < 10 && settled.mock.calls.length === 0; i++) {
@@ -818,7 +818,7 @@ describe('PanoViewer', () => {
       expect(settled).toHaveBeenCalledTimes(1);
       expect(renderer.removeTile).toHaveBeenCalledWith(1);
       expect(renderer.removeTile).toHaveBeenCalledWith(2);
-      expect(lastDrawList(viewer).some((d) => d.level === -1)).toBe(false);
+      expect(lastDrawList(viewer).some((d) => d.level === 0.5)).toBe(false);
       expect(viewer.getView()).toEqual(before);
       viewer.dispose();
     });
@@ -847,7 +847,7 @@ describe('PanoViewer', () => {
       tiles.release();
       await pendingB;
       tick(viewer);
-      expect(lastDrawList(viewer).every((d) => d.level === -1)).toBe(true);
+      expect(lastDrawList(viewer).every((d) => d.level === 0.5)).toBe(true);
       expect(lastDrawList(viewer)).toHaveLength(2);
       viewer.dispose();
     });

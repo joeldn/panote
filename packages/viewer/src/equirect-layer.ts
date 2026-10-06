@@ -55,8 +55,8 @@ export const PREVIEW_MAX_PATCH_PX = 4096;
 /** Gutter each interior patch edge carries, in source pixels. */
 export const PREVIEW_GUTTER_PX = 2;
 
-/** Draw-list level for the preview: below level 0, so any resident tile paints over it. */
-export const PREVIEW_LEVEL = -1;
+/** Draw-list level for the preview: over the softer level 0, under every finer level. */
+export const PREVIEW_LEVEL = 0.5;
 
 // Mesh density: 256 segments per full turn of yaw, 128 per half turn of pitch.
 const SEGMENTS_U = 256;
