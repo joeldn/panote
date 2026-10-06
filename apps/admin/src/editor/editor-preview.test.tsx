@@ -46,7 +46,7 @@ const sceneRow = (name: string) =>
 const addPoint = () => screen.getByRole('button', { name: 'Add point' });
 const startHere = () => screen.getByRole('button', { name: /Start here/ });
 const northHere = () => screen.getByRole('button', { name: /North is here/ });
-const lookOnlyNote = () => screen.queryByText(/Look-only until this pano is ready/);
+const lookOnlyNote = () => screen.queryByText(/Look-only while the image uploads/);
 
 describe('editor: an upload in this tab', () => {
   let viewers: FakeViewer[];
@@ -120,7 +120,7 @@ describe('editor: an upload in this tab', () => {
     expect(within(card).getByText('Current')).toBeTruthy();
     const viewer = viewers.at(-1)!;
     expect(viewer.showPreview).toHaveBeenCalledWith('pano-1', decoder.sources[0], {});
-    expect(screen.getByText(/Uploading 43%\. Look around while it finishes/)).toBeTruthy();
+    expect(screen.getByText(/Uploading 43%\. Look around while it uploads/)).toBeTruthy();
     expect(lookOnlyNote()).toBeTruthy();
     expect((addPoint() as HTMLButtonElement).disabled).toBe(true);
 
@@ -132,25 +132,43 @@ describe('editor: an upload in this tab', () => {
     expect(viewer.setView).not.toHaveBeenCalled();
   });
 
-  it('keeps a processing scene look-only until its tiles are in', async () => {
+  it('keeps a processing scene editable; a point placed on the preview survives the swap', async () => {
     const { backend } = await pick();
     await land();
-    expect(screen.getByText(/Processing this pano\. Look around/)).toBeTruthy();
-    expect(lookOnlyNote()).toBeTruthy();
-    expect((addPoint() as HTMLButtonElement).disabled).toBe(true);
-    expect((startHere() as HTMLButtonElement).disabled).toBe(true);
-    expect((northHere() as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Processing this pano\. You can keep editing/)).toBeTruthy();
+    expect(lookOnlyNote()).toBeNull();
+    expect((startHere() as HTMLButtonElement).disabled).toBe(false);
+    expect((northHere() as HTMLButtonElement).disabled).toBe(false);
     // A second image can't go over one that is still tiling.
     const replace = within(sceneRow('Town hall')).getByRole('button', {
       name: 'Replace the image of Town hall',
     });
     expect((replace as HTMLButtonElement).disabled).toBe(true);
 
+    // Place a point on the preview and save it while the pano tiles.
+    fireEvent.click(addPoint());
+    fireEvent.click(document.querySelector('.ed-placing')!);
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await tick();
+    await tick();
+    const configPuts = backend.state.calls.filter(
+      (c) => c.method === 'PUT' && c.url.endsWith('/api/admin/panos/pano-1/config'),
+    );
+    const saved = configPuts.at(-1)?.body as { hotspots: unknown[] };
+    expect(saved.hotspots).toEqual([
+      { id: expect.any(String), type: 'info', yaw: 0.5, pitch: 0.1, title: 'New point' },
+    ]);
+
+    // Ready: the stage reloads onto the tiles, and the point is where it was.
     await tilesReady(backend);
+    const viewer = viewers.at(-1)!;
+    expect(viewer.load.mock.calls.map((c) => c[0])).toEqual(['pano-1', 'pano-1']);
     expect(screen.queryByText(/Processing this pano/)).toBeNull();
-    expect(lookOnlyNote()).toBeNull();
-    expect((addPoint() as HTMLButtonElement).disabled).toBe(false);
-    expect((startHere() as HTMLButtonElement).disabled).toBe(false);
+    const list = document.querySelector('.ed-points__list') as HTMLElement;
+    expect(within(list).getByRole('button', { name: /New point/ })).toBeTruthy();
+    expect(screen.getByText('Saved')).toBeTruthy();
     expect(
       within(sceneRow('Town hall')).getByRole('link', { name: 'Replace the image of Town hall' }),
     ).toBeTruthy();
@@ -171,7 +189,8 @@ describe('editor: an upload in this tab', () => {
     expect(within(card).getByRole('link', { name: 'Replace image' }).getAttribute('href')).toBe(
       '/app/new?tour=tour-1&replace=pano-1',
     );
-    expect((addPoint() as HTMLButtonElement).disabled).toBe(true);
+    // Nothing to wait for: the scene stays editable while the user decides.
+    expect((addPoint() as HTMLButtonElement).disabled).toBe(false);
 
     // Remove is the editor's own: confirm, then it's an unsaved change to the tour.
     fireEvent.click(within(card).getByRole('button', { name: 'Remove from tour' }));
@@ -274,18 +293,18 @@ describe('editor: scenes still tiling after a reload', () => {
   const publishes = () =>
     server.requests.filter((r) => r.method === 'POST' && r.path.endsWith('/publish'));
 
-  it('polls a scene whose tiles 404, keeps it look-only, and loads it once ready', async () => {
+  it('polls a scene whose tiles 404, keeps it editable, and loads it once ready', async () => {
     server.tiling.set('church', 'pending');
     await open();
     expect(statusPolls('church')).toHaveLength(1);
     expect(screen.getByText(/Processing this pano/)).toBeTruthy();
     expect(screen.queryByText(/tiles aren’t ready yet/)).toBeNull();
-    expect(lookOnlyNote()).toBeTruthy();
-    expect((addPoint() as HTMLButtonElement).disabled).toBe(true);
+    expect(lookOnlyNote()).toBeNull();
+    expect((addPoint() as HTMLButtonElement).disabled).toBe(false);
     const list = document.querySelector('.ed-points__list') as HTMLElement;
     expect(
       (within(list).getByRole('button', { name: /Altar/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    ).toBe(false);
     expect(within(sceneRow('Church')).getByText('Processing…')).toBeTruthy();
     // The square is fine: it's never polled.
     expect(statusPolls('square')).toHaveLength(0);

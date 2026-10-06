@@ -532,8 +532,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           </header>
           {lookOnly && (
             <p className="ed-hint ed-look-only" role="note">
-              <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only until this pano is
-              ready: points, views and connections unlock once it finishes processing.
+              <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
+              uploads: points, views and connections unlock once it lands.
             </p>
           )}
           {cfg && currentId && (

@@ -16,7 +16,8 @@ export interface StageStatusProps {
   onCheckAgain?: () => void;
 }
 
-const LOOK_ONLY = 'Look around while it finishes; editing unlocks once it’s ready.';
+const UPLOADING_NOTE = 'Look around while it uploads; editing unlocks once it lands.';
+const PROCESSING_NOTE = 'You can keep editing; the full-resolution tiles swap in once it’s ready.';
 
 /**
  * What the stage says about a scene whose tiles aren't in: a quiet note while it
@@ -38,7 +39,8 @@ export function StageStatus({
         : 'Processing this pano.';
     return (
       <p className="ed-stage-note ed-stage-note--busy" role="status">
-        <i className="fa-solid fa-circle-notch fa-spin" aria-hidden="true" /> {what} {LOOK_ONLY}
+        <i className="fa-solid fa-circle-notch fa-spin" aria-hidden="true" /> {what}{' '}
+        {status === 'uploading' ? UPLOADING_NOTE : PROCESSING_NOTE}
       </p>
     );
   }

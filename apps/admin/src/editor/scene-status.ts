@@ -67,10 +67,12 @@ export const sceneStatusOf = (t: Tiling): SceneStatus | null =>
   t === 'ready' || t === 'unknown' ? null : t;
 
 /**
- * Look-only: a scene whose image is still on its way (or never arrived) can be looked
- * at but not edited, since points and views set on it would be set against a stand-in.
+ * Look-only: while a scene's image is still uploading (a new pano, or a replace whose
+ * PUT is in flight) it can be looked at but not edited. Once the image lands the scene
+ * is editable while it tiles: the preview and the tiles share one mapping, so points
+ * and views set on the preview land on the same pixels.
  */
-export const isLookOnly = (s: SceneStatus | null): boolean => s !== null;
+export const isLookOnly = (s: SceneStatus | null): boolean => s === 'uploading';
 
 /** The pano's upload hasn't added it to the tour yet: an add with no scene of its own. */
 export function isPendingCard(p: PendingUpload, sceneIds: readonly string[]): boolean {
