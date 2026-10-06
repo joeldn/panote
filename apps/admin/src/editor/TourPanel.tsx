@@ -2,7 +2,9 @@ import { Button, cx } from '@internal/ui';
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router';
 
+import type { PendingUpload } from '../upload/upload-context.js';
 import { findLink, yawDegrees, type EditorDocs } from './model.js';
+import { pendingLine, pendingPct, type SceneStatus } from './scene-status.js';
 import { addPanoPath, replaceImagePath } from './upload-links.js';
 
 // Each nudge turns a connection by this much (design: "nudge ±degrees").
@@ -15,6 +17,12 @@ export interface TourPanelProps {
   startId: string | null;
   /** Unsaved edits: adding a pano leaves the editor, so it waits for a save. */
   dirty: boolean;
+  /** Uploads into this tour that have no scene yet, oldest first. */
+  pending?: PendingUpload[];
+  /** A scene whose tiles aren't in (uploading, processing, failed, timed out), else null. */
+  statusOf?: (panoId: string) => SceneStatus | null;
+  /** The open pano is look-only: its connections can't be changed yet. */
+  lookOnly?: boolean;
   onSelect: (panoId: string) => void;
   onSetStart: (panoId: string) => void;
   onRemove: (panoId: string) => void;
@@ -24,6 +32,15 @@ export interface TourPanelProps {
   onDisconnect: (to: string) => void;
 }
 
+const STATUS_LABEL: Record<SceneStatus, string> = {
+  uploading: 'Uploading…',
+  processing: 'Processing…',
+  failed: 'Couldn’t process',
+  'timed-out': 'Taking a while',
+};
+
+const noStatus = (): SceneStatus | null => null;
+
 const hueOf = (id: string): number => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
 
 /** Screen 04's "Tour" card: the scene list, entry scene, and connections from the open pano. */
@@ -32,6 +49,9 @@ export function TourPanel({
   currentId,
   startId,
   dirty,
+  pending = [],
+  statusOf = noStatus,
+  lookOnly = false,
   onSelect,
   onSetStart,
   onRemove,
@@ -80,6 +100,9 @@ export function TourPanel({
           const name = missing ? 'Missing pano' : s.current.title;
           const isCurrent = panoId === currentId;
           const link = from && !isCurrent ? findLink(from, panoId) : undefined;
+          const status = missing ? null : statusOf(panoId);
+          // A second image can't go over one that is still on its way.
+          const busy = status === 'uploading' || status === 'processing';
           return (
             <li
               key={panoId}
@@ -87,6 +110,7 @@ export function TourPanel({
                 'ed-scene',
                 isCurrent && 'ed-scene--current',
                 missing && 'ed-scene--missing',
+                status && `ed-scene--${status}`,
               )}
             >
               <div className="ed-scene__row">
@@ -109,6 +133,7 @@ export function TourPanel({
                       {s?.kind === 'missing' && s.deleting ? 'Being deleted' : 'Deleted'}
                     </span>
                   )}
+                  {status && <span className="ed-scene__sub">{STATUS_LABEL[status]}</span>}
                 </button>
                 <button
                   type="button"
@@ -121,7 +146,18 @@ export function TourPanel({
                 >
                   <i className="fa-solid fa-star" aria-hidden="true" />
                 </button>
-                {!missing && (
+                {!missing && busy && (
+                  <button
+                    type="button"
+                    className="ed-icon-btn"
+                    aria-label={`Replace the image of ${name}`}
+                    title="You can replace the image once it’s ready"
+                    disabled
+                  >
+                    <i className="fa-solid fa-camera" aria-hidden="true" />
+                  </button>
+                )}
+                {!missing && !busy && (
                   <Link
                     className="ed-icon-btn"
                     to={replaceImagePath(docs.tourId, panoId)}
@@ -152,6 +188,7 @@ export function TourPanel({
                       <button
                         type="button"
                         className="ed-icon-btn ed-conn__nudge"
+                        disabled={lookOnly}
                         aria-label={`Nudge left ${NUDGE_DEG}°`}
                         onClick={() => onNudge(panoId, -NUDGE)}
                       >
@@ -160,6 +197,7 @@ export function TourPanel({
                       <button
                         type="button"
                         className="ed-icon-btn ed-conn__nudge"
+                        disabled={lookOnly}
                         aria-label={`Nudge right ${NUDGE_DEG}°`}
                         onClick={() => onNudge(panoId, NUDGE)}
                       >
@@ -168,6 +206,7 @@ export function TourPanel({
                       <button
                         type="button"
                         className="ed-conn__aim"
+                        disabled={lookOnly}
                         onClick={() => onAim(panoId, name)}
                       >
                         <i className="fa-solid fa-crosshairs" aria-hidden="true" /> Aim
@@ -175,6 +214,7 @@ export function TourPanel({
                       <button
                         type="button"
                         className="ed-icon-btn"
+                        disabled={lookOnly}
                         aria-label={`Remove connection to ${name}`}
                         onClick={() => onDisconnect(panoId)}
                       >
@@ -187,6 +227,7 @@ export function TourPanel({
                       <button
                         type="button"
                         className="ed-conn__aim"
+                        disabled={lookOnly}
                         onClick={() => onAim(panoId, name)}
                       >
                         <i className="fa-solid fa-crosshairs" aria-hidden="true" /> Aim here
@@ -198,8 +239,49 @@ export function TourPanel({
             </li>
           );
         })}
+        {pending.map((p) => {
+          const pct = pendingPct(p);
+          const isCurrent = p.panoId !== null && p.panoId === currentId;
+          return (
+            <li
+              key={p.key}
+              className={cx('ed-scene', 'ed-scene--pending', isCurrent && 'ed-scene--current')}
+            >
+              <div className="ed-scene__row">
+                <button
+                  type="button"
+                  className="ed-scene__open"
+                  aria-current={isCurrent ? 'true' : undefined}
+                  disabled={p.panoId === null}
+                  onClick={() => p.panoId && onSelect(p.panoId)}
+                >
+                  <span className="ed-scene__thumb ed-scene__thumb--pending" aria-hidden="true">
+                    <i className="fa-solid fa-cloud-arrow-up" />
+                  </span>
+                  <span className="ed-pending__name">{p.fileName}</span>
+                  <span className="ed-scene__sub">{pendingLine(p)}</span>
+                </button>
+                {isCurrent && <span className="ed-scene__badge">Current</span>}
+              </div>
+              {pct !== null && (
+                <div
+                  className="ed-scene__bar"
+                  role="progressbar"
+                  aria-label={`Uploading ${p.fileName}`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={pct}
+                >
+                  <span style={{ width: `${pct}%` }} />
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
-      {scenes.length === 0 && <p className="ed-hint">This tour has no panos yet.</p>}
+      {scenes.length === 0 && pending.length === 0 && (
+        <p className="ed-hint">This tour has no panos yet.</p>
+      )}
     </section>
   );
 }

@@ -57,6 +57,8 @@ export function fakeBackend() {
     getTourStatus: 200,
     /** The panoId the presign hands a new pano. */
     newPanoId: 'pano-1',
+    /** Panos the tour publish reports as `not-ready` (a 422); empty publishes. */
+    publishNotReady: [] as string[],
   };
 
   const fetch: FetchLike = async (url, init = {}) => {
@@ -122,6 +124,18 @@ export function fakeBackend() {
       const panoId = path.split('/')[4]!;
       state.configs[panoId] ??= { title: (body as { title: string }).title };
       return json({ etag: 'c1' });
+    }
+    if (method === 'POST' && path === '/api/admin/tours/tour-1/publish') {
+      if (state.publishNotReady.length > 0) {
+        const scenes = state.publishNotReady.map((panoId) => ({ panoId, reason: 'not-ready' }));
+        return json({ error: 'scenes not publishable', scenes }, 422);
+      }
+      return json({
+        slug: 'town-hall',
+        visibility: 'unlisted',
+        publishedAt: '2026-10-01T00:00:00.000Z',
+        url: '/s/town-hall',
+      });
     }
     if (method === 'GET' && path === '/api/admin/tours/tour-1') {
       if (state.getTourStatus !== 200) return json({ error: 'nope' }, state.getTourStatus);

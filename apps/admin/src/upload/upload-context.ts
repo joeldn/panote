@@ -62,6 +62,8 @@ export interface Uploads {
   previewFor(panoId: string): StagePreview | null;
   /** Uploads into `tourId` still under way (or failed and not dismissed), oldest first. */
   pendingFor(tourId: string): PendingUpload[];
+  /** Polls a timed-out upload of `panoId` again (the chip's Check again); false if none. */
+  checkAgain(panoId: string): boolean;
 }
 
 export const UploadsContext = createContext<Uploads | null>(null);
