@@ -880,7 +880,7 @@ describe('PanoViewer', () => {
       const viewer = new PanoViewer(makeContainer(400, 800));
       const settled = vi.fn();
       viewer.on('tiles-settled', settled);
-      viewer.showPreview('pano-a', source(), { version: 'v2' });
+      viewer.showPreview('pano-a', source(), { replacesVersion: 'v1' });
 
       await viewer.load('pano-a');
       tick(viewer);
@@ -907,7 +907,7 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
-    it('takes any manifest as its own when no version is given', async () => {
+    it('takes any manifest as its own without replacesVersion (a new pano)', async () => {
       stubTiles();
       manifestVersion = 'v7';
       const viewer = new PanoViewer(makeContainer(400, 800));
@@ -919,6 +919,20 @@ describe('PanoViewer', () => {
       expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
       await settle(viewer, settled);
       expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
+      viewer.dispose();
+    });
+
+    it('treats an unversioned old manifest as the replaced one when replacesVersion is empty', async () => {
+      stubTiles();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const settled = vi.fn();
+      viewer.on('tiles-settled', settled);
+      viewer.showPreview('pano-a', source(), { replacesVersion: '' });
+      await viewer.load('pano-a');
+      tick(viewer);
+      expect(previewItems(viewer).map((d) => d.level)).toEqual([3, 3]);
+      await settle(viewer, settled);
+      expect(rendererOf(viewer).removeTile).not.toHaveBeenCalledWith(1);
       viewer.dispose();
     });
 
@@ -941,7 +955,7 @@ describe('PanoViewer', () => {
           image: image(),
         })),
       };
-      viewer.showPreview('pano-a', wide, { version: 'v2' });
+      viewer.showPreview('pano-a', wide, { replacesVersion: 'v1' });
       await viewer.load('pano-a');
       tick(viewer);
       const levels = lastDrawList(viewer)

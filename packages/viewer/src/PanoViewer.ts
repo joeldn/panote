@@ -54,8 +54,9 @@ export class PanoViewer implements ControlHost {
   private pendingLayers = new Set<TileLayer>();
   private preview: EquirectLayer | undefined;
   private previewPano: string | undefined;
-  // The manifest version the preview stands in for; undefined accepts any.
-  private previewVersion: string | undefined;
+  // The version of the tiles the preview replaces ('' for unversioned ones);
+  // undefined for a new pano, where any manifest is the preview's own.
+  private previewReplaces: string | undefined;
   // True once the preview's own tiles are on screen: it then sits among the
   // tile levels by resolution (see previewDrawLevel) and is disposed at the
   // next tiles-settled. False while it covers tiles that are not its own.
@@ -240,7 +241,8 @@ export class PanoViewer implements ControlHost {
       // Replacing an image keeps the panoId, so the manifest can still be the
       // old image's until the new tiles are written. Those tiles are not the
       // preview's: it stays on top of them and outlives their tiles-settled.
-      const own = this.previewVersion === undefined || manifest.version === this.previewVersion;
+      const own =
+        this.previewReplaces === undefined || (manifest.version ?? '') !== this.previewReplaces;
       this.previewUnderlay = own;
       this.preview.setLevel(
         own
@@ -270,11 +272,14 @@ export class PanoViewer implements ControlHost {
    * A later `load(panoId)` swaps the tiles in under it: once they are on screen
    * the preview paints over the tile levels no sharper than itself and under
    * the sharper ones (see `previewDrawLevel`), and is disposed at the next
-   * `tiles-settled`. Pass `options.version`, the version the new upload's
-   * tiles will have, when `panoId` may already have tiles from an earlier
-   * image (a replace): a `load()` that gets a manifest with a different
-   * version then leaves the preview on top of those tiles and keeps it past
-   * their `tiles-settled`. With no version, any manifest for `panoId` counts.
+   * `tiles-settled`. On a replace, `panoId` already has tiles from the old
+   * image and the new version is not known until the server has tiled the
+   * upload, so pass `options.replacesVersion`, the old manifest's version
+   * (`''` for an unversioned one, as the upload machine's baseline has it). A
+   * `load()` that gets a manifest with that version leaves the preview on top
+   * of the old tiles and keeps it past their `tiles-settled`; any other
+   * version is the preview's own. Without `replacesVersion` (a new pano), any
+   * manifest for `panoId` is its own.
    *
    * Ownership: the patches' ImageBitmaps are closed as soon as they are on the
    * GPU (or straight away if the viewer is disposed or the source is
@@ -285,7 +290,11 @@ export class PanoViewer implements ControlHost {
    * resolves without swapping anything in. Call `load(panoId)` again after
    * this to get the tiles.
    */
-  showPreview(panoId: string, source: PreviewSource, options: { version?: string } = {}): void {
+  showPreview(
+    panoId: string,
+    source: PreviewSource,
+    options: { replacesVersion?: string } = {},
+  ): void {
     if (this.disposed) {
       closePreviewSource(source);
       return;
@@ -296,7 +305,7 @@ export class PanoViewer implements ControlHost {
     this.disposePreview();
     this.preview = preview;
     this.previewPano = panoId;
-    this.previewVersion = options.version;
+    this.previewReplaces = options.replacesVersion;
     this.layer?.dispose();
     this.layer = undefined;
     this.wasPending = false;
@@ -311,7 +320,7 @@ export class PanoViewer implements ControlHost {
     this.preview?.dispose();
     this.preview = undefined;
     this.previewPano = undefined;
-    this.previewVersion = undefined;
+    this.previewReplaces = undefined;
     this.previewUnderlay = false;
   }
 
