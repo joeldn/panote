@@ -216,7 +216,8 @@ describe('/s/:slug', () => {
       settings: { controls: 'top', showMap: false, showCompass: false, autoRotate: true },
     });
     renderAt('/s/old-town');
-    await screen.findByText('Old town');
+    // The viewer is created in PanoStage's effect, which can land after the title renders.
+    await shown('square');
     expect(screen.getByRole('toolbar').className).toContain('pn-controls--top');
     expect(screen.queryByRole('img', { name: 'Compass' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Map' })).toBeNull();
