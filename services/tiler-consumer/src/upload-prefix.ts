@@ -53,3 +53,22 @@ const LOG_PANO_RE = /^panos\/[^/]+\/([^/]+)\/original$/;
  * throws: a key of the wrong shape yields a fixed placeholder.
  */
 export const panoIdForLog = (key: string): string => LOG_PANO_RE.exec(key)?.[1] ?? '<unparsed-key>';
+
+// Any `panos/<owner>/` prefix inside free text, e.g. an R2 key in an error.
+const OWNER_PREFIX_IN_TEXT_RE = /panos\/[^/\s]+\//g;
+
+/**
+ * Strips the owner segment out of any `panos/<owner>/...` key in `text`,
+ * keeping the rest of the key.
+ */
+export const redactOwner = (text: string): string =>
+  text.replace(OWNER_PREFIX_IN_TEXT_RE, 'panos/<owner>/');
+
+/**
+ * An error as text that is safe to log or return. Errors from the R2 S3
+ * client (`R2 DELETE <key> -> 403`), the R2 binding and key parsing can
+ * all carry an owner-bearing key, so every caught error that reaches a log
+ * line or a response body goes through this.
+ */
+export const errorText = (e: unknown): string =>
+  redactOwner(e instanceof Error ? e.message : String(e));

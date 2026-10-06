@@ -11,7 +11,7 @@ import {
   tileFailedKeyFromOriginalKey,
   tileVersionPrefix,
 } from '@internal/contracts';
-import { deriveUploadTarget } from './upload-prefix.js';
+import { deriveUploadTarget, errorText } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
 
 // The Tiler DO (src/consumer.ts) forwards these through `Container.envVars`
@@ -82,7 +82,7 @@ const deleteKeys = async (keys: string[]): Promise<void> => {
       await r2.deleteObject(k);
     } catch (e) {
       failed.push(k);
-      console.error(`failed to delete ${k}: ${String(e)}`);
+      console.error(`failed to delete ${k}: ${errorText(e)}`);
     }
   }
   if (failed.length) throw new Error(`cleanup failed to delete: ${failed.join(', ')}`);
@@ -202,7 +202,7 @@ createServer((req, res) => {
             // Successful manifest swap (unit B4): clear any earlier marker.
             // Best-effort - a delete failure must not fail this job.
             await r2.deleteObject(tileFailedKeyFromOriginalKey(key)).catch((e: unknown) => {
-              console.warn(`failed to clear tile-failed marker pano=${panoId}: ${String(e)}`);
+              console.warn(`failed to clear tile-failed marker pano=${panoId}: ${errorText(e)}`);
             });
           }
         }
@@ -212,7 +212,8 @@ createServer((req, res) => {
         await rm(work, { recursive: true, force: true });
       }
     } catch (e) {
-      res.writeHead(500).end(String(e));
+      // The consumer logs this body, so it goes through errorText too.
+      res.writeHead(500).end(errorText(e));
     }
   });
 }).listen(8080);

@@ -1,6 +1,6 @@
 import { Container } from '@cloudflare/containers';
 import { containerEnvVars } from './container-env.js';
-import { deriveUploadTarget, panoIdForLog } from './upload-prefix.js';
+import { deriveUploadTarget, errorText, panoIdForLog, redactOwner } from './upload-prefix.js';
 import { writeFailureMarker } from './failure-marker.js';
 import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
 
@@ -90,9 +90,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       // starts a 12 GiB container just to 500 on the same rejected key).
       ({ panoId } = deriveUploadTarget(key));
     } catch (e) {
-      console.error(
-        `skip unprocessable key pano=${panoIdForLog(key)}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      console.error(`skip unprocessable key pano=${panoIdForLog(key)}: ${errorText(e)}`);
       await writeFailureMarker(env.BUCKET, key, 'unprocessable-key', msg.body.object.eTag);
       msg.ack();
       continue;
@@ -119,16 +117,14 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
         } catch {
           // A failed body read must not block the retry below.
         }
-        console.error(`tile job failed pano=${panoId}: ${res.status} ${bodyText}`);
+        console.error(`tile job failed pano=${panoId}: ${res.status} ${redactOwner(bodyText)}`);
         msg.retry();
       }
     } catch (e) {
       // Covers a failed fetch and a DO constructor throw (missing R2
       // secrets, container-env.ts); e's message never contains a secret.
       console.warn(`tile job end pano=${panoId} threw after ${elapsed()}`);
-      console.error(
-        `tile job failed pano=${panoId}: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      console.error(`tile job failed pano=${panoId}: ${errorText(e)}`);
       msg.retry();
     }
   }

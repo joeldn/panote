@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveUploadTarget, panoIdForLog } from './upload-prefix.js';
+import { deriveUploadTarget, errorText, panoIdForLog, redactOwner } from './upload-prefix.js';
 
 describe('deriveUploadTarget', () => {
   it('returns the panoId for a valid key', () => {
@@ -87,4 +87,30 @@ describe('panoIdForLog', () => {
       expect(panoIdForLog(key)).toBe('<unparsed-key>');
     },
   );
+});
+
+describe('redactOwner', () => {
+  it('replaces the owner segment of every panos/ key in the text', () => {
+    expect(
+      redactOwner('R2 DELETE panos/ae-_vTXvv70/p1/tile-failed -> 403; also panos/x/p2/original'),
+    ).toBe('R2 DELETE panos/<owner>/p1/tile-failed -> 403; also panos/<owner>/p2/original');
+  });
+
+  it('leaves owner-free tile keys alone', () => {
+    expect(redactOwner('R2 PUT tiles/p1/t1-abc/0/px/0-0.webp -> 500')).toBe(
+      'R2 PUT tiles/p1/t1-abc/0/px/0-0.webp -> 500',
+    );
+  });
+});
+
+describe('errorText', () => {
+  it('returns an Error message with the owner scrubbed', () => {
+    expect(errorText(new Error('R2 DELETE panos/secret/p1/tile-failed -> 403'))).toBe(
+      'R2 DELETE panos/<owner>/p1/tile-failed -> 403',
+    );
+  });
+
+  it('stringifies a non-Error and scrubs it too', () => {
+    expect(errorText('boom at panos/secret/p1/original')).toBe('boom at panos/<owner>/p1/original');
+  });
 });

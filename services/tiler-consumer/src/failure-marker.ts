@@ -5,6 +5,7 @@ import {
 } from '@internal/contracts';
 import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { putJson } from '@internal/worker-kit/r2-binding';
+import { errorText, panoIdForLog } from './upload-prefix.js';
 
 export type FailureReason = 'dlq' | 'oversize' | 'unprocessable-key';
 export type MarkerOutcome = 'written' | 'skipped' | 'failed';
@@ -22,14 +23,14 @@ export const writeFailureMarker = async (
   reason: FailureReason,
   expectedEtag?: string,
 ): Promise<MarkerOutcome> => {
+  // Log lines name the pano only: both keys below carry the owner segment.
+  const pano = panoIdForLog(originalNotificationKey);
   let markerKey: string;
   try {
     markerKey = tileFailedKeyFromOriginalKey(originalNotificationKey);
   } catch (e) {
     // No owner/panoId to hang a marker off - nothing to write.
-    console.warn(
-      `cannot derive tile-failed marker for ${originalNotificationKey}: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    console.warn(`cannot derive tile-failed marker pano=${pano}: ${errorText(e)}`);
     return 'skipped';
   }
   // Same input already validated above, so this cannot throw again.
@@ -42,28 +43,22 @@ export const writeFailureMarker = async (
     head = await bucket.head(originalNotificationKey);
   } catch (e) {
     // An R2 error here must not read as "original is gone" - skip, don't write.
-    console.warn(
-      `skip tile-failed marker for ${originalNotificationKey}: HEAD failed (${e instanceof Error ? e.message : String(e)})`,
-    );
+    console.warn(`skip tile-failed marker pano=${pano}: HEAD failed (${errorText(e)})`);
     return 'skipped';
   }
   if (!head) {
-    console.warn(
-      `skip tile-failed marker for ${originalNotificationKey}: original no longer exists`,
-    );
+    console.warn(`skip tile-failed marker pano=${pano}: original no longer exists`);
     return 'skipped';
   }
   // Cloudflare create events always carry object.eTag; a missing one can't
   // be proven current, so skip rather than fail open onto whatever's there.
   if (expectedEtag === undefined) {
-    console.warn(
-      `skip tile-failed marker for ${originalNotificationKey}: notification carried no eTag`,
-    );
+    console.warn(`skip tile-failed marker pano=${pano}: notification carried no eTag`);
     return 'skipped';
   }
   if (bareEtag(head.etag) !== bareEtag(expectedEtag)) {
     console.warn(
-      `skip tile-failed marker for ${originalNotificationKey}: original etag changed (superseded by a newer upload)`,
+      `skip tile-failed marker pano=${pano}: original etag changed (superseded by a newer upload)`,
     );
     return 'skipped';
   }
@@ -77,14 +72,14 @@ export const writeFailureMarker = async (
       const expectedVersion = `t${TILER_OUTPUT_VERSION}-${bareEtag(head.etag)}`;
       if (manifest.version === expectedVersion) {
         console.warn(
-          `skip tile-failed marker for ${originalNotificationKey}: a concurrent attempt already tiled this etag (manifest version ${expectedVersion})`,
+          `skip tile-failed marker pano=${pano}: a concurrent attempt already tiled this etag (manifest version ${expectedVersion})`,
         );
         return 'skipped';
       }
     }
   } catch (e) {
     console.warn(
-      `could not check the manifest for ${originalNotificationKey} before writing a marker: ${e instanceof Error ? e.message : String(e)}`,
+      `could not check the manifest pano=${pano} before writing a marker: ${errorText(e)}`,
     );
   }
 
@@ -97,9 +92,7 @@ export const writeFailureMarker = async (
       { reason, originalEtag: head.etag },
     );
   } catch (e) {
-    console.error(
-      `failed to write tile-failed marker ${markerKey}: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    console.error(`failed to write tile-failed marker pano=${pano}: ${errorText(e)}`);
     return 'failed';
   }
 
@@ -112,7 +105,7 @@ export const writeFailureMarker = async (
       let cleared = true;
       await bucket.delete(markerKey).catch((e: unknown) => {
         cleared = false;
-        console.warn(`failed to clear a just-written marker ${markerKey}: ${String(e)}`);
+        console.warn(`failed to clear a just-written marker pano=${pano}: ${errorText(e)}`);
       });
       return cleared ? 'skipped' : 'failed';
     }
@@ -120,7 +113,7 @@ export const writeFailureMarker = async (
     // The marker is already written; log only - there is nothing safe to
     // undo without knowing whether the original is actually still there.
     console.warn(
-      `could not verify the original still exists after writing ${markerKey}: ${e instanceof Error ? e.message : String(e)}`,
+      `could not verify the original still exists after writing the marker pano=${pano}: ${errorText(e)}`,
     );
   }
   return 'written';

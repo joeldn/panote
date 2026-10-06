@@ -7,6 +7,11 @@ export interface DeadLetteredItem {
   marker: MarkerOutcome | 'none';
 }
 
+// The full key stays in the email on purpose, unlike the log lines. The
+// email goes to one operator address held as a secret, not to shared logs,
+// and the re-tile procedure (docs/deploy.md) needs the whole
+// panos/<owner>/<panoId>/original key, with no quick way back from a
+// panoId to its owner.
 const itemLine = (item: DeadLetteredItem): string =>
   item.key === null
     ? `- <no object.key> (message ${item.messageId})`
