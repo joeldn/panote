@@ -129,6 +129,27 @@ function publishNotice(
   }
 }
 
+const sceneName = (docs: EditorDocs, panoId: string): string => {
+  const s = docs.scenes[panoId];
+  return s?.kind === 'config' ? s.current.title : 'Missing pano';
+};
+
+/** “Hall”, or “your new panos” for more than one. */
+const processingSubject = (docs: EditorDocs, panoIds: string[]): string =>
+  panoIds.length === 1 ? `“${sceneName(docs, panoIds[0]!)}” finishes` : 'your new panos finish';
+
+/** A publish that only hit `not-ready`: nothing is wrong, the tiles just aren't there yet. */
+function waitingNotice(docs: EditorDocs, panoIds: string[], wasPublished: boolean): EditorNotice {
+  const subject = processingSubject(docs, panoIds);
+  return {
+    id: 'publish',
+    tone: 'info',
+    text: wasPublished
+      ? `Saved. The share link updates as soon as ${subject} processing.`
+      : `Saved. Publishing as soon as ${subject} processing.`,
+  };
+}
+
 /** Load, edit, save (one conditional PUT per dirty doc), publish, and resolve conflicts. */
 export function useEditor(
   api: EditorApi,
@@ -170,6 +191,15 @@ export function useEditor(
   const [publish, setPublish] = useState<TourPublishState | null>(null);
   const publishRef = useRef<TourPublishState | null>(null);
   const [notices, setNotices] = useState<EditorNotice[]>([]);
+  // The last publish attempt hit only `not-ready` for these panos: once their tiles are
+  // in, the editor publishes again by itself (autoRepublish). Null otherwise.
+  const [awaitingTiles, setAwaitingState] = useState<string[] | null>(null);
+  const awaitingRef = useRef<string[] | null>(null);
+  const setAwaiting = useCallback((ids: string[] | null) => {
+    awaitingRef.current = ids;
+    setAwaitingState(ids);
+  }, []);
+  const publishingRef = useRef(false);
 
   // Synchronous so a save started right after an edit sees it.
   const dispatch = useCallback((action: EditorAction) => {
@@ -269,25 +299,52 @@ export function useEditor(
     if (ready && dirtyCount === 0 && storage) clearDraft(storage, user, tourId);
   }, [ready, dirtyCount, storage, user, tourId]);
 
+  /** `auto`: the editor's own retry once the tiles a `not-ready` publish waited on are in. */
   const republishWith = useCallback(
-    async (fallback: EditorDocs) => {
+    async (fallback: EditorDocs, { auto = false } = {}) => {
       const wasPublished = publishRef.current !== null;
+      const waitedOn = awaitingRef.current;
+      publishingRef.current = true;
       setPublishing(true);
       try {
         const published = await runPublish(api, tourId);
+        const docsNow = docsRef.current ?? fallback;
         if (published.kind === 'ok') {
           const { slug, visibility, publishedAt } = published.publish;
           publishRef.current = { slug, visibility, publishedAt };
           setPublish(publishRef.current);
         }
-        const notice = publishNotice(published, docsRef.current ?? fallback, wasPublished);
+        if (published.kind === 'unpublishable' && published.scenes.length > 0) {
+          const ids = published.scenes.map((s) => s.panoId);
+          const onlyNotReady = published.scenes.every((s) => s.reason === 'not-ready');
+          // An automatic retry that finds a pano it thought was ready still not ready
+          // doesn't wait again (it would loop): the notice offers Try again instead.
+          const again = auto && ids.some((id) => waitedOn?.includes(id));
+          if (onlyNotReady && !again) {
+            setAwaiting(ids);
+            notify(waitingNotice(docsNow, ids, wasPublished));
+            return;
+          }
+        }
+        setAwaiting(null);
+        if (auto && published.kind === 'ok') {
+          notify({
+            id: 'publish',
+            tone: 'info',
+            text: 'Your new panos are processed and the share link is up to date.',
+            link: { to: 'share/link', label: 'Share' },
+          });
+          return;
+        }
+        const notice = publishNotice(published, docsNow, wasPublished);
         if (notice) notify(notice);
         else dismiss('publish');
       } finally {
+        publishingRef.current = false;
         setPublishing(false);
       }
     },
-    [api, tourId, notify, dismiss],
+    [api, tourId, notify, dismiss, setAwaiting],
   );
 
   const hasConflict = () => Object.values(failuresRef.current).some((f) => f?.kind === 'conflict');
@@ -374,6 +431,36 @@ export function useEditor(
   const republish = useCallback(async () => {
     if (docsRef.current) await republishWith(docsRef.current);
   }, [republishWith]);
+
+  /**
+   * The tiles the last publish waited on are all in: publish again. A no-op unless that
+   * publish hit `not-ready` (and nothing else has been tried since), or while a save or
+   * another publish is under way.
+   */
+  const autoRepublish = useCallback(async () => {
+    if (!awaitingRef.current || savingRef.current || publishingRef.current) return;
+    if (docsRef.current) await republishWith(docsRef.current, { auto: true });
+  }, [republishWith]);
+
+  /** A pano the last publish waited on failed: stop waiting, and say what to do. */
+  const tilesFailed = useCallback(
+    (panoIds: string[]) => {
+      if (!awaitingRef.current) return;
+      setAwaiting(null);
+      const docsNow = docsRef.current;
+      const names = docsNow
+        ? panoIds.map((id) => `“${sceneName(docsNow, id)}”`).join(', ')
+        : 'A pano';
+      const one = panoIds.length === 1;
+      notify({
+        id: 'publish',
+        tone: 'warn',
+        text: `${names} couldn’t be processed, so the share link wasn’t updated. Replace ${one ? 'its image' : 'their images'} or remove ${one ? 'it' : 'them'} from the tour, then try again.`,
+        action: 'republish',
+      });
+    },
+    [notify, setAwaiting],
+  );
 
   /** Fetch the server's copy of one document: its ETag and contents. */
   const fetchDoc = useCallback(
@@ -475,6 +562,9 @@ export function useEditor(
     publish,
     republish,
     publishing,
+    awaitingTiles,
+    autoRepublish,
+    tilesFailed,
     notices,
     dismiss,
     syncAppended,
