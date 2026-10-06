@@ -18,6 +18,19 @@ import {
 } from './pyramid.js';
 import { TILER_OUTPUT_VERSION } from './version.js';
 
+/**
+ * Sets the libvips worker-thread count for every sharp op in this process and
+ * returns the value now in effect. sharp drops its default to 1 on glibc
+ * Linux without jemalloc (node:24-slim is glibc), and that call wins over a
+ * VIPS_CONCURRENCY env var, so a caller that wants more threads must call
+ * this. Exposed here so callers don't need their own sharp dependency.
+ */
+export const setVipsConcurrency = (threads: number): number => {
+  if (!Number.isInteger(threads) || threads < 1)
+    throw new Error(`vips concurrency must be a positive integer (got ${threads})`);
+  return sharp.concurrency(threads);
+};
+
 export interface BuildOptions {
   src: string;
   outDir: string; // tiles root (e.g. apps/demo/public/tiles)

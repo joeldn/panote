@@ -17,6 +17,10 @@ import { manifestKey, tileFailedKeyFromOriginalKey, tileVersionPrefix } from '@i
 const MOCK_TILER_OUTPUT_VERSION = 7;
 
 const buildMock = vi.fn(async () => ({}));
+const setVipsConcurrencyMock = vi.fn((n: number) => n);
+// clearMocks wipes call history before each test, so the import-time call
+// is captured in beforeAll.
+let vipsConcurrencyCallsAtImport: unknown[][] = [];
 const uploadDirMock = vi.fn(async () => {});
 const r2GetMock = vi.fn();
 const r2PutMock = vi.fn(async () => {});
@@ -47,6 +51,7 @@ vi.mock('node:fs/promises', () => ({
 
 vi.mock('@internal/tiler', () => ({
   build: buildMock,
+  setVipsConcurrency: setVipsConcurrencyMock,
   TILER_OUTPUT_VERSION: MOCK_TILER_OUTPUT_VERSION,
 }));
 
@@ -116,6 +121,7 @@ beforeAll(async () => {
   process.env.R2_ACCESS_KEY_ID = 'test-key-id';
   process.env.R2_SECRET_ACCESS_KEY = 'test-secret';
   await import('./container.js');
+  vipsConcurrencyCallsAtImport = [...setVipsConcurrencyMock.mock.calls];
 });
 
 afterEach(() => {
@@ -173,6 +179,12 @@ const setupManifestWritten = (panoId: string): void => {
   installFsTree(buildFsTree(panoId));
   r2GetMock.mockResolvedValue(okOriginalResponse());
 };
+
+describe('container startup', () => {
+  it('sets libvips to 4 threads, matching standard-4 in wrangler.jsonc', () => {
+    expect(vipsConcurrencyCallsAtImport).toEqual([[4]]);
+  });
+});
 
 describe('container.ts /tile handler', () => {
   it('uploads under the owner-free versioned tile prefix, derived from TILER_OUTPUT_VERSION and the original ETag', async () => {

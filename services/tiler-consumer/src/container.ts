@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { build, TILER_OUTPUT_VERSION } from '@internal/tiler';
+import { build, setVipsConcurrency, TILER_OUTPUT_VERSION } from '@internal/tiler';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 import {
   manifestKey,
@@ -31,6 +31,14 @@ const r2 = createR2S3Client({
   accessKeyId: requireEnv('R2_ACCESS_KEY_ID'),
   secretAccessKey: requireEnv('R2_SECRET_ACCESS_KEY'),
 });
+// libvips threads. Must match the vCPU count of `instance_type` in
+// wrangler.jsonc (standard-4 = 4 vCPU). Set explicitly because sharp pins
+// libvips to 1 thread on glibc without jemalloc, which is this image, and
+// os.availableParallelism() inside a container can report the host's cores
+// rather than the instance's share.
+const VIPS_THREADS = 4;
+console.warn(`tiler vips concurrency=${setVipsConcurrency(VIPS_THREADS)}`);
+
 // The /tile body is a tiny `{ key }` JSON; cap it so a malformed request
 // can't buffer unbounded memory.
 const MAX_TILE_REQUEST_BYTES = 64 * 1024;

@@ -7,7 +7,7 @@ import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
 export class Tiler extends Container<Env> {
   override defaultPort = 8080;
   // Each pano keys its own container (idFromName(key)), so a warm instance is
-  // never reused - keep the post-job idle window short to avoid billing 4 GiB
+  // never reused - keep the post-job idle window short to avoid billing 12 GiB
   // for nothing. Tiling itself (~2-4 min) is billed regardless; this only
   // trims the idle tail after the tile response returns.
   override sleepAfter = '1m';
@@ -87,7 +87,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
     let panoId: string;
     try {
       // Acks keys that can never succeed rather than retrying (each retry
-      // starts a 4 GiB container just to 500 on the same rejected key).
+      // starts a 12 GiB container just to 500 on the same rejected key).
       ({ panoId } = deriveUploadTarget(key));
     } catch (e) {
       console.error(`skip unprocessable key ${key}: ${e instanceof Error ? e.message : String(e)}`);

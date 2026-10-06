@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { build } from './build.js';
+import { build, setVipsConcurrency } from './build.js';
 import { TILER_OUTPUT_VERSION } from './version.js';
 import type { Manifest } from '@panote/core';
 
@@ -53,12 +53,34 @@ function chainable(): Record<string, unknown> {
   return self;
 }
 
+const concurrency = vi.fn((n: number) => n);
+
 vi.mock('sharp', () => ({
-  default: vi.fn((...args: unknown[]) => {
-    sharpCalls.push(args);
-    return chainable();
-  }),
+  default: Object.assign(
+    vi.fn((...args: unknown[]) => {
+      sharpCalls.push(args);
+      return chainable();
+    }),
+    { concurrency: (n: number) => concurrency(n) },
+  ),
 }));
+
+describe('setVipsConcurrency', () => {
+  afterEach(() => {
+    concurrency.mockClear();
+  });
+
+  it('passes the thread count to sharp.concurrency and returns what sharp reports', () => {
+    concurrency.mockReturnValueOnce(4);
+    expect(setVipsConcurrency(4)).toBe(4);
+    expect(concurrency).toHaveBeenCalledWith(4);
+  });
+
+  it.each([0, -1, 2.5, Number.NaN])('rejects %s without touching sharp', (n) => {
+    expect(() => setVipsConcurrency(n)).toThrow('vips concurrency must be a positive integer');
+    expect(concurrency).not.toHaveBeenCalled();
+  });
+});
 
 describe('build', () => {
   const dirs: string[] = [];
