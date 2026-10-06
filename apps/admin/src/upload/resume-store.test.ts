@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  clearBackgroundRecord,
   clearResumeRecord,
   parseResumeRecord,
+  readBackgroundRecords,
   readResumeRecord,
   RESUME_MAX_AGE_MS,
   targetFromParams,
+  writeBackgroundRecord,
   writeResumeRecord,
 } from './resume-store.js';
 
@@ -91,6 +94,46 @@ describe('resume record', () => {
       writeResumeRecord({ owner: 'u1', fileName: 'a', target: { kind: 'new-tour' }, landed: null }),
     ).not.toThrow();
     expect(readResumeRecord()).toBeNull();
+  });
+});
+
+describe('background records', () => {
+  const rec = (panoId: string, fileName = `${panoId}.jpg`) => ({
+    owner: 'u1',
+    fileName,
+    target: { kind: 'add' as const, tourId: 'tour-1' },
+    landed: { panoId, mode: { kind: 'fresh' as const } },
+  });
+
+  it('keeps one per landed pano, apart from the foreground record', () => {
+    writeResumeRecord({
+      owner: 'u1',
+      fileName: 'fg.jpg',
+      target: { kind: 'new-tour' },
+      landed: null,
+    });
+    writeBackgroundRecord(rec('p1'));
+    writeBackgroundRecord(rec('p2'));
+    writeBackgroundRecord(rec('p1', 'again.jpg'));
+    expect(readBackgroundRecords().map((r) => r.fileName)).toEqual(['p2.jpg', 'again.jpg']);
+
+    clearResumeRecord();
+    clearBackgroundRecord('p2');
+    expect(readBackgroundRecords().map((r) => r.landed.panoId)).toEqual(['p1']);
+    clearBackgroundRecord('p1');
+    expect(sessionStorage.getItem('panote.upload.resume.bg')).toBeNull();
+  });
+
+  it('drops entries that no longer parse', () => {
+    sessionStorage.setItem(
+      'panote.upload.resume.bg',
+      JSON.stringify([
+        { v: 1, ...rec('p1'), savedAt: Date.now() },
+        { v: 1, owner: 'u1' },
+      ]),
+    );
+    expect(readBackgroundRecords()).toHaveLength(1);
+    expect(JSON.parse(sessionStorage.getItem('panote.upload.resume.bg')!)).toHaveLength(1);
   });
 });
 

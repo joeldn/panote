@@ -21,6 +21,9 @@ export interface ResumeRecord {
 }
 
 const KEY = 'panote.upload.resume';
+// Landed uploads finishing in the background, each with its own record so the foreground
+// upload's record (KEY) never overwrites or clears theirs.
+const BG_KEY = 'panote.upload.resume.bg';
 /** A record older than this is stale (the user wandered off); it is dropped. */
 export const RESUME_MAX_AGE_MS = 60 * 60_000;
 
@@ -77,6 +80,10 @@ export function parseResumeRecord(raw: string | null, now: number): ResumeRecord
   } catch {
     return null;
   }
+  return parseRecord(v, now);
+}
+
+function parseRecord(v: unknown, now: number): ResumeRecord | null {
   if (!isObj(v) || v.v !== 1 || typeof v.fileName !== 'string') return null;
   if (typeof v.owner !== 'string' || v.owner.length === 0) return null;
   if (typeof v.savedAt !== 'number' || now - v.savedAt > RESUME_MAX_AGE_MS || v.savedAt > now) {
@@ -138,4 +145,50 @@ export function clearResumeRecord(): void {
   } catch {
     // Nothing to clear.
   }
+}
+
+/** A landed upload's record for the background slot (one per landed panoId). */
+export type BackgroundRecord = ResumeRecord & { landed: NonNullable<ResumeRecord['landed']> };
+
+function readBackgroundList(now: number): { raw: unknown[]; records: BackgroundRecord[] } {
+  let raw: unknown[] = [];
+  try {
+    const v: unknown = JSON.parse(storage()?.getItem(BG_KEY) ?? '[]');
+    if (Array.isArray(v)) raw = v;
+  } catch {
+    // Unreadable: treated as empty and rewritten on the next change.
+  }
+  const records = raw
+    .map((v) => parseRecord(v, now))
+    .filter((r): r is BackgroundRecord => r?.landed != null);
+  return { raw, records };
+}
+
+function writeBackgroundList(records: BackgroundRecord[]): void {
+  try {
+    if (records.length) storage()?.setItem(BG_KEY, JSON.stringify(records));
+    else storage()?.removeItem(BG_KEY);
+  } catch {
+    // Private mode or full storage: that upload just won't resume after a reload.
+  }
+}
+
+/** The background records still valid; stale or unparseable ones are removed. */
+export function readBackgroundRecords(now = Date.now()): BackgroundRecord[] {
+  const { raw, records } = readBackgroundList(now);
+  if (records.length !== raw.length) writeBackgroundList(records);
+  return records;
+}
+
+export function writeBackgroundRecord(record: Omit<BackgroundRecord, 'v' | 'savedAt'>): void {
+  const now = Date.now();
+  const others = readBackgroundList(now).records.filter(
+    (r) => r.landed.panoId !== record.landed.panoId,
+  );
+  writeBackgroundList([...others, { v: 1, ...record, savedAt: now }]);
+}
+
+export function clearBackgroundRecord(panoId: string): void {
+  const { records } = readBackgroundList(Date.now());
+  writeBackgroundList(records.filter((r) => r.landed.panoId !== panoId));
 }
