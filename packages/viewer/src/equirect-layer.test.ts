@@ -3,9 +3,9 @@ import { FACES, dirToEquirectUV, faceUVToDir, type Vec3 } from '@panote/core';
 import {
   EquirectLayer,
   PREVIEW_GUTTER_PX,
-  PREVIEW_LEVEL,
   buildEquirectPatchGeometry,
   patchCoreRects,
+  previewDrawLevel,
   type PreviewPatch,
   type PreviewSource,
 } from './equirect-layer.js';
@@ -235,13 +235,15 @@ describe('buildEquirectPatchGeometry', () => {
 });
 
 describe('EquirectLayer', () => {
-  it('uploads one texture per patch and draws them between level 0 and level 1', () => {
+  it('uploads one texture per patch, drawn at the level it is given', () => {
     const r = fakeRenderer();
     const layer = new EquirectLayer(r, gridSource(8000, 4000, 2, 1));
     expect(r.uploadTile).toHaveBeenCalledTimes(2);
+    expect(layer.width).toBe(8000);
+    layer.setLevel(1.5);
     expect(layer.drawList()).toEqual([
-      { handle: 1, level: PREVIEW_LEVEL },
-      { handle: 2, level: PREVIEW_LEVEL },
+      { handle: 1, level: 1.5 },
+      { handle: 2, level: 1.5 },
     ]);
     const order = sortDrawList([
       { handle: 10, level: 1 },
@@ -249,7 +251,7 @@ describe('EquirectLayer', () => {
       { handle: 11, level: 0 },
       { handle: 12, level: 2 },
     ]).map((d) => d.handle);
-    expect(order).toEqual([11, 1, 2, 10, 12]);
+    expect(order).toEqual([11, 10, 1, 2, 12]);
   });
 
   it('closes each bitmap once it is uploaded', () => {
@@ -315,5 +317,39 @@ describe('EquirectLayer', () => {
       });
     expect(() => new EquirectLayer(r, gridSource(2048, 1024, 2, 1))).toThrow('context lost');
     expect(r.removeTile).toHaveBeenCalledWith(7);
+  });
+});
+
+describe('previewDrawLevel', () => {
+  // 512 px tiles: level L holds 512 * 2^L texels per face edge.
+  it('sits just above the finest level no sharper than the preview', () => {
+    // Desktop tier: 8192 wide is 2048 per face, level 2 exactly.
+    expect(previewDrawLevel(8192, 512, 5)).toBe(2.5);
+    // Phone tier: 4096 wide is 1024 per face, level 1 exactly.
+    expect(previewDrawLevel(4096, 512, 5)).toBe(1.5);
+    // 6000 wide is 1500 per face: sharper than level 1, softer than level 2.
+    expect(previewDrawLevel(6000, 512, 5)).toBe(1.5);
+    expect(previewDrawLevel(2048, 512, 5)).toBe(0.5);
+  });
+
+  it('stays under every level sharper than the preview', () => {
+    for (const width of [2048, 3000, 4096, 6000, 8192, 12000]) {
+      const level = previewDrawLevel(width, 512, 6);
+      for (let L = 0; L <= 6; L++) {
+        const sharper = 512 * 2 ** L > width / 4;
+        expect(L > level).toBe(sharper);
+      }
+    }
+  });
+
+  it('goes under level 0 when softer than it, and over the top level when sharper', () => {
+    expect(previewDrawLevel(1024, 512, 3)).toBe(-0.5);
+    expect(previewDrawLevel(8192, 512, 1)).toBe(1.5);
+    expect(previewDrawLevel(0, 512, 3)).toBe(-0.5);
+  });
+
+  it('follows the tile size', () => {
+    expect(previewDrawLevel(8192, 1024, 5)).toBe(1.5);
+    expect(previewDrawLevel(8192, 256, 5)).toBe(3.5);
   });
 });

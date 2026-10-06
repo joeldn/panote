@@ -55,8 +55,28 @@ export const PREVIEW_MAX_PATCH_PX = 4096;
 /** Gutter each interior patch edge carries, in source pixels. */
 export const PREVIEW_GUTTER_PX = 2;
 
-/** Draw-list level for the preview: over the softer level 0, under every finer level. */
-export const PREVIEW_LEVEL = 0.5;
+/**
+ * Draw-list level for a preview under a pyramid of `tileSize` tiles, levels
+ * 0..`maxLevel`.
+ *
+ * The rule: the preview draws just above the finest tile level that is no
+ * sharper than it, and below every level that is sharper. Level L holds
+ * `tileSize * 2^L` texels per 90° face edge (the same density `selectLevel`
+ * assumes), and an equirect `width` px wide holds `width / 4` per 90°. With k
+ * the largest L where `tileSize * 2^L <= width / 4`, the preview sits at
+ * k + 0.5: an 8192-wide preview over 512 px tiles (2048 per face) is 2.5, so
+ * levels 0 to 2 paint under it and level 3 over it. A preview softer than
+ * level 0 sits at -0.5, under everything; one at least as sharp as `maxLevel`
+ * sits at `maxLevel + 0.5`, over everything.
+ */
+export function previewDrawLevel(width: number, tileSize: number, maxLevel: number): number {
+  const ratio = width / 4 / tileSize;
+  if (!(ratio > 0) || !Number.isFinite(ratio)) return -0.5;
+  // The epsilon keeps an exact power of two (2048 / 512 = 4) from rounding
+  // down to the level below.
+  const k = Math.floor(Math.log2(ratio) + 1e-9);
+  return Math.min(Math.max(k, -1), maxLevel) + 0.5;
+}
 
 // Mesh density: 256 segments per full turn of yaw, 128 per half turn of pitch.
 const SEGMENTS_U = 256;
@@ -177,11 +197,14 @@ function validate(source: PreviewSource, limit: number): void {
 export class EquirectLayer {
   private handles: TileHandle[] = [];
   private items: DrawItem[] = [];
+  /** Width of the source equirect, in pixels; what {@link previewDrawLevel} needs. */
+  readonly width: number;
 
   constructor(
     private renderer: PreviewRenderer,
     source: PreviewSource,
   ) {
+    this.width = source.width;
     try {
       validate(source, Math.min(PREVIEW_MAX_PATCH_PX, renderer.maxTextureSize));
       const cores = patchCoreRects(source.patches);
@@ -196,11 +219,18 @@ export class EquirectLayer {
       // The textures own the pixels now; free the CPU copies straight away.
       closePreviewSource(source);
     }
-    this.items = this.handles.map((handle) => ({ handle, level: PREVIEW_LEVEL }));
+    // Level 0 until a load() places it: with no tiles on screen the level
+    // orders nothing.
+    this.items = this.handles.map((handle) => ({ handle, level: 0 }));
   }
 
   drawList(): DrawItem[] {
     return this.items;
+  }
+
+  /** Set the draw-list level the patches paint at; see {@link previewDrawLevel}. */
+  setLevel(level: number): void {
+    for (const item of this.items) item.level = level;
   }
 
   dispose(): void {

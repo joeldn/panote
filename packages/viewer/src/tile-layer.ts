@@ -484,8 +484,17 @@ export class TileLayer {
     }
   }
 
+  /**
+   * Is any tile for the current view still to come? In flight, or queued: the
+   * queue is non-empty after pump() only when every slot is busy or the
+   * cross-panorama backoff is holding it, and a held queue is work that has
+   * not happened yet, not work that is done. A tile that failed is in neither
+   * (it is out of the queue while it waits out a per-tile cooldown, and for
+   * good once it is permanent or out of attempts), so failures do not keep
+   * this true.
+   */
   hasPending(): boolean {
-    return this.inflight.size > 0;
+    return this.inflight.size > 0 || this.queue.length > 0;
   }
 
   dispose(): void {

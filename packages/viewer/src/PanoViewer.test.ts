@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from '@panote/core';
 import { PanoViewer } from './PanoViewer.js';
-import { setSharedTileFailureMonitor } from './tile-retry.js';
+import { TileFailureMonitor, setSharedTileFailureMonitor } from './tile-retry.js';
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -689,18 +689,29 @@ describe('PanoViewer', () => {
       (viewer as unknown as { loop: () => void }).loop();
     }
 
-    /** Two 1026×1024 patches with a 2 px gutter, over a 2048×1024 source. */
-    function source() {
-      const image = () => ({ width: 1026, height: 1024, close: vi.fn() }) as unknown as ImageBitmap;
+    /**
+     * Two patches with a 2 px gutter, over a `width`×`width / 2` source. The
+     * default 2048 is 512 px per face, level 0 of the 512 px tiles below.
+     */
+    function source(width = 2048) {
+      const h = width / 2;
+      const w = h + 2;
+      const image = () => ({ width: w, height: h, close: vi.fn() }) as unknown as ImageBitmap;
       return {
-        width: 2048,
-        height: 1024,
+        width,
+        height: h,
         patches: [
-          { x: 0, y: 0, w: 1026, h: 1024, image: image() },
-          { x: 1022, y: 0, w: 1026, h: 1024, image: image() },
+          { x: 0, y: 0, w, h, image: image() },
+          { x: h - 2, y: 0, w, h, image: image() },
         ],
       };
     }
+
+    // Read when a manifest is served, so a test can change it between loads.
+    let manifestVersion: string | undefined;
+    beforeEach(() => {
+      manifestVersion = undefined;
+    });
 
     const manifestFor = (pano: string) => ({
       pano,
@@ -710,6 +721,7 @@ describe('PanoViewer', () => {
       faces: [...FACES],
       quality: 82,
       format: 'jpg',
+      ...(manifestVersion === undefined ? {} : { version: manifestVersion }),
     });
 
     /** Tiles answer at once, except URLs `hold` matches, which wait for release(). */
@@ -747,10 +759,7 @@ describe('PanoViewer', () => {
 
       expect(sceneChange).toHaveBeenCalledWith('pano-a');
       expect(viewer.getView()).toEqual(before);
-      expect(lastDrawList(viewer)).toEqual([
-        { handle: 1, level: 0.5 },
-        { handle: 2, level: 0.5 },
-      ]);
+      expect(lastDrawList(viewer).map((d) => d.handle)).toEqual([1, 2]);
       viewer.dispose();
     });
 
@@ -847,8 +856,160 @@ describe('PanoViewer', () => {
       tiles.release();
       await pendingB;
       tick(viewer);
-      expect(lastDrawList(viewer).every((d) => d.level === 0.5)).toBe(true);
+      // Only the preview, at its default level: pano-b never swapped in.
+      expect(lastDrawList(viewer).every((d) => d.level === 0)).toBe(true);
       expect(lastDrawList(viewer)).toHaveLength(2);
+      viewer.dispose();
+    });
+
+    /** Tick until tiles-settled has fired `n` times (or give up), checking each frame draws. */
+    async function settle(viewer: PanoViewer, settled: ReturnType<typeof vi.fn>, n = 1) {
+      for (let i = 0; i < 20 && settled.mock.calls.length < n; i++) {
+        await flush();
+        tick(viewer);
+        expect(lastDrawList(viewer).length).toBeGreaterThan(0);
+      }
+    }
+    const previewItems = (viewer: PanoViewer): Item[] =>
+      lastDrawList(viewer).filter((d) => d.handle === 1 || d.handle === 2);
+
+    it('keeps the preview on top of an older version of the same pano, past its tiles-settled', async () => {
+      // A replace keeps the panoId: the manifest can still be the old image's.
+      stubTiles();
+      manifestVersion = 'v1';
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const settled = vi.fn();
+      viewer.on('tiles-settled', settled);
+      viewer.showPreview('pano-a', source(), { version: 'v2' });
+
+      await viewer.load('pano-a');
+      tick(viewer);
+      // Over every tile level, the finest (2) included.
+      expect(previewItems(viewer)).toEqual([
+        { handle: 1, level: 3 },
+        { handle: 2, level: 3 },
+      ]);
+      await settle(viewer, settled);
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(rendererOf(viewer).removeTile).not.toHaveBeenCalledWith(1);
+      expect(previewItems(viewer)).toHaveLength(2);
+
+      // The new version lands: now the tiles are the preview's own.
+      manifestVersion = 'v2';
+      await viewer.load('pano-a');
+      tick(viewer);
+      expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
+      await settle(viewer, settled, 2);
+      expect(settled).toHaveBeenCalledTimes(2);
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(2);
+      expect(previewItems(viewer)).toEqual([]);
+      viewer.dispose();
+    });
+
+    it('takes any manifest as its own when no version is given', async () => {
+      stubTiles();
+      manifestVersion = 'v7';
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const settled = vi.fn();
+      viewer.on('tiles-settled', settled);
+      viewer.showPreview('pano-a', source());
+      await viewer.load('pano-a');
+      tick(viewer);
+      expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
+      await settle(viewer, settled);
+      expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
+      viewer.dispose();
+    });
+
+    it('places a sharper preview above the tile levels it out-resolves', async () => {
+      // 8192 wide is 2048 px per face: level 2 of 512 px tiles. Levels 0 to 2
+      // paint under it; a level-3 pyramid's finest level would paint over it.
+      stubTiles();
+      manifestVersion = 'v2';
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      // Four 2052×4096 patches (2 px gutters), each within the 4096 px cap.
+      const image = () => ({ width: 2052, height: 4096, close: vi.fn() }) as unknown as ImageBitmap;
+      const wide = {
+        width: 8192,
+        height: 4096,
+        patches: [0, 1, 2, 3].map((i) => ({
+          x: Math.max(0, i * 2048 - 2),
+          y: 0,
+          w: i === 0 || i === 3 ? 2050 : 2052,
+          h: 4096,
+          image: image(),
+        })),
+      };
+      viewer.showPreview('pano-a', wide, { version: 'v2' });
+      await viewer.load('pano-a');
+      tick(viewer);
+      const levels = lastDrawList(viewer)
+        .filter((d) => d.handle <= 4)
+        .map((d) => d.level);
+      expect(levels).toEqual([2.5, 2.5, 2.5, 2.5]);
+      viewer.dispose();
+    });
+
+    it('keeps the preview while the backoff holds its tiles in the queue', async () => {
+      const tiles = stubTiles((url) => !url.includes('/0/'));
+      let clock = 0;
+      const monitor = new TileFailureMonitor({ now: () => clock });
+      setSharedTileFailureMonitor(monitor);
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const settled = vi.fn();
+      viewer.on('tiles-settled', settled);
+      viewer.showPreview('pano-a', source());
+      await viewer.load('pano-a');
+
+      // Two other panoramas fail: the backoff trips with nothing in flight.
+      monitor.fail(monitor.acquire()!, 'other-1', 'transient');
+      monitor.fail(monitor.acquire()!, 'other-2', 'transient');
+      expect(monitor.canStart()).toBe(false);
+      for (let i = 0; i < 3; i++) {
+        await flush();
+        tick(viewer);
+      }
+      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/2/'), expect.anything());
+      expect(settled).not.toHaveBeenCalled();
+      expect(previewItems(viewer)).toHaveLength(2);
+
+      // The window passes: the held tiles start, land, and only then settle.
+      clock += 60_000;
+      tick(viewer);
+      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/2/'), expect.anything());
+      expect(settled).not.toHaveBeenCalled();
+      tiles.release();
+      await settle(viewer, settled);
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(previewItems(viewer)).toEqual([]);
+      viewer.dispose();
+    });
+
+    it('cancels a load of the same pano already in flight', async () => {
+      let holding = true;
+      const tiles = stubTiles((url) => holding && url.includes('/0/'));
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const ready = vi.fn();
+      viewer.on('ready', ready);
+      const early = viewer.load('pano-a');
+      await flush();
+
+      viewer.showPreview('pano-a', source());
+      tiles.release();
+      await early;
+      expect(ready).not.toHaveBeenCalled();
+      tick(viewer);
+      // Only the preview is drawn: the cancelled load swapped nothing in.
+      expect(lastDrawList(viewer)).toEqual([
+        { handle: 1, level: 0 },
+        { handle: 2, level: 0 },
+      ]);
+
+      // Loading again is what brings the tiles in.
+      holding = false;
+      await viewer.load('pano-a');
+      expect(ready).toHaveBeenCalledTimes(1);
       viewer.dispose();
     });
 
