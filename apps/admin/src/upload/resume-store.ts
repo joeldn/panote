@@ -17,6 +17,12 @@ export interface ResumeRecord {
   fileName: string;
   target: UploadTarget;
   landed: { panoId: string; mode: UploadMode } | null;
+  /**
+   * An added pano's config and tour write already went through (they run as soon as
+   * the image lands), so a resume only polls: it must not append a scene the user
+   * may have removed since. Absent in older records, which append again (idempotent).
+   */
+  appended?: boolean;
   savedAt: number;
 }
 
@@ -106,6 +112,7 @@ function parseRecord(v: unknown, now: number): ResumeRecord | null {
     fileName: v.fileName.slice(0, 200),
     target,
     landed,
+    ...(landed && v.appended === true && { appended: true }),
     savedAt: v.savedAt,
   };
 }
