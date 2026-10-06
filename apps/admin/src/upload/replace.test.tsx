@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { PROCESSING_TIMEOUT_MS } from '@internal/web-kit';
+import { PROCESSING_GIVE_UP_MS, PROCESSING_TIMEOUT_MS } from '@internal/web-kit';
 import { useEffect } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -125,7 +125,7 @@ describe('replace image', () => {
     ).toBe(true);
   });
 
-  it('identical bytes (same version) never report ready and reach timed-out after 10 minutes', async () => {
+  it('identical bytes (same version) never report ready, time out, and stop at the cap', async () => {
     const { backend } = renderProvider();
     backend.state.manifests = [manifest('t1-same', 'pano-9')];
     // The status route would even say "ready" here; it only ever signals failure.
@@ -143,6 +143,17 @@ describe('replace image', () => {
     expect(chipTitle()).toBe('Still processing');
     expect(screen.getByTestId('reload-key').textContent).toBe('none');
     expect(backend.manifestPolls().length).toBeGreaterThan(60);
+
+    // Slow polling carries on to the cap and never flips to ready.
+    for (let t = PROCESSING_TIMEOUT_MS; t < PROCESSING_GIVE_UP_MS; t += 60_000) {
+      await tick(60_000);
+      seen.add(chipTitle());
+    }
+    expect(seen.has('Ready at full resolution')).toBe(false);
+    expect(chipTitle()).toBe('Still processing');
+    const polls = backend.manifestPolls().length;
+    await tick(5 * 60_000);
+    expect(backend.manifestPolls()).toHaveLength(polls);
 
     // Re-upload from the timed-out chip: a fresh baseline, then a new presign for the same pano.
     fireEvent.click(screen.getByRole('button', { name: 'Re-upload' }));

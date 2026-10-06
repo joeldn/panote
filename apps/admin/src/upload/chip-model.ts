@@ -101,7 +101,10 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         value: null,
         pct: null,
         bar: 'none',
-        note: 'This is taking longer than usual. Check again, or upload the image again.',
+        // Still slow-polling until the give-up cap; a manifest switches over on its own.
+        note: m.checking
+          ? 'Taking longer than usual — we’ll keep checking.'
+          : 'This is taking longer than usual. Check again, or upload the image again.',
         actions: [
           { id: 'retry-poll', label: 'Check again' },
           a.hasFile
