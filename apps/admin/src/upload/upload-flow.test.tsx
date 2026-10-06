@@ -506,9 +506,25 @@ describe('sign-in during an upload', () => {
     expect(back.backend.state.calls).toEqual([]);
     expect(FakeXhr.all).toHaveLength(0);
     expect(readResumeRecord()).toBeNull();
-    // The stash is left to take()'s owner check, which never hands it to this user.
-    expect(pending.clear).not.toHaveBeenCalled();
+    // Their stash is cleared at boot rather than left waiting for them.
+    expect(pending.dropForeign).toHaveBeenCalledWith('google-oauth2|2');
+    expect(pending.peek()).toBeNull();
     expect(await pending.take('google-oauth2|2')).toBeNull();
+  });
+
+  it("another user's stash is cleared at boot even with no resume record; an own one stays", async () => {
+    const theirs = fakePending(pngFile('Theirs.png'), 'google-oauth2|2');
+    setup('/app/', theirs);
+    await tick();
+    expect(theirs.dropForeign).toHaveBeenCalledWith('google-oauth2|1');
+    expect(theirs.peek()).toBeNull();
+
+    cleanup();
+    const mine = fakePending(pngFile('Mine.png'), 'google-oauth2|1');
+    setup('/app/', mine);
+    await tick();
+    expect(mine.peek()?.name).toBe('Mine.png');
+    expect(mine.take).not.toHaveBeenCalled();
   });
 
   it('an owned stash with no resume record never starts by itself from ?resume=upload', async () => {

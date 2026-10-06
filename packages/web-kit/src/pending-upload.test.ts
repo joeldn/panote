@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MAX_UPLOAD_BYTES } from './api/upload.js';
 import {
+  clearForeignPendingUpload,
   clearPendingUpload,
   PENDING_UPLOAD_MAX_AGE_MS,
   stashPendingUpload,
@@ -49,7 +50,14 @@ function fakeIdb(opts: { failOpen?: boolean; failTx?: boolean } = {}) {
             } = { oncomplete: null, onerror: null, onabort: null, error: null };
             tx.objectStore = () => ({
               put: (v: unknown, k: IDBValidKey) => data.set(k, v),
-              get: (k: IDBValidKey) => ({ result: data.get(k) }),
+              get: (k: IDBValidKey) => {
+                const req: { result: unknown; onsuccess: Handler } = {
+                  result: data.get(k),
+                  onsuccess: null,
+                };
+                queueMicrotask(() => req.onsuccess?.());
+                return req;
+              },
               delete: (k: IDBValidKey) => data.delete(k),
             });
             later(() => {
@@ -173,5 +181,30 @@ describe('pending upload', () => {
       expect(await stashPendingUpload(jpeg(), { indexedDB })).toBe(false);
       expect(await takePendingUpload({ indexedDB })).toBeNull();
     }
+  });
+
+  it('clearForeignPendingUpload drops only a stash the signed-in user can never take', async () => {
+    const idb = fakeIdb();
+    let now = 0;
+    const opts = { indexedDB: idb.indexedDB, now: () => now };
+
+    await stashPendingUpload(jpeg(), { ...opts, owner: 'user-a' });
+    expect(await clearForeignPendingUpload({ ...opts, owner: 'user-a' })).toBe(false);
+    expect(idb.stored()).toMatchObject({ owner: 'user-a' });
+    expect(await clearForeignPendingUpload({ ...opts, owner: 'user-b' })).toBe(true);
+    expect(idb.stored()).toBeUndefined();
+
+    // The landing page's unowned stash is anyone's, until it expires.
+    await stashPendingUpload(jpeg(), opts);
+    expect(await clearForeignPendingUpload({ ...opts, owner: 'user-b' })).toBe(false);
+    expect(idb.stored()).toBeDefined();
+    now = PENDING_UPLOAD_MAX_AGE_MS + 1;
+    expect(await clearForeignPendingUpload({ ...opts, owner: 'user-b' })).toBe(true);
+    expect(idb.stored()).toBeUndefined();
+
+    expect(await clearForeignPendingUpload({ ...opts, owner: 'user-b' })).toBe(false);
+    await expect(
+      clearForeignPendingUpload({ indexedDB: fakeIdb({ failTx: true }).indexedDB, owner: 'x' }),
+    ).resolves.toBe(false);
   });
 });

@@ -418,12 +418,18 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Another user's stash (from a sign-in that never came back) would otherwise sit there.
+  useEffect(() => {
+    const { owner: who, pending: store } = live.current;
+    if (who !== null) void store.dropForeign(who).catch(() => {});
+  }, []);
+
   // After a sign-in redirect: resume polling an image that landed, or get the file back.
   useEffect(() => {
     if (!boot) return;
     const { rec } = boot;
     if (boot.kind === 'foreign') {
-      // Someone else's record: drop it. Their stash is left to take()'s owner check.
+      // Someone else's record: drop it (their stash goes at boot, above).
       clearResumeRecord();
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {

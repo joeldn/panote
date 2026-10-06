@@ -205,6 +205,13 @@ export function fakePending(initial: File | null = null, initialOwner: string | 
       file = null;
       owner = null;
     }),
+    // Same rule as web-kit's clearForeignPendingUpload (minus the age check).
+    dropForeign: vi.fn(async (who: string) => {
+      if (owner !== null && owner !== who) {
+        file = null;
+        owner = null;
+      }
+    }),
     peek: () => file,
   };
 }
