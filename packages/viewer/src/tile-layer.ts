@@ -130,6 +130,9 @@ export class TileLayer {
   // Aborted by dispose(). Only the base loader's retry wait listens to it: the
   // in-flight fetches are cancelled through their own controllers in `inflight`.
   private lifetime = new AbortController();
+  // Set while pump() is held by the backoff: fires onInvalidate when fetches
+  // may start again, so the queue moves without waiting for an interaction.
+  private wakeTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Per-tile retry accounting for this panorama load. Replaces the old
   // permanent `failed` set: a transiently-failed tile stays re-queueable (so a
@@ -335,11 +338,29 @@ export class TileLayer {
       // Global backoff: hold the queue intact rather than draining it into
       // no-op ensureTile calls. update() rebuilds it next frame anyway, and
       // the one probe the monitor allows is started from here too.
-      if (!this.monitor.canStart()) return;
+      if (!this.monitor.canStart()) {
+        this.wakeWhenStartable();
+        return;
+      }
       const next = this.queue.shift()!;
       if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
       void this.ensureTile(next.level, next.face, next.x, next.y);
     }
+  }
+
+  /**
+   * A frame is what refills and pumps the queue, and an idle viewer draws no
+   * frames. Without this, tiles held by the backoff (and so tiles-settled, and
+   * a preview waiting on it) would wait for the next pan or zoom.
+   */
+  private wakeWhenStartable(): void {
+    if (this.wakeTimer !== undefined) return;
+    // At least 1 ms, so a clock that disagrees with canStart() cannot spin.
+    const ms = Math.max(1, this.monitor.msUntilStart());
+    this.wakeTimer = setTimeout(() => {
+      this.wakeTimer = undefined;
+      if (!this.disposed) this.onInvalidate();
+    }, ms);
   }
 
   private tileVisible(face: Face, level: number, x: number, y: number): boolean {
@@ -484,8 +505,17 @@ export class TileLayer {
     }
   }
 
+  /**
+   * Is any tile for the current view still to come? In flight, or queued: the
+   * queue is non-empty after pump() only when every slot is busy or the
+   * cross-panorama backoff is holding it, and a held queue is work that has
+   * not happened yet, not work that is done. A tile that failed is in neither
+   * (it is out of the queue while it waits out a per-tile cooldown, and for
+   * good once it is permanent or out of attempts), so failures do not keep
+   * this true.
+   */
   hasPending(): boolean {
-    return this.inflight.size > 0;
+    return this.inflight.size > 0 || this.queue.length > 0;
   }
 
   dispose(): void {
@@ -493,6 +523,8 @@ export class TileLayer {
     // Cuts short the base loader's retry wait; the fetches themselves are
     // cancelled through their own controllers just below.
     this.lifetime.abort();
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = undefined;
     // The queue is what pump() would otherwise drain the moment those aborts
     // free their concurrency slots.
     this.queue = [];

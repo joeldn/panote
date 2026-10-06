@@ -8,6 +8,13 @@ import {
   type Mat4,
 } from './render/projection.js';
 import { TileLayer } from './tile-layer.js';
+import {
+  EquirectLayer,
+  closePreviewSource,
+  previewDrawLevel,
+  type PreviewSource,
+} from './equirect-layer.js';
+import type { DrawItem } from './render/gl-renderer.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
@@ -45,6 +52,15 @@ export class PanoViewer implements ControlHost {
   // legitimately be in flight more than once — a superseded load is still
   // holding a layer that has to be torn down.
   private pendingLayers = new Set<TileLayer>();
+  private preview: EquirectLayer | undefined;
+  private previewPano: string | undefined;
+  // The version of the tiles the preview replaces ('' for unversioned ones);
+  // undefined for a new pano, where any manifest is the preview's own.
+  private previewReplaces: string | undefined;
+  // True once the preview's own tiles are on screen: it then sits among the
+  // tile levels by resolution (see previewDrawLevel) and is disposed at the
+  // next tiles-settled. False while it covers tiles that are not its own.
+  private previewUnderlay = false;
   private raf = 0;
   private dirty = true;
   private wasPending = false;
@@ -221,6 +237,21 @@ export class PanoViewer implements ControlHost {
     // screen before it was called.
     this.layer?.dispose();
     this.layer = layer;
+    if (this.preview && this.previewPano === pano) {
+      // Replacing an image keeps the panoId, so the manifest can still be the
+      // old image's until the new tiles are written. Those tiles are not the
+      // preview's: it stays on top of them and outlives their tiles-settled.
+      const own =
+        this.previewReplaces === undefined || (manifest.version ?? '') !== this.previewReplaces;
+      this.previewUnderlay = own;
+      this.preview.setLevel(
+        own
+          ? previewDrawLevel(this.preview.width, manifest.tileSize, manifest.maxLevel)
+          : manifest.maxLevel + 1,
+      );
+    } else {
+      this.disposePreview();
+    }
     this.home = {
       yaw: this.target.yaw,
       pitch: this.target.pitch,
@@ -232,6 +263,72 @@ export class PanoViewer implements ControlHost {
     this.dirty = true;
     this.emitter.emit('ready', manifest);
     this.emitter.emit('scene-change', manifest.pano);
+  }
+
+  /**
+   * Show a local decode of `panoId` now, in place of whatever is on screen,
+   * keeping the camera.
+   *
+   * A later `load(panoId)` swaps the tiles in under it: once they are on screen
+   * the preview paints over the tile levels no sharper than itself and under
+   * the sharper ones (see `previewDrawLevel`), and is disposed at the next
+   * `tiles-settled`. On a replace, `panoId` already has tiles from the old
+   * image and the new version is not known until the server has tiled the
+   * upload, so pass `options.replacesVersion`, the old manifest's version
+   * (`''` for an unversioned one, as the upload machine's baseline has it). A
+   * `load()` that gets a manifest with that version leaves the preview on top
+   * of the old tiles and keeps it past their `tiles-settled`; any other
+   * version is the preview's own. Without `replacesVersion` (a new pano), any
+   * manifest for `panoId` is its own.
+   *
+   * Ownership: the patches' ImageBitmaps are closed as soon as they are on the
+   * GPU (or straight away if the viewer is disposed or the source is
+   * rejected), so a `PreviewSource` can be shown once. To show it again,
+   * decode it again, e.g. from the stored WebP.
+   *
+   * Any `load()` in flight is cancelled, including one for `panoId`: it
+   * resolves without swapping anything in. Call `load(panoId)` again after
+   * this to get the tiles.
+   */
+  showPreview(
+    panoId: string,
+    source: PreviewSource,
+    options: { replacesVersion?: string } = {},
+  ): void {
+    if (this.disposed) {
+      closePreviewSource(source);
+      return;
+    }
+    // Built first: a source that throws leaves the viewer exactly as it was.
+    const preview = new EquirectLayer(this.renderer, source);
+    this.loadToken++;
+    this.disposePreview();
+    this.preview = preview;
+    this.previewPano = panoId;
+    this.previewReplaces = options.replacesVersion;
+    this.layer?.dispose();
+    this.layer = undefined;
+    this.wasPending = false;
+    this.home = { ...this.target };
+    this.controls?.dispose();
+    this.controls = new Controls(this.renderer.canvas, this);
+    this.dirty = true;
+    this.emitter.emit('scene-change', panoId);
+  }
+
+  private disposePreview(): void {
+    this.preview?.dispose();
+    this.preview = undefined;
+    this.previewPano = undefined;
+    this.previewReplaces = undefined;
+    this.previewUnderlay = false;
+  }
+
+  // Painter's order is applied by the renderer, so the order here is free.
+  private drawList(): DrawItem[] {
+    const tiles = this.layer?.drawList() ?? [];
+    if (!this.preview) return tiles;
+    return [...this.preview.drawList(), ...tiles];
   }
 
   getFovLimits(): { min: number; max: number } {
@@ -431,11 +528,18 @@ export class PanoViewer implements ControlHost {
     // of re-deriving devicePixelRatio.
     this.layer?.update(this.viewProj, vfovDeg, fwd, this.renderer.canvas.height || 1);
 
+    // Queued tiles count as pending, so a backoff holding the queue does not
+    // settle early and drop the preview before its tiles exist. A tile that
+    // fails (for good, or until its cooldown ends) does not count, so failed
+    // tiles can still end the preview, leaving coarser tiles in their place.
     const pending = this.layer?.hasPending() ?? false;
-    if (this.wasPending && !pending) this.emitter.emit('tiles-settled', undefined);
+    if (this.wasPending && !pending) {
+      if (this.previewUnderlay) this.disposePreview();
+      this.emitter.emit('tiles-settled', undefined);
+    }
     this.wasPending = pending;
 
-    this.renderer.render(this.layer?.drawList() ?? []);
+    this.renderer.render(this.drawList());
     this.hotspots.update(
       this.viewProj,
       fwd,
@@ -485,9 +589,9 @@ export class PanoViewer implements ControlHost {
 
     // Only snapshot when there is something to draw; snapshotting an empty draw
     // list would crossfade from a black frame.
-    const drawList = this.layer?.drawList();
+    const drawList = this.drawList();
     let snap: HTMLDivElement | undefined;
-    if (drawList && drawList.length > 0) {
+    if (drawList.length > 0) {
       snap = document.createElement('div');
       snap.style.cssText =
         'position:absolute;inset:0;background-size:cover;background-position:center;' +
@@ -534,6 +638,7 @@ export class PanoViewer implements ControlHost {
     for (const pending of this.pendingLayers) pending.dispose();
     this.pendingLayers.clear();
     this.layer?.dispose();
+    this.disposePreview();
     this.hotspots.clear();
     this.renderCbs.clear();
     this.renderer.dispose();

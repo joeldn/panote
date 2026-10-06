@@ -6,11 +6,12 @@ import { faceUVToDir, tileCornersUV, type Face } from '@panote/core';
 /** Sphere/cube radius the tiles sit on (shared with tile-layer.ts). */
 export const RADIUS = 10;
 
-/** Plain typed-array geometry consumed by the WebGL2 renderer. */
+/** Plain typed-array geometry consumed by the WebGL2 renderer: N vertices
+ *  (N ≤ 65536, the indices are 16-bit) as xyz positions and texture UVs. */
 export interface TileGeometry {
-  pos: Float32Array; // 4 verts × 3 = 12 floats
-  uv: Float32Array; // 4 verts × 2 = 8 floats
-  index: Uint16Array; // 2 tris × 3 = 6 indices
+  pos: Float32Array; // N verts × 3 floats (a cube tile quad has N = 4)
+  uv: Float32Array; // N verts × 2 floats
+  index: Uint16Array; // triangle list, 3 indices per triangle
 }
 
 /** The flat 4-vert quad (TL,TR,BL,BR) on the cube face at RADIUS. */

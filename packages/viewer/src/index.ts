@@ -1,5 +1,11 @@
 export * from './types.js';
 export { PanoViewer } from './PanoViewer.js';
+export {
+  PREVIEW_GUTTER_PX,
+  PREVIEW_MAX_PATCH_PX,
+  type PreviewPatch,
+  type PreviewSource,
+} from './equirect-layer.js';
 export { BaseTileLoadError } from './tile-layer.js';
 // BaseTileLoadError's documented `cause` type. Exported because that doc tells
 // callers to inspect `cause`, and a documented type a caller cannot name leaves

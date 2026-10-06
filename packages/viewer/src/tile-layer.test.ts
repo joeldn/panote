@@ -328,6 +328,64 @@ describe('TileLayer failure handling', () => {
     expect(renderer.uploadTile).toHaveBeenCalledTimes(requests.length);
   });
 
+  it('wakes the viewer once when the backoff lets held tiles start again', async () => {
+    const layerA = makeLayer('pano-a');
+    script = { status: 500 };
+    await render(layerA, 0);
+    const layerB = makeLayer('pano-b');
+    await render(layerB, 0);
+    expect(monitor.backingOff()).toBe(true);
+    layerA.dispose();
+    layerB.dispose();
+
+    // A healthy panorama whose tiles the backoff is holding in the queue.
+    script = { status: 200 };
+    const invalidate = vi.fn();
+    const layerC = new TileLayer(
+      renderer as unknown as GLRenderer,
+      makeManifest('pano-c'),
+      '/tiles/',
+      128,
+      invalidate,
+      8,
+      monitor,
+    );
+    const timeouts = vi.spyOn(globalThis, 'setTimeout');
+    const wakes = () => timeouts.mock.calls.filter(([, ms]) => (ms ?? 0) > 0);
+    requests = [];
+    await render(layerC, 0);
+    await render(layerC, 0);
+    expect(requests).toHaveLength(0);
+    expect(layerC.hasPending()).toBe(true);
+    // One timer, however many frames hit the held queue, set for the probe.
+    expect(wakes()).toHaveLength(1);
+    expect(wakes()[0]![1]).toBe(BACKOFF_MS / 2);
+
+    advance(BACKOFF_MS / 2);
+    (wakes()[0]![0] as () => void)();
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    // The frame that wake asks for starts the probe; it succeeds, which
+    // clears the backoff and lets the rest of the queue go.
+    await render(layerC, 0);
+    expect(requests.length).toBeGreaterThan(1);
+    expect(monitor.backingOff()).toBe(false);
+    timeouts.mockRestore();
+    layerC.dispose();
+  });
+
+  it('cancels the backoff wake on dispose', async () => {
+    const layerA = makeLayer('pano-a');
+    script = { status: 500 };
+    await render(layerA, 0);
+    const layerB = makeLayer('pano-b');
+    await render(layerB, 0);
+    layerA.dispose();
+    const clears = vi.spyOn(globalThis, 'clearTimeout');
+    layerB.dispose();
+    expect(clears).toHaveBeenCalledWith(expect.anything());
+    clears.mockRestore();
+  });
+
   it('leaves an aborted in-flight load fully re-queueable', async () => {
     const layer = makeLayer();
     vi.stubGlobal(

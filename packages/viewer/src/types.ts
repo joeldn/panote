@@ -34,6 +34,6 @@ export type PanoViewerEvents = {
   ready: Manifest;
   'tiles-settled': undefined;
   loading: string;
-  'scene-change': string; // panoId, emitted whenever a load() completes
+  'scene-change': string; // panoId, emitted whenever a load() or showPreview() completes
   'hotspot-open': string; // hotspotId, reported by a hotspot UI layer
 };
