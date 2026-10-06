@@ -3,6 +3,7 @@ import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { RECENT_UPLOAD_MS, STALLED_TILING_MS } from './delete-owned-pano.js';
 import worker from './index.js';
 
 const MY_SUB = 'auth0|purge-me';
@@ -21,7 +22,29 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+// The pano DELETE refuses a pano still tiling or uploaded within the hour: mark
+// it tiled, then move the worker's clock on (R2 stamps `uploaded` for real).
+const clockPast = (ms: number) => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(Date.now() + ms);
+};
+const deletablePano = async (panoId: string) => {
+  await readyPano(panoId);
+  const original = await env.BUCKET.head(originalKey(MY_SUB, panoId));
+  await env.BUCKET.put(
+    manifestKey(panoId),
+    JSON.stringify({
+      pano: panoId,
+      version: `t1-${original!.etag}`,
+      format: 'webp',
+      tileSize: 512,
+    }),
+  );
+  clockPast(RECENT_UPLOAD_MS + 60_000);
+};
 
 // The worker's outbound fetch, mocked: only purge calls are expected here.
 const mockPurgeFetch = (respond: () => Promise<Response> = async () => Response.json({})) => {
@@ -82,7 +105,7 @@ const publishedTour = async (panoIds: string[], slug: string): Promise<string> =
 
 describe('CDN purge on delete/unpublish (B6)', () => {
   it('DELETE pano purges its tiles prefix', async () => {
-    await readyPano('purge-p1');
+    await deletablePano('purge-p1');
     const { bodies } = mockPurgeFetch();
     expect((await call('/api/admin/panos/purge-p1', { method: 'DELETE' })).status).toBe(204);
     expect(bodies).toEqual([{ prefixes: ['cdn.panote.dev/tiles/purge-p1/'] }]);
@@ -90,12 +113,14 @@ describe('CDN purge on delete/unpublish (B6)', () => {
 
   it('DELETE pano without proof of ownership purges nothing', async () => {
     const { spy } = mockPurgeFetch();
-    expect((await call('/api/admin/panos/purge-never', { method: 'DELETE' })).status).toBe(204);
+    expect((await call('/api/admin/panos/purge-never', { method: 'DELETE' })).status).toBe(404);
     expect(spy).not.toHaveBeenCalled();
   });
 
   it('DELETE pano of an owned original with no tiles yet purges nothing', async () => {
     await env.BUCKET.put(originalKey(MY_SUB, 'purge-untiled'), 'bytes');
+    // Past the stall cutoff: a pano never tiled in a day is deletable.
+    clockPast(STALLED_TILING_MS + 60_000);
     const { spy } = mockPurgeFetch();
     expect((await call('/api/admin/panos/purge-untiled', { method: 'DELETE' })).status).toBe(204);
     expect(spy).not.toHaveBeenCalled();
@@ -156,7 +181,7 @@ describe('CDN purge on delete/unpublish (B6)', () => {
     ['a rejected fetch', 'purge-fail-reject', () => Promise.reject(new TypeError('network down'))],
   ])('still 204s on %s from the purge API', async (_, panoId, respond) => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    await readyPano(panoId);
+    await deletablePano(panoId);
     const { spy } = mockPurgeFetch(respond);
     expect((await call(`/api/admin/panos/${panoId}`, { method: 'DELETE' })).status).toBe(204);
     expect(spy).toHaveBeenCalledOnce();
@@ -164,7 +189,7 @@ describe('CDN purge on delete/unpublish (B6)', () => {
 
   it('makes no purge call when CF_PURGE_TOKEN is unset (the test env)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await readyPano('purge-unconf');
+    await deletablePano('purge-unconf');
     const { spy } = mockPurgeFetch();
     expect((await call('/api/admin/panos/purge-unconf', { method: 'DELETE' }, false)).status).toBe(
       204,

@@ -15,7 +15,9 @@ import {
 import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env, SELF } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { RECENT_UPLOAD_MS } from './delete-owned-pano.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
@@ -25,6 +27,10 @@ const OTHER_SUB = 'auth0|other';
 // it (see the port spec section 0.8). Never touch globalThis directly.
 // 'good' and 'good-other' resolve to two distinct users so cross-tenant
 // isolation can be asserted; anything else rejects.
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
     if (t === 'good') return { sub: 'auth0|me' };
@@ -252,7 +258,19 @@ describe('admin panos routes', () => {
     await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
     await env.BUCKET.put(tileVersionPrefix(panoId, 't1-abc') + '0/px/0-0.webp', 'tile v1');
     await env.BUCKET.put(tileVersionPrefix(panoId, 't1-def') + '0/px/0-0.webp', 'tile v2');
-    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ pano: panoId }));
+    const original = await env.BUCKET.head(originalKey(MY_SUB, panoId));
+    await env.BUCKET.put(
+      manifestKey(panoId),
+      JSON.stringify({
+        pano: panoId,
+        version: `t1-${original!.etag}`,
+        format: 'webp',
+        tileSize: 1,
+      }),
+    );
+    // Tiled and over an hour old, or the DELETE refuses it (see delete-owned-pano.ts).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 2 * RECENT_UPLOAD_MS);
 
     const del = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
       method: 'DELETE',
@@ -328,14 +346,13 @@ describe('admin panos routes', () => {
     ).not.toBeNull();
   });
 
-  it('a repeat DELETE after a successful delete is still 204 (idempotent)', async () => {
+  it('a repeat DELETE after a successful delete 404s', async () => {
     const panoId = 'delete-repeat-p1';
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
       body: JSON.stringify({ panoId, title: 'Repeat', hotspots: [] }),
     });
-    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'original bytes');
 
     const first = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
       method: 'DELETE',
@@ -347,7 +364,7 @@ describe('admin panos routes', () => {
       method: 'DELETE',
       headers: auth.headers,
     });
-    expect(second.status).toBe(204);
+    expect(second.status).toBe(404);
   });
 
   it('400s a panoId containing "|" or a space (outside the URL-unreserved charset)', async () => {
