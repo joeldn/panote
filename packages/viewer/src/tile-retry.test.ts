@@ -246,6 +246,22 @@ describe('TileFailureMonitor', () => {
     monitor.fail(b!, 'pano-b', 'transient');
   }
 
+  it('says how long until a fetch may start: the probe, then the window end', () => {
+    const clock = fakeClock();
+    const monitor = new TileFailureMonitor({ now: clock.now, baseDelayMs: 1_000 });
+    expect(monitor.msUntilStart()).toBe(0);
+    tripBackoff(monitor);
+    // The probe is released halfway through the 1 s window.
+    expect(monitor.msUntilStart()).toBe(500);
+    clock.advance(200);
+    expect(monitor.msUntilStart()).toBe(300);
+    clock.advance(300);
+    expect(monitor.msUntilStart()).toBe(0);
+    // Probe taken: nothing more until the window ends.
+    expect(monitor.acquire()?.probe).toBe(true);
+    expect(monitor.msUntilStart()).toBe(500);
+  });
+
   it('hands out unrestricted permits while healthy', () => {
     const monitor = new TileFailureMonitor({ now: fakeClock().now });
     expect(monitor.canStart()).toBe(true);

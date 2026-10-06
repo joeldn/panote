@@ -307,6 +307,19 @@ export class TileFailureMonitor {
     return this.now() < this.backoffUntil;
   }
 
+  /**
+   * Milliseconds until `canStart()` can next turn true: 0 when it is true now,
+   * otherwise the time to this window's probe, or to the window's end once
+   * the probe is spent. A probe in flight can end the window sooner.
+   */
+  msUntilStart(): number {
+    const now = this.now();
+    if (this.canStart()) return 0;
+    const probeLeft = !this.probeUsed && !this.probeInFlight;
+    const at = probeLeft ? Math.min(this.probeAllowedAt, this.backoffUntil) : this.backoffUntil;
+    return Math.max(0, at - now);
+  }
+
   /** Non-consuming peek: would `acquire()` hand out a permit right now? */
   canStart(): boolean {
     const now = this.now();
