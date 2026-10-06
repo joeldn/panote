@@ -56,6 +56,10 @@ const walk = async (dir: string, root = dir, acc: Record<string, Uint8Array> = {
   return acc;
 };
 
+// Phase timings for Workers Logs. panoId only: R2 keys carry the base64url owner segment.
+const logPhase = (panoId: string, msg: string): void => console.warn(`tiler pano=${panoId} ${msg}`);
+const secsSince = (t0: number): string => `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+
 // S3 ETags are double-quoted; the quotes are stripped once here so every
 // comparison and the derived version string work on the bare value.
 const stripEtagQuotes = (raw: string | null): string | null =>
@@ -103,6 +107,8 @@ createServer((req, res) => {
       // Validates the key and derives panoId; the owner plays no further
       // part, since tile/manifest output is owner-free.
       const { panoId } = deriveUploadTarget(key);
+      const jobT0 = performance.now();
+      logPhase(panoId, 'download start');
       const orig = await r2.get(key);
       if (!orig.ok) throw new Error(`download ${key} -> ${orig.status}`);
       const len = Number(orig.headers.get('content-length'));
@@ -121,6 +127,8 @@ createServer((req, res) => {
         // panoId can never take ("." is outside PANO_PATTERN's charset).
         const src = join(work, '.original');
         await writeFile(src, new Uint8Array(await orig.arrayBuffer()));
+        logPhase(panoId, `download done in ${secsSince(jobT0)}; build start`);
+        const buildT0 = performance.now();
         await build({
           src,
           outDir: work,
@@ -136,7 +144,11 @@ createServer((req, res) => {
             .filter((k) => k !== 'manifest.json')
             .map((k) => tilePrefix + k);
 
+        const tileCount = tileKeysOf().length;
+        logPhase(panoId, `build done in ${secsSince(buildT0)}; upload start, ${tileCount} file(s)`);
+        const uploadT0 = performance.now();
         await uploadDir(files, tilePrefix, put);
+        logPhase(panoId, `upload done: ${tileCount} file(s) in ${secsSince(uploadT0)}`);
 
         // A newer upload or a delete can supersede this job before the
         // manifest swap; skipping it here is success, not a failure to retry.
@@ -157,7 +169,9 @@ createServer((req, res) => {
           );
         } else {
           if (files['manifest.json']) {
+            const manifestT0 = performance.now();
             await put(manifestKey(panoId), files['manifest.json'], 'application/json');
+            logPhase(panoId, `manifest written in ${secsSince(manifestT0)}`);
           }
           // A DELETE can land between the pre-swap HEAD and the manifest PUT;
           // this catches it - a retry won't, since r2.get(key) 404s first.
@@ -184,6 +198,7 @@ createServer((req, res) => {
             });
           }
         }
+        logPhase(panoId, `job done in ${secsSince(jobT0)}`);
         res.writeHead(200).end('ok');
       } finally {
         await rm(work, { recursive: true, force: true });

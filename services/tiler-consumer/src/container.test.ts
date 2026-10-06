@@ -312,6 +312,71 @@ describe('container.ts /tile handler', () => {
   });
 });
 
+describe('concurrent tile upload through the real uploadDir', () => {
+  // Many tiles whose PUTs finish in reverse start order, plus the preview.
+  const manyTilesTree = (panoId: string, n: number): Record<string, FakeDirent[]> => ({
+    [WORK]: [dirent('.original', false), dirent(panoId, true)],
+    [`${WORK}/${panoId}`]: [
+      dirent('manifest.json', false),
+      dirent('preview.webp', false),
+      dirent('1', true),
+    ],
+    [`${WORK}/${panoId}/1`]: Array.from({ length: n }, (_, i) => dirent(`${i}.webp`, false)),
+  });
+
+  const useRealUploadDir = async (): Promise<void> => {
+    const real = await vi.importActual<{ uploadDir: unknown }>('./r2io.js');
+    uploadDirMock.mockImplementation(real.uploadDir as never);
+  };
+
+  it('writes the manifest last, after every tile and the preview, when tiles finish out of order', async () => {
+    const panoId = 'p-concurrent';
+    installFsTree(manyTilesTree(panoId, 40));
+    r2GetMock.mockResolvedValue(okOriginalResponse());
+    await useRealUploadDir();
+    const ends: string[] = [];
+    let manifestStartedAfter = -1;
+    r2PutMock.mockImplementation(async (key: string) => {
+      if (key === manifestKey(panoId)) manifestStartedAfter = ends.length;
+      const i = Number(/(\d+)\.webp$/.exec(key)?.[1] ?? 0);
+      await new Promise((r) => setTimeout(r, 10 - (i % 10)));
+      ends.push(key);
+    });
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(200);
+    const prefix = tileVersionPrefix(panoId, version);
+    expect(ends).toHaveLength(42);
+    expect(ends.at(-1)).toBe(manifestKey(panoId));
+    expect(manifestStartedAfter).toBe(41);
+    expect(ends).toContain(`${prefix}preview.webp`);
+  });
+
+  it('writes no manifest and 500s when one tile PUT fails', async () => {
+    const panoId = 'p-tile-fails';
+    installFsTree(manyTilesTree(panoId, 40));
+    r2GetMock.mockResolvedValue(okOriginalResponse());
+    await useRealUploadDir();
+    const prefix = tileVersionPrefix(panoId, version);
+    r2PutMock.mockImplementation(async (key: string) => {
+      await new Promise((r) => setTimeout(r, 2));
+      if (key === `${prefix}1/7.webp`) throw new Error(`R2 PUT ${key} -> 500`);
+    });
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(500);
+    expect(res.body).toContain('1/7.webp -> 500');
+    expect(r2PutMock).not.toHaveBeenCalledWith(
+      manifestKey(panoId),
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(r2HeadMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('orphan tile cleanup when the original is deleted mid-job', () => {
   it('deletes every uploaded tile key when the pre-swap HEAD finds the original gone, and writes no manifest', async () => {
     const panoId = 'p-gone';

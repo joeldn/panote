@@ -84,22 +84,28 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       msg.ack();
       continue;
     }
+    let panoId: string;
     try {
       // Acks keys that can never succeed rather than retrying (each retry
       // starts a 4 GiB container just to 500 on the same rejected key).
-      deriveUploadTarget(key);
+      ({ panoId } = deriveUploadTarget(key));
     } catch (e) {
       console.error(`skip unprocessable key ${key}: ${e instanceof Error ? e.message : String(e)}`);
       await writeFailureMarker(env.BUCKET, key, 'unprocessable-key', msg.body.object.eTag);
       msg.ack();
       continue;
     }
+    // panoId only in these timing lines: the key carries the owner segment.
+    const t0 = Date.now();
+    const elapsed = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+    console.warn(`tile job start pano=${panoId}`);
     try {
       const stub = env.TILER.get(env.TILER.idFromName(key));
       const res = await stub.fetch('https://container/tile', {
         method: 'POST',
         body: JSON.stringify({ key }),
       });
+      console.warn(`tile job end pano=${panoId} status=${res.status} after ${elapsed()}`);
       if (res.ok) {
         msg.ack();
       } else {
@@ -117,6 +123,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
     } catch (e) {
       // Covers a failed fetch and a DO constructor throw (missing R2
       // secrets, container-env.ts); e's message never contains a secret.
+      console.warn(`tile job end pano=${panoId} threw after ${elapsed()}`);
       console.error(`tile job failed for ${key}: ${e instanceof Error ? e.message : String(e)}`);
       msg.retry();
     }
