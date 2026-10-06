@@ -129,7 +129,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const config = useContext(ConfigContext);
   const uploadEnv = useContext(UploadEnvContext);
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const owner = session.user.sub ?? null;
 
   const tilesBase = uploadEnv.tilesBase ?? (config ? tilesBaseUrl(config) : null);
@@ -151,6 +151,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (!rec) return null;
     if (rec.owner !== owner) return { kind: 'foreign' as const, rec };
     if (rec.landed && rec.target.kind !== 'new-tour') return { kind: 'poll' as const, rec };
+    // The landing's `?resume=upload` (a new tour) beats a record left for another tour.
+    const landing = pathname === '/new' && new URLSearchParams(search).get('resume') === 'upload';
+    if (landing && rec.target.kind !== 'new-tour') return { kind: 'stale' as const, rec };
     return { kind: 'repick' as const, rec };
   });
   const bootRepick = boot?.kind === 'repick' ? boot.rec : null;
@@ -429,8 +432,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!boot) return;
     const { rec } = boot;
-    if (boot.kind === 'foreign') {
-      // Someone else's record: drop it (their stash goes at boot, above).
+    if (boot.kind === 'foreign' || boot.kind === 'stale') {
+      // Someone else's record, or one the landing superseded: drop it.
       clearResumeRecord();
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {

@@ -529,6 +529,32 @@ describe('sign-in during an upload', () => {
     expect(backend.state.calls).toEqual([]);
   });
 
+  it('?resume=upload from the landing beats an own record for another tour, and drops it', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Old.png',
+        target: { kind: 'add', tourId: 'tour-9' },
+        landed: null,
+        savedAt: Date.now(),
+      }),
+    );
+    const file = pngFile('Harbour.png');
+    const { backend, pending } = setup('/app/new?resume=upload', fakePending(file));
+    await tick();
+    expect(pending.take).toHaveBeenCalledWith(null);
+    // A new tour from the landing's file, not an Add pano into tour-9.
+    expect(backend.state.calls[0]).toMatchObject({
+      url: '/api/admin/tours',
+      body: { title: 'Harbour' },
+    });
+    expect(FakeXhr.last.body).toBe(file);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(readResumeRecord()).toBeNull();
+  });
+
   it('a resumed replace goes back to the tour in its record, not the one in the URL', async () => {
     const { backend, pending } = setup('/app/new?tour=tour-1&replace=pano-9');
     backend.state.manifests = [manifest('t1-old', 'pano-9')];
