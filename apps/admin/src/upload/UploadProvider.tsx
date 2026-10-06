@@ -125,9 +125,14 @@ const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null)
   return p === 'ready' && a.finalize.status === 'running';
 };
 
-/** The image is in R2 and only server-side work (tiling, the tour write, the reload) is left. */
+/**
+ * The image is in R2 and only server-side work (tiling, the tour write, the reload) is
+ * left. A failed tour write isn't: nothing retries it unless the user does, so a job
+ * dismissed in that state is dropped rather than kept hidden forever.
+ */
 const isLandedWork = (j: Job): boolean =>
   j.landed !== null &&
+  j.finalize.status !== 'failed' &&
   (j.machine.phase === 'processing' || (j.machine.phase === 'ready' && !j.done));
 
 /** Its tiler is (as far as we know) still working: a second replace would race it. */
@@ -362,7 +367,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
    */
   const complete = useCallback(
     async (j: Job, panoId: string, manifest: Manifest) => {
-      if (j.done || j.completing) return;
+      // A job dropped meanwhile (cancelled, or superseded by an upload over its pano) must
+      // not bump the reload key under whatever runs now.
+      if (j.done || j.completing || !jobs.current.has(j)) return;
       // An added pano waits for its tour write; that write calls back here once it's in.
       if (j.target.kind === 'add' && j.finalize.status !== 'done') return;
       j.completing = true;
@@ -374,6 +381,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       // The CDN's max-age=30 copy would otherwise reload the old image (a replace),
       // and an editor that looked before the tiles existed may hold a 404 (an add).
       if (base) await refreshManifestCache(base, panoId, fetch ? { fetch } : {}).catch(() => {});
+      if (!jobs.current.has(j)) return;
       setReloadKeys((r) => ({ ...r, [panoId]: manifest.version ?? `${Date.now()}` }));
       forgetFor(j);
       j.finalize = { status: 'done' };
@@ -404,6 +412,15 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         await addPanoToTour(live.current.session.api, tourId, panoId, title);
         j.finalize = { status: 'done' };
         setLastAdded({ tourId, panoId });
+        // A 401 elsewhere (a status poll) may have saved this job's record while the write
+        // was out: mark it appended, so the resume doesn't add back a scene removed since.
+        if (j.bg) {
+          if (readBackgroundRecords().some((r) => r.landed.panoId === panoId)) {
+            persist(j.key, j.fileName, j.target, j.landed, null, true, true);
+          }
+        } else if (savedBy.current === j.key) {
+          persist(j.key, j.fileName, j.target, j.landed, null, false, true);
+        }
         sync(j);
         if (j.machine.phase === 'ready') await complete(j, j.machine.panoId, j.machine.manifest);
       } catch (e) {
@@ -511,9 +528,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         });
         j.preview = keeper;
         void keeper.ready.then((ok) => {
-          if (!ok || j.preview !== keeper) return;
+          // Whichever job holds it now: Try again may have carried it over to a new one.
+          const owner = ok ? [...jobs.current].find((o) => o.preview === keeper) : undefined;
+          if (!owner) return;
           // Full-size bitmaps stay up for the newest preview only; older ones re-decode their stash.
-          for (const o of jobs.current) if (o !== j) o.preview?.release();
+          for (const o of jobs.current) if (o !== owner) o.preview?.release();
           touch();
         });
       }
@@ -699,12 +718,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const phase = active?.machine.phase;
+  // Closing the tab mid tour write would leave the landed pano out of its tour.
+  const appending = active?.target.kind === 'add' && active.finalize.status === 'running';
   useEffect(() => {
-    if (phase !== 'preparing' && phase !== 'upload') return;
+    if (phase !== 'preparing' && phase !== 'upload' && !appending) return;
     const warn = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [phase]);
+  }, [phase, appending]);
 
   const model = active ? chipModel(active) : null;
   const tone = model?.tone;

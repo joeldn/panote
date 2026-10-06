@@ -1,5 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { FetchLike, PreviewSource } from '@internal/web-kit';
+import {
+  type DecodedPreview,
+  type FetchLike,
+  type PreviewDecoder,
+  type PreviewSource,
+} from '@internal/web-kit';
 import { useEffect } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +21,7 @@ import {
 import { AuthEnvContext } from '../auth-context.js';
 import { createSessionApi, createSessionUploadApi, SessionContext } from '../session.js';
 
+import { readResumeRecord } from './resume-store.js';
 import { UploadEnvContext, useUploads, type Uploads } from './upload-context.js';
 import { STILL_TILING_MESSAGE, UploadProvider } from './UploadProvider.js';
 
@@ -36,22 +42,26 @@ function Probe() {
 const uploads = () => probe.uploads!;
 
 /**
- * The provider alone. `holdManifests` parks every manifest read until `release()`,
- * so a test can look at the moment before a replace's baseline is known.
+ * The provider alone. `gate.hold()` parks every manifest read (or whatever `match`
+ * picks) until `release()`, so a test can look at the moment a request is out.
  */
 function renderProvider(opts: { decoder?: ReturnType<typeof fakeDecoder> } = {}) {
   const backend = fakeBackend();
   const decoder = opts.decoder ?? fakeDecoder();
   let held: Array<() => void> | null = null;
+  let match = (url: string, _init?: RequestInit) => url.startsWith(TILES);
   const fetch: FetchLike = (url, init) => {
-    if (held && url.startsWith(TILES)) {
+    if (held && match(url, init)) {
       const list = held;
       return new Promise((resolve) => list.push(() => resolve(backend.fetch(url, init))));
     }
     return backend.fetch(url, init);
   };
   const gate = {
-    hold: () => (held = []),
+    hold: (pick?: (url: string, init?: RequestInit) => boolean) => {
+      match = pick ?? ((url) => url.startsWith(TILES));
+      held = [];
+    },
     release: () => {
       const list = held ?? [];
       held = null;
@@ -341,5 +351,122 @@ describe('replace while tiling', () => {
     expect(chipTitle()).toBe('Ready at full resolution');
     expect(backend.writes()).toEqual([]);
     expect(uploads().lastAdded).toBeNull();
+  });
+});
+
+/** The tour PUT: the append's last write. */
+const tourPut = (url: string, init?: RequestInit) =>
+  init?.method === 'PUT' && url.endsWith('/api/admin/tours/tour-1');
+
+describe('review follow-ups', () => {
+  it('a dismissed upload whose tour write failed is dropped and frees its preview', async () => {
+    const { backend, decoder } = renderProvider();
+    await add();
+    backend.state.getTourStatus = 404;
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('Couldn’t add the pano to your tour');
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Dismiss' }));
+    await tick();
+
+    backend.state.manifests = [manifest('v1')];
+    await tick(60_000);
+    expect(uploads().pendingFor('tour-1')).toEqual([]);
+    expect(uploads().previewFor('pano-1')).toBeNull();
+    expect(closeOf(decoder.sources[0]!).close).toHaveBeenCalled();
+    // Dropped, so it stopped polling as well.
+    const polls = backend.manifestPolls().length;
+    await tick(60_000);
+    expect(backend.manifestPolls()).toHaveLength(polls);
+  });
+
+  it('a record saved by a 401 while the tour write is out is marked appended once it lands', async () => {
+    const { backend, gate } = renderProvider();
+    await add();
+    gate.hold(tourPut);
+    FakeXhr.last.respond(200);
+    await tick();
+    backend.state.statusStatus = 401;
+    await tick(15_000);
+    expect(readResumeRecord()).toMatchObject({ landed: { panoId: 'pano-1' } });
+    expect(readResumeRecord()).not.toHaveProperty('appended');
+
+    gate.release();
+    await tick();
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+    expect(readResumeRecord()).toMatchObject({ landed: { panoId: 'pano-1' }, appended: true });
+  });
+
+  it('warns before unload while the tour write is out, not after', async () => {
+    const { gate } = renderProvider();
+    await add();
+    const unload = () => {
+      const e = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    gate.hold(tourPut);
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('Processing on our side');
+    expect(unload()).toBe(true);
+
+    gate.release();
+    await tick();
+    expect(unload()).toBe(false);
+  });
+
+  it('a tour write that outlives its job never bumps the reload key', async () => {
+    const { backend, gate } = renderProvider();
+    await add();
+    gate.hold(tourPut);
+    FakeXhr.last.respond(200);
+    await tick();
+    backend.state.manifests = [manifest('t1-first')];
+    await tick(1_000);
+    // Ready, still waiting on the tour write: hidden, it carries on.
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+
+    // A replace of that pano starts and takes it over.
+    await act(() =>
+      uploads().begin(pngFile(), { kind: 'replace', panoId: 'pano-1', tourId: 'tour-1' }),
+    );
+    gate.release();
+    await tick();
+    expect(uploads().reloadKeyFor('pano-1')).toBeUndefined();
+    expect(uploads().pendingFor('tour-1')).toMatchObject([{ target: { kind: 'replace' } }]);
+  });
+
+  it('Try again before the first decode lands still frees the older full decode', async () => {
+    const base = fakeDecoder();
+    let finish: (() => void) | null = null;
+    const decode = vi.fn<PreviewDecoder>(async (blob, options) => {
+      // The second upload's decode waits for the test.
+      if (base.decode.mock.calls.length === 1) {
+        await new Promise<void>((r) => (finish = r));
+      }
+      return (await base.decode(blob, options)) as DecodedPreview;
+    });
+    const { backend } = renderProvider({ decoder: { ...base, decode } });
+    await add();
+    FakeXhr.last.respond(200);
+    await tick();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    const older = base.sources[0]!;
+
+    backend.state.newPanoId = 'pano-2';
+    await choose({ kind: 'add', tourId: 'tour-1' }, pngFile('Second.png'));
+    FakeXhr.last.fail();
+    await tick();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Try again' }));
+    await tick();
+    expect(uploads().previewFor('pano-2')).toBeNull();
+
+    act(() => finish!());
+    await tick();
+    expect(closeOf(older).close).toHaveBeenCalled();
+    expect(uploads().previewFor('pano-2')?.key).toBe('upload-3');
   });
 });
