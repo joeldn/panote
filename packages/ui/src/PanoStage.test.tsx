@@ -70,8 +70,32 @@ function previewOf(panoId: string, extra: Partial<StagePreview> = {}) {
     sources.push(s);
     return s;
   });
-  const preview: StagePreview = { panoId, source, ...extra };
+  const preview: StagePreview = { panoId, key: 'job-1', source, ...extra };
   return { preview, source, sources };
+}
+
+/** A source whose one patch records `close()`. */
+function closableSource() {
+  const close = vi.fn();
+  const source: PreviewSource = {
+    width: 8,
+    height: 4,
+    patches: [{ x: 0, y: 0, w: 8, h: 4, image: { close } as unknown as ImageBitmap }],
+  };
+  return { source, close };
+}
+
+/** A preview whose factory returns a promise the test settles. */
+function asyncPreviewOf(panoId: string, key = 'job-1') {
+  const pending: { resolve: (s: PreviewSource) => void; reject: (e: unknown) => void }[] = [];
+  const source = vi.fn(
+    () =>
+      new Promise<PreviewSource>((resolve, reject) => {
+        pending.push({ resolve, reject });
+      }),
+  );
+  const preview: StagePreview = { panoId, key, source };
+  return { preview, source, pending };
 }
 
 afterEach(cleanup);
@@ -351,21 +375,14 @@ describe('PanoStage', () => {
 
   it('waits for an async source before showing it and loading', async () => {
     const f = factory();
-    let resolve!: (s: PreviewSource) => void;
-    const preview: StagePreview = {
-      panoId: 'hall',
-      source: () =>
-        new Promise<PreviewSource>((r) => {
-          resolve = r;
-        }),
-    };
+    const { preview, pending } = asyncPreviewOf('hall');
     render(
       <PanoStage baseUrl="b/" panoId="hall" preview={preview} createViewer={f.createViewer} />,
     );
     const v = f.last();
     expect(v.calls).toEqual([]);
     const s = fakeSource();
-    await act(async () => resolve(s));
+    await act(async () => pending[0]?.resolve(s));
     expect(v.calls).toEqual(['show:hall', 'load:hall']);
     expect(v.showPreview).toHaveBeenCalledWith('hall', s, {});
   });
@@ -380,7 +397,7 @@ describe('PanoStage', () => {
     expect(f.last().calls).toEqual(['load:hall']);
   });
 
-  it('shows a preview once: a reload or a dropped preview does not show it again', () => {
+  it('shows a preview once: a reload, a rebuilt object with the same key or a dropped preview do not show it again', () => {
     const f = factory();
     const { preview, source } = previewOf('hall');
     const { rerender } = render(
@@ -402,6 +419,16 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
+    // Rebuilt on every render (e.g. a status poll): same key, so nothing happens.
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        reloadKey="new"
+        preview={{ ...preview }}
+        createViewer={f.createViewer}
+      />,
+    );
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -415,7 +442,7 @@ describe('PanoStage', () => {
     expect(v.calls).toEqual(['show:hall', 'load:hall', 'load:hall']);
   });
 
-  it('swaps in a new preview for the pano on stage without moving the camera', () => {
+  it('swaps in a preview with a new key for the pano on stage without moving the camera', () => {
     const f = factory();
     const first = previewOf('hall');
     const { rerender } = render(
@@ -428,7 +455,7 @@ describe('PanoStage', () => {
       />,
     );
     const v = f.last();
-    const second = previewOf('hall', { replacesVersion: 'v2' });
+    const second = previewOf('hall', { key: 'job-2', replacesVersion: 'v2' });
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -494,23 +521,32 @@ describe('PanoStage', () => {
     expect(live[0]?.calls.at(-1)).toBe('load:hall');
   });
 
-  it('closes an async source that lands after the stage moved on, and reports load errors', async () => {
+  it('closes an async source that lands after the stage moved to another pano', async () => {
     const f = factory();
-    const resolvers: ((s: PreviewSource) => void)[] = [];
-    const preview: StagePreview = {
-      panoId: 'hall',
-      source: () =>
-        new Promise<PreviewSource>((r) => {
-          resolvers.push(r);
-        }),
-    };
-    const onLoadError = vi.fn();
+    const { preview, pending } = asyncPreviewOf('hall');
+    const { rerender } = render(
+      <PanoStage baseUrl="b/" panoId="hall" preview={preview} createViewer={f.createViewer} />,
+    );
+    const v = f.last();
+    rerender(
+      <PanoStage baseUrl="b/" panoId="nave" preview={preview} createViewer={f.createViewer} />,
+    );
+    const { source, close } = closableSource();
+    await act(async () => pending[0]?.resolve(source));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(v.showPreview).not.toHaveBeenCalled();
+    expect(v.calls).toEqual(['load:nave']);
+  });
+
+  it('asks for a fresh source when reloadKey changes while one is pending', async () => {
+    const f = factory();
+    const { preview, source, pending } = asyncPreviewOf('hall');
     const { rerender } = render(
       <PanoStage
         baseUrl="b/"
         panoId="hall"
+        reloadKey={1}
         preview={preview}
-        onLoadError={onLoadError}
         createViewer={f.createViewer}
       />,
     );
@@ -518,21 +554,182 @@ describe('PanoStage', () => {
     rerender(
       <PanoStage
         baseUrl="b/"
-        panoId="nave"
+        panoId="hall"
+        reloadKey={2}
         preview={preview}
-        onLoadError={onLoadError}
         createViewer={f.createViewer}
       />,
     );
-    const close = vi.fn();
-    const stale: PreviewSource = {
-      width: 8,
-      height: 4,
-      patches: [{ x: 0, y: 0, w: 8, h: 4, image: { close } as unknown as ImageBitmap }],
-    };
-    await act(async () => resolvers[0]?.(stale));
+    expect(source).toHaveBeenCalledTimes(2);
+    const stale = closableSource();
+    const fresh = fakeSource();
+    await act(async () => {
+      pending[0]?.resolve(stale.source);
+      pending[1]?.resolve(fresh);
+    });
+    expect(stale.close).toHaveBeenCalledTimes(1);
+    expect(v.showPreview).toHaveBeenCalledTimes(1);
+    expect(v.showPreview).toHaveBeenCalledWith('hall', fresh, {});
+    expect(v.calls).toEqual(['show:hall', 'load:hall']);
+  });
+
+  it('closes a pending source when the stage unmounts', async () => {
+    const f = factory();
+    const { preview, pending } = asyncPreviewOf('hall');
+    const { unmount } = render(
+      <PanoStage baseUrl="b/" panoId="hall" preview={preview} createViewer={f.createViewer} />,
+    );
+    const v = f.last();
+    unmount();
+    const { source, close } = closableSource();
+    await act(async () => pending[0]?.resolve(source));
     expect(close).toHaveBeenCalledTimes(1);
     expect(v.showPreview).not.toHaveBeenCalled();
-    expect(v.calls).toEqual(['load:nave']);
+    expect(v.load).not.toHaveBeenCalled();
+  });
+
+  it('reports a throwing or rejecting source to onPreviewError only, and still loads', async () => {
+    const f = factory();
+    const onLoadError = vi.fn();
+    const onPreviewError = vi.fn();
+    const boom = new Error('decode failed');
+    const throwing: StagePreview = {
+      panoId: 'hall',
+      key: 'job-1',
+      source: () => {
+        throw boom;
+      },
+    };
+    const { rerender } = render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        preview={throwing}
+        onLoadError={onLoadError}
+        onPreviewError={onPreviewError}
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    expect(onPreviewError).toHaveBeenCalledWith(boom, 'hall');
+    expect(v.calls).toEqual(['load:hall']);
+
+    const rejecting = asyncPreviewOf('hall', 'job-2');
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        preview={rejecting.preview}
+        onLoadError={onLoadError}
+        onPreviewError={onPreviewError}
+        createViewer={f.createViewer}
+      />,
+    );
+    const nope = new Error('stash gone');
+    await act(async () => rejecting.pending[0]?.reject(nope));
+    expect(onPreviewError).toHaveBeenLastCalledWith(nope, 'hall');
+    expect(onPreviewError).toHaveBeenCalledTimes(2);
+    expect(v.calls).toEqual(['load:hall', 'load:hall']);
+    expect(v.showPreview).not.toHaveBeenCalled();
+    expect(onLoadError).not.toHaveBeenCalled();
+  });
+
+  it('survives showPreview throwing for a sync source: reports it, closes the source, loads', () => {
+    const f = factory();
+    const onLoadError = vi.fn();
+    const onPreviewError = vi.fn();
+    const { source, close } = closableSource();
+    const preview: StagePreview = { panoId: 'hall', key: 'job-1', source: () => source };
+    const refused = new RangeError('preview source has no patches');
+    const createViewer = vi.fn((el: HTMLElement, opts: ViewerOptions) => {
+      const viewer = f.createViewer(el, opts);
+      f.last().showPreview.mockImplementation(() => {
+        throw refused;
+      });
+      return viewer;
+    });
+    render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        preview={preview}
+        onLoadError={onLoadError}
+        onPreviewError={onPreviewError}
+        createViewer={createViewer}
+      />,
+    );
+    expect(screen.getByRole('application')).toBeTruthy();
+    expect(onPreviewError).toHaveBeenCalledWith(refused, 'hall');
+    expect(onLoadError).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(f.last().calls).toEqual(['load:hall']);
+  });
+
+  it('survives showPreview throwing for an async source: reports it and loads', async () => {
+    const f = factory();
+    const onLoadError = vi.fn();
+    const onPreviewError = vi.fn();
+    const { preview, pending } = asyncPreviewOf('hall');
+    render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        preview={preview}
+        onLoadError={onLoadError}
+        onPreviewError={onPreviewError}
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    const refused = new RangeError('preview patch image is empty or already closed');
+    v.showPreview.mockImplementation(() => {
+      throw refused;
+    });
+    const { source, close } = closableSource();
+    await act(async () => pending[0]?.resolve(source));
+    expect(onPreviewError).toHaveBeenCalledWith(refused, 'hall');
+    expect(onLoadError).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(v.calls).toEqual(['load:hall']);
+  });
+
+  it('reports a failed tile load under a shown preview to onLoadError only', async () => {
+    const f = factory();
+    const onLoadError = vi.fn();
+    const onPreviewError = vi.fn();
+    const { preview } = previewOf('hall');
+    const missing = new Error('manifest 404');
+    const createViewer = vi.fn((el: HTMLElement, opts: ViewerOptions) => {
+      const viewer = f.createViewer(el, opts);
+      f.last().load.mockRejectedValueOnce(missing);
+      return viewer;
+    });
+    await act(async () => {
+      render(
+        <PanoStage
+          baseUrl="b/"
+          panoId="hall"
+          preview={preview}
+          onLoadError={onLoadError}
+          onPreviewError={onPreviewError}
+          createViewer={createViewer}
+        />,
+      );
+    });
+    expect(f.last().showPreview).toHaveBeenCalledTimes(1);
+    expect(onLoadError).toHaveBeenCalledTimes(1);
+    expect(onLoadError).toHaveBeenCalledWith(missing, 'hall');
+    expect(onPreviewError).not.toHaveBeenCalled();
+  });
+
+  it('loads a pano again after the stage went empty and came back to it', () => {
+    const f = factory();
+    const { rerender } = render(
+      <PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />,
+    );
+    const v = f.last();
+    rerender(<PanoStage baseUrl="b/" panoId={null} createViewer={f.createViewer} />);
+    rerender(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
+    expect(v.load).toHaveBeenCalledTimes(2);
   });
 });
