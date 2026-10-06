@@ -1,5 +1,11 @@
 import { vi } from 'vitest';
-import type { FetchLike, XhrLike } from '@internal/web-kit';
+import type {
+  DecodedPreview,
+  FetchLike,
+  PreviewDecoder,
+  PreviewSource,
+  XhrLike,
+} from '@internal/web-kit';
 
 export const TILES = 'https://cdn.test/tiles/';
 export const PUT_URL = 'https://r2.test/put?X-Amz-SignedHeaders=content-type%3Bhost';
@@ -49,6 +55,8 @@ export function fakeBackend() {
     statusStatus: 200,
     createTourStatus: 201,
     getTourStatus: 200,
+    /** The panoId the presign hands a new pano. */
+    newPanoId: 'pano-1',
   };
 
   const fetch: FetchLike = async (url, init = {}) => {
@@ -83,7 +91,8 @@ export function fakeBackend() {
     if (method === 'POST' && path === '/api/upload-url') {
       if (state.presignStatus !== 200) return json({ error: 'nope' }, state.presignStatus);
       const req = body as { panoId?: string };
-      return json({ panoId: req.panoId ?? 'pano-1', key: 'panos/o/pano-1/original', url: PUT_URL });
+      const panoId = req.panoId ?? state.newPanoId;
+      return json({ panoId, key: `panos/o/${panoId}/original`, url: PUT_URL });
     }
     if (method === 'POST' && path === '/api/admin/tours') {
       if (state.createTourStatus !== 201) return json({ error: 'nope' }, state.createTourStatus);
@@ -134,7 +143,10 @@ export function fakeBackend() {
   return {
     state,
     fetch,
-    manifestPolls: () => callsTo((c) => c.url.startsWith(TILES)),
+    /** Readiness polls (and replace baselines); not the cache refresh once ready. */
+    manifestPolls: () => callsTo((c) => c.url.startsWith(TILES) && c.cache !== 'reload'),
+    /** The `cache: 'reload'` refetch once a pano is ready, so the viewer's copy is fresh. */
+    manifestRefreshes: () => callsTo((c) => c.url.startsWith(TILES) && c.cache === 'reload'),
     presigns: () => callsTo((c) => c.url.endsWith('/api/upload-url')),
     writes: () => callsTo((c) => c.method === 'PUT'),
   };
@@ -227,4 +239,30 @@ export function fakePending(initial: File | null = null, initialOwner: string | 
     }),
     peek: () => file,
   };
+}
+
+/**
+ * Stands in for the preview worker: every decode is a new one-patch source, labelled by
+ * what it decoded (`file` for the picked file, `stash` for the stash image it returns).
+ */
+export function fakeDecoder(opts: { fail?: boolean } = {}) {
+  const stash = new Blob(['stash'], { type: 'image/webp' });
+  const sources: Array<PreviewSource & { from: string }> = [];
+  const decode = vi.fn<PreviewDecoder>(async (blob, options): Promise<DecodedPreview | null> => {
+    if (opts.fail) throw new Error('preview decode failed: corrupt JPEG');
+    const image = { width: 8, height: 4, close: vi.fn() } as unknown as ImageBitmap;
+    const source = {
+      from: blob === stash ? 'stash' : 'file',
+      width: 8,
+      height: 4,
+      patches: [{ x: 0, y: 0, w: 8, h: 4, image }],
+    };
+    sources.push(source);
+    return {
+      source,
+      stash: options.stash === false ? null : stash,
+      stats: { sourceWidth: 8, sourceHeight: 4, resize: 'none', decodeMs: 0, totalMs: 0 },
+    };
+  });
+  return { decode, sources, stash };
 }
