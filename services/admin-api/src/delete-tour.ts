@@ -1,31 +1,9 @@
-import { tilesPrefix, tourKey, userToursPrefix, type TourDoc } from '@internal/contracts';
-import { getJson, listChildren } from '@internal/worker-kit/r2-binding';
+import { tilesPrefix, tourKey, type TourDoc } from '@internal/contracts';
+import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
 import { mergePurges, type CdnPurge } from './purge.js';
-
-const REFERENCE_CONCURRENCY = 8;
-
-const referencedPanoIds = async (
-  bucket: R2Bucket,
-  sub: string,
-  excludeTourId: string,
-): Promise<Set<string>> => {
-  const otherTourIds = (await listChildren(bucket, userToursPrefix(sub))).filter(
-    (id) => id !== excludeTourId,
-  );
-  const referenced = new Set<string>();
-  for (let i = 0; i < otherTourIds.length; i += REFERENCE_CONCURRENCY) {
-    const batch = otherTourIds.slice(i, i + REFERENCE_CONCURRENCY);
-    await Promise.all(
-      batch.map(async (tourId) => {
-        const other = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
-        for (const scene of other?.value.scenes ?? []) referenced.add(scene.panoId);
-      }),
-    );
-  }
-  return referenced;
-};
+import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
 
 const deleteUnreferenced = async (
   bucket: R2Bucket,
