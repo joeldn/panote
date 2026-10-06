@@ -167,8 +167,8 @@ export function NewPanoOverlay() {
   // A sign-in redirect that lost the file: this overlay (not the provider's picker) asks again.
   const lost = uploads.repick?.reason === 'signed-out' ? uploads.repick : null;
   const target = lost?.target ?? targetFromParams(params);
-  const tour =
-    target.kind === 'add' ? target.tourId : target.kind === 'replace' ? params.get('tour') : null;
+  // From the target, never the raw `tour` param: a resumed replace keeps its own tour.
+  const tour = target.kind === 'new-tour' ? null : target.tourId;
   const resume =
     params.get('resume') === 'upload' || lost
       ? {

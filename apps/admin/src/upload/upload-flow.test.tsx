@@ -543,6 +543,188 @@ describe('sign-in during an upload', () => {
     expect(backend.state.calls).toEqual([]);
   });
 
+  it('?resume=upload from the landing beats an own record for another tour, and drops it', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Old.png',
+        target: { kind: 'add', tourId: 'tour-9' },
+        landed: null,
+        savedAt: Date.now(),
+      }),
+    );
+    const file = pngFile('Harbour.png');
+    const { backend, pending } = setup('/app/new?resume=upload', fakePending(file));
+    await tick();
+    expect(pending.take).toHaveBeenCalledWith(null);
+    // A new tour from the landing's file, not an Add pano into tour-9.
+    expect(backend.state.calls[0]).toMatchObject({
+      url: '/api/admin/tours',
+      body: { title: 'Harbour' },
+    });
+    expect(FakeXhr.last.body).toBe(file);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('?resume=upload from the landing beats a landed own record, which finishes in the background', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        v: 1,
+        owner: 'google-oauth2|1',
+        fileName: 'Old.png',
+        target: { kind: 'add', tourId: 'tour-1' },
+        landed: { panoId: 'pano-old', mode: { kind: 'fresh' } },
+        savedAt: Date.now(),
+      }),
+    );
+    const file = pngFile('Harbour.png');
+    const { backend } = setup('/app/new?resume=upload', fakePending(file));
+    await tick();
+    // The landing's file starts a new tour rather than being refused as a second upload.
+    expect(backend.state.calls.find((c) => c.url === '/api/admin/tours')).toMatchObject({
+      body: { title: 'Harbour' },
+    });
+    expect(FakeXhr.last.body).toBe(file);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await tick(STATUS_POLL_MS);
+    // The older image is still polled, out of sight.
+    expect(backend.manifestPolls().some((c) => c.url.includes('pano-old'))).toBe(true);
+  });
+
+  const OLD_LANDED = {
+    v: 1,
+    owner: 'google-oauth2|1',
+    fileName: 'Old.png',
+    target: { kind: 'add', tourId: 'tour-1' },
+    landed: { panoId: 'pano-old', mode: { kind: 'fresh' } },
+  };
+  const bgRecords = (): Array<{ fileName: string; landed: { panoId: string } }> =>
+    JSON.parse(sessionStorage.getItem('panote.upload.resume.bg') ?? '[]') as never;
+
+  it('the landing upload starting keeps the background record of a landed one', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({ ...OLD_LANDED, savedAt: Date.now() }),
+    );
+    setup('/app/new?resume=upload', fakePending(pngFile('Harbour.png')));
+    await tick();
+    expect(FakeXhr.last.body).not.toBeNull();
+    expect(bgRecords()).toMatchObject([{ fileName: 'Old.png', landed: { panoId: 'pano-old' } }]);
+  });
+
+  it('a reload with a foreground and a background record resumes both', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({
+        ...OLD_LANDED,
+        fileName: 'Town_hall.png',
+        landed: { panoId: 'pano-1', mode: { kind: 'fresh' } },
+        savedAt: Date.now(),
+      }),
+    );
+    sessionStorage.setItem(
+      'panote.upload.resume.bg',
+      JSON.stringify([{ ...OLD_LANDED, savedAt: Date.now() }]),
+    );
+    const { backend } = setup('/app/t/tour-1');
+    await tick();
+    await tick(STATUS_POLL_MS);
+    const polled = backend.manifestPolls().map((c) => c.url);
+    expect(polled.some((u) => u.includes('pano-1'))).toBe(true);
+    expect(polled.some((u) => u.includes('pano-old'))).toBe(true);
+    // One chip, for the foreground one.
+    expect(chipTitle()).toBe('Processing on our side');
+  });
+
+  it("one upload's sign-in record doesn't overwrite the other's", async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({ ...OLD_LANDED, savedAt: Date.now() }),
+    );
+    const { backend } = setup('/app/new?resume=upload', fakePending(pngFile('Harbour.png')));
+    backend.state.presignStatus = 401;
+    backend.state.statusStatus = 401;
+    await tick();
+    await tick(STATUS_POLL_MS);
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Harbour.png', landed: null });
+    expect(bgRecords()).toMatchObject([{ fileName: 'Old.png', landed: { panoId: 'pano-old' } }]);
+  });
+
+  it('a background upload that fails while the chip is busy is shown once the chip is free', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({ ...OLD_LANDED, savedAt: Date.now() }),
+    );
+    const { backend } = setup('/app/new?resume=upload', fakePending(pngFile('Harbour.png')));
+    backend.state.tiling = 'failed';
+    await tick();
+    await tick(STATUS_POLL_MS);
+    expect(chipTitle()).toBe('Uploading panorama');
+
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
+    await tick();
+    expect(chipTitle()).toBe('We couldn’t process this image');
+  });
+
+  it('a background upload clears its own record once it reaches its tour', async () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      JSON.stringify({ ...OLD_LANDED, savedAt: Date.now() }),
+    );
+    const { backend } = setup('/app/new?resume=upload', fakePending(pngFile('Harbour.png')));
+    await tick();
+    expect(bgRecords()).toHaveLength(1);
+    backend.state.manifests = [manifest('t1-abc', 'pano-old')];
+    await tick(5_000);
+    expect(backend.writes().map((w) => w.url)).toContain('/api/admin/tours/tour-1');
+    expect(bgRecords()).toEqual([]);
+  });
+
+  it("hiding the chip doesn't clear the sign-in record of the waiting upload it shows next", async () => {
+    const { backend, router } = await uploadThroughPut();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    await act(() => router.navigate('/new?tour=tour-1'));
+    await pick(pngFile('Second.png'));
+    expect(chipTitle()).toBe('Uploading panorama');
+
+    // The hidden upload's tour write needs a sign-in: it waits behind the busy chip.
+    backend.state.getTourStatus = 401;
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(5_000);
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Town_hall.png' });
+
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
+    await tick();
+    expect(within(chip()).getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Town_hall.png' });
+  });
+
+  it('a resumed replace goes back to the tour in its record, not the one in the URL', async () => {
+    const { backend, pending } = setup('/app/new?tour=tour-1&replace=pano-9');
+    backend.state.manifests = [manifest('t1-old', 'pano-9')];
+    backend.state.presignStatus = 401;
+    await tick();
+    const file = pngFile();
+    await pick(file);
+    expect(readResumeRecord()).toMatchObject({
+      target: { kind: 'replace', panoId: 'pano-9', tourId: 'tour-1' },
+    });
+
+    cleanup();
+    const back = setup('/app/new?tour=tour-2&replace=pano-9', pending);
+    back.backend.state.manifests = [manifest('t1-old', 'pano-9')];
+    await tick();
+    expect(FakeXhr.last.body).toBe(file);
+    expect(back.backend.presigns()[0]?.body).toMatchObject({ panoId: 'pano-9' });
+    expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
+  });
+
   it('a stashed file still goes through the type and size checks', async () => {
     const gif = new File(['GIF89a'], 'a.gif', { type: 'image/gif' });
     const { backend } = setup('/app/new?resume=upload', fakePending(gif));

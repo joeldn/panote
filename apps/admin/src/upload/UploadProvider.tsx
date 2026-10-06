@@ -37,9 +37,13 @@ import {
 import { addPanoToTour, assertTourHasRoom, FinalizeError, titleFromFileName } from './finalize.js';
 import { repickNotice } from './repick-notice.js';
 import {
+  clearBackgroundRecord,
   clearResumeRecord,
+  readBackgroundRecords,
   readResumeRecord,
+  writeBackgroundRecord,
   writeResumeRecord,
+  type BackgroundRecord,
   type UploadTarget,
 } from './resume-store.js';
 import {
@@ -70,6 +74,10 @@ interface Job {
   landed: Landed | null;
   /** This upload created its tour (new-tour), so cancelling early may delete it again. */
   createdTour: boolean;
+  /** Started in the background; its resume record has its own slot (resume-store's bg). */
+  bg: boolean;
+  /** Failed while hidden with the chip taken: shown once the chip is free. */
+  waiting: boolean;
   machine: UploadState;
   finalize: FinalizeState;
   ctl: UploadController | null;
@@ -129,7 +137,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const config = useContext(ConfigContext);
   const uploadEnv = useContext(UploadEnvContext);
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const owner = session.user.sub ?? null;
 
   const tilesBase = uploadEnv.tilesBase ?? (config ? tilesBaseUrl(config) : null);
@@ -150,9 +158,21 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const rec = readResumeRecord();
     if (!rec) return null;
     if (rec.owner !== owner) return { kind: 'foreign' as const, rec };
-    if (rec.landed && rec.target.kind !== 'new-tour') return { kind: 'poll' as const, rec };
+    // The landing's `?resume=upload` (a new tour) beats a record left for another tour. An
+    // image that record already landed still finishes, hidden, so it doesn't block the new one.
+    const landing = pathname === '/new' && new URLSearchParams(search).get('resume') === 'upload';
+    if (landing && rec.target.kind !== 'new-tour') {
+      return rec.landed
+        ? { kind: 'poll' as const, rec, hidden: true }
+        : { kind: 'stale' as const, rec };
+    }
+    if (rec.landed && rec.target.kind !== 'new-tour') {
+      return { kind: 'poll' as const, rec, hidden: false };
+    }
     return { kind: 'repick' as const, rec };
   });
+  // Landed uploads that were finishing in the background before the reload.
+  const [bootBg] = useState(readBackgroundRecords);
   const bootRepick = boot?.kind === 'repick' ? boot.rec : null;
   // On /app/new the route's own overlay takes the file back instead (one dialog, not two).
   const [picker, setPicker] = useState<{ target: PanoTarget; resume: boolean } | null>(() =>
@@ -197,7 +217,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     (j: Job) => {
       if (fg.current === j) return;
       if (fg.current) {
-        jobs.current.delete(j);
+        j.waiting = true;
         return;
       }
       fg.current = j;
@@ -205,6 +225,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     },
     [sync],
   );
+
+  /** The chip is free: show a hidden job that failed meanwhile, if any. */
+  const release = useCallback(() => {
+    fg.current = null;
+    setActive(null);
+    const next = [...jobs.current].find((j) => j.waiting);
+    if (next) {
+      next.waiting = false;
+      surface(next);
+    }
+  }, [surface]);
 
   /** Survive a sign-in redirect: a record always, the file too if it hadn't landed yet. */
   // Which job's record/stash is saved; a background job finishing must not wipe another's.
@@ -216,9 +247,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       target: UploadTarget,
       landed: Landed | null,
       file: File | null,
+      bg = false,
     ) => {
       const { owner: who, pending: store, session: s } = live.current;
       if (who === null) return;
+      if (bg && landed && target.kind !== 'new-tour') {
+        writeBackgroundRecord({ owner: who, fileName, target, landed });
+        return;
+      }
       savedBy.current = key;
       writeResumeRecord({ owner: who, fileName, target, landed });
       if (!landed && file) s.holdSignIn(store.stash(file, who).catch(() => false));
@@ -231,10 +267,12 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     clearResumeRecord();
     void live.current.pending.clear().catch(() => {});
   }, []);
-  /** `forget`, unless another job's record is the one saved. */
+  /** Clear this job's record: its own slot if a background one, else `forget` unless another job's record is the one saved. */
   const forgetFor = useCallback(
     (j: Job) => {
-      if (savedBy.current === null || savedBy.current === j.key) forget();
+      if (j.bg) {
+        if (j.landed) clearBackgroundRecord(j.landed.panoId);
+      } else if (savedBy.current === null || savedBy.current === j.key) forget();
     },
     [forget],
   );
@@ -262,7 +300,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         else jobs.current.delete(j);
       } catch (e) {
         j.finalize = finalizeFailure(e);
-        if (j.finalize.auth) persist(j.key, j.fileName, j.target, j.landed, null);
+        if (j.finalize.auth) persist(j.key, j.fileName, j.target, j.landed, null, j.bg);
         else forgetFor(j);
         if (fg.current === j) sync(j);
         else surface(j);
@@ -277,7 +315,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       if (s.phase === 'processing') j.landed = { panoId: s.panoId, mode: s.mode };
       if (s.phase === 'failed' && s.stage === 'auth') {
         const landed = s.resumable && s.panoId ? { panoId: s.panoId, mode: s.resumable } : null;
-        persist(j.key, j.fileName, j.target, landed, j.file);
+        persist(j.key, j.fileName, j.target, landed, j.file, j.bg);
       } else if (s.phase === 'failed' || s.phase === 'timed-out') {
         // Done with, short of a user retry: a reload must not run it again.
         forgetFor(j);
@@ -297,11 +335,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       target: PanoTarget,
       source: Source,
       createdTour = false,
+      /** Run in the background: the chip (and whatever it shows) is left alone. */
+      bg = false,
     ) => {
       const d = live.current.deps;
       if (!d) throw new Error('Uploads aren’t configured in this build.');
       const prev = fg.current;
-      if (prev) {
+      if (prev && !bg) {
         prev.ctl?.cancel();
         jobs.current.delete(prev);
       }
@@ -312,13 +352,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         target,
         landed: 'resume' in source ? source.resume : null,
         createdTour,
+        bg,
+        waiting: false,
         machine: { phase: 'preparing', mode: null },
         finalize: { status: 'idle' },
         ctl: null,
       };
-      fg.current = j;
       jobs.current.add(j);
-      setActive(toActive(j));
+      if (!bg) {
+        fg.current = j;
+        setActive(toActive(j));
+      }
       const onChange = (s: UploadState) => onMachine(j, s);
       j.ctl =
         'resume' in source
@@ -381,9 +425,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(() => {
     const j = fg.current;
-    fg.current = null;
-    setActive(null);
-    forget();
+    release();
+    // Only this job's record: a waiting job release() just showed may have saved its own.
+    if (j) forgetFor(j);
+    else forget();
     if (!j) return;
     // Hidden, not stopped: tiling and the tour write carry on so the pano doesn't go missing.
     if (isLandedWork(j)) return;
@@ -392,7 +437,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (!j.landed && j.createdTour && j.target.kind === 'add') {
       void discardEmptyTour(j.target.tourId);
     }
-  }, [forget, discardEmptyTour]);
+  }, [release, forget, forgetFor, discardEmptyTour]);
 
   const onAction = (id: ChipActionId) => {
     const j = fg.current;
@@ -427,11 +472,26 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
   // After a sign-in redirect: resume polling an image that landed, or get the file back.
   useEffect(() => {
+    const background = (r: BackgroundRecord) => {
+      if (r.target.kind !== 'new-tour' && live.current.deps) {
+        run(null, r.fileName, r.target, { resume: r.landed }, false, true);
+      }
+    };
+    for (const r of bootBg) {
+      if (r.owner === owner) background(r);
+      else clearBackgroundRecord(r.landed.panoId);
+    }
     if (!boot) return;
     const { rec } = boot;
-    if (boot.kind === 'foreign') {
-      // Someone else's record: drop it (their stash goes at boot, above).
+    if (boot.kind === 'foreign' || boot.kind === 'stale') {
+      // Someone else's record, or one the landing superseded: drop it.
       clearResumeRecord();
+    } else if (boot.kind === 'poll' && boot.hidden && rec.landed) {
+      // Moved to its own slot so the landing upload's record can't overwrite or clear it.
+      const moved = { ...rec, landed: rec.landed };
+      writeBackgroundRecord(moved);
+      clearResumeRecord();
+      background(moved);
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
         run(null, rec.fileName, rec.target, { resume: rec.landed });
@@ -482,11 +542,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const t = setTimeout(() => {
       const j = fg.current;
       if (j) jobs.current.delete(j);
-      fg.current = null;
-      setActive(null);
+      release();
     }, READY_CHIP_MS);
     return () => clearTimeout(t);
-  }, [tone]);
+  }, [tone, release]);
 
   const value = useMemo<Uploads>(
     () => ({
