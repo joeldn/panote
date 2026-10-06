@@ -1,4 +1,7 @@
 import {
+  DEFAULT_INSIGHTS_DAYS,
+  InsightsOkSchema,
+  InsightsUnavailableSchema,
   NotPublishedSchema,
   PANO_PATTERN,
   PanoConfigNotFoundSchema,
@@ -16,6 +19,7 @@ import {
   TourOkSchema,
   ToursListOkSchema,
   TourWithConfigsOkSchema,
+  type InsightsOk,
   type PanosListOk,
   type PanoStatus,
   type PanoWithStatusOk,
@@ -61,6 +65,10 @@ export type GetResult<T, NotFound = { status: 'not-found' }> =
 
 export type PanoNotFound = { status: 'not-found'; deleting: boolean; hasOriginal: boolean };
 
+/** `unavailable` is admin-api's 502 when the Analytics Engine query fails. */
+export type InsightsResult =
+  { status: 'ok'; data: InsightsOk } | { status: 'unavailable' } | { status: 'not-found' };
+
 export interface ListQuery {
   cursor?: string;
   limit?: number;
@@ -103,6 +111,7 @@ export interface AdminApi {
   renameSlug(tourId: string, slug: string): Promise<SlugPutOk>;
   setVisibility(tourId: string, visibility: Visibility): Promise<VisibilityOk>;
   unpublishTour(tourId: string): Promise<void>;
+  getInsights(tourId: string, days?: number): Promise<InsightsResult>;
 }
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
@@ -296,5 +305,17 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
     setVisibility: async (tourId, visibility) =>
       write('PATCH', `${tourPath(tourId)}/visibility`, { visibility }, VisibilityOkSchema),
     unpublishTour: async (tourId) => del(`${tourPath(tourId)}/publish`),
+    getInsights: async (tourId, days = DEFAULT_INSIGHTS_DAYS) => {
+      const { res, url, body } = await send('GET', `${tourPath(tourId)}/insights?days=${days}`);
+      if (res.status === 404) {
+        parseWith(TourNotFoundSchema, url, body);
+        return { status: 'not-found' };
+      }
+      if (res.status === 502 && InsightsUnavailableSchema.safeParse(body).success) {
+        return { status: 'unavailable' };
+      }
+      if (!res.ok) throw new ApiError(res.status, body);
+      return { status: 'ok', data: parseWith(InsightsOkSchema, url, body) };
+    },
   };
 }

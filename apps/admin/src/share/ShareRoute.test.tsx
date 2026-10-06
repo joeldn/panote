@@ -79,6 +79,7 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
       visibility,
     })),
     unpublishTour: fail,
+    getInsights: fail,
     ...overrides,
   };
 }

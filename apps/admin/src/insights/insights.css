@@ -1,0 +1,192 @@
+/* Insights modal (docs/design/README.md 9; screen 09). */
+.ins {
+  padding: 22px 24px 26px;
+  font-family: var(--fbody);
+  color: var(--ink);
+}
+.ins__status {
+  margin: 0;
+  font: 400 13px/1.5 var(--fbody);
+  color: var(--ink-62);
+}
+.ins__label {
+  margin: 0 0 12px;
+  font: 400 11px var(--fmono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-45);
+}
+.ins__meta {
+  font: 400 12px var(--fmono);
+  color: var(--ink-55);
+  white-space: nowrap;
+}
+.ins__empty {
+  margin: 10px 0 0;
+  font: 400 13px/1.5 var(--fbody);
+  color: var(--ink-55);
+}
+.ins__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ins__cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.ins__card {
+  padding: 16px 16px 14px;
+  background: #fff;
+  border: 1px solid var(--ink-10);
+  border-radius: var(--r-card);
+}
+.ins__card .ins__label {
+  margin-bottom: 6px;
+}
+.ins__value {
+  margin: 0;
+  font: 400 30px/1.15 var(--fdisp);
+  letter-spacing: -0.015em;
+}
+.ins__caption {
+  margin: 4px 0 0;
+  font: 400 12px var(--fbody);
+  color: var(--ink-45);
+}
+.ins__note {
+  margin: 12px 0 0;
+  font: 400 12px/1.45 var(--fbody);
+  color: var(--ink-55);
+}
+.ins__note i {
+  margin-right: 4px;
+  font-size: 11px;
+}
+
+.ins__section {
+  margin-top: 26px;
+}
+.ins__chart {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 96px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ins__bar {
+  flex: 1;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: color-mix(in srgb, var(--accent) 35%, var(--paper));
+}
+.ins__bar--today {
+  background: var(--accent);
+}
+.ins__bar[data-empty] {
+  background: var(--ink-08);
+}
+.ins__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font: 400 11px var(--fmono);
+  color: var(--ink-45);
+}
+
+.ins__panos {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ins__pano-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font: 500 14px var(--fbody);
+}
+.ins__track {
+  height: 7px;
+  border-radius: 99px;
+  background: var(--ink-08);
+  overflow: hidden;
+}
+.ins__fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+}
+
+.ins__points {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ins__point {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--ink-08);
+}
+.ins__point:first-child {
+  border-top: 0;
+}
+.ins__rank {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ink-06);
+  font: 500 11px var(--fmono);
+  color: var(--ink-70);
+}
+.ins__point-name {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font: 500 14px var(--fbody);
+}
+
+.ins__unavailable {
+  margin-top: 22px;
+  padding: 18px;
+  border-radius: var(--r-card);
+  background: var(--ink-05);
+}
+.ins__unavailable-title {
+  margin: 0 0 4px;
+  font: 600 14px var(--fbody);
+}
+.ins__unavailable-body {
+  margin: 0 0 14px;
+  font: 400 13px/1.5 var(--fbody);
+  color: var(--ink-62);
+}
+
+@media (max-width: 480px) {
+  .ins {
+    padding: 18px 16px 22px;
+  }
+  .ins__cards {
+    gap: 8px;
+  }
+  .ins__value {
+    font-size: 24px;
+  }
+}

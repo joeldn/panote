@@ -40,7 +40,8 @@ describe('admin routes', () => {
 
   it('routes insights and preview', async () => {
     renderAt('/app/t/tour-1/insights');
-    expect((await screen.findByRole('dialog')).textContent).toBe('Insights');
+    expect(await editorShown()).toBeTruthy();
+    expect(await screen.findByRole('dialog', { name: 'Insights' })).toBeTruthy();
     cleanup();
     renderAt('/app/t/tour-1/preview');
     expect(await screen.findByRole('heading', { name: 'Preview tour-1' })).toBeTruthy();

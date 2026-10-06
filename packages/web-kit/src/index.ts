@@ -35,6 +35,7 @@ export {
   type AdminApiOptions,
   type ConditionalQuery,
   type GetResult,
+  type InsightsResult,
   type ListQuery,
   type PanoNotFound,
   type PublishError,
