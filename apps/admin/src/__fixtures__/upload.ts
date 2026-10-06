@@ -42,6 +42,8 @@ export function fakeBackend() {
     tiling: 'pending' as 'pending' | 'failed' | 'ready' | 'none',
     tour: { tourId: 'tour-1', title: 'Town hall', scenes: [] as Array<{ panoId: string }> },
     tourEtag: 't1',
+    /** Stored pano configs, as the editor's `?include=configs` load returns them. */
+    configs: {} as Record<string, { title: string }>,
     hasConfig: false,
     presignStatus: 200,
     statusStatus: 200,
@@ -62,9 +64,15 @@ export function fakeBackend() {
     }
     // The editor's own load of the tour (it sits under /app/t/:id); not part of the upload.
     if (method === 'GET' && /\?include=configs$/.test(path)) {
-      return path.startsWith('/api/admin/tours/tour-1')
-        ? json({ tour: state.tour, etag: state.tourEtag, configs: {} })
-        : json({ error: 'not found' }, 404);
+      if (!path.startsWith('/api/admin/tours/tour-1')) return json({ error: 'not found' }, 404);
+      const configs: Record<string, unknown> = {};
+      for (const { panoId } of state.tour.scenes) {
+        const c = state.configs[panoId];
+        configs[panoId] = c
+          ? { config: { panoId, title: c.title, hotspots: [] }, etag: `c-${panoId}` }
+          : { missing: true, deleting: false, hasOriginal: true };
+      }
+      return json({ tour: state.tour, etag: state.tourEtag, configs });
     }
     state.calls.push({ method, url, headers, body, cache: init.cache });
 
@@ -102,6 +110,8 @@ export function fakeBackend() {
       if (headers['if-none-match'] === '*' && state.hasConfig)
         return json({ error: 'conflict' }, 412);
       state.hasConfig = true;
+      const panoId = path.split('/')[4]!;
+      state.configs[panoId] ??= { title: (body as { title: string }).title };
       return json({ etag: 'c1' });
     }
     if (method === 'GET' && path === '/api/admin/tours/tour-1') {
@@ -112,9 +122,10 @@ export function fakeBackend() {
       return new Response(null, { status: 204 });
     }
     if (method === 'PUT' && path === '/api/admin/tours/tour-1') {
+      if (headers['if-match'] !== `"${state.tourEtag}"`) return json({ error: 'conflict' }, 412);
       state.tour = body as typeof state.tour;
-      state.tourEtag = 't2';
-      return json({ etag: 't2' });
+      state.tourEtag = `t${Number(state.tourEtag.slice(1)) + 1}`;
+      return json({ etag: state.tourEtag });
     }
     return json({ error: 'not found' }, 404);
   };

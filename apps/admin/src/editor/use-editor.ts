@@ -9,6 +9,8 @@ import {
   dirtyKeys,
   editorReducer,
   fromServer,
+  isTourDirty,
+  mergeAppendedScenes,
   panoIdOf,
   UNTITLED_PANO,
   type DocKey,
@@ -153,6 +155,9 @@ export function useEditor(
   const unloadGuardRef = useRef(true);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // An appended pano that arrived mid-save, and the sync to run for it after (syncAppended).
+  const syncAfterSave = useRef(false);
+  const syncRef = useRef<() => Promise<void>>(async () => {});
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [publish, setPublish] = useState<TourPublishState | null>(null);
   const publishRef = useRef<TourPublishState | null>(null);
@@ -296,10 +301,51 @@ export function useEditor(
       } finally {
         savingRef.current = false;
         setSaving(false);
+        if (syncAfterSave.current) {
+          syncAfterSave.current = false;
+          void syncRef.current();
+        }
       }
     },
     [api, tourId, user, storage, dispatch, dismiss, setFailures, republishWith],
   );
+
+  /**
+   * The upload chip appended a pano to this tour: take the server's tour (and the new
+   * scene's config) the way the conflict Reload does, keeping local edits, so the next
+   * Save doesn't 412. If the tour also changed some other way while edited here, that's
+   * a real conflict and the conflict banner takes over.
+   */
+  const syncAppended = useCallback(async () => {
+    if (!docsRef.current) return;
+    // A save in flight would move the ETag under us: run once it settles.
+    if (savingRef.current) {
+      syncAfterSave.current = true;
+      return;
+    }
+    try {
+      const res = await api.getTourWithConfigs(tourId);
+      const now = docsRef.current;
+      if (res.status !== 'ok' || !now) return;
+      const fresh = fromServer(res.data);
+      dispatch({ type: 'add-scenes', scenes: fresh.scenes });
+      if (failuresRef.current.tour?.kind === 'conflict' || fresh.tour.etag === now.tour.etag) {
+        return;
+      }
+      const merged = mergeAppendedScenes(now.tour, {
+        etag: fresh.tour.etag,
+        tour: fresh.tour.base,
+      });
+      if (merged) dispatch({ type: 'replace-doc', key: 'tour', doc: merged });
+      else if (!isTourDirty(now)) dispatch({ type: 'replace-doc', key: 'tour', doc: fresh.tour });
+      else setFailures((f) => ({ ...f, tour: { kind: 'conflict' } }));
+    } catch {
+      // Best effort: Save's 412 handling still covers it.
+    }
+  }, [api, tourId, dispatch, setFailures]);
+  useEffect(() => {
+    syncRef.current = syncAppended;
+  });
 
   /** The publish notice's "Try again": publishes the already-saved tour. */
   const republish = useCallback(async () => {
@@ -408,6 +454,7 @@ export function useEditor(
     publishing,
     notices,
     dismiss,
+    syncAppended,
   };
 }
 

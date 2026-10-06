@@ -22,6 +22,7 @@ import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { writeCurrentTour } from '../dashboard/current-tour.js';
 import { useSession } from '../session.js';
+import { useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
 import { newId, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
@@ -55,6 +56,16 @@ export function Editor() {
   useEffect(() => {
     if (ready) writeCurrentTour(tourId);
   }, [ready, tourId]);
+
+  // A pano the upload chip appended to this tour since it opened: fold it in.
+  const { lastAdded } = useUploads();
+  const seenAdded = useRef(lastAdded);
+  const { syncAppended } = editor;
+  useEffect(() => {
+    if (!ready || !lastAdded || lastAdded === seenAdded.current) return;
+    seenAdded.current = lastAdded;
+    if (lastAdded.tourId === tourId) void syncAppended();
+  }, [ready, lastAdded, tourId, syncAppended]);
 
   if (load.status === 'loading') {
     return <EditorMessage title="Loading tour…" />;
@@ -149,6 +160,7 @@ function SaveButton({ editor }: { editor: EditorController }) {
 function EditorScreen({ editor, docs }: { editor: EditorController; docs: EditorDocs }) {
   const config = useConfig();
   const session = useSession();
+  const uploads = useUploads();
   const { origins } = useAuthEnv();
   const createViewer = useContext(StageFactoryContext);
   const [params, setParams] = useSearchParams();
@@ -242,6 +254,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           className="ed-stage"
           baseUrl={tilesBaseUrl(config)}
           panoId={currentId}
+          reloadKey={uploads.reloadKeyFor(currentId) ?? ''}
           {...(cfg.initialView && { view: cfg.initialView })}
           north={cfg.north ?? 0}
           {...(createViewer && { createViewer })}

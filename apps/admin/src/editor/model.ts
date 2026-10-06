@@ -113,6 +113,30 @@ export function dirtyKeys(docs: EditorDocs): DocKey[] {
   return keys;
 }
 
+/**
+ * Folds in a server tour that differs from `local.base` only by scenes appended to it
+ * (the upload chip adding a pano): the server copy becomes the base, with its ETag, and
+ * local edits stay on top. Null when the server tour changed in any other way.
+ */
+export function mergeAppendedScenes(
+  local: TourState,
+  server: { etag: string; tour: TourDoc },
+): TourState | null {
+  const known = new Set(local.base.scenes.map((s) => s.panoId));
+  const added = server.tour.scenes.filter((s) => !known.has(s.panoId));
+  const rest = { ...server.tour, scenes: server.tour.scenes.filter((s) => known.has(s.panoId)) };
+  if (!sameValue(rest, local.base)) return null;
+  const inCurrent = new Set(local.current.scenes.map((s) => s.panoId));
+  return {
+    etag: server.etag,
+    base: server.tour,
+    current: {
+      ...local.current,
+      scenes: [...local.current.scenes, ...added.filter((s) => !inCurrent.has(s.panoId))],
+    },
+  };
+}
+
 /** Wrap into (-π, π], the same canonical form the contract stores. */
 export function normalizeAngle(a: number): number {
   const wrapped = a % TWO_PI;

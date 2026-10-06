@@ -3,6 +3,8 @@ import { PROCESSING_TIMEOUT_MS, STATUS_POLL_MS } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
+import { viewerFactory } from '../__fixtures__/editor-server.js';
+import { StageFactoryContext } from '../editor/stage-factory.js';
 import {
   FakeXhr,
   fakeBackend,
@@ -27,6 +29,10 @@ function setup(path = '/app/new', pending = fakePending(), auth = fakeAuth()) {
     auth,
     fetch: backend.fetch,
     upload: { tilesBase: TILES, createXhr: () => new FakeXhr(), pending },
+    // The editor under the chip shows the pano once it's added; jsdom has no WebGL.
+    wrap: (tree) => (
+      <StageFactoryContext value={viewerFactory().create}>{tree}</StageFactoryContext>
+    ),
   });
   return { backend, pending, ...app };
 }
