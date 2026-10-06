@@ -150,10 +150,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const rec = readResumeRecord();
     if (!rec) return null;
     if (rec.owner !== owner) return { kind: 'foreign' as const, rec };
-    if (rec.landed && rec.target.kind !== 'new-tour') return { kind: 'poll' as const, rec };
-    // The landing's `?resume=upload` (a new tour) beats a record left for another tour.
+    // The landing's `?resume=upload` (a new tour) beats a record left for another tour. An
+    // image that record already landed still finishes, hidden, so it doesn't block the new one.
     const landing = pathname === '/new' && new URLSearchParams(search).get('resume') === 'upload';
-    if (landing && rec.target.kind !== 'new-tour') return { kind: 'stale' as const, rec };
+    if (landing && rec.target.kind !== 'new-tour') {
+      return rec.landed
+        ? { kind: 'poll' as const, rec, hidden: true }
+        : { kind: 'stale' as const, rec };
+    }
+    if (rec.landed && rec.target.kind !== 'new-tour') {
+      return { kind: 'poll' as const, rec, hidden: false };
+    }
     return { kind: 'repick' as const, rec };
   });
   const bootRepick = boot?.kind === 'repick' ? boot.rec : null;
@@ -300,11 +307,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       target: PanoTarget,
       source: Source,
       createdTour = false,
+      /** Run in the background: the chip (and whatever it shows) is left alone. */
+      hidden = false,
     ) => {
       const d = live.current.deps;
       if (!d) throw new Error('Uploads aren’t configured in this build.');
       const prev = fg.current;
-      if (prev) {
+      if (prev && !hidden) {
         prev.ctl?.cancel();
         jobs.current.delete(prev);
       }
@@ -319,9 +328,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         finalize: { status: 'idle' },
         ctl: null,
       };
-      fg.current = j;
       jobs.current.add(j);
-      setActive(toActive(j));
+      if (!hidden) {
+        fg.current = j;
+        setActive(toActive(j));
+      }
       const onChange = (s: UploadState) => onMachine(j, s);
       j.ctl =
         'resume' in source
@@ -437,7 +448,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       clearResumeRecord();
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
-        run(null, rec.fileName, rec.target, { resume: rec.landed });
+        run(null, rec.fileName, rec.target, { resume: rec.landed }, false, boot.hidden);
       }
     } else if (rec.target.kind === 'new-tour' && pathname !== '/new') {
       void navigate('/new?resume=upload');
