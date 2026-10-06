@@ -70,6 +70,8 @@ function PointsLayer({
 }: PointsLayerProps) {
   const viewer = usePanoViewer();
   const open = (h: ViewerHotspot) => {
+    // Clicking the marker of the point already open (e.g. to close it) isn't another open.
+    if (active?.id === h.id) return;
     setActive(h);
     viewer?.reportHotspotOpen(h.id);
   };
