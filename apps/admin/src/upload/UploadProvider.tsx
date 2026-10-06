@@ -612,8 +612,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     const j = fg.current;
     release();
     // Only this job's record: a waiting job release() just showed may have saved its own.
-    if (j) forgetFor(j);
-    else forget();
+    // A tour write that needs a sign-in keeps it, so the next sign-in still adds the pano.
+    const needsSignIn = j?.finalize.status === 'failed' && j.finalize.auth;
+    if (j && !needsSignIn) forgetFor(j);
+    else if (!j) forget();
     if (!j) return;
     // Hidden, not stopped: tiling and the tour write carry on so the pano doesn't go missing.
     if (isLandedWork(j)) return;
@@ -682,6 +684,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     } else if (boot.kind === 'poll') {
       if (rec.landed && rec.target.kind !== 'new-tour' && live.current.deps) {
         run(null, rec.fileName, rec.target, { resume: rec.landed }, { appended: !!rec.appended });
+        // The record is this job's: its append marks it, and only it clears it.
+        savedBy.current = keyRef.current;
       }
     } else if (rec.target.kind === 'new-tour' && pathname !== '/new') {
       void navigate('/new?resume=upload');
@@ -717,15 +721,19 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const phase = active?.machine.phase;
-  // Closing the tab mid tour write would leave the landed pano out of its tour.
-  const appending = active?.target.kind === 'add' && active.finalize.status === 'running';
+  // Closing the tab mid PUT loses the upload; mid tour write (any job, hidden ones too)
+  // it leaves the landed pano out of its tour.
   useEffect(() => {
-    if (phase !== 'preparing' && phase !== 'upload' && !appending) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    const warn = (e: BeforeUnloadEvent) => {
+      const phase = fg.current?.machine.phase;
+      const appending = [...jobs.current].some(
+        (j) => j.target.kind === 'add' && j.finalize.status === 'running',
+      );
+      if (phase === 'preparing' || phase === 'upload' || appending) e.preventDefault();
+    };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [phase, appending]);
+  }, []);
 
   const model = active ? chipModel(active) : null;
   const tone = model?.tone;

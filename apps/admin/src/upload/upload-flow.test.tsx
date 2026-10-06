@@ -1027,6 +1027,15 @@ describe('the scene joins its tour when the image lands', () => {
       '/api/admin/panos/pano-1/config',
       '/api/admin/tours/tour-1',
     ]);
+    // pano-1's slot is marked too, so another reload won't append it again.
+    const slots = JSON.parse(sessionStorage.getItem('panote.upload.resume.bg') ?? '[]') as Array<{
+      landed: { panoId: string };
+      appended?: boolean;
+    }>;
+    expect(slots.map((r) => [r.landed.panoId, r.appended])).toEqual([
+      ['pano-old', true],
+      ['pano-1', true],
+    ]);
     // Hidden: the chip stays free, and both are still polled.
     expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
     await tick(1_000);
@@ -1055,6 +1064,8 @@ describe('the scene joins its tour when the image lands', () => {
     expect(back.backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
     expect(back.backend.presigns()).toHaveLength(0);
     expect(chipTitle()).toBe('Processing on our side');
+    // A reload from here on only polls: a scene removed meanwhile stays removed.
+    expect(readResumeRecord()).toMatchObject({ landed: { panoId: 'pano-1' }, appended: true });
     back.backend.state.manifests = [manifest('t1-abc')];
     await tick(1_000);
     expect(chipTitle()).toBe('Ready at full resolution');
@@ -1103,5 +1114,25 @@ describe('the scene joins its tour when the image lands', () => {
     await tick();
     expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
     expect(backend.state.calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('dismissing the signed-out chip of a tour write keeps the record, so sign-in still adds it', async () => {
+    const { backend } = setup();
+    await tick();
+    await pick();
+    backend.state.getTourStatus = 401;
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('You’ve been signed out');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Dismiss' }));
+    await tick();
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+    expect(readResumeRecord()).toMatchObject({ landed: { panoId: 'pano-1' } });
+
+    cleanup();
+    const back = setup('/app/t/tour-1');
+    await tick();
+    expect(back.backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
   });
 });

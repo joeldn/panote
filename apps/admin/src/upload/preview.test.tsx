@@ -416,6 +416,27 @@ describe('review follow-ups', () => {
     expect(unload()).toBe(false);
   });
 
+  it('warns before unload while a hidden upload’s tour write is out', async () => {
+    const { gate } = renderProvider();
+    await add();
+    const unload = () => {
+      const e = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    };
+    gate.hold(tourPut);
+    FakeXhr.last.respond(200);
+    await tick();
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Hide (keeps processing)' }));
+    await tick();
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+    expect(unload()).toBe(true);
+
+    gate.release();
+    await tick();
+    expect(unload()).toBe(false);
+  });
+
   it('a tour write that outlives its job never bumps the reload key', async () => {
     const { backend, gate } = renderProvider();
     await add();
