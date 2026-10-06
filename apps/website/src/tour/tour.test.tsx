@@ -129,6 +129,9 @@ const robots = () => document.head.querySelector('meta[name="robots"]')?.getAttr
 const shown = (panoId: string) =>
   waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith(panoId));
 const unavailable = () => screen.findByRole('heading', { name: "This tour isn't available" });
+// The stats hook and the beacon's listeners only mount in the commit after the first
+// scene-change, so `shown()` alone doesn't mean they exist yet. The view POST does.
+const viewRecorded = () => waitFor(() => expect(calls('/api/tours/tour-a/view')).toHaveLength(1));
 
 beforeEach(() => {
   viewers = [];
@@ -231,6 +234,8 @@ describe('/s/:slug', () => {
     renderAt('/s/old-town');
     await screen.findByText('Old town');
     expect(screen.getByRole('img', { name: 'Compass' })).toBeTruthy();
+    // Picking a scene before the first load lands would `load` it instead of `transitionTo`.
+    await shown('square');
     fireEvent.click(screen.getByRole('button', { name: 'Map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Church' }));
     await waitFor(() =>
@@ -258,6 +263,8 @@ describe('/s/:slug', () => {
   it('likes with a stable X-Client-Id and only once', async () => {
     renderAt('/s/old-town');
     const like = await screen.findByRole('button', { name: 'Like this tour' });
+    // Let the view POST land first, or its counts (likes 7) can overwrite the like's 8.
+    expect(await screen.findByText('2.4k')).toBeTruthy();
     fireEvent.click(like);
     await screen.findByRole('button', { name: 'Liked' });
     await waitFor(() => expect(calls('/api/tours/tour-a/like')).toHaveLength(1));
@@ -354,11 +361,12 @@ describe('/s/:slug/embed', () => {
   it('has no site chrome and keeps whole-tour navigation', async () => {
     renderAt('/s/old-town/embed');
     await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await viewRecorded();
     expect(screen.queryByRole('navigation', { name: 'Tour' })).toBeNull();
     expect(document.querySelector('.app-shell__bar')).toBeNull();
+    // Checked once the (hidden) stats hook has mounted, so this isn't vacuous.
     expect(screen.queryByRole('button', { name: 'Like this tour' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
-    expect(calls('/api/tours/tour-a/view')).toHaveLength(1);
     expect(calls('/api/tours/tour-a/view')[0]?.[1]?.body).toBe(
       JSON.stringify({ panoId: 'square', surface: 'embed' }),
     );
@@ -386,7 +394,9 @@ describe('/s/:slug/embed', () => {
   it('is noindex when unlisted', async () => {
     objects['pub/tours/tour-a.json'] = bundle({ visibility: 'unlisted' });
     renderAt('/s/old-town/embed');
-    await waitFor(() => expect(robots()).toBe('noindex'));
+    // The loading state is noindex too, so wait for the tour itself first.
+    await shown('square');
+    expect(robots()).toBe('noindex');
   });
 });
 
@@ -408,6 +418,8 @@ describe('analytics beacon', () => {
   it('sends scene, hotspot and dwell events when the page hides', async () => {
     renderAt('/s/old-town/embed');
     await shown('square');
+    // The pagehide listener is attached in the same commit that records the view.
+    await viewRecorded();
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
     window.dispatchEvent(new Event('pagehide'));
     const events = beacons();

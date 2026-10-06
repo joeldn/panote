@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
-import { PROCESSING_TIMEOUT_MS, STATUS_POLL_MS } from '@internal/web-kit';
+import { PROCESSING_TIMEOUT_MS, SLOW_POLL_MS, STATUS_POLL_MS } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
@@ -191,13 +191,27 @@ describe('fresh upload from /app/new', () => {
     expect(chipTitle()).toBe('Uploading panorama');
   });
 
+  it('times out after 10 minutes but keeps checking; a late manifest lands on its own', async () => {
+    const { backend } = await uploadThroughPut();
+    await tick(PROCESSING_TIMEOUT_MS);
+    expect(chipTitle()).toBe('Still processing');
+    expect(chip().textContent).toContain('Taking longer than usual — we’ll keep checking.');
+    const polls = backend.manifestPolls().length;
+    await tick(SLOW_POLL_MS * 2);
+    expect(backend.manifestPolls()).toHaveLength(polls + 2);
+
+    // Minute 14: tiling finishes with no click, and the pano is added to the tour.
+    await tick(3 * 60_000);
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(SLOW_POLL_MS);
+    expect(chipTitle()).toBe('Ready at full resolution');
+    expect(backend.presigns()).toHaveLength(1);
+  });
+
   it('times out after 10 minutes; Check again re-polls without re-uploading', async () => {
     const { backend } = await uploadThroughPut();
     await tick(PROCESSING_TIMEOUT_MS);
     expect(chipTitle()).toBe('Still processing');
-    const polls = backend.manifestPolls().length;
-    await tick(60_000);
-    expect(backend.manifestPolls()).toHaveLength(polls);
 
     backend.state.manifests = [manifest('t1-abc')];
     fireEvent.click(within(chip()).getByRole('button', { name: 'Check again' }));
