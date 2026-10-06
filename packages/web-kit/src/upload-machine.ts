@@ -95,6 +95,17 @@ export function isReadyManifest(mode: UploadMode, manifest: Manifest | null): ma
   return mode.baselineVersion === null || versionOf(manifest) !== mode.baselineVersion;
 }
 
+/**
+ * The tiles a preview of this upload stands in for (`showPreview`'s `replacesVersion`):
+ * a replace's baseline version, `''` when that manifest was unversioned. Undefined for
+ * a new pano, and for a replace of a pano that had no manifest yet.
+ */
+export function replacedVersionOf(mode: UploadMode): string | undefined {
+  return mode.kind === 'replace' && mode.baselineVersion !== null
+    ? mode.baselineVersion
+    : undefined;
+}
+
 const pctOf = (loaded: number, total: number): number =>
   total > 0 ? Math.max(0, Math.min(100, Math.floor((loaded / total) * 100))) : 0;
 

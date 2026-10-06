@@ -59,6 +59,12 @@ describe('decodePreview', () => {
     expect(w.terminated).toBe(true);
   });
 
+  it('passes stash: false through, and only when given', () => {
+    const w = new FakeWorker();
+    void decodePreview(file, { tier: 'desktop', stash: false, createWorker: () => w });
+    expect(w.posted[0]?.request).toMatchObject({ tier: 'desktop', stash: false });
+  });
+
   it('picks the tier from the device when not given', () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }));
     const w = new FakeWorker();

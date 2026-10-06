@@ -101,6 +101,7 @@ export {
   MANIFEST_POLL_MAX_MS,
   PROCESSING_GIVE_UP_MS,
   PROCESSING_TIMEOUT_MS,
+  replacedVersionOf,
   SLOW_POLL_MS,
   startUpload,
   STATUS_POLL_MS,
@@ -140,6 +141,14 @@ export {
 export { MAX_TOUR_SCENES } from '@internal/contracts';
 export { EDITOR_DRAFT_PREFIX, sweepEditorDrafts } from './drafts.js';
 export { decodePreview, type DecodePreviewOptions, type WorkerLike } from './preview/client.js';
+export {
+  keepPreview,
+  probeMaxTextureSize,
+  readMaxTextureSize,
+  type KeepPreviewOptions,
+  type PreviewDecoder,
+  type PreviewKeeper,
+} from './preview/keeper.js';
 export {
   closePreview,
   STASH_SIZE,

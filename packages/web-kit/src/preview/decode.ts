@@ -21,6 +21,8 @@ export interface DecodeEnv {
 export interface DecodeRequest {
   tier: PreviewTier;
   limits?: PreviewLimits | undefined;
+  /** False skips encoding the stash image (`stash` is then null), e.g. when decoding a stash. */
+  stash?: boolean | undefined;
 }
 
 /** How the preview was scaled: at decode time, on a canvas, or not at all. */
@@ -159,7 +161,7 @@ export async function decodePreviewImage(
     const decodeMs = now() - started;
     signal?.throwIfAborted();
 
-    const stash = await encodeStash(env, bitmap);
+    const stash = request.stash === false ? null : await encodeStash(env, bitmap);
     signal?.throwIfAborted();
 
     const rects = planPatches(target.width, target.height, patchLimit(request.limits));

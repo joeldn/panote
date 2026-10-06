@@ -137,6 +137,18 @@ describe('decodePreviewImage', () => {
     expect(out?.stash?.type).toBe('image/webp');
   });
 
+  it('skips the stash encode when asked (a re-decode of a stash)', async () => {
+    const f = fakeEnv();
+    const out = await decodePreviewImage(
+      pngHeaderFile(4096, 2048),
+      { tier: 'desktop', stash: false },
+      f.env,
+    );
+    expect(f.encodes).toEqual([]);
+    expect(out?.stash).toBeNull();
+    expect(out?.source.width).toBe(4096);
+  });
+
   it('falls back to JPEG where WebP encoding is unsupported', async () => {
     const f = fakeEnv({ webp: false });
     const out = await decodePreviewImage(pngHeaderFile(8000, 4000), { tier: 'phone' }, f.env);

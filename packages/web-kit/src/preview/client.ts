@@ -20,6 +20,8 @@ export interface DecodePreviewOptions extends PreviewLimits {
   /** Defaults to the tier the device hints pick. */
   tier?: PreviewTier | undefined;
   createWorker?: (() => WorkerLike) | undefined;
+  /** False skips the stash encode (the result's `stash` is null). */
+  stash?: boolean | undefined;
 }
 
 // Literal `new Worker(new URL(...))` so Vite finds and bundles the worker as a same-origin file.
@@ -73,7 +75,9 @@ export function decodePreview(
       maxTextureSize: options.maxTextureSize,
       maxWidth: options.maxWidth,
     };
-    const message: DecodeMessage = { type: 'decode', file, request: { tier, limits } };
+    const request: DecodeMessage['request'] = { tier, limits };
+    if (options.stash === false) request.stash = false;
+    const message: DecodeMessage = { type: 'decode', file, request };
     worker.postMessage(message);
   });
 }
