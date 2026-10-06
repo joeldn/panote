@@ -12,12 +12,19 @@ interface PendingRecord {
   name: string;
   type: string;
   savedAt: number;
+  /** The signed-in user's `sub` when the admin app stashed it; absent from the landing page. */
+  owner?: string;
 }
 
 export interface PendingUploadOptions {
   /** Defaults to the global `indexedDB`; a test seam. */
   indexedDB?: IDBFactory;
   now?: () => number;
+  /**
+   * stash: records whose user this is. take: the user taking it; a stash owned by
+   * someone else is dropped unused. An unowned (landing) stash goes to anyone.
+   */
+  owner?: string;
 }
 
 function openDb(idb: IDBFactory): Promise<IDBDatabase> {
@@ -67,6 +74,7 @@ export async function stashPendingUpload(
     type: file.type,
     savedAt: (opts.now ?? Date.now)(),
   };
+  if (opts.owner !== undefined) record.owner = opts.owner;
   try {
     return await inStore(idb, (store) => {
       store.put(record, KEY);
@@ -99,6 +107,7 @@ export async function takePendingUpload(opts: PendingUploadOptions = {}): Promis
       return () => get.result as unknown;
     });
     if (!isRecord(value)) return null;
+    if (value.owner !== undefined && value.owner !== opts.owner) return null;
     const age = (opts.now ?? Date.now)() - value.savedAt;
     if (age < 0 || age > PENDING_UPLOAD_MAX_AGE_MS) return null;
     return value.file instanceof File
@@ -106,5 +115,19 @@ export async function takePendingUpload(opts: PendingUploadOptions = {}): Promis
       : new File([value.file], value.name, { type: value.type });
   } catch {
     return null;
+  }
+}
+
+/** Drops any stashed file (the user gave up on it). Never throws. */
+export async function clearPendingUpload(opts: PendingUploadOptions = {}): Promise<void> {
+  const idb = opts.indexedDB ?? globalIdb();
+  if (!idb) return;
+  try {
+    await inStore(idb, (store) => {
+      store.delete(KEY);
+      return () => undefined;
+    });
+  } catch {
+    // Nothing to clear, or IndexedDB is unavailable.
   }
 }

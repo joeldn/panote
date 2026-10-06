@@ -29,7 +29,7 @@ describe('admin routes', () => {
     expect(
       await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
     ).toBeTruthy();
-    expect(screen.getByRole('dialog').textContent).toBe('Upload');
+    expect(screen.getByRole('dialog', { name: 'New pano' })).toBeTruthy();
   });
 
   it.each(['link', 'privacy', 'embed'])('opens the %s share tab over the editor', async (tab) => {

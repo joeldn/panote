@@ -13,6 +13,7 @@ import { vi } from 'vitest';
 import { AuthEnvContext } from '../auth-context.js';
 import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
+import { UploadEnvContext, type UploadEnv } from '../upload/upload-context.js';
 
 export const LOCAL: AppOrigins = {
   website: 'http://localhost:5174',
@@ -50,6 +51,8 @@ export interface RenderOptions {
   fetch?: FetchLike;
   origins?: AppOrigins;
   strict?: boolean;
+  /** Upload seams: the PUT XHR, the tiles base and the pending-file store. */
+  upload?: UploadEnv;
   /** Wraps the router, e.g. to provide a test viewer factory. */
   wrap?: (tree: ReactNode) => ReactNode;
 }
@@ -68,7 +71,9 @@ export function renderAdmin(path: string, opts: RenderOptions = {}) {
         ...(opts.fetch && { fetch: opts.fetch }),
       }}
     >
-      <RouterProvider router={router} />
+      <UploadEnvContext value={opts.upload ?? {}}>
+        <RouterProvider router={router} />
+      </UploadEnvContext>
     </AuthEnvContext>
   );
   const tree = (

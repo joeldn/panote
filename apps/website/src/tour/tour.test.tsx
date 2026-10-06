@@ -256,13 +256,14 @@ describe('/s/:slug', () => {
     const like = await screen.findByRole('button', { name: 'Like this tour' });
     fireEvent.click(like);
     await screen.findByRole('button', { name: 'Liked' });
+    await waitFor(() => expect(calls('/api/tours/tour-a/like')).toHaveLength(1));
     const [call] = calls('/api/tours/tour-a/like');
     const id = localStorage.getItem('panote_client_id');
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
     expect(call?.[1]).toMatchObject({ method: 'POST', headers: { 'X-Client-Id': id } });
     fireEvent.click(screen.getByRole('button', { name: 'Liked' }));
     expect(calls('/api/tours/tour-a/like')).toHaveLength(1);
-    expect(screen.getByText('8')).toBeTruthy();
+    expect(await screen.findByText('8')).toBeTruthy();
   });
 
   it('starts at ?pano= on the full viewer, keeping navigation', async () => {

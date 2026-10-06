@@ -44,6 +44,7 @@ export {
 export {
   createPublicApi,
   fetchManifest,
+  refreshManifestCache,
   TourStatsSchema,
   type FetchManifestOptions,
   type PublicApi,
@@ -56,6 +57,7 @@ export {
   type PublishedTourResult,
 } from './api/published.js';
 export {
+  clearPendingUpload,
   PENDING_UPLOAD_MAX_AGE_MS,
   stashPendingUpload,
   takePendingUpload,
@@ -99,6 +101,8 @@ export {
   STATUS_POLL_MS,
   uploadReducer,
   type StartUploadOptions,
+  type UploadFileSource,
+  type UploadResumeSource,
   type Timers,
   type UploadController,
   type UploadDeps,
@@ -109,6 +113,13 @@ export {
   type UploadState,
 } from './upload-machine.js';
 export { createUploadDeps, type UploadDepsOptions } from './upload-deps.js';
+export {
+  MAX_UPLOAD_PIXELS,
+  readImageSize,
+  validateUploadImage,
+  type ImageSize,
+  type ImageValidationError,
+} from './image-size.js';
 export {
   ADMIN_BASE,
   appOrigins,
@@ -121,4 +132,5 @@ export {
   type AppOrigins,
   type ReturnTarget,
 } from './app-links.js';
+export { MAX_TOUR_SCENES } from '@internal/contracts';
 export { EDITOR_DRAFT_PREFIX, sweepEditorDrafts } from './drafts.js';

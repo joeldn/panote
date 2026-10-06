@@ -7,7 +7,7 @@ export type ShareTab = 'link' | 'privacy' | 'embed';
 // Route placeholders; the real screens land in the D units (docs/wave6-plan.md 4.3).
 export { Dashboard } from './dashboard/Dashboard.js';
 
-export const UploadOverlay = () => <p role="dialog">Upload</p>;
+export { NewPanoOverlay as UploadOverlay } from './upload/UploadOverlay.js';
 
 export { Editor } from './editor/Editor.js';
 
