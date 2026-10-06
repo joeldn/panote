@@ -158,8 +158,13 @@ export function useEditor(
   // An appended pano that arrived mid-save, and the sync to run for it after (syncAppended).
   const syncAfterSave = useRef(false);
   const syncRef = useRef<() => Promise<void>>(async () => {});
-  // Bumped per sync request; a response from an older request is dropped.
+  // Bumped per sync request, save and load; a sync response from before the latest bump is
+  // dropped, so it can't undo a save or land in another tour.
   const syncSeq = useRef(0);
+  // The seq of the sync whose GET is out, if any: a save that starts meanwhile reruns it.
+  const syncInFlight = useRef<number | null>(null);
+  // Tour ETags this editor has moved past; a response carrying one is older than what we hold.
+  const pastTourEtags = useRef(new Set<string>());
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [publish, setPublish] = useState<TourPublishState | null>(null);
   const publishRef = useRef<TourPublishState | null>(null);
@@ -167,7 +172,11 @@ export function useEditor(
 
   // Synchronous so a save started right after an edit sees it.
   const dispatch = useCallback((action: EditorAction) => {
+    const prev = docsRef.current?.tour.etag;
     docsRef.current = editorReducer(docsRef.current, action);
+    const next = docsRef.current?.tour.etag;
+    if (action.type === 'load') pastTourEtags.current.clear();
+    else if (prev && prev !== next) pastTourEtags.current.add(prev);
     setDocs(docsRef.current);
   }, []);
 
@@ -181,6 +190,8 @@ export function useEditor(
   useEffect(() => {
     let cancelled = false;
     const key = loadKey;
+    // A sync still out for the previous tour (or load) must not land in this one.
+    syncSeq.current++;
     void (async () => {
       try {
         const res = await api.getTourWithConfigs(tourId);
@@ -290,6 +301,9 @@ export function useEditor(
       if (isEmptyPlan(plan)) return;
       savingRef.current = true;
       setSaving(true);
+      // A sync whose GET is already out could answer with the pre-save tour: drop it and rerun.
+      syncSeq.current++;
+      if (syncInFlight.current !== null) syncAfterSave.current = true;
       try {
         const out = await runSave(api, tourId, plan);
         dispatch({ type: 'saved', ...(out.tour && { tour: out.tour }), configs: out.configs });
@@ -326,10 +340,13 @@ export function useEditor(
       return;
     }
     const seq = ++syncSeq.current;
+    syncInFlight.current = seq;
     try {
       const res = await api.getTourWithConfigs(tourId);
       const now = docsRef.current;
       if (seq !== syncSeq.current || res.status !== 'ok' || !now) return;
+      if (res.data.tour.tourId !== now.tourId) return;
+      if (pastTourEtags.current.has(res.data.etag)) return;
       const fresh = fromServer(res.data);
       dispatch({ type: 'add-scenes', scenes: fresh.scenes });
       if (failuresRef.current.tour?.kind === 'conflict' || fresh.tour.etag === now.tour.etag) {
@@ -344,6 +361,8 @@ export function useEditor(
       else setFailures((f) => ({ ...f, tour: { kind: 'conflict' } }));
     } catch {
       // Best effort: Save's 412 handling still covers it.
+    } finally {
+      if (syncInFlight.current === seq) syncInFlight.current = null;
     }
   }, [api, tourId, dispatch, setFailures]);
   useEffect(() => {
