@@ -71,6 +71,15 @@ describe('resume record', () => {
     expect(parseResumeRecord(value, NOW)).toBeNull();
   });
 
+  it('removes a stored record that no longer parses (a replace saved before tourId)', () => {
+    sessionStorage.setItem(
+      'panote.upload.resume',
+      raw({ target: { kind: 'replace', panoId: 'p9' }, savedAt: Date.now() }),
+    );
+    expect(readResumeRecord()).toBeNull();
+    expect(sessionStorage.getItem('panote.upload.resume')).toBeNull();
+  });
+
   it('survives storage that throws', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota');

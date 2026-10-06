@@ -112,9 +112,13 @@ const storage = (): Storage | null => {
   }
 };
 
+/** A stored record that doesn't parse (stale, or from an older build) is removed, not kept. */
 export function readResumeRecord(now = Date.now()): ResumeRecord | null {
   try {
-    return parseResumeRecord(storage()?.getItem(KEY) ?? null, now);
+    const raw = storage()?.getItem(KEY) ?? null;
+    const record = parseResumeRecord(raw, now);
+    if (raw !== null && !record) clearResumeRecord();
+    return record;
   } catch {
     return null;
   }
