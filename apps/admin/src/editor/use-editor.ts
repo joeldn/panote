@@ -158,6 +158,8 @@ export function useEditor(
   // An appended pano that arrived mid-save, and the sync to run for it after (syncAppended).
   const syncAfterSave = useRef(false);
   const syncRef = useRef<() => Promise<void>>(async () => {});
+  // Bumped per sync request; a response from an older request is dropped.
+  const syncSeq = useRef(0);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [publish, setPublish] = useState<TourPublishState | null>(null);
   const publishRef = useRef<TourPublishState | null>(null);
@@ -323,10 +325,11 @@ export function useEditor(
       syncAfterSave.current = true;
       return;
     }
+    const seq = ++syncSeq.current;
     try {
       const res = await api.getTourWithConfigs(tourId);
       const now = docsRef.current;
-      if (res.status !== 'ok' || !now) return;
+      if (seq !== syncSeq.current || res.status !== 'ok' || !now) return;
       const fresh = fromServer(res.data);
       dispatch({ type: 'add-scenes', scenes: fresh.scenes });
       if (failuresRef.current.tour?.kind === 'conflict' || fresh.tour.etag === now.tour.etag) {
