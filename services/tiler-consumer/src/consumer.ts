@@ -1,6 +1,6 @@
 import { Container } from '@cloudflare/containers';
 import { containerEnvVars } from './container-env.js';
-import { deriveUploadTarget } from './upload-prefix.js';
+import { deriveUploadTarget, panoIdForLog } from './upload-prefix.js';
 import { writeFailureMarker } from './failure-marker.js';
 import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
 
@@ -58,7 +58,7 @@ const handleDlqBatch = async (batch: MessageBatch<R2Event>, env: Env): Promise<v
       msg.ack();
       continue;
     }
-    console.error(`tile job dead-lettered for ${key} after exhausting retries`);
+    console.error(`tile job dead-lettered pano=${panoIdForLog(key)} after exhausting retries`);
     const marker = await writeFailureMarker(env.BUCKET, key, 'dlq', msg.body.object.eTag);
     dead.push({ key, messageId: msg.id, marker });
     msg.ack();
@@ -79,7 +79,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
     if (typeof size === 'number' && size > maxBytes) {
       // ack (not retry): an oversized original will never fit, so
       // retrying only burns the container until it dead-letters.
-      console.warn(`skip oversized original ${key}: ${size} > ${maxBytes}`);
+      console.warn(`skip oversized original pano=${panoIdForLog(key)}: ${size} > ${maxBytes}`);
       await writeFailureMarker(env.BUCKET, key, 'oversize', msg.body.object.eTag);
       msg.ack();
       continue;
@@ -90,12 +90,14 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       // starts a 12 GiB container just to 500 on the same rejected key).
       ({ panoId } = deriveUploadTarget(key));
     } catch (e) {
-      console.error(`skip unprocessable key ${key}: ${e instanceof Error ? e.message : String(e)}`);
+      console.error(
+        `skip unprocessable key pano=${panoIdForLog(key)}: ${e instanceof Error ? e.message : String(e)}`,
+      );
       await writeFailureMarker(env.BUCKET, key, 'unprocessable-key', msg.body.object.eTag);
       msg.ack();
       continue;
     }
-    // panoId only in these timing lines: the key carries the owner segment.
+    // panoId only in log lines from here on: the key carries the owner segment.
     const t0 = Date.now();
     const elapsed = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
     console.warn(`tile job start pano=${panoId}`);
@@ -117,14 +119,16 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
         } catch {
           // A failed body read must not block the retry below.
         }
-        console.error(`tile job for ${key} failed: ${res.status} ${bodyText}`);
+        console.error(`tile job failed pano=${panoId}: ${res.status} ${bodyText}`);
         msg.retry();
       }
     } catch (e) {
       // Covers a failed fetch and a DO constructor throw (missing R2
       // secrets, container-env.ts); e's message never contains a secret.
       console.warn(`tile job end pano=${panoId} threw after ${elapsed()}`);
-      console.error(`tile job failed for ${key}: ${e instanceof Error ? e.message : String(e)}`);
+      console.error(
+        `tile job failed pano=${panoId}: ${e instanceof Error ? e.message : String(e)}`,
+      );
       msg.retry();
     }
   }

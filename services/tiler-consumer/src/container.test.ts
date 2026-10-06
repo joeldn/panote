@@ -276,10 +276,13 @@ describe('container.ts /tile handler', () => {
       headers: new Headers({ 'content-length': '10' }),
       arrayBuffer: async () => new ArrayBuffer(10),
     });
-    const res = await postTile(JSON.stringify({ key: 'panos/abc/p-no-etag/original' }));
+    const res = await postTile(JSON.stringify({ key: 'panos/owner-xyz/p-no-etag/original' }));
 
     expect(res.status).toBe(500);
     expect(res.body).toContain('ETag');
+    // The body is logged by the consumer: panoId, never the owner segment.
+    expect(res.body).toContain('pano=p-no-etag');
+    expect(res.body).not.toContain('owner-xyz');
     expect(buildMock).not.toHaveBeenCalled();
     expect(uploadDirMock).not.toHaveBeenCalled();
   });
@@ -475,7 +478,9 @@ describe('post-PUT re-check after a successful manifest write', () => {
     const res = await postTile(JSON.stringify({ key }));
 
     expect(res.status).toBe(200);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(key));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`clear tile-failed marker pano=${panoId}`),
+    );
     warnSpy.mockRestore();
   });
 

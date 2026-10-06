@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveUploadTarget } from './upload-prefix.js';
+import { deriveUploadTarget, panoIdForLog } from './upload-prefix.js';
 
 describe('deriveUploadTarget', () => {
   it('returns the panoId for a valid key', () => {
@@ -57,4 +57,34 @@ describe('deriveUploadTarget', () => {
   it('throws on a config.json key instead of an original key', () => {
     expect(() => deriveUploadTarget('panos/a/b/config.json')).toThrow();
   });
+});
+
+describe('deriveUploadTarget error messages', () => {
+  // These messages reach logs (consumer.ts) and the container's 500 body,
+  // so they must not echo the owner segment.
+  it.each([
+    ['a bad shape', 'panos/secretowner/p1/extra/original'],
+    ['a bad owner charset', 'panos/secret%owner/p1/original'],
+  ])('does not echo the owner segment on %s', (_label, key) => {
+    expect(() => deriveUploadTarget(key)).toThrow(
+      expect.objectContaining({ message: expect.not.stringContaining('secret') }),
+    );
+  });
+});
+
+describe('panoIdForLog', () => {
+  it('returns the panoId segment of a well-formed key', () => {
+    expect(panoIdForLog('panos/ae-_vTXvv70/p1/original')).toBe('p1');
+  });
+
+  it('returns the panoId segment even when its charset is invalid', () => {
+    expect(panoIdForLog('panos/owner/bad panoid/original')).toBe('bad panoid');
+  });
+
+  it.each(['panos/owner/p1/extra/original', 'panos/owner/original', 'tours/owner/p1/original', ''])(
+    'returns a placeholder, never the key, for %j',
+    (key) => {
+      expect(panoIdForLog(key)).toBe('<unparsed-key>');
+    },
+  );
 });

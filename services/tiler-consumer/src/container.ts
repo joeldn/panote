@@ -118,12 +118,12 @@ createServer((req, res) => {
       const jobT0 = performance.now();
       logPhase(panoId, 'download start');
       const orig = await r2.get(key);
-      if (!orig.ok) throw new Error(`download ${key} -> ${orig.status}`);
+      if (!orig.ok) throw new Error(`download original pano=${panoId} -> ${orig.status}`);
       const len = Number(orig.headers.get('content-length'));
       if (len && len > MAX_ORIGINAL_BYTES)
-        throw new Error(`original ${key} too large: ${len} > ${MAX_ORIGINAL_BYTES}`);
+        throw new Error(`original pano=${panoId} too large: ${len} > ${MAX_ORIGINAL_BYTES}`);
       const etag = stripEtagQuotes(orig.headers.get('etag'));
-      if (!etag) throw new Error(`original ${key} has no ETag`);
+      if (!etag) throw new Error(`original pano=${panoId} has no ETag`);
       // Deterministic from the tiler build + the exact original tiled, so a
       // duplicate delivery of the same original lands on the same keys.
       const version = `t${TILER_OUTPUT_VERSION}-${etag}`;
@@ -162,18 +162,18 @@ createServer((req, res) => {
         // manifest swap; skipping it here is success, not a failure to retry.
         const preHead = await r2.head(key);
         if (!preHead.ok && preHead.status !== 404) {
-          throw new Error(`pre-swap HEAD ${key} -> ${preHead.status}`);
+          throw new Error(`pre-swap HEAD of original pano=${panoId} -> ${preHead.status}`);
         }
         if (!preHead.ok) {
-          console.warn(`skip manifest for ${key}: original is gone (HEAD ${preHead.status})`);
+          console.warn(`skip manifest pano=${panoId}: original is gone (HEAD ${preHead.status})`);
           const tileKeys = tileKeysOf();
           await deleteKeys(tileKeys);
           console.warn(
-            `deleted ${tileKeys.length} orphaned tile(s) under ${tilePrefix}: original ${key} was deleted mid-job`,
+            `deleted ${tileKeys.length} orphaned tile(s) under ${tilePrefix}: original was deleted mid-job`,
           );
         } else if (stripEtagQuotes(preHead.etag) !== etag) {
           console.warn(
-            `skip manifest for ${key}: original ETag changed (${etag} -> ${String(stripEtagQuotes(preHead.etag))})`,
+            `skip manifest pano=${panoId}: original ETag changed (${etag} -> ${String(stripEtagQuotes(preHead.etag))})`,
           );
         } else {
           if (files['manifest.json']) {
@@ -186,23 +186,23 @@ createServer((req, res) => {
           const postHead = await r2.head(key);
           if (!postHead.ok) {
             if (postHead.status !== 404)
-              throw new Error(`post-PUT HEAD ${key} -> ${postHead.status}`);
+              throw new Error(`post-PUT HEAD of original pano=${panoId} -> ${postHead.status}`);
             const orphanKeys = [manifestKey(panoId), ...tileKeysOf()];
             await deleteKeys(orphanKeys);
             console.warn(
-              `deleted ${orphanKeys.length} post-PUT orphaned key(s) under ${tilePrefix}: original ${key} was deleted mid-job`,
+              `deleted ${orphanKeys.length} post-PUT orphaned key(s) under ${tilePrefix}: original was deleted mid-job`,
             );
           } else if (stripEtagQuotes(postHead.etag) !== etag) {
             // A newer original landed after the pre-swap check and may have
             // had its manifest overwritten - throw so the retry rewrites it.
             throw new Error(
-              `post-PUT HEAD ${key} ETag changed: ${etag} -> ${String(stripEtagQuotes(postHead.etag))}`,
+              `post-PUT HEAD of original pano=${panoId} ETag changed: ${etag} -> ${String(stripEtagQuotes(postHead.etag))}`,
             );
           } else if (files['manifest.json']) {
             // Successful manifest swap (unit B4): clear any earlier marker.
             // Best-effort - a delete failure must not fail this job.
             await r2.deleteObject(tileFailedKeyFromOriginalKey(key)).catch((e: unknown) => {
-              console.warn(`failed to clear tile-failed marker for ${key}: ${String(e)}`);
+              console.warn(`failed to clear tile-failed marker pano=${panoId}: ${String(e)}`);
             });
           }
         }

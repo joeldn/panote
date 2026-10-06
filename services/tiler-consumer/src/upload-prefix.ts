@@ -27,16 +27,13 @@ export interface UploadTarget {
 export const deriveUploadTarget = (key: string): UploadTarget => {
   const match = NOTIFICATION_KEY_RE.exec(key);
   if (!match) {
-    throw new Error(
-      `tiler notification key must match panos/<owner>/<panoId>/original (got ${JSON.stringify(key)})`,
-    );
+    // The key itself is not echoed: it can carry the owner segment.
+    throw new Error('tiler notification key must match panos/<owner>/<panoId>/original');
   }
   const owner = match[1]!;
   const panoId = match[2]!;
   if (!OWNER_CHARSET_RE.test(owner)) {
-    throw new Error(
-      `tiler notification key owner segment must match ${OWNER_CHARSET_RE} (got ${JSON.stringify(owner)})`,
-    );
+    throw new Error(`tiler notification key owner segment must match ${OWNER_CHARSET_RE}`);
   }
   if (!PANO_PATTERN.test(panoId)) {
     throw new Error(
@@ -45,3 +42,14 @@ export const deriveUploadTarget = (key: string): UploadTarget => {
   }
   return { panoId };
 };
+
+// Looser than NOTIFICATION_KEY_RE on purpose: only the shape, no charset
+// checks, so a log line can still name the pano of a key that failed them.
+const LOG_PANO_RE = /^panos\/[^/]+\/([^/]+)\/original$/;
+
+/**
+ * The panoId to put in a log or error line for a notification key, in place
+ * of the key itself (whose owner segment must stay out of logs). Never
+ * throws: a key of the wrong shape yields a fixed placeholder.
+ */
+export const panoIdForLog = (key: string): string => LOG_PANO_RE.exec(key)?.[1] ?? '<unparsed-key>';

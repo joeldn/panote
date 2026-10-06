@@ -190,7 +190,7 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([{ msgId: 'msg-container-fails' }]);
   });
 
-  it('logs the failing key and error on the catch path, and still retries the message', async () => {
+  it('logs the failing panoId (not the owner-bearing key) on the catch path, and still retries the message', async () => {
     // Also covers a DO constructor throw (missing R2 secrets): it reaches
     // this same catch block via stub.fetch() rejecting.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -211,7 +211,8 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([{ msgId: 'msg-logged-failure' }]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const [message] = errorSpy.mock.calls[0] as [string];
-    expect(message).toContain(key);
+    expect(message).toContain('pano=logged-failure');
+    expect(message).not.toContain('u1');
   });
 
   it('acks and logs a key deriveUploadTarget rejects, without calling the container or writing a marker (invalid charset)', async () => {
@@ -240,7 +241,8 @@ describe('queue()', () => {
       expect(getSpy).not.toHaveBeenCalled();
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message] = errorSpy.mock.calls[0] as [string];
-      expect(message).toContain(key);
+      expect(message).toContain('pano=bad panoid');
+      expect(message).not.toContain('u1');
       // No junk marker for a key whose charset a stricter parse rejects.
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('cannot derive'));
       expect(await env.BUCKET.get('panos/u1/bad panoid/tile-failed')).toBeNull();
@@ -310,7 +312,7 @@ describe('res.ok handling', () => {
     }
   });
 
-  it('logs the key, status, and (truncated) body, and still retries, on a non-ok container response', async () => {
+  it('logs the panoId, status, and (truncated) body, and still retries, on a non-ok container response', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const longBody = 'x'.repeat(600);
     const fakeFetch = vi.fn(async () => new Response(longBody, { status: 500 }));
@@ -336,7 +338,8 @@ describe('res.ok handling', () => {
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message] = errorSpy.mock.calls[0] as [string];
-      expect(message).toContain(key);
+      expect(message).toContain('pano=bad-response');
+      expect(message).not.toContain('u1');
       expect(message).toContain('500');
       // Truncated to ~500 chars - the full 600-char body must not appear.
       expect(message).not.toContain(longBody);
@@ -375,7 +378,8 @@ describe('DLQ handling', () => {
     expect(body.reason).toBe('dlq');
     expect(typeof body.at).toBe('string');
     expect(body.originalEtag).toBe(head!.etag);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(key));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('pano=dlq-valid'));
+    for (const call of errorSpy.mock.calls) expect(call.join(' ')).not.toContain('u1');
   });
 
   it('does not write a marker when the panoId charset is invalid (review fix), but still acks and logs', async () => {
