@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { build, TILER_OUTPUT_VERSION } from '@internal/tiler';
+import { build, setVipsConcurrency, TILER_OUTPUT_VERSION } from '@internal/tiler';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 import {
   manifestKey,
@@ -11,7 +11,7 @@ import {
   tileFailedKeyFromOriginalKey,
   tileVersionPrefix,
 } from '@internal/contracts';
-import { deriveUploadTarget } from './upload-prefix.js';
+import { deriveUploadTarget, errorText } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
 
 // The Tiler DO (src/consumer.ts) forwards these through `Container.envVars`
@@ -31,6 +31,14 @@ const r2 = createR2S3Client({
   accessKeyId: requireEnv('R2_ACCESS_KEY_ID'),
   secretAccessKey: requireEnv('R2_SECRET_ACCESS_KEY'),
 });
+// libvips threads. Must match the vCPU count of `instance_type` in
+// wrangler.jsonc (standard-4 = 4 vCPU). Set explicitly because sharp pins
+// libvips to 1 thread on glibc without jemalloc, which is this image, and
+// os.availableParallelism() inside a container can report the host's cores
+// rather than the instance's share.
+const VIPS_THREADS = 4;
+console.warn(`tiler vips concurrency=${setVipsConcurrency(VIPS_THREADS)}`);
+
 // The /tile body is a tiny `{ key }` JSON; cap it so a malformed request
 // can't buffer unbounded memory.
 const MAX_TILE_REQUEST_BYTES = 64 * 1024;
@@ -74,7 +82,7 @@ const deleteKeys = async (keys: string[]): Promise<void> => {
       await r2.deleteObject(k);
     } catch (e) {
       failed.push(k);
-      console.error(`failed to delete ${k}: ${String(e)}`);
+      console.error(`failed to delete ${k}: ${errorText(e)}`);
     }
   }
   if (failed.length) throw new Error(`cleanup failed to delete: ${failed.join(', ')}`);
@@ -110,12 +118,12 @@ createServer((req, res) => {
       const jobT0 = performance.now();
       logPhase(panoId, 'download start');
       const orig = await r2.get(key);
-      if (!orig.ok) throw new Error(`download ${key} -> ${orig.status}`);
+      if (!orig.ok) throw new Error(`download original pano=${panoId} -> ${orig.status}`);
       const len = Number(orig.headers.get('content-length'));
       if (len && len > MAX_ORIGINAL_BYTES)
-        throw new Error(`original ${key} too large: ${len} > ${MAX_ORIGINAL_BYTES}`);
+        throw new Error(`original pano=${panoId} too large: ${len} > ${MAX_ORIGINAL_BYTES}`);
       const etag = stripEtagQuotes(orig.headers.get('etag'));
-      if (!etag) throw new Error(`original ${key} has no ETag`);
+      if (!etag) throw new Error(`original pano=${panoId} has no ETag`);
       // Deterministic from the tiler build + the exact original tiled, so a
       // duplicate delivery of the same original lands on the same keys.
       const version = `t${TILER_OUTPUT_VERSION}-${etag}`;
@@ -154,18 +162,18 @@ createServer((req, res) => {
         // manifest swap; skipping it here is success, not a failure to retry.
         const preHead = await r2.head(key);
         if (!preHead.ok && preHead.status !== 404) {
-          throw new Error(`pre-swap HEAD ${key} -> ${preHead.status}`);
+          throw new Error(`pre-swap HEAD of original pano=${panoId} -> ${preHead.status}`);
         }
         if (!preHead.ok) {
-          console.warn(`skip manifest for ${key}: original is gone (HEAD ${preHead.status})`);
+          console.warn(`skip manifest pano=${panoId}: original is gone (HEAD ${preHead.status})`);
           const tileKeys = tileKeysOf();
           await deleteKeys(tileKeys);
           console.warn(
-            `deleted ${tileKeys.length} orphaned tile(s) under ${tilePrefix}: original ${key} was deleted mid-job`,
+            `deleted ${tileKeys.length} orphaned tile(s) under ${tilePrefix}: original was deleted mid-job`,
           );
         } else if (stripEtagQuotes(preHead.etag) !== etag) {
           console.warn(
-            `skip manifest for ${key}: original ETag changed (${etag} -> ${String(stripEtagQuotes(preHead.etag))})`,
+            `skip manifest pano=${panoId}: original ETag changed (${etag} -> ${String(stripEtagQuotes(preHead.etag))})`,
           );
         } else {
           if (files['manifest.json']) {
@@ -178,23 +186,23 @@ createServer((req, res) => {
           const postHead = await r2.head(key);
           if (!postHead.ok) {
             if (postHead.status !== 404)
-              throw new Error(`post-PUT HEAD ${key} -> ${postHead.status}`);
+              throw new Error(`post-PUT HEAD of original pano=${panoId} -> ${postHead.status}`);
             const orphanKeys = [manifestKey(panoId), ...tileKeysOf()];
             await deleteKeys(orphanKeys);
             console.warn(
-              `deleted ${orphanKeys.length} post-PUT orphaned key(s) under ${tilePrefix}: original ${key} was deleted mid-job`,
+              `deleted ${orphanKeys.length} post-PUT orphaned key(s) under ${tilePrefix}: original was deleted mid-job`,
             );
           } else if (stripEtagQuotes(postHead.etag) !== etag) {
             // A newer original landed after the pre-swap check and may have
             // had its manifest overwritten - throw so the retry rewrites it.
             throw new Error(
-              `post-PUT HEAD ${key} ETag changed: ${etag} -> ${String(stripEtagQuotes(postHead.etag))}`,
+              `post-PUT HEAD of original pano=${panoId} ETag changed: ${etag} -> ${String(stripEtagQuotes(postHead.etag))}`,
             );
           } else if (files['manifest.json']) {
             // Successful manifest swap (unit B4): clear any earlier marker.
             // Best-effort - a delete failure must not fail this job.
             await r2.deleteObject(tileFailedKeyFromOriginalKey(key)).catch((e: unknown) => {
-              console.warn(`failed to clear tile-failed marker for ${key}: ${String(e)}`);
+              console.warn(`failed to clear tile-failed marker pano=${panoId}: ${errorText(e)}`);
             });
           }
         }
@@ -204,7 +212,8 @@ createServer((req, res) => {
         await rm(work, { recursive: true, force: true });
       }
     } catch (e) {
-      res.writeHead(500).end(String(e));
+      // The consumer logs this body, so it goes through errorText too.
+      res.writeHead(500).end(errorText(e));
     }
   });
 }).listen(8080);

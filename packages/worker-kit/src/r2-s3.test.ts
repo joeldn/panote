@@ -99,6 +99,69 @@ describe('put', () => {
       client.put('panos/p1/config.json', '{}', { contentType: 'application/json' }),
     ).rejects.toThrow('R2 PUT panos/p1/config.json -> 403');
   });
+
+  describe('network-error retry', () => {
+    // Runs backoff sleeps immediately and records their delays. Fake timers
+    // don't fit: the sleep is scheduled only after aws4fetch's async signing
+    // resolves, so there is no timer pending yet to advance.
+    const instantBackoff = (): number[] => {
+      const delays: number[] = [];
+      vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+        delays.push(ms ?? 0);
+        fn();
+        return 0;
+      }) as unknown as typeof setTimeout);
+      return delays;
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('retries a thrown network error with backoff and succeeds on a later attempt', async () => {
+      const delays = instantBackoff();
+      const fetchMock = vi
+        .fn<(req: Request) => Promise<Response>>()
+        .mockRejectedValueOnce(new TypeError('fetch failed'))
+        .mockRejectedValueOnce(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }))
+        .mockResolvedValue(new Response(null, { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const client = createR2S3Client(config);
+
+      await client.put('panos/p1/0/f/0-0.webp', new Uint8Array([1, 2, 3]), {
+        contentType: 'image/webp',
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(delays).toEqual([250, 500]);
+    });
+
+    it('gives up after 2 retries and rethrows the network error', async () => {
+      instantBackoff();
+      const fetchMock = vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const client = createR2S3Client(config);
+
+      await expect(
+        client.put('panos/p1/0/f/0-0.webp', 'x', { contentType: 'image/webp' }),
+      ).rejects.toThrow('fetch failed');
+      // 1 initial attempt + 2 retries.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not retry a 4xx response', async () => {
+      const fetchMock = vi.fn(async () => new Response('denied', { status: 403 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const client = createR2S3Client(config);
+
+      await expect(
+        client.put('panos/p1/0/f/0-0.webp', 'x', { contentType: 'image/webp' }),
+      ).rejects.toThrow('R2 PUT panos/p1/0/f/0-0.webp -> 403');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 describe('get', () => {

@@ -31,7 +31,10 @@ export interface R2S3Client {
   ): Promise<string>;
   /** Raw GET. The caller checks `res.ok` and reads the body it wants. */
   get(key: string): Promise<Response>;
-  /** PUT. Throws on a non-2xx response. */
+  /**
+   * PUT. Throws on a non-2xx response. A thrown network error is retried
+   * twice with a short backoff; 4xx responses are never retried.
+   */
   put(
     key: string,
     body: Uint8Array | string,
@@ -44,6 +47,29 @@ export interface R2S3Client {
 }
 
 const DEFAULT_PRESIGN_EXPIRY_SECONDS = 900;
+
+// aws4fetch retries only 5xx/429 responses. A thrown network error
+// (ECONNRESET, `fetch failed`) rejects straight through, so `put` - the
+// container's hot path, hundreds of PUTs per job - gets its own small retry.
+const PUT_NETWORK_RETRIES = 2;
+const PUT_NETWORK_RETRY_BASE_MS = 250;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Runs `send`, retrying only when it throws (a network-level failure). A
+ * non-2xx response resolves normally and is never retried here.
+ */
+const retryOnThrow = async <T>(send: () => Promise<T>): Promise<T> => {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await send();
+    } catch (e) {
+      if (attempt >= PUT_NETWORK_RETRIES) throw e;
+      await sleep(PUT_NETWORK_RETRY_BASE_MS * 2 ** attempt);
+    }
+  }
+};
 
 export const createR2S3Client = (config: R2S3Config): R2S3Client => {
   const aws = new AwsClient({
@@ -84,14 +110,18 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
     },
 
     async put(key, body, opts) {
-      const res = await aws.fetch(`${base}/${key}`, {
-        method: 'PUT',
-        body,
-        headers: {
-          'content-type': opts.contentType,
-          ...(opts.cacheControl ? { 'cache-control': opts.cacheControl } : {}),
-        },
-      });
+      // body is a Uint8Array or string, never a stream, so it is safe to
+      // send again on a retry.
+      const res = await retryOnThrow(() =>
+        aws.fetch(`${base}/${key}`, {
+          method: 'PUT',
+          body,
+          headers: {
+            'content-type': opts.contentType,
+            ...(opts.cacheControl ? { 'cache-control': opts.cacheControl } : {}),
+          },
+        }),
+      );
       if (!res.ok) throw new Error(`R2 PUT ${key} -> ${res.status}`);
     },
   };

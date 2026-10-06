@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { tileFailedKeyFromOriginalKey } from '@internal/contracts';
 import worker from './consumer.js';
 
+// Owner segment for the log-hygiene tests. Distinctive, so a substring
+// match can't come from anything but a leaked key or owner.
+const OWNER = 'ownerSECRETx';
+
+// Spies on every console method a log line could go through. Call it first
+// in a test: a later vi.spyOn on the same method returns this same spy.
+const spyOnAllConsole = () =>
+  (['log', 'info', 'warn', 'error'] as const).map((m) =>
+    vi.spyOn(console, m).mockImplementation(() => undefined),
+  );
+
+const expectOwnerNeverLogged = (spies: ReturnType<typeof spyOnAllConsole>): void => {
+  for (const spy of spies)
+    for (const call of spy.mock.calls) expect(call.map(String).join(' ')).not.toContain(OWNER);
+};
+
 /**
  * Coverage for the queue() handler's ack/retry logic - the largest untested
  * hole in the source (no consumer.test.ts existed there at all).
@@ -121,11 +137,12 @@ describe('queue()', () => {
   });
 
   it('acks (not retries) an original larger than MAX_ORIGINAL_BYTES, and writes a tile-failed marker', async () => {
+    const consoleSpies = spyOnAllConsole();
     const ctx = createExecutionContext();
     // env.MAX_ORIGINAL_BYTES is "157286400" (150 MiB) under wrangler.jsonc's
     // dev env - see wrangler.jsonc.
     const maxBytes = Number(env.MAX_ORIGINAL_BYTES);
-    const key = 'panos/u1/oversized/original';
+    const key = `panos/${OWNER}/oversized/original`;
     // The marker write's resurrection guard (review fix) requires the
     // original to actually exist, with a matching eTag on the notification.
     await env.BUCKET.put(key, 'original bytes');
@@ -147,6 +164,7 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([]);
     const marker = await env.BUCKET.get(tileFailedKeyFromOriginalKey(key));
     expect((await marker!.json()) as { reason: string }).toMatchObject({ reason: 'oversize' });
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('does not oversize-skip a size exactly at MAX_ORIGINAL_BYTES', async () => {
@@ -190,12 +208,13 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([{ msgId: 'msg-container-fails' }]);
   });
 
-  it('logs the failing key and error on the catch path, and still retries the message', async () => {
+  it('logs the failing panoId (not the owner-bearing key) on the catch path, and still retries the message', async () => {
+    const consoleSpies = spyOnAllConsole();
     // Also covers a DO constructor throw (missing R2 secrets): it reaches
     // this same catch block via stub.fetch() rejecting.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
-    const key = 'panos/u1/logged-failure/original';
+    const key = `panos/${OWNER}/logged-failure/original`;
     const batch = createMessageBatch('pano-uploads-dev', [
       {
         id: 'msg-logged-failure',
@@ -211,10 +230,13 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([{ msgId: 'msg-logged-failure' }]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     const [message] = errorSpy.mock.calls[0] as [string];
-    expect(message).toContain(key);
+    expect(message).toContain('pano=logged-failure');
+    expect(message).not.toContain(OWNER);
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('acks and logs a key deriveUploadTarget rejects, without calling the container or writing a marker (invalid charset)', async () => {
+    const consoleSpies = spyOnAllConsole();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const getSpy = vi.spyOn(env.TILER, 'get');
@@ -223,7 +245,7 @@ describe('queue()', () => {
       // Passes the action/suffix filters, but the panoId segment has a
       // space, which deriveUploadTarget rejects (upload-prefix.ts) - and,
       // since the review fix, tileFailedKeyFromOriginalKey rejects it too.
-      const key = 'panos/u1/bad panoid/original';
+      const key = `panos/${OWNER}/bad panoid/original`;
       const batch = createMessageBatch('pano-uploads-dev', [
         {
           id: 'msg-unprocessable-key',
@@ -240,13 +262,15 @@ describe('queue()', () => {
       expect(getSpy).not.toHaveBeenCalled();
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message] = errorSpy.mock.calls[0] as [string];
-      expect(message).toContain(key);
+      expect(message).toContain('pano=bad panoid');
+      expect(message).not.toContain(OWNER);
       // No junk marker for a key whose charset a stricter parse rejects.
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('cannot derive'));
-      expect(await env.BUCKET.get('panos/u1/bad panoid/tile-failed')).toBeNull();
+      expect(await env.BUCKET.get(`panos/${OWNER}/bad panoid/tile-failed`)).toBeNull();
     } finally {
       getSpy.mockRestore();
     }
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('processes each message in a batch independently (partial ack/retry)', async () => {
@@ -282,6 +306,42 @@ describe('queue()', () => {
  * Exercises the ack/retry decision directly by swapping `env.TILER.get` for
  * a fake stub whose `fetch` resolves with a response this suite controls.
  */
+// Owners that fail the charset check, through both the main queue (the
+// unprocessable-key path) and the DLQ: no console method may see them.
+describe('malformed owner segments never reach the logs', () => {
+  it.each([
+    ['pano-uploads-dev', 'an @', 'secret@example.com'],
+    ['pano-uploads-dev', 'a %', 'secret%owner'],
+    ['pano-uploads-dev', 'a space', 'secret owner'],
+    ['pano-uploads-dlq-dev', 'an @', 'secret@example.com'],
+    ['pano-uploads-dlq-dev', 'a %', 'secret%owner'],
+    ['pano-uploads-dlq-dev', 'a space', 'secret owner'],
+  ])('%s, owner with %s', async (queue, _label, owner) => {
+    const consoleSpies = spyOnAllConsole();
+    const ctx = createExecutionContext();
+    const key = `panos/${owner}/p1/original`;
+    const batch = createMessageBatch(queue, [
+      {
+        id: 'msg-bad-owner',
+        timestamp: new Date(),
+        body: { object: { key, size: 10, eTag: 'etag' }, action: 'PutObject' },
+        attempts: 1,
+      },
+    ]);
+
+    await worker.queue(batch, env, ctx);
+    const result = await getQueueResult(batch, ctx);
+
+    expect(result.explicitAcks).toEqual(['msg-bad-owner']);
+    for (const spy of consoleSpies)
+      for (const call of spy.mock.calls) expect(call.map(String).join(' ')).not.toContain('secret');
+    // Something was logged, naming the pano.
+    expect(
+      consoleSpies.some((spy) => spy.mock.calls.some((c) => String(c[0]).includes('pano=p1'))),
+    ).toBe(true);
+  });
+});
+
 describe('res.ok handling', () => {
   it('acks a 2xx container response without logging anything', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -310,7 +370,8 @@ describe('res.ok handling', () => {
     }
   });
 
-  it('logs the key, status, and (truncated) body, and still retries, on a non-ok container response', async () => {
+  it('logs the panoId, status, and (truncated) body, and still retries, on a non-ok container response', async () => {
+    const consoleSpies = spyOnAllConsole();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const longBody = 'x'.repeat(600);
     const fakeFetch = vi.fn(async () => new Response(longBody, { status: 500 }));
@@ -319,7 +380,7 @@ describe('res.ok handling', () => {
       .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
     try {
       const ctx = createExecutionContext();
-      const key = 'panos/u1/bad-response/original';
+      const key = `panos/${OWNER}/bad-response/original`;
       const batch = createMessageBatch('pano-uploads-dev', [
         {
           id: 'msg-bad-response',
@@ -336,7 +397,8 @@ describe('res.ok handling', () => {
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
       const [message] = errorSpy.mock.calls[0] as [string];
-      expect(message).toContain(key);
+      expect(message).toContain('pano=bad-response');
+      expect(message).not.toContain(OWNER);
       expect(message).toContain('500');
       // Truncated to ~500 chars - the full 600-char body must not appear.
       expect(message).not.toContain(longBody);
@@ -344,6 +406,7 @@ describe('res.ok handling', () => {
     } finally {
       getSpy.mockRestore();
     }
+    expectOwnerNeverLogged(consoleSpies);
   });
 });
 
@@ -351,9 +414,10 @@ describe('res.ok handling', () => {
 // `queue()` branches on `batch.queue` - always acking, never retrying further.
 describe('DLQ handling', () => {
   it('writes a tile-failed marker and acks for a dead-lettered message with a valid key', async () => {
+    const consoleSpies = spyOnAllConsole();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
-    const key = 'panos/u1/dlq-valid/original';
+    const key = `panos/${OWNER}/dlq-valid/original`;
     await env.BUCKET.put(key, 'original bytes');
     const head = await env.BUCKET.head(key);
     const batch = createMessageBatch('pano-uploads-dlq-dev', [
@@ -375,13 +439,16 @@ describe('DLQ handling', () => {
     expect(body.reason).toBe('dlq');
     expect(typeof body.at).toBe('string');
     expect(body.originalEtag).toBe(head!.etag);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(key));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('pano=dlq-valid'));
+    for (const call of errorSpy.mock.calls) expect(call.join(' ')).not.toContain(OWNER);
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('does not write a marker when the panoId charset is invalid (review fix), but still acks and logs', async () => {
+    const consoleSpies = spyOnAllConsole();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
-    const key = 'panos/u1/bad panoid/original';
+    const key = `panos/${OWNER}/bad panoid/original`;
     const batch = createMessageBatch('pano-uploads-dlq-dev', [
       {
         id: 'msg-dlq-bad-panoid',
@@ -395,16 +462,18 @@ describe('DLQ handling', () => {
     const result = await getQueueResult(batch, ctx);
 
     expect(result.explicitAcks).toEqual(['msg-dlq-bad-panoid']);
-    expect(await env.BUCKET.get('panos/u1/bad panoid/tile-failed')).toBeNull();
+    expect(await env.BUCKET.get(`panos/${OWNER}/bad panoid/tile-failed`)).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('cannot derive'));
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('does not resurrect a deleted pano: no marker when the original no longer exists (review blocker)', async () => {
+    const consoleSpies = spyOnAllConsole();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
     // Never put() this key - simulates deletePano having already swept
     // this prefix before this slow, retried DLQ delivery lands.
-    const key = 'panos/u1/dlq-already-deleted/original';
+    const key = `panos/${OWNER}/dlq-already-deleted/original`;
     const batch = createMessageBatch('pano-uploads-dlq-dev', [
       {
         id: 'msg-dlq-already-deleted',
@@ -420,12 +489,14 @@ describe('DLQ handling', () => {
     expect(result.explicitAcks).toEqual(['msg-dlq-already-deleted']);
     expect(await env.BUCKET.get(tileFailedKeyFromOriginalKey(key))).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer exists'));
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('acks and logs console.error when the marker write itself rejects', async () => {
+    const consoleSpies = spyOnAllConsole();
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
-    const key = 'panos/u1/dlq-put-rejects/original';
+    const key = `panos/${OWNER}/dlq-put-rejects/original`;
     await env.BUCKET.put(key, 'original bytes');
     const head = await env.BUCKET.head(key);
     const putSpy = vi.spyOn(env.BUCKET, 'put').mockRejectedValue(new Error('put boom'));
@@ -447,12 +518,14 @@ describe('DLQ handling', () => {
     } finally {
       putSpy.mockRestore();
     }
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('acks and logs, without writing a marker, for a key with no owner/panoId to hang one on', async () => {
+    const consoleSpies = spyOnAllConsole();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const ctx = createExecutionContext();
-    const key = 'panos/only-one-segment/original';
+    const key = `panos/${OWNER}/original`;
     const batch = createMessageBatch('pano-uploads-dlq-dev', [
       {
         id: 'msg-dlq-unparseable',
@@ -466,7 +539,10 @@ describe('DLQ handling', () => {
     const result = await getQueueResult(batch, ctx);
 
     expect(result.explicitAcks).toEqual(['msg-dlq-unparseable']);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(key));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('cannot derive tile-failed marker pano=<unparsed-key>'),
+    );
+    expectOwnerNeverLogged(consoleSpies);
   });
 
   it('acks and logs, without throwing, a malformed message body (no object.key)', async () => {
@@ -554,8 +630,9 @@ describe('DLQ handling', () => {
   });
 
   it('still acks when the marker write HEAD rejects (an R2 error must not change the ack decision)', async () => {
+    const consoleSpies = spyOnAllConsole();
     const ctx = createExecutionContext();
-    const key = 'panos/u1/dlq-head-rejects/original';
+    const key = `panos/${OWNER}/dlq-head-rejects/original`;
     await env.BUCKET.put(key, 'original bytes');
     const headSpy = vi.spyOn(env.BUCKET, 'head').mockRejectedValue(new Error('head boom'));
     try {
@@ -576,6 +653,7 @@ describe('DLQ handling', () => {
     } finally {
       headSpy.mockRestore();
     }
+    expectOwnerNeverLogged(consoleSpies);
   });
 });
 

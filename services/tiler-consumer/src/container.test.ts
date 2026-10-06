@@ -17,6 +17,10 @@ import { manifestKey, tileFailedKeyFromOriginalKey, tileVersionPrefix } from '@i
 const MOCK_TILER_OUTPUT_VERSION = 7;
 
 const buildMock = vi.fn(async () => ({}));
+const setVipsConcurrencyMock = vi.fn((n: number) => n);
+// clearMocks wipes call history before each test, so the import-time call
+// is captured in beforeAll.
+let vipsConcurrencyCallsAtImport: unknown[][] = [];
 const uploadDirMock = vi.fn(async () => {});
 const r2GetMock = vi.fn();
 const r2PutMock = vi.fn(async () => {});
@@ -47,6 +51,7 @@ vi.mock('node:fs/promises', () => ({
 
 vi.mock('@internal/tiler', () => ({
   build: buildMock,
+  setVipsConcurrency: setVipsConcurrencyMock,
   TILER_OUTPUT_VERSION: MOCK_TILER_OUTPUT_VERSION,
 }));
 
@@ -116,6 +121,7 @@ beforeAll(async () => {
   process.env.R2_ACCESS_KEY_ID = 'test-key-id';
   process.env.R2_SECRET_ACCESS_KEY = 'test-secret';
   await import('./container.js');
+  vipsConcurrencyCallsAtImport = [...setVipsConcurrencyMock.mock.calls];
 });
 
 afterEach(() => {
@@ -173,6 +179,24 @@ const setupManifestWritten = (panoId: string): void => {
   installFsTree(buildFsTree(panoId));
   r2GetMock.mockResolvedValue(okOriginalResponse());
 };
+
+// Owner segment for the log-hygiene tests; distinctive so a match can only
+// come from a leaked key or owner.
+const OWNER = 'ownerSECRETx';
+
+const spyOnAllConsole = () =>
+  (['log', 'info', 'warn', 'error'] as const).map((m) =>
+    vi.spyOn(console, m).mockImplementation(() => undefined),
+  );
+
+const loggedText = (spies: ReturnType<typeof spyOnAllConsole>): string =>
+  spies.flatMap((spy) => spy.mock.calls.map((call) => call.map(String).join(' '))).join('\n');
+
+describe('container startup', () => {
+  it('sets libvips to 4 threads, matching standard-4 in wrangler.jsonc', () => {
+    expect(vipsConcurrencyCallsAtImport).toEqual([[4]]);
+  });
+});
 
 describe('container.ts /tile handler', () => {
   it('uploads under the owner-free versioned tile prefix, derived from TILER_OUTPUT_VERSION and the original ETag', async () => {
@@ -264,10 +288,13 @@ describe('container.ts /tile handler', () => {
       headers: new Headers({ 'content-length': '10' }),
       arrayBuffer: async () => new ArrayBuffer(10),
     });
-    const res = await postTile(JSON.stringify({ key: 'panos/abc/p-no-etag/original' }));
+    const res = await postTile(JSON.stringify({ key: 'panos/owner-xyz/p-no-etag/original' }));
 
     expect(res.status).toBe(500);
     expect(res.body).toContain('ETag');
+    // The body is logged by the consumer: panoId, never the owner segment.
+    expect(res.body).toContain('pano=p-no-etag');
+    expect(res.body).not.toContain('owner-xyz');
     expect(buildMock).not.toHaveBeenCalled();
     expect(uploadDirMock).not.toHaveBeenCalled();
   });
@@ -463,8 +490,45 @@ describe('post-PUT re-check after a successful manifest write', () => {
     const res = await postTile(JSON.stringify({ key }));
 
     expect(res.status).toBe(200);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(key));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`clear tile-failed marker pano=${panoId}`),
+    );
     warnSpy.mockRestore();
+  });
+
+  it('logs a failed marker clear without the owner, even though the r2-s3 error names the marker key', async () => {
+    const panoId = 'p-marker-clear-keyed-error';
+    const key = `panos/${OWNER}/${panoId}/original`;
+    setupManifestWritten(panoId);
+    r2HeadMock.mockResolvedValue({ ok: true, status: 200, etag: '"abc123"' });
+    // The exact shape worker-kit's r2-s3 deleteObject throws.
+    r2DeleteMock.mockRejectedValue(
+      new Error(`R2 DELETE ${tileFailedKeyFromOriginalKey(key)} -> 403`),
+    );
+    const spies = spyOnAllConsole();
+
+    const res = await postTile(JSON.stringify({ key }));
+
+    expect(res.status).toBe(200);
+    const logged = loggedText(spies);
+    expect(logged).toContain(`failed to clear tile-failed marker pano=${panoId}`);
+    expect(logged).toContain(`R2 DELETE panos/<owner>/${panoId}/tile-failed -> 403`);
+    expect(logged).not.toContain(OWNER);
+  });
+
+  it('scrubs the owner from a keyed R2 error before it becomes the 500 body the consumer logs', async () => {
+    const panoId = 'p-keyed-500';
+    const key = `panos/${OWNER}/${panoId}/original`;
+    setupManifestWritten(panoId);
+    r2HeadMock.mockRejectedValue(new Error(`R2 HEAD ${key} -> socket hang up`));
+    const spies = spyOnAllConsole();
+
+    const res = await postTile(JSON.stringify({ key }));
+
+    expect(res.status).toBe(500);
+    expect(res.body).toContain(`panos/<owner>/${panoId}/original`);
+    expect(res.body).not.toContain(OWNER);
+    expect(loggedText(spies)).not.toContain(OWNER);
   });
 
   it('500s and deletes nothing when the post-PUT HEAD finds a different ETag - a newer original landed mid-job', async () => {

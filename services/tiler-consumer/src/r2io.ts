@@ -1,7 +1,7 @@
 export type PutFn = (key: string, body: Uint8Array, contentType: string) => Promise<void>;
 
 // Tile PUTs in flight at once. Bodies are already in memory (walk()), so this
-// adds only sockets and request state, well inside standard-1's 4 GiB.
+// adds only sockets and request state, well inside standard-4's 12 GiB.
 export const UPLOAD_CONCURRENCY = 16;
 
 const ctOf = (k: string): string =>

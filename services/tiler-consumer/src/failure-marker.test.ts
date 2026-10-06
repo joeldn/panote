@@ -101,7 +101,7 @@ describe('writeFailureMarker', () => {
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const [message] = warnSpy.mock.calls[0] as [string];
-    expect(message).toContain(key);
+    expect(message).toContain('cannot derive tile-failed marker pano=<unparsed-key>');
     warnSpy.mockRestore();
   });
 
@@ -289,6 +289,130 @@ describe('writeFailureMarker', () => {
       expect(await env.BUCKET.get(tileFailedKeyFromOriginalKey(key))).not.toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('could not check the manifest'));
       warnSpy.mockRestore();
+    });
+  });
+
+  // Every log line names the pano only. R2 errors are given messages that
+  // carry the key, the way worker-kit's r2-s3 errors do, to prove the
+  // errors are scrubbed too, not just the line around them.
+  describe('never logs the owner segment', () => {
+    const OWNER = 'ownerSECRETx';
+    const spyOnAllConsole = () =>
+      (['log', 'info', 'warn', 'error'] as const).map((m) =>
+        vi.spyOn(console, m).mockImplementation(() => undefined),
+      );
+    const loggedText = (spies: ReturnType<typeof spyOnAllConsole>): string =>
+      spies.flatMap((spy) => spy.mock.calls.map((call) => call.map(String).join(' '))).join('\n');
+    const keyed = (k: string): Error => new Error(`R2 op ${k} -> 500`);
+
+    it.each([
+      [
+        'no eTag on the notification',
+        async (key: string) => {
+          await env.BUCKET.put(key, 'x');
+          await writeFailureMarker(env.BUCKET, key, 'dlq');
+        },
+      ],
+      [
+        'the original is gone',
+        async (key: string) => {
+          await writeFailureMarker(env.BUCKET, key, 'dlq', 'etag');
+        },
+      ],
+      [
+        'the original etag changed',
+        async (key: string) => {
+          await env.BUCKET.put(key, 'x');
+          await writeFailureMarker(env.BUCKET, key, 'dlq', 'some-other-etag');
+        },
+      ],
+      [
+        'the pre-write HEAD rejects with a keyed error',
+        async (key: string) => {
+          vi.spyOn(env.BUCKET, 'head').mockRejectedValue(keyed(key));
+          await writeFailureMarker(env.BUCKET, key, 'dlq', 'etag');
+        },
+      ],
+      [
+        'the manifest check rejects with a keyed error',
+        async (key: string) => {
+          await env.BUCKET.put(key, 'x');
+          const etag = (await env.BUCKET.head(key))!.etag;
+          vi.spyOn(env.BUCKET, 'get').mockRejectedValue(keyed(key));
+          await writeFailureMarker(env.BUCKET, key, 'dlq', etag);
+        },
+      ],
+      [
+        'the marker PUT rejects with a keyed error',
+        async (key: string) => {
+          await env.BUCKET.put(key, 'x');
+          const etag = (await env.BUCKET.head(key))!.etag;
+          vi.spyOn(env.BUCKET, 'put').mockRejectedValue(keyed(tileFailedKeyFromOriginalKey(key)));
+          await writeFailureMarker(env.BUCKET, key, 'dlq', etag);
+        },
+      ],
+      [
+        'the post-write HEAD rejects with a keyed error',
+        async (key: string) => {
+          await env.BUCKET.put(key, 'x');
+          const etag = (await env.BUCKET.head(key))!.etag;
+          const realHead = env.BUCKET.head.bind(env.BUCKET);
+          vi.spyOn(env.BUCKET, 'head')
+            .mockImplementationOnce(realHead)
+            .mockRejectedValue(keyed(key));
+          await writeFailureMarker(env.BUCKET, key, 'dlq', etag);
+        },
+      ],
+      [
+        'clearing a just-written marker rejects with a keyed error',
+        async (key: string) => {
+          await env.BUCKET.put(key, 'x');
+          const etag = (await env.BUCKET.head(key))!.etag;
+          const realHead = env.BUCKET.head.bind(env.BUCKET);
+          vi.spyOn(env.BUCKET, 'head').mockImplementationOnce(realHead).mockResolvedValue(null);
+          vi.spyOn(env.BUCKET, 'delete').mockRejectedValue(
+            keyed(tileFailedKeyFromOriginalKey(key)),
+          );
+          await writeFailureMarker(env.BUCKET, key, 'dlq', etag);
+        },
+      ],
+    ])('when %s', async (_label, run) => {
+      const spies = spyOnAllConsole();
+      const key = `panos/${OWNER}/p-owner-free-${Math.random().toString(36).slice(2)}/original`;
+
+      await run(key);
+
+      const text = loggedText(spies);
+      expect(text).toContain('pano=p-owner-free-');
+      expect(text).not.toContain(OWNER);
+    });
+
+    // Owners that fail the charset check. The contracts parse error used to
+    // echo the bare owner (no panos/ prefix, so redactOwner can't catch it).
+    it.each([
+      ['an @', 'secret@example.com'],
+      ['a %', 'secret%owner'],
+      ['a space', 'secret owner'],
+    ])('when the owner segment contains %s', async (_label, owner) => {
+      const spies = spyOnAllConsole();
+
+      await expect(
+        writeFailureMarker(env.BUCKET, `panos/${owner}/p1/original`, 'unprocessable-key'),
+      ).resolves.toBe('skipped');
+
+      const text = loggedText(spies);
+      expect(text).toContain('cannot derive tile-failed marker pano=p1');
+      expect(text).not.toContain('secret');
+    });
+
+    it('when the key has no panoId to derive a marker from', async () => {
+      const spies = spyOnAllConsole();
+
+      await writeFailureMarker(env.BUCKET, `panos/${OWNER}/original`, 'unprocessable-key');
+
+      const text = loggedText(spies);
+      expect(text).toContain('pano=<unparsed-key>');
+      expect(text).not.toContain(OWNER);
     });
   });
 });

@@ -751,12 +751,32 @@ because `uploadDir` PUT its 510 tiles one at a time (~1 tile/s). Tile PUTs now r
 (`UPLOAD_CONCURRENCY` in `services/tiler-consumer/src/r2io.ts`); the manifest is still written
 last, only after every tile and the preview have succeeded.
 
-The build itself is not faster, so a larger input can still approach the limit on its own. Both
-sides log phase timings with the panoId only: the consumer logs `tile job start`/`tile job end`,
-and the container logs download, build, upload (file count and duration), manifest, and total
-time as `tiler pano=<panoId> ...` lines. If the build time grows, the follow-ups (not done) are to
-decouple the queue invocation from tiling (ack once the container accepts the job and report
-completion separately) or to move to a larger `instance_type`.
+With parallel upload, the same 10000x5000 image took 227 s on `standard-1`: download 1.1 s,
+vips build 192.9 s, upload 29 s (511 files), manifest 0.8 s. The build was ~85% of the job, so the
+container now runs on `standard-4` (4 vCPU, 12 GiB memory, 20 GB disk), the largest predefined
+type; a custom `instance_type` caps at the same 4 vCPU and 12 GiB. The container sets libvips to
+4 threads at startup (`VIPS_THREADS` in `services/tiler-consumer/src/container.ts`). It has to:
+sharp drops libvips to 1 thread on glibc without jemalloc, which is this image, so neither the
+default nor a `VIPS_CONCURRENCY` env var would use the extra cores. Change both together.
+
+Not every part of the build scales with cores: the equirect-to-cube remap (`renderFace`) is plain
+JS on one thread, and tiles are encoded one at a time. Expect a large speedup over 0.5 vCPU, not
+8x. The new baseline has not been measured yet; check the `tiler pano=<panoId> build done in ...`
+line after the first large upload and update this section.
+
+Cost: CPU is billed per vCPU-second of active use, so the same build work costs roughly the same
+on 4 vCPU as on 0.5. Memory and disk are billed on what is provisioned, for as long as the
+container runs, including the 1 minute `sleepAfter` idle tail in `src/consumer.ts`. 12 GiB is 3x
+`standard-1`'s 4 GiB, so the memory part of a job costs more unless the job gets much shorter.
+At $0.0000025 per GiB-second that is fractions of a cent per job. With `max_instances: 5`, the
+worst case is 20 vCPU and 60 GiB running at once, far below the account's concurrent limits
+(1,500 vCPU, 6 TiB).
+
+Both sides log phase timings with the panoId only: the consumer logs `tile job start`/`tile job
+end`, and the container logs download, build, upload (file count and duration), manifest, and
+total time as `tiler pano=<panoId> ...` lines. If a job still gets close to 15 minutes, the
+remaining follow-up is to decouple the queue invocation from tiling (ack once the container
+accepts the job and report completion separately).
 
 ## Deleted panos
 
