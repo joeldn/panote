@@ -28,6 +28,14 @@ const isReferenced = async (bucket: R2Bucket, sub: string, panoId: string): Prom
  * or one that may still be joining a tour, then runs the same deletePano that
  * tour delete (Q5) uses. The original's delete inside deletePano is the commit
  * point; up to then a delete that finds a new reference rolls its tombstone back.
+ *
+ * Not atomic: R2 has no multi-key transaction, and the tour PUT doesn't check
+ * its scenes' panos. A tour.json that lands after the second reference check,
+ * from a client that already had the pano in hand (an editor undo of a scene
+ * removal, or an upload's add-to-tour retried after more than an hour), ends
+ * up with a scene whose image is gone. The editor already shows that as a
+ * deleted pano, as after tour delete's TOCTOU (delete-tour.ts); no other
+ * tour's data is touched.
  */
 export const deleteOwnedPano = async (
   bucket: R2Bucket,
