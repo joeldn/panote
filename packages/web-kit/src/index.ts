@@ -136,3 +136,25 @@ export {
 } from './app-links.js';
 export { MAX_TOUR_SCENES } from '@internal/contracts';
 export { EDITOR_DRAFT_PREFIX, sweepEditorDrafts } from './drafts.js';
+export { decodePreview, type DecodePreviewOptions, type WorkerLike } from './preview/client.js';
+export {
+  closePreview,
+  STASH_SIZE,
+  type DecodedPreview,
+  type PreviewStats,
+  type ResizeMethod,
+} from './preview/decode.js';
+export {
+  MAX_PATCH_SIZE,
+  PATCH_GUTTER,
+  PHONE_FULL_DECODE_MAX_PIXELS,
+  PREVIEW_TIERS,
+  previewSize,
+  readDeviceHints,
+  selectPreviewTier,
+  type DeviceHints,
+  type PreviewLimits,
+  type PreviewPatch,
+  type PreviewSource,
+  type PreviewTier,
+} from './preview/plan.js';
