@@ -131,3 +131,34 @@ export async function clearPendingUpload(opts: PendingUploadOptions = {}): Promi
     // Nothing to clear, or IndexedDB is unavailable.
   }
 }
+
+/**
+ * Drops a stash that `owner` can never take: another user's, or an expired one.
+ * The landing page's unowned stash stays. Resolves true if one was dropped; never throws.
+ */
+export async function clearForeignPendingUpload(
+  opts: PendingUploadOptions & { owner: string },
+): Promise<boolean> {
+  const idb = opts.indexedDB ?? globalIdb();
+  if (!idb) return false;
+  const now = (opts.now ?? Date.now)();
+  try {
+    return await inStore(idb, (store) => {
+      let dropped = false;
+      const get = store.get(KEY);
+      get.onsuccess = () => {
+        const value = get.result as unknown;
+        if (value === undefined) return;
+        const age = isRecord(value) ? now - value.savedAt : -1;
+        const foreign = isRecord(value) && value.owner !== undefined && value.owner !== opts.owner;
+        if (!isRecord(value) || foreign || age < 0 || age > PENDING_UPLOAD_MAX_AGE_MS) {
+          store.delete(KEY);
+          dropped = true;
+        }
+      };
+      return () => dropped;
+    });
+  } catch {
+    return false;
+  }
+}

@@ -58,6 +58,7 @@ export {
   type PublishedTourResult,
 } from './api/published.js';
 export {
+  clearForeignPendingUpload,
   clearPendingUpload,
   PENDING_UPLOAD_MAX_AGE_MS,
   stashPendingUpload,

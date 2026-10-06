@@ -1,4 +1,5 @@
 import {
+  clearForeignPendingUpload,
   clearPendingUpload,
   stashPendingUpload,
   takePendingUpload,
@@ -49,12 +50,17 @@ export interface PendingUploadStore {
   /** The file, unless it belongs to another user (then it is dropped). */
   take(owner: string | null): Promise<File | null>;
   clear(): Promise<void>;
+  /** Drops a stash `owner` can never take (another user's, or expired), so it doesn't linger. */
+  dropForeign(owner: string): Promise<void>;
 }
 
 export const idbPendingUploads: PendingUploadStore = {
   stash: (file, owner) => stashPendingUpload(file, { owner }),
   take: (owner) => takePendingUpload(owner === null ? {} : { owner }),
   clear: () => clearPendingUpload(),
+  dropForeign: async (owner) => {
+    await clearForeignPendingUpload({ owner });
+  },
 };
 
 /** Test seams: the presigned PUT's XHR, the pending-file store, and the tiles base. */

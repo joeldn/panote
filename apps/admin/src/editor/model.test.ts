@@ -6,6 +6,7 @@ import {
   editorReducer,
   findLink,
   fromServer,
+  mergeAppendedScenes,
   normalizeAngle,
   sameValue,
   yawDegrees,
@@ -135,5 +136,32 @@ describe('editor model', () => {
   it('formats yaw as 0..359 degrees', () => {
     expect(yawDegrees(-Math.PI / 2)).toBe(270);
     expect(yawDegrees(normalizeAngle(Math.PI * 3))).toBe(180);
+  });
+});
+
+describe('mergeAppendedScenes', () => {
+  const base = { tourId: 't1', title: 'Old town', scenes: [{ panoId: 'a' }, { panoId: 'b' }] };
+
+  it('takes the server copy as base and keeps local edits, appending the new scene', () => {
+    const local = {
+      etag: 'e1',
+      base,
+      current: { ...base, title: 'New name', scenes: [{ panoId: 'b' }] },
+    };
+    const tour = { ...base, scenes: [...base.scenes, { panoId: 'c' }] };
+    expect(mergeAppendedScenes(local, { etag: 'e2', tour })).toEqual({
+      etag: 'e2',
+      base: tour,
+      // A scene removed locally stays removed; the appended one is added once.
+      current: { ...base, title: 'New name', scenes: [{ panoId: 'b' }, { panoId: 'c' }] },
+    });
+  });
+
+  it('is null when the server tour changed in any other way', () => {
+    const local = { etag: 'e1', base, current: base };
+    const renamed = { ...base, title: 'Elsewhere', scenes: [...base.scenes, { panoId: 'c' }] };
+    expect(mergeAppendedScenes(local, { etag: 'e2', tour: renamed })).toBeNull();
+    const removed = { ...base, scenes: [{ panoId: 'a' }, { panoId: 'c' }] };
+    expect(mergeAppendedScenes(local, { etag: 'e2', tour: removed })).toBeNull();
   });
 });

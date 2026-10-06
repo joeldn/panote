@@ -3,6 +3,8 @@ import { PROCESSING_TIMEOUT_MS, STATUS_POLL_MS } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
+import { viewerFactory } from '../__fixtures__/editor-server.js';
+import { StageFactoryContext } from '../editor/stage-factory.js';
 import {
   FakeXhr,
   fakeBackend,
@@ -27,6 +29,10 @@ function setup(path = '/app/new', pending = fakePending(), auth = fakeAuth()) {
     auth,
     fetch: backend.fetch,
     upload: { tilesBase: TILES, createXhr: () => new FakeXhr(), pending },
+    // The editor under the chip shows the pano once it's added; jsdom has no WebGL.
+    wrap: (tree) => (
+      <StageFactoryContext value={viewerFactory().create}>{tree}</StageFactoryContext>
+    ),
   });
   return { backend, pending, ...app };
 }
@@ -458,6 +464,49 @@ describe('sign-in during an upload', () => {
     expect(chipTitle()).toBe('Uploading panorama');
   });
 
+  it('a 401 checking the tour from /app/new?tour= comes back to a single Add pano dialog', async () => {
+    const { backend, pending } = setup('/app/new?tour=tour-1');
+    backend.state.getTourStatus = 401;
+    await tick();
+    const file = pngFile();
+    await pick(file);
+    expect(readResumeRecord()).toMatchObject({ target: { kind: 'add', tourId: 'tour-1' } });
+    expect(pending.peek()).toBe(file);
+
+    cleanup();
+    pending.take.mockImplementationOnce(async () => null);
+    const back = setup('/app/new?tour=tour-1', pending);
+    await tick();
+    // The provider's re-pick prompt and the route overlay used to stack here.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.getByRole('dialog', { name: 'Add pano' }).textContent).toContain(
+      'Choose it again to continue.',
+    );
+    expect(pending.take).toHaveBeenCalledTimes(1);
+
+    await pick(file);
+    expect(back.backend.presigns()).toHaveLength(1);
+    expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(readResumeRecord()).toBeNull();
+  });
+
+  it('the same return with the file stashed starts the upload at once', async () => {
+    const { backend, pending } = setup('/app/new?tour=tour-1');
+    backend.state.getTourStatus = 401;
+    await tick();
+    const file = pngFile();
+    await pick(file);
+
+    cleanup();
+    const back = setup('/app/new?tour=tour-1', pending);
+    await tick();
+    expect(pending.take).toHaveBeenCalledTimes(1);
+    expect(FakeXhr.last.body).toBe(file);
+    expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
   it('/app/new?resume=upload starts at once with the file stashed on the landing', async () => {
     const file = pngFile('Harbour.png');
     const { backend, router } = setup('/app/new?resume=upload', fakePending(file));
@@ -506,9 +555,25 @@ describe('sign-in during an upload', () => {
     expect(back.backend.state.calls).toEqual([]);
     expect(FakeXhr.all).toHaveLength(0);
     expect(readResumeRecord()).toBeNull();
-    // The stash is left to take()'s owner check, which never hands it to this user.
-    expect(pending.clear).not.toHaveBeenCalled();
+    // Their stash is cleared at boot rather than left waiting for them.
+    expect(pending.dropForeign).toHaveBeenCalledWith('google-oauth2|2');
+    expect(pending.peek()).toBeNull();
     expect(await pending.take('google-oauth2|2')).toBeNull();
+  });
+
+  it("another user's stash is cleared at boot even with no resume record; an own one stays", async () => {
+    const theirs = fakePending(pngFile('Theirs.png'), 'google-oauth2|2');
+    setup('/app/', theirs);
+    await tick();
+    expect(theirs.dropForeign).toHaveBeenCalledWith('google-oauth2|1');
+    expect(theirs.peek()).toBeNull();
+
+    cleanup();
+    const mine = fakePending(pngFile('Mine.png'), 'google-oauth2|1');
+    setup('/app/', mine);
+    await tick();
+    expect(mine.peek()?.name).toBe('Mine.png');
+    expect(mine.take).not.toHaveBeenCalled();
   });
 
   it('an owned stash with no resume record never starts by itself from ?resume=upload', async () => {

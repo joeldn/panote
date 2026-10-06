@@ -101,7 +101,16 @@ function renderInsights(api: AdminApi, fetch = statsFetch(3), path = '/app/t/tou
       <AuthEnvContext
         value={{ auth: fakeAuth(), origins: LOCAL, assign: vi.fn(), apiBase: '', fetch }}
       >
-        <SessionContext value={{ user: { sub: 'u1' }, api, signOut: async () => {} }}>
+        <SessionContext
+          value={{
+            user: { sub: 'u1' },
+            api,
+            upload: { presign: vi.fn() },
+            requestSignIn: () => {},
+            holdSignIn: () => {},
+            signOut: async () => {},
+          }}
+        >
           <RouterProvider router={router} />
         </SessionContext>
       </AuthEnvContext>

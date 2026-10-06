@@ -167,6 +167,9 @@ describe('/s/:slug', () => {
     const panel = screen.getByRole('complementary', { name: 'Fountain' });
     expect(panel.querySelector('strong')?.textContent).toBe('Old');
     expect(lastViewer().reportHotspotOpen).toHaveBeenCalledWith('i1');
+    // Clicking the open point's marker again is not a second open (Insights counted it twice).
+    fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+    expect(lastViewer().reportHotspotOpen).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
     await waitFor(() =>
       expect(lastViewer().transitionTo).toHaveBeenCalledWith('church', { yaw: 1 }),
@@ -216,7 +219,8 @@ describe('/s/:slug', () => {
       settings: { controls: 'top', showMap: false, showCompass: false, autoRotate: true },
     });
     renderAt('/s/old-town');
-    await screen.findByText('Old town');
+    // The viewer is created in PanoStage's effect, which can land after the title renders.
+    await shown('square');
     expect(screen.getByRole('toolbar').className).toContain('pn-controls--top');
     expect(screen.queryByRole('img', { name: 'Compass' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Map' })).toBeNull();
