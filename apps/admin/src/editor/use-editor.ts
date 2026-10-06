@@ -164,6 +164,7 @@ export function useEditor(
   // The seq of the sync whose GET is out, if any: a save that starts meanwhile reruns it.
   const syncInFlight = useRef<number | null>(null);
   // Tour ETags this editor has moved past; a response carrying one is older than what we hold.
+  // (Content that repeats can bring an ETag back and drop a valid sync; Save's 412 recovers.)
   const pastTourEtags = useRef(new Set<string>());
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [publish, setPublish] = useState<TourPublishState | null>(null);
