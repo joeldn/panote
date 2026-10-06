@@ -742,6 +742,22 @@ bytes **without** a version bump yields the same ETag, so the derived version st
 rewriting identical keys rather than creating a new one. Old version dirs are left in place after
 a re-tile; cleaning them up is deferred to Wave 6.
 
+## Tiling time and the queue limit
+
+A queue consumer invocation has a 15-minute wall-time limit, and the consumer holds its
+invocation open for the whole container `/tile` call. A dev run on a 50 MP (10000x5000) JPEG took
+14 min 28 s: about 4-5 min of vips build on `standard-1` (0.5 vCPU) and 8-9 min of tile upload,
+because `uploadDir` PUT its 510 tiles one at a time (~1 tile/s). Tile PUTs now run 16 at a time
+(`UPLOAD_CONCURRENCY` in `services/tiler-consumer/src/r2io.ts`); the manifest is still written
+last, only after every tile and the preview have succeeded.
+
+The build itself is not faster, so a larger input can still approach the limit on its own. Both
+sides log phase timings with the panoId only: the consumer logs `tile job start`/`tile job end`,
+and the container logs download, build, upload (file count and duration), manifest, and total
+time as `tiler pano=<panoId> ...` lines. If the build time grows, the follow-ups (not done) are to
+decouple the queue invocation from tiling (ack once the container accepts the job and report
+completion separately) or to move to a larger `instance_type`.
+
 ## Deleted panos
 
 `admin-api`'s `DELETE /api/admin/panos/:panoId` always returns 204 and is idempotent. Without proof
