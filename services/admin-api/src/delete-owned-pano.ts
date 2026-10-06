@@ -33,9 +33,10 @@ const isReferenced = async (bucket: R2Bucket, sub: string, panoId: string): Prom
  * its scenes' panos. A tour.json that lands after the second reference check,
  * from a client that already had the pano in hand (an editor undo of a scene
  * removal, or an upload's add-to-tour retried after more than an hour), ends
- * up with a scene whose image is gone. The editor already shows that as a
- * deleted pano, as after tour delete's TOCTOU (delete-tour.ts); no other
- * tour's data is touched.
+ * up with a scene whose image is gone: the editor marks it "Deleted", as after
+ * tour delete's TOCTOU (delete-tour.ts), or, if that retry re-created its
+ * config, shows a scene with no image. Either way the owner caused it by
+ * deleting the pano, and no other data is touched.
  */
 export const deleteOwnedPano = async (
   bucket: R2Bucket,
