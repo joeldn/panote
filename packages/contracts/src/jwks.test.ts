@@ -38,6 +38,10 @@ describe('makeJwksLoader', () => {
   const keys = [{ kid: 'k1', kty: 'RSA', n: 'n', e: 'AQAB' }];
   let fetchSpy: ReturnType<typeof vi.fn>;
   beforeEach(() => {
+    // The loader reads Date.now() for both the TTL and the forced-refetch
+    // floor. Freeze the clock so no test depends on how much real time
+    // passes between calls; tests that need time to pass advance it.
+    vi.useFakeTimers({ now: new Date('2026-01-01T00:00:00Z') });
     fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ keys }) }));
     vi.stubGlobal('fetch', fetchSpy);
   });
@@ -53,12 +57,15 @@ describe('makeJwksLoader', () => {
     expect(await loader.get()).toEqual(keys);
     await loader.get();
     expect(fetchSpy).toHaveBeenCalledTimes(1); // served from cache
+    // The floor is a strict "elapsed > minForceIntervalMs", so a forced call
+    // in the same millisecond as the fetch is still throttled. Step past it,
+    // staying well inside the TTL.
+    vi.advanceTimersByTime(1);
     await loader.get(true);
     expect(fetchSpy).toHaveBeenCalledTimes(2); // forced refetch
   });
 
   it('refetches after the TTL expires', async () => {
-    vi.useFakeTimers();
     const loader = makeJwksLoader('https://issuer/', 1000);
     await loader.get();
     vi.advanceTimersByTime(1500);
@@ -80,7 +87,6 @@ describe('makeJwksLoader', () => {
   });
 
   it('honours a forced refetch again once the minimum interval has elapsed', async () => {
-    vi.useFakeTimers();
     const loader = makeJwksLoader('https://issuer/', 1_000_000, 1000);
     await loader.get();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
