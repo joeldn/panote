@@ -8,6 +8,7 @@ import {
   LogoMark,
   PanoStage,
   SceneMap,
+  ShareModal,
   usePanoViewer,
   ViewerControls,
   type ViewerHotspot,
@@ -19,11 +20,13 @@ import { Link, useSearchParams } from 'react-router';
 
 import './tour.css';
 
+import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { useViewerAnalytics } from './analytics.js';
 import { StageFactoryContext } from './stage-factory.js';
 import { StatsChips } from './StatsChips.js';
 import { Unavailable } from './Unavailable.js';
+import { useIsOwner } from './use-owner.js';
 import { useTourStats } from './use-stats.js';
 
 type Scene = { id: string; view: { yaw?: number; pitch?: number; fov?: number } | undefined };
@@ -109,6 +112,18 @@ function TourStats({
   return visible ? <StatsChips {...stats} /> : null;
 }
 
+/** "Edit" for the tour's owner only (plan 4.3, row 05); never mounted in the embed. */
+function OwnerEdit({ tourId }: { tourId: string }) {
+  const { origins } = useAuthEnv();
+  const owner = useIsOwner(tourId);
+  if (!owner) return null;
+  return (
+    <a className="tour-edit" href={`${origins.admin}/app/t/${encodeURIComponent(tourId)}`}>
+      Edit
+    </a>
+  );
+}
+
 /** Screen 05: the visitor viewer, or the chrome-free embed. */
 export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean }) {
   const config = useConfig();
@@ -130,6 +145,7 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(vt.settings.autoRotate);
   const [failed, setFailed] = useState(false);
+  const [sharing, setSharing] = useState(false);
   // Set once a scene is on screen; a view is only counted from then on.
   const [shown, setShown] = useState(false);
   const surface = embed ? 'embed' : 'page';
@@ -203,6 +219,7 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
               </span>
             </nav>
             {shown && <TourStats tourId={tour.tourId} visible view={{ panoId, surface }} />}
+            <OwnerEdit tourId={tour.tourId} />
           </div>
         )}
         {embed && shown && (
@@ -226,8 +243,36 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
           autoRotate={autoRotate}
           onAutoRotateChange={setAutoRotate}
           position={controls}
-        />
+        >
+          {/* Visitor share sheet (design README 7); the embed links back here instead. */}
+          {!embed && (
+            <button
+              type="button"
+              className="pn-controls__btn"
+              aria-label="Share"
+              aria-haspopup="dialog"
+              onClick={() => {
+                // The sheet portals to <body>, which a fullscreen stage would hide.
+                if (document.fullscreenElement) void document.exitFullscreen();
+                setSharing(true);
+              }}
+            >
+              <i className="fa-solid fa-share-nodes" aria-hidden="true" />
+            </button>
+          )}
+        </ViewerControls>
       </PanoStage>
+      {!embed && (
+        <ShareModal
+          open={sharing}
+          onClose={() => setSharing(false)}
+          variant="visitor"
+          siteOrigin={config.siteOrigin}
+          title={tour.title}
+          slug={tour.slug}
+          visibility={tour.visibility}
+        />
+      )}
     </div>
   );
 }

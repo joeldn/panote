@@ -157,3 +157,24 @@
     display: none;
   }
 }
+
+/* Owner-only "Edit", pushed to the right end of the top bar (screen 05). */
+.tour-edit {
+  margin-left: auto;
+  padding: 10px 16px;
+  border-radius: 11px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  color: var(--ink);
+  font: 500 14px var(--fbody);
+  text-decoration: none;
+}
+.tour-edit:hover {
+  background: #fff;
+}
+.tour-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
