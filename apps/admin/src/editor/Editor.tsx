@@ -49,6 +49,11 @@ const toViewerHotspot = (h: Hotspot): ViewerHotspot => {
 /** Route element for `/app/t/:tourId` (screens 04 and 13). */
 export function Editor() {
   const { tourId = '' } = useParams();
+  // Keyed so moving to another tour starts from a fresh editor (no state carried across).
+  return <TourEditor key={tourId} tourId={tourId} />;
+}
+
+function TourEditor({ tourId }: { tourId: string }) {
   const { api, user } = useSession();
   const editor = useEditor(api, tourId, user.sub ?? 'anonymous');
   const { load } = editor;
