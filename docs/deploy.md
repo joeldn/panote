@@ -456,8 +456,10 @@ Ops steps, per environment:
    `MISS`/`404`.
 
 **Status: set for dev, outstanding for production** — the dev `CDN_ZONE_ID` is set and
-`CF_PURGE_TOKEN` has been set on dev, so purges go live in dev with the next deploy (step 4 not yet
-run). Production has no token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
+`CF_PURGE_TOKEN` has been set on dev. Step 4 is still not run as of 2026-10-07: it needs an owner
+token to delete a test pano, and no delete has happened in dev to observe instead (admin-api's
+logs for the 7 days to 2026-10-07 show no `DELETE` and no `cdn purge` line). Production has no
+token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
 
 ---
 
@@ -504,6 +506,25 @@ in place, or account recovery breaks.
 eforward, which stops working once a domain's nameservers leave Namecheap — so `panote.dev`
 inbound mail is likely already broken. Nothing depends on it yet; moving it to Cloudflare Email
 Routing too hasn't been done.
+
+### Cloudflare Access (dev only)
+
+Since 2026-10-06, `panote.dev` is behind Cloudflare Access so the dev site isn't public. Account
+`12e2809e05de8a2bf20b815fd394ec9a`, team domain `panote.cloudflareaccess.com`. Two Access apps:
+
+- **`panote dev`** — all paths on `panote.dev`. App id `710a2ec4-94f4-4854-968f-abb417d85562`,
+  allow policy `13e2a4b2-0f77-4d85-9d03-424275251124` (two of the owner's email addresses, not
+  recorded here), One-time PIN login, 24h session.
+- **`panote dev api bypass`** — `panote.dev/api/*`. App id
+  `374172f5-7ce6-4e33-afb8-708bbed65cb5`, a bypass-everyone policy. It's required: the API
+  Workers are path-routed on `panote.dev`, so without it every `/api/*` call (including the SPA's
+  own, which carry an Auth0 bearer, not an Access cookie) would be redirected to the Access login.
+
+A page `curl` against `panote.dev` now gets a `302` to `panote.cloudflareaccess.com` — expected,
+not an outage. `/api/*` still answers directly (e.g. `GET /api/tours/x/stats` → `200`,
+`GET /api/admin/panos` with no token → `401`, checked 2026-10-07). Not covered: `cdn.panote.dev`
+and the dev `*.workers.dev` URLs, which stay public. Undo: `DELETE
+/accounts/<account>/access/apps/<id>` for each app. Never apply this to `panote.io`.
 
 ---
 
@@ -999,7 +1020,8 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
 - **Datasets.** `panote_events_dev` / `panote_events`. AE creates a dataset the first time a
   Worker writes to it, so there is no provisioning command; the first `POST .../view` after
   deploying `public-api` creates it. AE keeps data for three months (Cloudflare's limit, not
-  configurable). **Status: not yet deployed.**
+  configurable). **Status: deployed to dev** — an owner `GET .../insights` returned `200` in dev
+  in the week to 2026-10-07 (admin-api logs); the dataset's contents weren't checked.
 - **Secret.** `admin-api` needs a custom API token whose only permission is **Account → Account
   Analytics → Read**, with Account Resources limited to the panote account. Cloudflare's AE SQL
   API docs create it under My Profile → API Tokens → Create Token → Create Custom Token (a user
@@ -1095,7 +1117,8 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
 - **Hardened (pending dev verification): the presigned upload PUT now pins content-type.**
   `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
   with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's
-  presigned-URL docs — not yet verified in dev, since B3's dev E2E is outstanding. **content-length
+  presigned-URL docs — still not verified in dev as of 2026-10-07: B3's dev E2E needs an owner
+  token for `POST /api/upload-url`, and none was available non-interactively. **content-length
   is not signed, and R2 does not enforce it** — content-length isn't part of the signature, so a
   PUT with a body size different from what was presigned for still succeeds. The 150 MiB size cap
   is therefore enforced only at presign (input validation on the presign request in `upload-api`)
