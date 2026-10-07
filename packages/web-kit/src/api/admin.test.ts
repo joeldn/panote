@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { json } from '../__fixtures__/helpers.js';
 import { AuthRequiredError } from '../auth.js';
-import { createAdminApi, publishErrorOf } from './admin.js';
+import { createAdminApi, panoDeleteErrorOf, publishErrorOf } from './admin.js';
 import { ApiError, ApiSchemaError, ConflictError } from './http.js';
 
 const status = {
@@ -352,5 +352,38 @@ describe('getInsights', () => {
     await expect(api.getInsights('t1')).rejects.toBeInstanceOf(ApiError);
     await expect(api.getInsights('t1')).rejects.toBeInstanceOf(ApiError);
     await expect(api.getInsights('t1')).rejects.toBeInstanceOf(ApiSchemaError);
+  });
+});
+
+describe('unused pano support', () => {
+  it('listPanos asks for references only when told to, and keeps the flag', async () => {
+    const pano = { panoId: 'p1', title: null, ...status, referenced: false };
+    const { api, call } = setup(
+      json({ panoIds: ['p1'], panos: [pano], cursor: null }),
+      json({ panoIds: [], panos: [], cursor: null }),
+    );
+    const res = await api.listPanos({ limit: 100, includeReferences: true });
+    expect(res.panos[0]?.referenced).toBe(false);
+    expect(call(0).url).toBe('https://panote.test/api/admin/panos?limit=100&include=references');
+    await api.listPanos({ cursor: 'p1' });
+    expect(call(1).url).toBe('https://panote.test/api/admin/panos?cursor=p1');
+  });
+
+  it.each([
+    [409, { error: 'pano is in use' }, 'in-use'],
+    [409, { error: 'pano is processing' }, 'processing'],
+    [409, { error: 'pano was uploaded recently' }, 'recent'],
+    [404, { error: 'not found' }, 'not-found'],
+  ] as const)('classifies a %i %j delete refusal as %s', async (code, body, expected) => {
+    const { api } = setup(json(body, code));
+    const err = await api.deletePano('p1').catch((e: unknown) => e);
+    expect(panoDeleteErrorOf(err)).toBe(expected);
+  });
+
+  it('does not classify other failures', async () => {
+    const { api } = setup(json({ error: 'conflict' }, 409), json({}, 500));
+    expect(panoDeleteErrorOf(await api.deletePano('p1').catch((e: unknown) => e))).toBeNull();
+    expect(panoDeleteErrorOf(await api.deletePano('p1').catch((e: unknown) => e))).toBeNull();
+    expect(panoDeleteErrorOf(new Error('network'))).toBeNull();
   });
 });

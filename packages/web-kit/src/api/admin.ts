@@ -5,6 +5,8 @@ import {
   NotPublishedSchema,
   PANO_PATTERN,
   PanoConfigNotFoundSchema,
+  PANO_DELETE_CONFLICTS,
+  PanoDeleteConflictSchema,
   PanosListOkSchema,
   PanoStatusOnlyOkSchema,
   PanoWithStatusOkSchema,
@@ -20,6 +22,7 @@ import {
   ToursListOkSchema,
   TourWithConfigsOkSchema,
   type InsightsOk,
+  type PanoDeleteConflict,
   type PanosListOk,
   type PanoStatus,
   type PanoWithStatusOk,
@@ -74,6 +77,11 @@ export interface ListQuery {
   limit?: number;
 }
 
+export interface PanoListQuery extends ListQuery {
+  /** Adds `referenced` to each pano; costs the server one read per tour. */
+  includeReferences?: boolean;
+}
+
 export interface ConditionalQuery {
   /** Unquoted etag from a previous load; a match gives `not-modified`. */
   ifNoneMatch?: string;
@@ -88,7 +96,7 @@ export interface AdminApiOptions {
 
 export interface AdminApi {
   listTours(q?: ListQuery): Promise<ToursListOk>;
-  listPanos(q?: ListQuery): Promise<PanosListOk>;
+  listPanos(q?: PanoListQuery): Promise<PanosListOk>;
   getTour(tourId: string, q?: ConditionalQuery): Promise<GetResult<TourOk>>;
   getTourWithConfigs(tourId: string, q?: ConditionalQuery): Promise<GetResult<TourWithConfigsOk>>;
   getPano(panoId: string, q?: ConditionalQuery): Promise<GetResult<PanoWithStatusOk, PanoNotFound>>;
@@ -105,6 +113,7 @@ export interface AdminApi {
   /** Create-only (`If-None-Match: *`): throws `ConflictError` if the config already exists. */
   createPanoConfig(panoId: string, config: SceneConfigInput): Promise<{ etag: string }>;
   deleteTour(tourId: string): Promise<void>;
+  /** Refusals are an `ApiError`; classify them with `panoDeleteErrorOf`. */
   deletePano(panoId: string): Promise<void>;
   /** Idempotent; failures are an `ApiError`, classify them with `publishErrorOf`. */
   publishTour(tourId: string, req?: PublishRequest): Promise<PublishOk>;
@@ -147,6 +156,20 @@ export function publishErrorOf(e: unknown): PublishError | null {
   return null;
 }
 
+/** Why a pano delete was refused: a 409 reason, or `not-found` (already gone). */
+export type PanoDeleteError = PanoDeleteConflict | 'not-found';
+
+/** Classify an error from `deletePano`; null for anything else (network, 5xx, auth). */
+export function panoDeleteErrorOf(e: unknown): PanoDeleteError | null {
+  if (!(e instanceof ApiError) || e instanceof ConflictError) return null;
+  if (e.status === 404) return 'not-found';
+  if (e.status !== 409) return null;
+  const body = PanoDeleteConflictSchema.safeParse(e.body);
+  if (!body.success) return null;
+  const entry = Object.entries(PANO_DELETE_CONFLICTS).find(([, msg]) => msg === body.data.error);
+  return entry ? (entry[0] as PanoDeleteConflict) : null;
+}
+
 const assertId = (id: string, name: string): string => {
   if (!PANO_PATTERN.test(id)) throw new TypeError(`${name} must match ${PANO_PATTERN}`);
   return id;
@@ -154,10 +177,11 @@ const assertId = (id: string, name: string): string => {
 
 const tourPath = (tourId: string): string => `/api/admin/tours/${assertId(tourId, 'tourId')}`;
 
-const listPath = (path: string, q: ListQuery = {}): string => {
+const listPath = (path: string, q: PanoListQuery = {}): string => {
   const params = new URLSearchParams();
   if (q.cursor !== undefined) params.set('cursor', q.cursor);
   if (q.limit !== undefined) params.set('limit', String(q.limit));
+  if (q.includeReferences) params.set('include', 'references');
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 };

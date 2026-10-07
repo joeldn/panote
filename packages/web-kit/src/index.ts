@@ -30,6 +30,7 @@ export {
 } from './api/http.js';
 export {
   createAdminApi,
+  panoDeleteErrorOf,
   publishErrorOf,
   type AdminApi,
   type AdminApiOptions,
@@ -37,6 +38,8 @@ export {
   type GetResult,
   type InsightsResult,
   type ListQuery,
+  type PanoDeleteError,
+  type PanoListQuery,
   type PanoNotFound,
   type PublishError,
   type SceneConfigInput,

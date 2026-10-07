@@ -137,6 +137,9 @@ export function Dashboard() {
     body = (
       <>
         <Totals dash={dash} />
+        <p className="dash__more">
+          <Link to="/panos/unused">Unused panos</Link>
+        </p>
         <PendingDeletes dash={dash} />
         {dash.notice && (
           <div className="dash__banner dash__banner--warn" role="alert">

@@ -50,9 +50,10 @@ const listAllTours = (api: AdminApi) =>
     return { items: r.tours, cursor: r.cursor };
   });
 
-const listAllPanos = (api: AdminApi) =>
+/** Every pano page; `includeReferences` adds each pano's `referenced` flag. */
+export const listAllPanos = (api: AdminApi, includeReferences = false) =>
   listAll(async (c) => {
-    const r = await api.listPanos(query(c));
+    const r = await api.listPanos({ ...query(c), ...(includeReferences && { includeReferences }) });
     return { items: r.panos, cursor: r.cursor };
   });
 
@@ -119,9 +120,10 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
       setStuck((s) => s.filter((id) => !ids.includes(id)));
       setResuming((r) => [...r, ...ids.filter((id) => !r.includes(id))]);
       const results = await Promise.allSettled(ids.map((id) => api.deletePano(id)));
+      // 404: already gone. 409: a tour uses the pano again, so the server rolled the delete back.
       const failed = ids.filter((_, i) => {
         const r = results[i];
-        return r?.status === 'rejected' && !isStatus(r.reason, 404);
+        return r?.status === 'rejected' && !isStatus(r.reason, 404) && !isStatus(r.reason, 409);
       });
       setResuming((r) => r.filter((id) => !ids.includes(id)));
       setStuck((s) => [...s, ...failed.filter((id) => !s.includes(id))]);
