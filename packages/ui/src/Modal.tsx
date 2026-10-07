@@ -182,10 +182,18 @@ export interface ModalHeaderProps {
   title: ReactNode;
   subtitle?: ReactNode;
   onClose: () => void;
+  /** Greys out the × while something that can't be abandoned is running. */
+  closeDisabled?: boolean;
 }
 
 /** Sticky header row: 600 17px title, optional mono subtitle, and the × button. */
-export function ModalHeader({ id, title, subtitle, onClose }: ModalHeaderProps) {
+export function ModalHeader({
+  id,
+  title,
+  subtitle,
+  onClose,
+  closeDisabled = false,
+}: ModalHeaderProps) {
   return (
     <div className="pn-modal__header">
       <div>
@@ -194,7 +202,13 @@ export function ModalHeader({ id, title, subtitle, onClose }: ModalHeaderProps) 
         </h2>
         {subtitle && <p className="pn-modal__subtitle">{subtitle}</p>}
       </div>
-      <button type="button" className="pn-modal__close" aria-label="Close" onClick={onClose}>
+      <button
+        type="button"
+        className="pn-modal__close"
+        aria-label="Close"
+        disabled={closeDisabled}
+        onClick={onClose}
+      >
         ×
       </button>
     </div>

@@ -21,7 +21,7 @@ export interface LibraryPickerProps {
   full: boolean;
   onClose(): void;
   /** The pano is in the server's tour: fold it into the editor and show it. */
-  onAdded(panoId: string): Promise<void>;
+  onAdded(panoId: string, title: string): Promise<void>;
 }
 
 function Thumb({ src }: { src: string | null }) {
@@ -84,8 +84,9 @@ export function LibraryPicker({ tourId, tourPanoIds, full, onClose, onAdded }: L
     setAdding(pano.panoId);
     setError(null);
     try {
-      await addPanoToTour(api, tourId, pano.panoId, pano.title ?? UNTITLED_PANO);
-      await onAdded(pano.panoId);
+      const title = pano.title ?? UNTITLED_PANO;
+      await addPanoToTour(api, tourId, pano.panoId, title);
+      await onAdded(pano.panoId, title);
     } catch (e) {
       setError(addErrorMessage(e));
       setAdding(null);
@@ -189,6 +190,7 @@ export function LibraryPicker({ tourId, tourPanoIds, full, onClose, onAdded }: L
         title="Add from library"
         subtitle="A pano you add keeps its points, shared with any other tour using it."
         onClose={close}
+        closeDisabled={adding !== null}
       />
       <div className="ed-lib">
         {error && (

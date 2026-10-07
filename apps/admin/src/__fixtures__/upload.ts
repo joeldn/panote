@@ -59,6 +59,8 @@ export function fakeBackend() {
     newPanoId: 'pano-1',
     /** Panos the tour publish reports as `not-ready` (a 422); empty publishes. */
     publishNotReady: [] as string[],
+    /** What the library listing (`GET /api/admin/panos`) returns. */
+    library: [] as Array<Record<string, unknown>>,
   };
 
   const fetch: FetchLike = async (url, init = {}) => {
@@ -70,7 +72,11 @@ export function fakeBackend() {
     if (method === 'GET' && /^\/api\/admin\/(tours|panos)(\?|$)/.test(path)) {
       return path.startsWith('/api/admin/tours')
         ? json({ tours: [], cursor: null })
-        : json({ panoIds: [], panos: [], cursor: null });
+        : json({
+            panoIds: state.library.map((p) => p.panoId),
+            panos: state.library,
+            cursor: null,
+          });
     }
     // The editor's own load of the tour (it sits under /app/t/:id); not part of the upload.
     if (method === 'GET' && /\?include=configs$/.test(path)) {

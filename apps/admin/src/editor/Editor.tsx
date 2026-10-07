@@ -354,10 +354,18 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   };
 
   // The picker appended it on the server: fold it in like an upload, then show it.
-  const addedFromLibrary = async (panoId: string) => {
-    await editor.syncAppended();
+  const addedFromLibrary = async (panoId: string, title: string) => {
+    const synced = await editor.syncAppended();
     setLibraryOpen(false);
+    // Kept even if the sync failed: the scene shows as soon as a later sync brings it in.
     select(panoId);
+    if (!synced) {
+      editor.notify({
+        id: 'library-sync',
+        tone: 'warn',
+        text: `“${title}” was added to the tour, but the editor couldn’t refresh to show it. Reload the page to see it.`,
+      });
+    }
   };
 
   const missingName = scene?.kind === 'missing' ? 'Missing pano' : null;

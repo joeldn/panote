@@ -46,8 +46,8 @@ describe('useEditor syncAppended', () => {
     const { result } = renderHook(() => useEditor(api, 'tour-1', 'user-1', null));
     await waitFor(() => expect(result.current.load.status).toBe('ready'));
 
-    let first!: Promise<void>;
-    let second!: Promise<void>;
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
     act(() => {
       first = result.current.syncAppended();
       second = result.current.syncAppended();
@@ -87,7 +87,7 @@ describe('useEditor syncAppended', () => {
     const { result } = renderHook(() => useEditor(api, 'tour-1', 'user-1', null));
     await waitFor(() => expect(result.current.load.status).toBe('ready'));
 
-    let sync!: Promise<void>;
+    let sync!: Promise<boolean>;
     act(() => {
       sync = result.current.syncAppended();
     });
@@ -152,7 +152,7 @@ describe('useEditor syncAppended', () => {
     });
     await waitFor(() => expect(result.current.load.status).toBe('ready'));
 
-    let sync!: Promise<void>;
+    let sync!: Promise<boolean>;
     act(() => {
       sync = result.current.syncAppended();
     });
