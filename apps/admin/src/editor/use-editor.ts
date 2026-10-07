@@ -200,6 +200,11 @@ export function useEditor(
     setAwaitingState(ids);
   }, []);
   const publishingRef = useRef(false);
+  // Publishes run one at a time; each takes a number, and a result whose number is no
+  // longer the latest (a save started since, say) is dropped rather than applied.
+  const publishSeq = useRef(0);
+  const publishTail = useRef<Promise<void>>(Promise.resolve());
+  const publishCount = useRef(0);
 
   // Synchronous so a save started right after an edit sees it.
   const dispatch = useCallback((action: EditorAction) => {
@@ -302,18 +307,28 @@ export function useEditor(
   /** `auto`: the editor's own retry once the tiles a `not-ready` publish waited on are in. */
   const republishWith = useCallback(
     async (fallback: EditorDocs, { auto = false } = {}) => {
-      const wasPublished = publishRef.current !== null;
+      const seq = ++publishSeq.current;
       const waitedOn = awaitingRef.current;
+      publishCount.current++;
       publishingRef.current = true;
       setPublishing(true);
+      const before = publishTail.current;
+      let release!: () => void;
+      publishTail.current = new Promise<void>((r) => (release = r));
       try {
+        // Never two publishes at once: the server would snapshot whichever lands last.
+        await before;
+        if (seq !== publishSeq.current) return;
+        const wasPublished = publishRef.current !== null;
         const published = await runPublish(api, tourId);
-        const docsNow = docsRef.current ?? fallback;
         if (published.kind === 'ok') {
           const { slug, visibility, publishedAt } = published.publish;
           publishRef.current = { slug, visibility, publishedAt };
           setPublish(publishRef.current);
         }
+        // Superseded (a save started meanwhile): its own publish decides what to show.
+        if (seq !== publishSeq.current) return;
+        const docsNow = docsRef.current ?? fallback;
         if (published.kind === 'unpublishable' && published.scenes.length > 0) {
           const ids = published.scenes.map((s) => s.panoId);
           const onlyNotReady = published.scenes.every((s) => s.reason === 'not-ready');
@@ -340,8 +355,12 @@ export function useEditor(
         if (notice) notify(notice);
         else dismiss('publish');
       } finally {
-        publishingRef.current = false;
-        setPublishing(false);
+        release();
+        publishCount.current--;
+        if (publishCount.current === 0) {
+          publishingRef.current = false;
+          setPublishing(false);
+        }
       }
     },
     [api, tourId, notify, dismiss, setAwaiting],
@@ -359,10 +378,19 @@ export function useEditor(
       if (isEmptyPlan(plan)) return;
       savingRef.current = true;
       setSaving(true);
+      // A new attempt: whatever the last publish waited on, this save's publish decides
+      // again, and a publish still out (an automatic one) can't apply its stale result.
+      publishSeq.current++;
+      if (awaitingRef.current) {
+        setAwaiting(null);
+        dismiss('publish');
+      }
       // A sync whose GET is already out could answer with the pre-save tour: drop it and rerun.
       syncSeq.current++;
       if (syncInFlight.current !== null) syncAfterSave.current = true;
       try {
+        // Its PUTs wait for a publish already out, so that publish can't snapshot them halfway.
+        await publishTail.current;
         const out = await runSave(api, tourId, plan);
         dispatch({ type: 'saved', ...(out.tour && { tour: out.tour }), configs: out.configs });
         setFailures(out.failures);
@@ -381,7 +409,7 @@ export function useEditor(
         }
       }
     },
-    [api, tourId, user, storage, dispatch, dismiss, setFailures, republishWith],
+    [api, tourId, user, storage, dispatch, dismiss, setFailures, republishWith, setAwaiting],
   );
 
   /**
@@ -434,11 +462,14 @@ export function useEditor(
 
   /**
    * The tiles the last publish waited on are all in: publish again. A no-op unless that
-   * publish hit `not-ready` (and nothing else has been tried since), or while a save or
-   * another publish is under way.
+   * publish hit `not-ready` and nothing has been tried since (a save attempt clears it),
+   * while another publish is under way, or while a save failed or a conflict is open.
    */
   const autoRepublish = useCallback(async () => {
-    if (!awaitingRef.current || savingRef.current || publishingRef.current) return;
+    // (A save clears `awaitingRef` before it starts, so there's no save to wait out here.)
+    if (!awaitingRef.current || publishingRef.current) return;
+    // A failed save or an open conflict: the saved tour isn't what the user is editing.
+    if (Object.keys(failuresRef.current).length > 0) return;
     if (docsRef.current) await republishWith(docsRef.current, { auto: true });
   }, [republishWith]);
 
