@@ -1,5 +1,3 @@
-import { useParams } from 'react-router';
-
 import { Placeholder } from './Shell.js';
 
 export type ShareTab = 'link' | 'privacy' | 'embed';
@@ -12,10 +10,7 @@ export { NewPanoOverlay as UploadOverlay } from './upload/UploadOverlay.js';
 
 export { Editor } from './editor/Editor.js';
 
-export function Preview() {
-  const { tourId } = useParams();
-  return <Placeholder title={`Preview ${tourId ?? ''}`} />;
-}
+export { Preview } from './preview/Preview.js';
 
 export { ShareRoute as ShareModal } from './share/ShareRoute.js';
 export { InsightsRoute as InsightsModal } from './insights/InsightsRoute.js';

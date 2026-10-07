@@ -352,3 +352,100 @@
 .pn-hspanel__medialink:hover {
   text-decoration: underline;
 }
+
+/* --- Tour viewer page (screen 05): full-screen frame and top bar --- */
+.pn-tour {
+  position: fixed;
+  inset: 0;
+  background: #0d0c0a;
+  font-family: var(--fbody);
+}
+
+/* Logo, breadcrumb pill, extras, then the end slot. Only its children take pointer events. */
+.pn-stage__overlay > .pn-tourbar {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  right: 84px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+.pn-tourbar > * {
+  pointer-events: auto;
+}
+.pn-tourbar__home {
+  display: flex;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
+}
+.pn-tourbar__end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+.pn-tourbar__end:empty {
+  display: none;
+}
+.pn-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 14px;
+  border-radius: 11px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+.pn-crumbs__tour {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-55);
+}
+.pn-crumbs__sep {
+  font-size: 9px;
+  color: var(--ink-40);
+}
+.pn-crumbs__scene {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--ink);
+}
+/* A glass text button in the bar: the owner's "Edit", or "Back to editor" in the preview. */
+.pn-tourbar__btn {
+  padding: 10px 16px;
+  border-radius: 11px;
+  background: var(--cbg);
+  backdrop-filter: var(--cbf);
+  -webkit-backdrop-filter: var(--cbf);
+  box-shadow: var(--shadow-glass);
+  color: var(--ink);
+  font: 500 14px var(--fbody);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pn-tourbar__btn:hover {
+  background: #fff;
+}
+.pn-tourbar__btn:focus-visible,
+.pn-tourbar__home:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.pn-stage__overlay > .pn-tour__compass {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+}
+@media (max-width: 600px) {
+  .pn-crumbs__tour,
+  .pn-crumbs__sep {
+    display: none;
+  }
+}
