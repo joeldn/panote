@@ -44,5 +44,11 @@ export { HotspotMarkers, type HotspotMarkersProps } from './viewer/HotspotMarker
 export { HotspotPanel, type HotspotPanelProps } from './viewer/HotspotPanel.js';
 export { SceneMap, type SceneMapEntry, type SceneMapProps } from './viewer/SceneMap.js';
 export type { ViewerHotspot, ViewerLinkArrow, ViewerMedia } from './viewer/types.js';
+export {
+  TourViewer,
+  type TourViewerBar,
+  type TourViewerData,
+  type TourViewerProps,
+} from './viewer/TourViewer.js';
 export { useViewerFrame } from './viewer/use-render.js';
 export { ViewerControls, type ViewerControlsProps } from './viewer/ViewerControls.js';
