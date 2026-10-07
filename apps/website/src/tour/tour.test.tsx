@@ -301,7 +301,11 @@ describe('/s/:slug', () => {
 
   it('likes with a stable X-Client-Id and only once', async () => {
     renderAt('/s/old-town');
-    fireEvent.click(await screen.findByRole('button', { name: 'Like this tour' }));
+    // The button renders before the stats hook's view effect runs. Click first and the
+    // view is sent after the like, so its counts (the mock's likes 7) count as newer and
+    // win. Wait for the view to be sent, not answered, so the like still races it.
+    await viewRecorded();
+    fireEvent.click(screen.getByRole('button', { name: 'Like this tour' }));
     await screen.findByRole('button', { name: 'Liked' });
     await waitFor(() => expect(calls('/api/tours/tour-a/like')).toHaveLength(1));
     const [call] = calls('/api/tours/tour-a/like');
