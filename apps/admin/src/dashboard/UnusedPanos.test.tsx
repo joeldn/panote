@@ -1,6 +1,6 @@
 import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { FetchLike } from '@internal/web-kit';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderAdmin } from '../__fixtures__/auth.js';
 import type { PanoSummary } from './types.js';
@@ -57,7 +57,16 @@ const listing = (panos: PanoSummary[]) => ({
 const row = (title: string) => screen.getByText(title).closest('li')!;
 
 configure({ asyncUtilTimeout: 5000 });
-afterEach(cleanup);
+// Pin the clock (Date only, so waitFor keeps real timers): the fixture's
+// fixed updatedAt otherwise drifts from "2 days ago" to "last week".
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-01T12:00:00Z'));
+});
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 const openConfirm = async (title: string) => {
   fireEvent.click(await screen.findByRole('button', { name: `Delete “${title}”` }));
@@ -85,7 +94,7 @@ describe('Unused panos', () => {
     expect(row('Old nave').querySelector('img')?.getAttribute('src')).toBe(
       'https://cdn.panote.dev/tiles/p1/t1-abc/preview.webp',
     );
-    expect(row('Old nave').textContent).toMatch(/^Old naveUpdated \S/);
+    expect(row('Old nave').textContent).toBe('Old naveUpdated 2 days ago');
     expect(within(row('Untitled pano')).getByTestId('thumb-fallback')).toBeTruthy();
     expect(row('Untitled pano').textContent).toContain('Still processing');
 
