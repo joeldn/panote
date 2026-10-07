@@ -149,6 +149,10 @@
 .pn-modal__close:hover {
   color: var(--ink);
 }
+.pn-modal__close:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
 
 /* --- ConfirmModal --- */
 .pn-confirm {

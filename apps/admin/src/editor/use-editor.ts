@@ -178,7 +178,7 @@ export function useEditor(
   const savingRef = useRef(false);
   // An appended pano that arrived mid-save, and the sync to run for it after (syncAppended).
   const syncAfterSave = useRef(false);
-  const syncRef = useRef<() => Promise<void>>(async () => {});
+  const syncRef = useRef<() => Promise<unknown>>(async () => {});
   // Bumped per sync request, save and load; a sync response from before the latest bump is
   // dropped, so it can't undo a save or land in another tour.
   const syncSeq = useRef(0);
@@ -417,26 +417,29 @@ export function useEditor(
    * scene's config) the way the conflict Reload does, keeping local edits, so the next
    * Save doesn't 412. If the tour also changed some other way while edited here, that's
    * a real conflict and the conflict banner takes over.
+   * Resolves false when the server's tour couldn't be read (nothing was folded in);
+   * true otherwise, including when a newer sync or save takes over.
    */
-  const syncAppended = useCallback(async () => {
-    if (!docsRef.current) return;
+  const syncAppended = useCallback(async (): Promise<boolean> => {
+    if (!docsRef.current) return false;
     // A save in flight would move the ETag under us: run once it settles.
     if (savingRef.current) {
       syncAfterSave.current = true;
-      return;
+      return true;
     }
     const seq = ++syncSeq.current;
     syncInFlight.current = seq;
     try {
       const res = await api.getTourWithConfigs(tourId);
       const now = docsRef.current;
-      if (seq !== syncSeq.current || res.status !== 'ok' || !now) return;
-      if (res.data.tour.tourId !== now.tourId) return;
-      if (pastTourEtags.current.has(res.data.etag)) return;
+      if (seq !== syncSeq.current || !now) return true;
+      if (res.status !== 'ok') return false;
+      if (res.data.tour.tourId !== now.tourId) return true;
+      if (pastTourEtags.current.has(res.data.etag)) return true;
       const fresh = fromServer(res.data);
       dispatch({ type: 'add-scenes', scenes: fresh.scenes });
       if (failuresRef.current.tour?.kind === 'conflict' || fresh.tour.etag === now.tour.etag) {
-        return;
+        return true;
       }
       const merged = mergeAppendedScenes(now.tour, {
         etag: fresh.tour.etag,
@@ -445,8 +448,10 @@ export function useEditor(
       if (merged) dispatch({ type: 'replace-doc', key: 'tour', doc: merged });
       else if (!isTourDirty(now)) dispatch({ type: 'replace-doc', key: 'tour', doc: fresh.tour });
       else setFailures((f) => ({ ...f, tour: { kind: 'conflict' } }));
+      return true;
     } catch {
       // Best effort: Save's 412 handling still covers it.
+      return false;
     } finally {
       if (syncInFlight.current === seq) syncInFlight.current = null;
     }
@@ -597,6 +602,7 @@ export function useEditor(
     autoRepublish,
     tilesFailed,
     notices,
+    notify,
     dismiss,
     syncAppended,
   };

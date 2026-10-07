@@ -40,6 +40,12 @@ export class FakeServer {
   unauthorized = false;
   /** What `?status=1` reports per pano (default `ready`). */
   tiling = new Map<string, 'ready' | 'pending' | 'failed' | 'none'>();
+  /** What `GET /api/admin/panos` lists (the library picker), one page. */
+  library: Array<Record<string, unknown>> = [];
+  /** The library listing fails with a 500 while set. */
+  libraryBroken = false;
+  /** Sees each request first; a returned Response answers it instead (await to hold it). */
+  intercept: ((r: Recorded) => Promise<Response | void> | Response | void) | null = null;
   private n = 0;
 
   nextEtag(): string {
@@ -68,6 +74,16 @@ export class FakeServer {
     const body = typeof init.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
     this.requests.push({ method, path: url.pathname + url.search, ifMatch, ifNoneMatch, body });
     if (this.unauthorized) return json({ error: 'unauthorized' }, 401);
+    if (this.intercept) {
+      const res = await this.intercept(this.requests.at(-1)!);
+      if (res) return res;
+    }
+
+    if (url.pathname === '/api/admin/panos' && method === 'GET') {
+      if (this.libraryBroken) return json({ error: 'boom' }, 500);
+      const panoIds = this.library.map((p) => p.panoId);
+      return json({ panoIds, panos: this.library, cursor: null });
+    }
 
     const tourMatch = /^\/api\/admin\/tours\/([^/]+)(\/publish)?$/.exec(url.pathname);
     const panoMatch = /^\/api\/admin\/panos\/([^/]+)(\/config)?$/.exec(url.pathname);
