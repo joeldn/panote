@@ -29,11 +29,11 @@ export const routes: RouteObject[] = [
               { path: 'new', element: <UploadOverlay /> },
             ],
           },
-          { path: 't/:tourId/preview', element: <Preview /> },
           { path: '*', element: <NotFound /> },
         ],
       },
-      // Full-screen with its own top bar, so outside Shell (whose bar would sit behind it).
+      // Full-screen with their own top bars, so outside Shell (whose bar would sit behind them).
+      { path: 't/:tourId/preview', element: <Preview /> },
       {
         path: 't/:tourId',
         element: <Editor />,

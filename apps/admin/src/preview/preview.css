@@ -1,0 +1,21 @@
+/* Owner preview (/app/t/:tourId/preview): the shared tour viewer plus a badge and a note. */
+
+.pv-badge {
+  flex: none;
+  box-shadow: var(--shadow-glass);
+}
+
+/* Same calm note as the editor's when a scene's tiles aren't there yet. */
+.pv-note {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: 90px;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: var(--r-pill);
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  font-size: 13px;
+}
