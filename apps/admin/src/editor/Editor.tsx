@@ -12,7 +12,7 @@ import {
   type ViewerHotspot,
   type ViewerLinkArrow,
 } from '@internal/ui';
-import { tilesBaseUrl } from '@internal/web-kit';
+import { MAX_TOUR_SCENES, tilesBaseUrl } from '@internal/web-kit';
 import { useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link, Outlet, useBlocker, useParams, useSearchParams } from 'react-router';
 
@@ -25,6 +25,7 @@ import { useSession } from '../session.js';
 import { useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
+import { LibraryPicker } from './LibraryPicker.js';
 import { newId, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
 import {
@@ -187,6 +188,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const [activePoint, setActivePoint] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [failedLoad, setFailedLoad] = useState<string | null>(null);
   const frame = useRef<HTMLElement>(null);
@@ -349,6 +351,13 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       setActivePoint(null);
       setParams(next ? { pano: next } : {}, { replace: true });
     }
+  };
+
+  // The picker appended it on the server: fold it in like an upload, then show it.
+  const addedFromLibrary = async (panoId: string) => {
+    await editor.syncAppended();
+    setLibraryOpen(false);
+    select(panoId);
   };
 
   const missingName = scene?.kind === 'missing' ? 'Missing pano' : null;
@@ -650,6 +659,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             currentId && dispatch({ type: 'link/nudge', from: currentId, to, delta })
           }
           onDisconnect={(to) => currentId && dispatch({ type: 'link/remove', from: currentId, to })}
+          onAddFromLibrary={() => setLibraryOpen(true)}
         />
       </aside>
 
@@ -720,6 +730,15 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         onConfirm={() => blocker.proceed?.()}
         onCancel={() => blocker.reset?.()}
       />
+      {libraryOpen && (
+        <LibraryPicker
+          tourId={docs.tourId}
+          tourPanoIds={[...sceneIds, ...pendingIds]}
+          full={sceneIds.length >= MAX_TOUR_SCENES}
+          onClose={() => setLibraryOpen(false)}
+          onAdded={addedFromLibrary}
+        />
+      )}
       <Outlet />
     </main>
   );

@@ -30,6 +30,8 @@ export interface TourPanelProps {
   onAim: (to: string, title: string) => void;
   onNudge: (to: string, delta: number) => void;
   onDisconnect: (to: string) => void;
+  /** Opens the library picker: add a pano that's already uploaded. */
+  onAddFromLibrary?: () => void;
 }
 
 const STATUS_LABEL: Record<SceneStatus, string> = {
@@ -58,6 +60,7 @@ export function TourPanel({
   onAim,
   onNudge,
   onDisconnect,
+  onAddFromLibrary,
 }: TourPanelProps) {
   const scenes = docs.tour.current.scenes;
   const current = currentId ? docs.scenes[currentId] : undefined;
@@ -69,25 +72,41 @@ export function TourPanel({
         <h2 id="ed-tour-title" className="ed-card__title">
           Tour <span className="ed-card__count">· {scenes.length} panos</span>
         </h2>
-        {dirty ? (
-          <Button
-            variant="accent"
-            size="sm"
-            pill
-            icon="fa-solid fa-plus"
-            disabled
-            title="Save your changes first"
-          >
-            Add pano
-          </Button>
-        ) : (
-          <Link
-            className="pn-btn pn-btn--accent pn-btn--sm pn-btn--pill"
-            to={addPanoPath(docs.tourId)}
-          >
-            <i className="fa-solid fa-plus" aria-hidden="true" /> Add pano
-          </Link>
-        )}
+        <div className="ed-card__actions">
+          {onAddFromLibrary && (
+            <Button
+              variant="ghost"
+              size="sm"
+              pill
+              icon="fa-solid fa-images"
+              aria-haspopup="dialog"
+              disabled={dirty}
+              title={dirty ? 'Save your changes first' : 'Add a pano you’ve already uploaded'}
+              onClick={onAddFromLibrary}
+            >
+              From library
+            </Button>
+          )}
+          {dirty ? (
+            <Button
+              variant="accent"
+              size="sm"
+              pill
+              icon="fa-solid fa-plus"
+              disabled
+              title="Save your changes first"
+            >
+              Add pano
+            </Button>
+          ) : (
+            <Link
+              className="pn-btn pn-btn--accent pn-btn--sm pn-btn--pill"
+              to={addPanoPath(docs.tourId)}
+            >
+              <i className="fa-solid fa-plus" aria-hidden="true" /> Add pano
+            </Link>
+          )}
+        </div>
       </header>
       <p className="ed-hint">
         Click a pano to edit it. Connections point <b>from</b> the open pano — <b>Aim here</b> sets
