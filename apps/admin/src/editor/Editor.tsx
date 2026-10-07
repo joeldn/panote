@@ -28,9 +28,11 @@ import { InlineText } from './InlineText.js';
 import { newId, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
 import {
+  isLanding,
   isLookOnly,
   isPendingCard,
   pendingLine,
+  pendingProblem,
   sceneStatusOf,
   tilingOf,
   tilingOfJob,
@@ -198,7 +200,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   // Uploads into this tour, and the ones that have no scene yet (the pending cards).
   const jobs = uploads.pendingFor(docs.tourId);
   const pendingCards = jobs.filter((p) => isPendingCard(p, sceneIds));
-  const pendingIds = pendingCards.flatMap((p) => (p.panoId ? [p.panoId] : []));
+  // Plus the ones already in the server's tour that this editor hasn't synced in yet.
+  const knownIds = Object.keys(docs.scenes);
+  const staged = [...pendingCards, ...jobs.filter((p) => isLanding(p, sceneIds, knownIds))];
+  const pendingIds = staged.flatMap((p) => (p.panoId ? [p.panoId] : []));
   const requested = params.get('pano');
   const currentId =
     requested && (sceneIds.includes(requested) || pendingIds.includes(requested))
@@ -209,7 +214,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const cfg = sceneConfig?.current ?? null;
   // An upload on stage before it has a scene: its local preview, look-only.
   const pendingCurrent =
-    currentId && !scene ? (pendingCards.find((p) => p.panoId === currentId) ?? null) : null;
+    currentId && !scene ? (staged.find((p) => p.panoId === currentId) ?? null) : null;
 
   // Scenes whose tiles the editor checks on itself: ones whose tiles failed to load on
   // stage, and the ones the last publish waited on, unless an upload here speaks for them.
@@ -425,7 +430,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         <StageStatus
           status={currentStatus}
           name={cfg?.title ?? pendingCurrent?.fileName ?? 'This pano'}
-          {...(pendingCurrent && { uploadLine: pendingLine(pendingCurrent) })}
+          {...(pendingCurrent && {
+            uploadLine: pendingLine(pendingCurrent),
+            problem: pendingProblem(pendingCurrent),
+          })}
           {...(scene &&
             (currentStatus === 'failed' || currentStatus === 'timed-out') && {
               replaceTo: replaceImagePath(docs.tourId, currentId),
@@ -439,11 +447,19 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             })}
         />
       )}
-      {failedLoad === loadKey && cfg && !currentStatus && (
+      {currentId && !currentStatus && watch.polled[currentId]?.state === 'signed-out' && (
         <p className="ed-stage-note" role="status">
-          This pano’s tiles aren’t ready yet. They appear once processing finishes.
+          Sign in again to see whether this pano has finished processing.
         </p>
       )}
+      {failedLoad === loadKey &&
+        cfg &&
+        !currentStatus &&
+        watch.polled[currentId ?? '']?.state !== 'signed-out' && (
+          <p className="ed-stage-note" role="status">
+            This pano’s tiles aren’t ready yet. They appear once processing finishes.
+          </p>
+        )}
 
       <header className="ed-bar">
         <div className="ed-bar__left">
@@ -463,6 +479,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 className="ed-crumbs__pano"
                 label="Pano name"
                 value={cfg.title}
+                disabled={lookOnly}
                 onCommit={(title) => dispatch({ type: 'scene/title', panoId: currentId, title })}
               />
             ) : (
@@ -533,7 +550,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           {lookOnly && (
             <p className="ed-hint ed-look-only" role="note">
               <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
-              uploads: points, views and connections unlock once it lands.
+              uploads: editing unlocks once it lands.
             </p>
           )}
           {cfg && currentId && (

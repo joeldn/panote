@@ -12,7 +12,9 @@ export type PolledTiling =
   | { state: 'ready' }
   | { state: 'failed' }
   /** Still pending after the editor's patience ran out; `checking` while it slow-polls. */
-  | { state: 'timed-out'; checking: boolean };
+  | { state: 'timed-out'; checking: boolean }
+  /** The status poll needs a sign-in: nothing is known until the user signs in again. */
+  | { state: 'signed-out' };
 
 /** `ready`: the tiles exist. `unknown`: nothing says either way (the usual case). */
 export type Tiling = SceneStatus | 'ready' | 'unknown';
@@ -41,7 +43,8 @@ export function tilingOfJob(p: PendingUpload): Tiling {
   }
 }
 
-const tilingOfPoll = (p: PolledTiling): Tiling => (p.state === 'pending' ? 'processing' : p.state);
+const tilingOfPoll = (p: PolledTiling): Tiling =>
+  p.state === 'pending' ? 'processing' : p.state === 'signed-out' ? 'unknown' : p.state;
 
 /**
  * A pano's tiles, newest source first: an upload of it in this tab, then the editor's
@@ -74,9 +77,41 @@ export const sceneStatusOf = (t: Tiling): SceneStatus | null =>
  */
 export const isLookOnly = (s: SceneStatus | null): boolean => s === 'uploading';
 
-/** The pano's upload hasn't added it to the tour yet: an add with no scene of its own. */
+/**
+ * The pano's upload hasn't added it to the tour yet: an add with no scene of its own,
+ * whose tour write hasn't gone through. Once it has, the scene speaks for it (and a
+ * scene removed since stays removed: its finished job is no card).
+ */
 export function isPendingCard(p: PendingUpload, sceneIds: readonly string[]): boolean {
-  return p.target.kind === 'add' && (p.panoId === null || !sceneIds.includes(p.panoId));
+  return (
+    p.target.kind === 'add' &&
+    p.finalize.status !== 'done' &&
+    (p.panoId === null || !sceneIds.includes(p.panoId))
+  );
+}
+
+/**
+ * Added to the tour on the server, but not in this editor yet (its sync is still out, or
+ * a conflict holds the tour doc): it stays on stage, look-only, without a card. A pano
+ * this editor already knows (one removed from the tour since) never counts.
+ */
+export function isLanding(
+  p: PendingUpload,
+  sceneIds: readonly string[],
+  knownIds: readonly string[],
+): boolean {
+  return (
+    p.target.kind === 'add' &&
+    p.finalize.status === 'done' &&
+    p.panoId !== null &&
+    !sceneIds.includes(p.panoId) &&
+    !knownIds.includes(p.panoId)
+  );
+}
+
+/** An upload with no scene yet went wrong (upload or tour write): the chip can fix it. */
+export function pendingProblem(p: PendingUpload): boolean {
+  return p.finalize.status === 'failed' || p.machine.phase === 'failed';
 }
 
 /** The short line under a pending card's name. */

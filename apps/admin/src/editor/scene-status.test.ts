@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { PendingUpload } from '../upload/upload-context.js';
 import {
+  isLanding,
+  isLookOnly,
   isPendingCard,
+  pendingProblem,
   pendingLine,
   pendingPct,
   sceneStatusOf,
@@ -96,5 +99,29 @@ describe('scene status', () => {
         }),
       ),
     ).toBe('Couldn’t add it to the tour');
+  });
+
+  it('is look-only only while the image uploads', () => {
+    expect(isLookOnly('uploading')).toBe(true);
+    expect(isLookOnly('processing')).toBe(false);
+    expect(isLookOnly('failed')).toBe(false);
+    expect(isLookOnly('timed-out')).toBe(false);
+    expect(isLookOnly(null)).toBe(false);
+  });
+
+  it('drops the card once the tour write went through', () => {
+    const appended = job(
+      { phase: 'processing', mode: fresh, panoId: 'p1', startedAt: 0 },
+      { finalize: { status: 'done' } },
+    );
+    expect(isPendingCard(appended, [])).toBe(false);
+    // Not synced in yet: still on stage. Known to this editor (removed since): gone.
+    expect(isLanding(appended, [], [])).toBe(true);
+    expect(isLanding(appended, [], ['p1'])).toBe(false);
+    expect(isLanding(appended, ['p1'], ['p1'])).toBe(false);
+    expect(pendingProblem(appended)).toBe(false);
+    expect(
+      pendingProblem(job({ phase: 'failed', panoId: 'p1', stage: 'upload', message: '' })),
+    ).toBe(true);
   });
 });

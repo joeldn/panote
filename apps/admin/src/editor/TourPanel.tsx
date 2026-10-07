@@ -141,7 +141,7 @@ export function TourPanel({
                   aria-pressed={panoId === startId}
                   aria-label={`Start the tour at ${name}`}
                   title="Tour starts here"
-                  disabled={missing}
+                  disabled={missing || status === 'uploading'}
                   onClick={() => onSetStart(panoId)}
                 >
                   <i className="fa-solid fa-star" aria-hidden="true" />

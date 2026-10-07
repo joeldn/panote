@@ -51,12 +51,12 @@ const lookOnlyNote = () => screen.queryByText(/Look-only while the image uploads
 describe('editor: an upload in this tab', () => {
   let viewers: FakeViewer[];
 
-  function setup() {
+  function setup(path = '/app/new?tour=tour-1') {
     const backend = fakeBackend();
     const factory = viewerFactory();
     const decoder = fakeDecoder();
     viewers = factory.viewers;
-    const app = renderAdmin('/app/new?tour=tour-1', {
+    const app = renderAdmin(path, {
       fetch: backend.fetch,
       upload: {
         tilesBase: TILES,
@@ -203,6 +203,11 @@ describe('editor: an upload in this tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await tick();
     expect(backend.state.tour.scenes).toEqual([]);
+    // Its finished upload doesn't come back as a card, nor put the pano back on stage.
+    await tick(60_000);
+    expect(document.querySelector('.ed-scene--pending')).toBeNull();
+    expect(screen.queryByText(/Town_hall\.png/)).toBeNull();
+    expect(screen.queryByRole('application', { name: /Town hall/ })).toBeNull();
   });
 
   it('a not-ready publish reads calmly, then publishes by itself once the tiles are in', async () => {
@@ -242,6 +247,58 @@ describe('editor: an upload in this tab', () => {
     backend.state.manifests = [manifest('t1-abc')];
     await tick(60_000);
     expect(publishes(backend)).toHaveLength(1);
+  });
+
+  it('says a pending upload failed instead of spinning, and points at the chip', async () => {
+    await pick();
+    FakeXhr.last.fail();
+    await tick();
+    const note = screen.getByText(/Upload failed\. Try again or dismiss it from the upload status/);
+    expect(note.getAttribute('role')).toBe('alert');
+    expect(screen.queryByText(/Look around while it uploads/)).toBeNull();
+  });
+
+  it('a replace whose PUT is in flight locks every edit on that scene, until it lands', async () => {
+    const ctx = setup('/app/new?tour=tour-1&replace=pano-9');
+    ctx.backend.state.tour.scenes = [{ panoId: 'pano-9' }];
+    ctx.backend.state.configs['pano-9'] = { title: 'Hall' };
+    ctx.backend.state.manifests = [manifest('t1-old', 'pano-9'), manifest('t1-new', 'pano-9')];
+    await tick();
+    fireEvent.change(screen.getByTestId('upload-input'), { target: { files: [pngFile()] } });
+    await tick();
+    await tick();
+    expect(ctx.router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(lookOnlyNote()).toBeTruthy();
+    expect(screen.getByText(/Uploading the new image\. Look around while it uploads/)).toBeTruthy();
+    expect((addPoint() as HTMLButtonElement).disabled).toBe(true);
+    expect((startHere() as HTMLButtonElement).disabled).toBe(true);
+    expect((northHere() as HTMLButtonElement).disabled).toBe(true);
+    const name = screen.getByRole('button', { name: /^Pano name: Hall/ }) as HTMLButtonElement;
+    expect(name.disabled).toBe(true);
+    const row = sceneRow('Hall');
+    const star = within(row).getByRole('button', { name: 'Start the tour at Hall' });
+    expect((star as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (within(row).getByRole('button', { name: 'Replace the image of Hall' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    // Landed: editable while it tiles, but still no second image over it.
+    ctx.backend.state.manifests = [manifest('t1-old', 'pano-9')];
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(lookOnlyNote()).toBeNull();
+    expect((addPoint() as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      (screen.getByRole('button', { name: /^Pano name: Hall/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(
+      (
+        within(sceneRow('Hall')).getByRole('button', {
+          name: 'Replace the image of Hall',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 });
 
@@ -326,6 +383,20 @@ describe('editor: scenes still tiling after a reload', () => {
     // Ready: polling stops.
     await tick(WATCH_GIVE_UP_MS);
     expect(statusPolls('church')).toHaveLength(3);
+  });
+
+  it('says so when a status poll needs a sign-in, and stops polling', async () => {
+    server.tiling.set('church', 'pending');
+    await open();
+    expect(statusPolls('church')).toHaveLength(1);
+    server.unauthorized = true;
+    await tick(WATCH_POLL_MS);
+    expect(statusPolls('church')).toHaveLength(2);
+    expect(screen.getByText(/Sign in again to see whether this pano has finished/)).toBeTruthy();
+    expect(screen.queryByText(/Processing this pano/)).toBeNull();
+    expect(within(sceneRow('Church')).queryByText('Processing…')).toBeNull();
+    await tick(WATCH_POLL_MS * 3);
+    expect(statusPolls('church')).toHaveLength(2);
   });
 
   it('shows a failed scene with Replace image and Remove, and stops polling', async () => {

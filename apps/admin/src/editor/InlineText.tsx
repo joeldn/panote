@@ -7,10 +7,12 @@ export interface InlineTextProps {
   /** Accessible name of the field, e.g. "Tour title". */
   label: string;
   className?: string;
+  /** Read-only for now (shown, not editable). */
+  disabled?: boolean;
 }
 
 /** Click to edit; Enter or blur commits, Escape cancels. Blank input keeps the old value. */
-export function InlineText({ value, onCommit, label, className }: InlineTextProps) {
+export function InlineText({ value, onCommit, label, className, disabled }: InlineTextProps) {
   const [draft, setDraft] = useState<string | null>(null);
 
   const commit = () => {
@@ -25,7 +27,8 @@ export function InlineText({ value, onCommit, label, className }: InlineTextProp
       <button
         type="button"
         className={`ed-inline ${className ?? ''}`}
-        aria-label={`${label}: ${value}. Click to edit`}
+        aria-label={disabled ? `${label}: ${value}` : `${label}: ${value}. Click to edit`}
+        disabled={disabled}
         onClick={() => setDraft(value)}
       >
         {value}

@@ -34,7 +34,10 @@ export interface TilingWatch {
 }
 
 const settled = (p: PolledTiling | undefined): boolean =>
-  p?.state === 'ready' || p?.state === 'failed' || (p?.state === 'timed-out' && !p.checking);
+  p?.state === 'ready' ||
+  p?.state === 'failed' ||
+  p?.state === 'signed-out' ||
+  (p?.state === 'timed-out' && !p.checking);
 
 /**
  * Polls `GET /api/admin/panos/:id?status=1` for each of `targets` (scenes whose tiles
@@ -53,6 +56,9 @@ export function useTilingWatch(opts: {
   const polledRef = useRef(polled);
   const [reloadKeys, setReloadKeys] = useState<Record<string, string>>({});
   const watches = useRef(new Map<string, Watch>());
+  // The panos the editor wants watched now: a loop for any other (a Check again on a
+  // pano that isn't a target) answers once and stops.
+  const wanted = useRef(new Set<string>());
   const live = useRef({ api, tilesBase, fetch });
   useEffect(() => {
     live.current = { api, tilesBase, fetch };
@@ -93,6 +99,10 @@ export function useTilingWatch(opts: {
         if (p) put(panoId, p);
       };
       const later = (ms: number) => {
+        if (!wanted.current.has(panoId)) {
+          w.active = false;
+          return;
+        }
         w.timer = setTimeout(() => {
           w.timer = null;
           void tick();
@@ -110,7 +120,7 @@ export function useTilingWatch(opts: {
           if (!current()) return;
           // Signed out: nothing more to learn until the user signs in again.
           if (isAuthError(e)) {
-            done(null);
+            done({ state: 'signed-out' });
             return;
           }
           later(elapsed > WATCH_TIMEOUT_MS ? WATCH_SLOW_POLL_MS : WATCH_POLL_MS);
@@ -150,13 +160,14 @@ export function useTilingWatch(opts: {
 
   const targetKey = targets.join('\n');
   useEffect(() => {
-    const wanted = new Set(targetKey ? targetKey.split('\n') : []);
-    for (const panoId of wanted) {
+    const want = new Set(targetKey ? targetKey.split('\n') : []);
+    wanted.current = want;
+    for (const panoId of want) {
       const w = watches.current.get(panoId);
       if (!w?.active && !settled(polledRef.current[panoId])) start(panoId);
     }
     for (const [panoId, w] of watches.current) {
-      if (!wanted.has(panoId) && w.active) stop(panoId);
+      if (!want.has(panoId) && w.active) stop(panoId);
     }
   }, [targetKey, start, stop]);
 
