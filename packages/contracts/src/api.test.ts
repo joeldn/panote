@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { PanoConfigOkSchema, TourOkSchema } from './api.js';
+import {
+  PANO_DELETE_CONFLICTS,
+  PanoConfigOkSchema,
+  PanoDeleteConflictSchema,
+  PanoStatusSchema,
+  PanoSummarySchema,
+  TourOkSchema,
+} from './api.js';
 
 describe('PanoConfigOkSchema canonicalizes legacy out-of-range angles/fov', () => {
   it('parses a legacy doc (fov 90, hotspot yaw 5, hotspot pitch 2) to canonical values', () => {
@@ -29,5 +36,34 @@ describe('TourOkSchema publish field', () => {
       publishedAt: '2026-09-27T00:00:00.000Z',
     };
     expect(TourOkSchema.parse({ tour, etag: 'e', publish }).publish).toEqual(publish);
+  });
+});
+
+describe('PanoSummarySchema referenced field', () => {
+  const pano = {
+    panoId: 'p1',
+    title: null,
+    hasConfig: false,
+    hasOriginal: true,
+    deleting: false,
+    tiling: 'ready',
+    manifest: null,
+    updatedAt: '2026-10-01T00:00:00.000Z',
+  };
+  it('is optional, so a list without ?include=references still parses', () => {
+    expect(PanoSummarySchema.parse(pano).referenced).toBeUndefined();
+    expect(PanoSummarySchema.parse({ ...pano, referenced: false }).referenced).toBe(false);
+  });
+  it('is not part of the per-pano status', () => {
+    expect('referenced' in PanoStatusSchema.shape).toBe(false);
+  });
+});
+
+describe('PanoDeleteConflictSchema', () => {
+  it('accepts every refusal the delete route sends, and nothing else', () => {
+    for (const error of Object.values(PANO_DELETE_CONFLICTS)) {
+      expect(PanoDeleteConflictSchema.safeParse({ error }).success).toBe(true);
+    }
+    expect(PanoDeleteConflictSchema.safeParse({ error: 'conflict' }).success).toBe(false);
   });
 });

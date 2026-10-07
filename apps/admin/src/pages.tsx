@@ -4,6 +4,7 @@ export type ShareTab = 'link' | 'privacy' | 'embed';
 
 // Route placeholders; the real screens land in the D units (docs/wave6-plan.md 4.3).
 export { Dashboard } from './dashboard/Dashboard.js';
+export { UnusedPanos } from './dashboard/UnusedPanos.js';
 
 export { NewPanoOverlay as UploadOverlay } from './upload/UploadOverlay.js';
 

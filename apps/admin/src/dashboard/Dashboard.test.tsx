@@ -75,6 +75,13 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Dashboard', () => {
+  it('links to the unused panos page', async () => {
+    const { fetch } = server(lists([tour()]));
+    renderAdmin('/app/', { fetch });
+    const link = await screen.findByRole('link', { name: 'Unused panos' });
+    expect(link.getAttribute('href')).toBe('/app/panos/unused');
+  });
+
   it('shows an empty state that links to the upload flow', async () => {
     const { fetch } = server(lists([]));
     renderAdmin('/app/', { fetch });
@@ -177,6 +184,17 @@ describe('Dashboard', () => {
       expect(screen.queryByRole('button', { name: 'Finish deleting' })).toBeNull();
       // A tombstoned pano doesn't count towards the totals.
       expect(document.querySelector('.dash__totals')!.textContent).toContain('panos1');
+    });
+
+    it('does not report a resumed delete the server rolled back (409) as stuck', async () => {
+      const { fetch, calls } = server({
+        ...lists([tour()], [pano({ panoId: 'p-back', deleting: true })]),
+        'DELETE /api/admin/panos/p-back': () => json({ error: 'pano is in use' }, 409),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(calls('DELETE /api/admin/panos/p-back')).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByText(/Finishing an interrupted delete/)).toBeNull());
+      expect(screen.queryByRole('button', { name: 'Finish deleting' })).toBeNull();
     });
 
     it('does not auto-resume the same tombstone again on a later pano refresh', async () => {

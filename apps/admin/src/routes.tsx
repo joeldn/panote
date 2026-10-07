@@ -8,6 +8,7 @@ import {
   NotFound,
   Preview,
   ShareModal,
+  UnusedPanos,
   UploadOverlay,
 } from './pages.js';
 import { RequireAuth } from './RequireAuth.js';
@@ -29,6 +30,7 @@ export const routes: RouteObject[] = [
               { path: 'new', element: <UploadOverlay /> },
             ],
           },
+          { path: 'panos/unused', element: <UnusedPanos /> },
           { path: '*', element: <NotFound /> },
         ],
       },

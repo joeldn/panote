@@ -82,6 +82,9 @@ export const PanoSummarySchema = z.object({
   tiling: TilingStatusSchema,
   manifest: PanoManifestSummarySchema.nullable(),
   updatedAt: z.string(),
+  // Only with `?include=references`: true when any of the owner's tours has
+  // a scene on this pano. Absent means "not computed", never "unreferenced".
+  referenced: z.boolean().optional(),
 });
 export type PanoSummary = z.infer<typeof PanoSummarySchema>;
 
@@ -94,7 +97,11 @@ export type PanosListOk = z.infer<typeof PanosListOkSchema>;
 
 // The pano GET's `status` field: PanoSummary minus the two fields already
 // known from the surrounding response (panoId from the URL, title from config).
-export const PanoStatusSchema = PanoSummarySchema.omit({ panoId: true, title: true });
+export const PanoStatusSchema = PanoSummarySchema.omit({
+  panoId: true,
+  title: true,
+  referenced: true,
+});
 export type PanoStatus = z.infer<typeof PanoStatusSchema>;
 
 // A separate schema from PanoConfigOkSchema: TourConfigEntrySchema still
@@ -104,6 +111,24 @@ export type PanoWithStatusOk = z.infer<typeof PanoWithStatusOkSchema>;
 
 export const PanoStatusOnlyOkSchema = z.object({ status: PanoStatusSchema });
 export type PanoStatusOnlyOk = z.infer<typeof PanoStatusOnlyOkSchema>;
+
+// DELETE /api/admin/panos/:panoId refusals. `in-use`: a tour of the owner has
+// a scene on it. `processing`: its original is still tiling. `recent`: it was
+// uploaded too recently for an unfinished "add to tour" to be ruled out.
+export const PANO_DELETE_CONFLICTS = {
+  'in-use': 'pano is in use',
+  processing: 'pano is processing',
+  recent: 'pano was uploaded recently',
+} as const;
+export type PanoDeleteConflict = keyof typeof PANO_DELETE_CONFLICTS;
+
+export const PanoDeleteConflictSchema = z.object({
+  error: z.enum([
+    PANO_DELETE_CONFLICTS['in-use'],
+    PANO_DELETE_CONFLICTS.processing,
+    PANO_DELETE_CONFLICTS.recent,
+  ]),
+});
 
 export const TourPublishSummarySchema = z.object({
   slug: z.string(),

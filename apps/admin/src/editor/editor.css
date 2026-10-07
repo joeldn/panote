@@ -742,3 +742,81 @@ p.ed-banner__text {
 .ed-saved--conflict > i {
   color: var(--accent);
 }
+
+/* Scenes whose tiles aren't in yet: the stage's note and card, and the scene list. */
+
+.ed-stage-note--busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, calc(100vw - 32px));
+}
+
+.ed-stage-card {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  /* The pano (or its preview) stays draggable around the card. */
+  pointer-events: none;
+}
+
+.ed-stage-card > .ed-missing {
+  pointer-events: auto;
+}
+
+.ed-stage-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ed-look-only {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.ed-scene--pending {
+  border-style: dashed;
+}
+
+.ed-scene__thumb--pending {
+  background: var(--ink-10);
+  color: var(--ink-40);
+}
+
+.ed-pending__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--ink-70);
+}
+
+.ed-scene--failed .ed-scene__sub,
+.ed-scene--timed-out .ed-scene__sub {
+  color: var(--ink-70);
+}
+
+.ed-scene__bar {
+  position: relative;
+  height: 4px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--ink-09);
+}
+
+.ed-scene__bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--dur-bar) linear;
+}

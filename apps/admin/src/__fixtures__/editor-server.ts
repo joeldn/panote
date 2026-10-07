@@ -38,6 +38,8 @@ export class FakeServer {
   brokenConfigs = new Set<string>();
   /** Answers every request with 401 while set (a session that died mid-edit). */
   unauthorized = false;
+  /** What `?status=1` reports per pano (default `ready`). */
+  tiling = new Map<string, 'ready' | 'pending' | 'failed' | 'none'>();
   private n = 0;
 
   nextEtag(): string {
@@ -108,6 +110,22 @@ export class FakeServer {
       if (stale(this.tour)) return json({ error: 'conflict' }, 412);
       this.tour = { etag: this.nextEtag(), body: { ...(body as object), tourId: tourMatch[1] } };
       return json({ etag: this.tour.etag });
+    }
+    if (panoMatch && !panoMatch[2] && method === 'GET' && url.searchParams.get('status') === '1') {
+      const tiling = this.tiling.get(panoMatch[1]!) ?? 'ready';
+      const status = {
+        hasConfig: this.configs.has(panoMatch[1]!),
+        hasOriginal: tiling !== 'none',
+        deleting: false,
+        tiling,
+        manifest: tiling === 'ready' ? { version: 'v-ready', format: 'webp', tileSize: 512 } : null,
+        updatedAt: '2026-10-01T00:00:00.000Z',
+      };
+      return json({ status });
+    }
+    if (url.hostname !== 'panote.test') {
+      // The tiles CDN (a manifest refresh once a pano is ready).
+      return json({}, 200);
     }
     if (panoMatch && !panoMatch[2] && method === 'GET') {
       const c = this.configs.get(panoMatch[1]!);

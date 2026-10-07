@@ -324,7 +324,7 @@ describe('editor: save', () => {
   });
 
   it('offers Try again on a publish that failed after a save', async () => {
-    const scenes = [{ panoId: 'church', reason: 'not-ready' }];
+    const scenes = [{ panoId: 'church', reason: 'deleting' }];
     server.publishScript = () =>
       new Response(JSON.stringify({ error: 'scenes not publishable', scenes }), {
         status: 422,
@@ -334,7 +334,7 @@ describe('editor: save', () => {
     await loaded(ui);
     await rename(ui, /Tour title: Old town/, 'Renamed');
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
-    await ui.findByText(/Church \(still processing\)/);
+    await ui.findByText(/Church \(being deleted\)/);
     expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
     server.publishScript = null;
     fireEvent.click(ui.getByRole('button', { name: 'Try again' }));

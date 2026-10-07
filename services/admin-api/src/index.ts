@@ -4,6 +4,7 @@ import {
   deletingKey,
   MAX_TOUR_SCENES,
   originalKey,
+  PANO_DELETE_CONFLICTS,
   PANO_PATTERN,
   PublishRequestSchema,
   SceneConfigSchema,
@@ -32,11 +33,12 @@ import {
   updateConditional,
   writeConditional,
 } from './conditional.js';
-import { deletePano } from './delete-pano.js';
+import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
+import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
@@ -141,6 +143,15 @@ app.get('/api/admin/panos', async (c) => {
     query.cursor,
     query.limit,
   );
+  // Opt-in, since it reads every tour.json: one GET per tour, per page.
+  if (c.req.query('include') === 'references') {
+    const referenced = await referencedPanoIds(c.env.BUCKET, sub);
+    return c.json({
+      panoIds,
+      panos: panos.map((p) => ({ ...p, referenced: referenced.has(p.panoId) })),
+      cursor,
+    });
+  }
   return c.json({ panoIds, panos, cursor });
 });
 
@@ -211,8 +222,14 @@ app.delete('/api/admin/panos/:panoId', async (c) => {
   if (!PANO_PATTERN.test(panoId)) {
     return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
   }
-  const { tilesDeleted } = await deletePano(c.env.BUCKET, sub, panoId);
-  if (tilesDeleted) purgeLater(c, { prefixes: [tilesPrefix(panoId)], files: [] });
+  const result = await deleteOwnedPano(c.env.BUCKET, sub, panoId);
+  if (!result.ok) {
+    return result.status === 404
+      ? c.json({ error: 'not found' }, 404)
+      : c.json({ error: PANO_DELETE_CONFLICTS[result.conflict] }, 409);
+  }
+  // Same purge tour delete batches for each pano it deletes.
+  if (result.tilesDeleted) purgeLater(c, { prefixes: [tilesPrefix(panoId)], files: [] });
   return c.body(null, 204);
 });
 

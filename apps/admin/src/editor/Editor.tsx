@@ -27,10 +27,24 @@ import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
 import { newId, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
+import {
+  isLanding,
+  isLookOnly,
+  isPendingCard,
+  pendingLine,
+  pendingProblem,
+  sceneStatusOf,
+  tilingOf,
+  tilingOfJob,
+  type SceneStatus,
+} from './scene-status.js';
 import { SettingsPopover } from './SettingsPopover.js';
 import { StageFactoryContext, type Viewer } from './stage-factory.js';
+import { StageStatus } from './StageStatus.js';
 import { TourPanel } from './TourPanel.js';
+import { replaceImagePath } from './upload-links.js';
 import { useEditor, type EditorController } from './use-editor.js';
+import { useTilingWatch } from './use-tiling-watch.js';
 
 const FOV_MIN = 15;
 const FOV_MAX = 80;
@@ -166,7 +180,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const config = useConfig();
   const session = useSession();
   const uploads = useUploads();
-  const { origins } = useAuthEnv();
+  const { origins, fetch: authFetch } = useAuthEnv();
   const createViewer = useContext(StageFactoryContext);
   const [params, setParams] = useSearchParams();
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -183,16 +197,99 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
 
   const sceneIds = tour.scenes.map((s) => s.panoId);
   const startId = tour.startPanoId && sceneIds.includes(tour.startPanoId) ? tour.startPanoId : null;
+  // Uploads into this tour, and the ones that have no scene yet (the pending cards).
+  const jobs = uploads.pendingFor(docs.tourId);
+  const pendingCards = jobs.filter((p) => isPendingCard(p, sceneIds));
+  // Plus the ones already in the server's tour that this editor hasn't synced in yet.
+  const knownIds = Object.keys(docs.scenes);
+  const staged = [...pendingCards, ...jobs.filter((p) => isLanding(p, sceneIds, knownIds))];
+  const pendingIds = staged.flatMap((p) => (p.panoId ? [p.panoId] : []));
   const requested = params.get('pano');
   const currentId =
-    requested && sceneIds.includes(requested) ? requested : (startId ?? sceneIds[0] ?? null);
+    requested && (sceneIds.includes(requested) || pendingIds.includes(requested))
+      ? requested
+      : (startId ?? sceneIds[0] ?? null);
   const scene = currentId ? docs.scenes[currentId] : undefined;
   const sceneConfig: ConfigState | null = scene?.kind === 'config' ? scene : null;
   const cfg = sceneConfig?.current ?? null;
-  const reloadKey = currentId ? (uploads.reloadKeyFor(currentId) ?? '') : '';
+  // An upload on stage before it has a scene: its local preview, look-only.
+  const pendingCurrent =
+    currentId && !scene ? (staged.find((p) => p.panoId === currentId) ?? null) : null;
+
+  // Scenes whose tiles the editor checks on itself: ones whose tiles failed to load on
+  // stage, and the ones the last publish waited on, unless an upload here speaks for them.
+  const [stageMisses, setStageMisses] = useState<string[]>([]);
+  const liveJob = (panoId: string) =>
+    jobs.some((p) => p.panoId === panoId && tilingOfJob(p) !== 'unknown');
+  const watchTargets = [...new Set([...stageMisses, ...(editor.awaitingTiles ?? [])])].filter(
+    (id) => sceneIds.includes(id) && !liveJob(id) && uploads.reloadKeyFor(id) === undefined,
+  );
+  const watch = useTilingWatch({
+    api: session.api,
+    targets: watchTargets,
+    tilesBase: tilesBaseUrl(config),
+    fetch: authFetch,
+  });
+  const tilingFor = (panoId: string) =>
+    tilingOf(panoId, jobs, watch.polled[panoId], uploads.reloadKeyFor(panoId) !== undefined);
+  const statusFor = (panoId: string): SceneStatus | null => sceneStatusOf(tilingFor(panoId));
+  // An upload in this tab now speaks for a pano the editor was polling (a Replace, say).
+  const liveIds = jobs.flatMap((p) => (p.panoId && tilingOfJob(p) !== 'unknown' ? [p.panoId] : []));
+  const { forget } = watch;
+  const liveKey = liveIds.join('\n');
+  useEffect(() => {
+    for (const id of liveKey ? liveKey.split('\n') : []) forget(id);
+  }, [liveKey, forget]);
+
+  // A timed-out pano still being checked on its own needs no Check again.
+  const checkingOn = (panoId: string): boolean => {
+    const job = jobs.findLast((p) => p.panoId === panoId);
+    if (job?.machine.phase === 'timed-out') return job.machine.checking;
+    const p = watch.polled[panoId];
+    return p?.state === 'timed-out' && p.checking;
+  };
+
+  const currentStatus: SceneStatus | null = pendingCurrent
+    ? 'uploading'
+    : currentId && scene
+      ? statusFor(currentId)
+      : null;
+  const lookOnly = pendingCurrent !== null || isLookOnly(currentStatus);
+
+  const reloadKey = currentId
+    ? [uploads.reloadKeyFor(currentId), watch.reloadKeys[currentId]].filter(Boolean).join('+')
+    : '';
   // A scene joins the tour as soon as its image lands, so its tiles may not exist yet:
   // the note is for this pano at this reload key, and the reload once they're ready clears it.
   const loadKey = `${currentId ?? ''}\n${reloadKey}`;
+
+  // The last publish waited on these panos' tiles: publish again once they're all in,
+  // or stop waiting (and say so) if one of them failed.
+  const { awaitingTiles, autoRepublish, tilesFailed, saving, publishing } = editor;
+  const awaitedKey = (awaitingTiles ?? []).map((id) => `${id}=${tilingFor(id)}`).join('\n');
+  useEffect(() => {
+    if (!awaitedKey || saving || publishing) return;
+    const awaited = awaitedKey.split('\n').map((row) => row.split('='));
+    const failed = awaited.filter(([, t]) => t === 'failed').map(([id]) => id!);
+    if (failed.length > 0) tilesFailed(failed);
+    else if (awaited.every(([, t]) => t === 'ready')) void autoRepublish();
+  }, [awaitedKey, saving, publishing, tilesFailed, autoRepublish]);
+
+  // A new upload into this tour goes on stage the moment it has a pano id, so its local
+  // preview shows while it uploads. Once per upload: the user can look elsewhere after.
+  const shownUploads = useRef(new Set<string>());
+  const uploading = pendingCards
+    .filter((p) => p.machine.phase === 'preparing' || p.machine.phase === 'upload')
+    .flatMap((p) => (p.panoId ? [`${p.key}=${p.panoId}`] : []))
+    .join('\n');
+  useEffect(() => {
+    for (const row of uploading ? uploading.split('\n') : []) {
+      const [key, panoId] = row.split('=') as [string, string];
+      if (shownUploads.current.has(key)) continue;
+      shownUploads.current.add(key);
+      setParams({ pano: panoId }, { replace: true });
+    }
+  }, [uploading, setParams]);
 
   const select = (panoId: string) => {
     setActivePoint(null);
@@ -217,8 +314,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     return () => document.removeEventListener('keydown', onKey);
   }, [editor]);
 
+  // Look-only: nothing can be placed or edited on this scene (see `point` below).
+  const placingNow = placing && !lookOnly;
   const points = cfg ? cfg.hotspots.filter((h) => h.type === 'info') : [];
-  const point = points.find((h) => h.id === activePoint) ?? null;
+  const point = lookOnly ? null : (points.find((h) => h.id === activePoint) ?? null);
   const links: ViewerLinkArrow[] = cfg
     ? cfg.hotspots.flatMap((h) => {
         const target = h.targetPanoId ? docs.scenes[h.targetPanoId] : undefined;
@@ -230,7 +329,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
 
   const view = () => viewer?.getView();
   const place = (e: MouseEvent<HTMLDivElement>) => {
-    if (!viewer || !currentId) return;
+    if (!viewer || !currentId || lookOnly) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const { yaw, pitch } = viewer.directionAtPixel(e.clientX - rect.left, e.clientY - rect.top);
     const id = newId('pt');
@@ -258,22 +357,26 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   return (
     <main ref={frame} className="ed">
       <title>{`${tour.title} · Editor · panote`}</title>
-      {cfg && currentId ? (
+      {(cfg || pendingCurrent) && currentId ? (
         <PanoStage
           className="ed-stage"
           baseUrl={tilesBaseUrl(config)}
           panoId={currentId}
           reloadKey={reloadKey}
           preview={uploads.previewFor(currentId)}
-          {...(cfg.initialView && { view: cfg.initialView })}
-          north={cfg.north ?? 0}
+          {...(cfg?.initialView && { view: cfg.initialView })}
+          north={cfg?.north ?? 0}
           {...(createViewer && { createViewer })}
           onViewer={setViewer}
-          onLoadError={(err) => {
+          onLoadError={(err, panoId) => {
+            // No tiles yet is expected while an upload here is still on its way.
+            if (liveJob(panoId)) return;
             console.error('pano load failed', err);
             setFailedLoad(loadKey);
+            // After a reload nothing else is watching it: find out whether it's tiling.
+            setStageMisses((m) => (m.includes(panoId) ? m : [...m, panoId]));
           }}
-          aria-label={`${tour.title}: ${cfg.title}`}
+          aria-label={`${tour.title}: ${cfg?.title ?? pendingCurrent?.fileName ?? ''}`}
         >
           <FloorLinks key={`links-${currentId}`} links={links} onGo={(l) => select(l.to)} />
           <HotspotMarkers
@@ -281,11 +384,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             hotspots={points.map(toViewerHotspot)}
             activeId={activePoint}
             onOpen={(h) => {
+              if (lookOnly) return;
               setPlacing(false);
               setActivePoint(h.id);
             }}
           />
-          {placing && (
+          {placingNow && (
             <div className="ed-placing" onClick={place} role="presentation">
               <span className="ed-placing__hint">
                 Click the pano to drop the point · Esc to cancel
@@ -322,11 +426,40 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           )}
         </div>
       )}
-      {failedLoad === loadKey && cfg && (
+      {currentId && currentStatus && (
+        <StageStatus
+          status={currentStatus}
+          name={cfg?.title ?? pendingCurrent?.fileName ?? 'This pano'}
+          {...(pendingCurrent && {
+            uploadLine: pendingLine(pendingCurrent),
+            problem: pendingProblem(pendingCurrent),
+          })}
+          {...(scene &&
+            (currentStatus === 'failed' || currentStatus === 'timed-out') && {
+              replaceTo: replaceImagePath(docs.tourId, currentId),
+              onRemove: () => setConfirm({ kind: 'remove-pano', panoId: currentId }),
+            })}
+          {...(currentStatus === 'timed-out' &&
+            !checkingOn(currentId) && {
+              onCheckAgain: () => {
+                if (!uploads.checkAgain(currentId)) watch.checkAgain(currentId);
+              },
+            })}
+        />
+      )}
+      {currentId && !currentStatus && watch.polled[currentId]?.state === 'signed-out' && (
         <p className="ed-stage-note" role="status">
-          This pano’s tiles aren’t ready yet. They appear once processing finishes.
+          Sign in again to see whether this pano has finished processing.
         </p>
       )}
+      {failedLoad === loadKey &&
+        cfg &&
+        !currentStatus &&
+        watch.polled[currentId ?? '']?.state !== 'signed-out' && (
+          <p className="ed-stage-note" role="status">
+            This pano’s tiles aren’t ready yet. They appear once processing finishes.
+          </p>
+        )}
 
       <header className="ed-bar">
         <div className="ed-bar__left">
@@ -346,10 +479,13 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 className="ed-crumbs__pano"
                 label="Pano name"
                 value={cfg.title}
+                disabled={lookOnly}
                 onCommit={(title) => dispatch({ type: 'scene/title', panoId: currentId, title })}
               />
             ) : (
-              <span className="ed-crumbs__pano">{missingName ?? '—'}</span>
+              <span className="ed-crumbs__pano">
+                {missingName ?? pendingCurrent?.fileName ?? '—'}
+              </span>
             )}
             <i className="fa-solid fa-pen ed-crumbs__pen" aria-hidden="true" />
           </nav>
@@ -400,17 +536,23 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               variant="accent"
               size="sm"
               pill
-              icon={placing ? 'fa-solid fa-xmark' : 'fa-solid fa-plus'}
-              disabled={!cfg || !viewer}
-              aria-pressed={placing}
+              icon={placingNow ? 'fa-solid fa-xmark' : 'fa-solid fa-plus'}
+              disabled={!cfg || !viewer || lookOnly}
+              aria-pressed={placingNow}
               onClick={() => {
                 setActivePoint(null);
                 setPlacing((p) => !p);
               }}
             >
-              {placing ? 'Cancel' : 'Add point'}
+              {placingNow ? 'Cancel' : 'Add point'}
             </Button>
           </header>
+          {lookOnly && (
+            <p className="ed-hint ed-look-only" role="note">
+              <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
+              uploads: editing unlocks once it lands.
+            </p>
+          )}
           {cfg && currentId && (
             <div className="ed-pano-settings" role="group" aria-label="This pano">
               <div className="ed-pano-settings__row">
@@ -421,7 +563,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 <button
                   type="button"
                   className="ed-conn__aim"
-                  disabled={!viewer}
+                  disabled={!viewer || lookOnly}
                   onClick={() => {
                     const v = view();
                     if (!v) return;
@@ -438,7 +580,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 <button
                   type="button"
                   className="ed-conn__aim"
-                  disabled={!viewer}
+                  disabled={!viewer || lookOnly}
                   onClick={() => {
                     const v = view();
                     if (v) dispatch({ type: 'scene/north', panoId: currentId, north: v.yaw });
@@ -476,6 +618,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                     <button
                       type="button"
                       className="ed-points__item"
+                      disabled={lookOnly}
                       onClick={() => setActivePoint(h.id)}
                     >
                       <i className={`fa-solid fa-${h.icon ?? 'info'}`} aria-hidden="true" />
@@ -492,6 +635,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           currentId={currentId}
           startId={startId}
           dirty={dirty.length > 0}
+          pending={pendingCards}
+          statusOf={statusFor}
+          lookOnly={lookOnly}
           onSelect={select}
           onSetStart={(panoId) => dispatch({ type: 'tour/start', panoId })}
           onRemove={(panoId) => setConfirm({ kind: 'remove-pano', panoId })}
