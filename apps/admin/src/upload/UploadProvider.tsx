@@ -777,6 +777,12 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           finalize: j.finalize,
           hasPreview: j.preview?.available ?? false,
         }));
+    const checkAgain = (panoId: string): boolean => {
+      const j = current().find((x) => x.panoId === panoId && x.machine.phase === 'timed-out');
+      if (!j?.ctl) return false;
+      j.ctl.retryPoll();
+      return true;
+    };
     return {
       active,
       busy: isInFlight(active),
@@ -792,6 +798,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       lastAdded,
       previewFor,
       pendingFor,
+      checkAgain,
     };
     // rev: the jobs behind previewFor and pendingFor changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps

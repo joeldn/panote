@@ -131,19 +131,22 @@ describe('editor and the upload chip', () => {
     expect(decoder.sources[0]?.from).toBe('file');
   });
 
-  it("says the scene's tiles aren't ready until they are, then loads them", async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('says the scene is processing until its tiles are in, then loads them', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     let tiled = false;
     const { backend } = await pickPano('/app/new?tour=tour-1', () => !tiled);
     await land();
-    expect(screen.getByText(/tiles aren’t ready yet/)).toBeTruthy();
+    expect(screen.getByText(/Processing this pano/)).toBeTruthy();
+    // The upload is watching it: no tile-load error, and no polling of its own.
+    expect(screen.queryByText(/tiles aren’t ready yet/)).toBeNull();
+    expect(error).not.toHaveBeenCalled();
 
     tiled = true;
     backend.state.manifests = [manifest('t1-abc')];
     await tick(1_000);
     await tick();
     expect(viewers.at(-1)!.load).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(/tiles aren’t ready yet/)).toBeNull();
+    expect(screen.queryByText(/Processing this pano/)).toBeNull();
   });
 
   it('keeps local edits and saves them over the new ETag, without a 412', async () => {
