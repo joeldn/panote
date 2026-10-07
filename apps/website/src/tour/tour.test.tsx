@@ -581,6 +581,28 @@ describe('analytics beacon', () => {
     expect(calls('/events')).toHaveLength(0);
   });
 
+  it('tags a point opened after a link with the scene it is on', async () => {
+    objects['pub/tours/tour-a.json'] = bundle({
+      scenes: [
+        bundle().scenes[0],
+        scene('church', 'Church', [{ id: 'i2', type: 'info', yaw: 0.3, pitch: 0, title: 'Altar' }]),
+      ],
+    });
+    renderAt('/s/old-town');
+    await shown('square');
+    await viewRecorded();
+    fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(lastViewer().transitionTo.mock.calls.at(-1)?.[0]).toBe('church'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Altar' }));
+    window.dispatchEvent(new Event('pagehide'));
+    expect(beacons()).toContainEqual({
+      type: 'hotspot',
+      panoId: 'church',
+      hotspotId: 'i2',
+      surface: 'page',
+    });
+  });
+
   it('sends nothing for a tour that never shows a scene', async () => {
     failLoads = true;
     vi.spyOn(console, 'error').mockImplementation(() => {});

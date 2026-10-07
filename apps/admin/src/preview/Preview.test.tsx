@@ -6,7 +6,11 @@ import { FakeServer, viewerFactory, type FakeViewer } from '../__fixtures__/edit
 import { StageFactoryContext as EditorStage } from '../editor/stage-factory.js';
 import { StageFactoryContext } from './stage-factory.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // jsdom has no sendBeacon; drop the stub the analytics test puts on navigator.
+  Reflect.deleteProperty(navigator, 'sendBeacon');
+});
 
 let server: FakeServer;
 let viewers: FakeViewer[];
@@ -78,6 +82,8 @@ describe('owner preview', () => {
     await shown();
     fireEvent.click(await screen.findByRole('button', { name: 'Altar' }));
     expect(await screen.findByRole('complementary')).toBeTruthy();
+    // The open went through the viewer's hotspot-open event, as it does for visitors.
+    expect(lastViewer().reportHotspotOpen).toHaveBeenCalledWith('i1');
     fireEvent.click(screen.getByRole('button', { name: 'Go to Square' }));
     await waitFor(() => expect(lastViewer().transitionTo.mock.calls[0]?.[0]).toBe('square'));
     document.dispatchEvent(new Event('visibilitychange'));

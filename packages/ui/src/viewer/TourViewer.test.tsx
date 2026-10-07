@@ -50,7 +50,7 @@ const data = (over: Partial<TourViewerData> = {}): TourViewerData => ({
   },
   hotspots: {
     square: [{ source: { id: 'i1', type: 'info', yaw: 0.2, pitch: 0.1, title: 'Fountain' } }],
-    church: [],
+    church: [{ source: { id: 'i2', type: 'info', yaw: 0.3, pitch: 0, title: 'Altar' } }],
   },
   links: { square: [{ to: 'church', yaw: 1, label: 'To the church' }], church: [] },
   north: { square: 0.3 },
@@ -125,6 +125,16 @@ describe('TourViewer', () => {
     expect(viewer().transitionTo.mock.calls[0]?.[0]).toBe('church');
     // Moving on closes the open point.
     expect(screen.queryByRole('complementary')).toBeNull();
+  });
+
+  it('reports a point opened on a later scene with that scene', async () => {
+    const onHotspotOpen = vi.fn();
+    const onSceneChange = vi.fn();
+    renderViewer({ onHotspotOpen, onSceneChange });
+    fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(onSceneChange).toHaveBeenCalledWith('church'));
+    fireEvent.click(screen.getByRole('button', { name: 'Altar' }));
+    expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('church', 'i2');
   });
 
   it('honours the tour settings', async () => {
