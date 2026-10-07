@@ -85,7 +85,7 @@ describe('Unused panos', () => {
     expect(row('Old nave').querySelector('img')?.getAttribute('src')).toBe(
       'https://cdn.panote.dev/tiles/p1/t1-abc/preview.webp',
     );
-    expect(row('Old nave').textContent).toMatch(/Updated .+ago/);
+    expect(row('Old nave').textContent).toMatch(/^Old naveUpdated \S/);
     expect(within(row('Untitled pano')).getByTestId('thumb-fallback')).toBeTruthy();
     expect(row('Untitled pano').textContent).toContain('Still processing');
 
