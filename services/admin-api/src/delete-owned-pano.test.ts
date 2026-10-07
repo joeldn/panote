@@ -4,6 +4,8 @@ import {
   manifestKey,
   originalKey,
   previewKey,
+  publishKey,
+  pubTourKey,
   tileFailedKey,
   tileVersionPrefix,
   tourKey,
@@ -146,6 +148,28 @@ describe('deleteOwnedPano', () => {
     expect(result).toEqual({ ok: false, status: 409, conflict: 'in-use' });
     expect(panoKeys(b, 'p-shared')).toEqual(before);
     expect(b.has(deletingKey(SUB, 'p-shared'))).toBe(false);
+  });
+
+  it("409s a pano only the owner's live published bundle still serves", async () => {
+    const b = new FakeBucket();
+    seedReadyPano(b, SUB, 'p-live');
+    b.seed(...tour(SUB, 't-pub', []));
+    b.seed(publishKey(SUB, 't-pub'), JSON.stringify({ slug: 's', visibility: 'public' }));
+    b.seed(pubTourKey('t-pub'), JSON.stringify({ scenes: [{ panoId: 'p-live' }] }));
+
+    expect(await deleteOwnedPano(asR2(b), SUB, 'p-live', NOW)).toMatchObject({
+      conflict: 'in-use',
+    });
+    expect(b.has(originalKey(SUB, 'p-live'))).toBe(true);
+  });
+
+  it('ignores a bundle without the owner’s publish record as proof', async () => {
+    const b = new FakeBucket();
+    seedReadyPano(b, SUB, 'p-unproved');
+    b.seed(...tour(SUB, 't-draft', []));
+    // pub/ is owner-free: no publish.json under the owner means it isn't theirs.
+    b.seed(pubTourKey('t-draft'), JSON.stringify({ scenes: [{ panoId: 'p-unproved' }] }));
+    expect(await deleteOwnedPano(asR2(b), SUB, 'p-unproved', NOW)).toMatchObject({ ok: true });
   });
 
   it("ignores another owner's tours when checking references", async () => {
