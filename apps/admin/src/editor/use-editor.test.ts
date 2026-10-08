@@ -187,6 +187,28 @@ describe('useEditor syncAppended', () => {
     expect(docs!.tour.etag).toBe('b1');
     expect(Object.keys(docs!.scenes)).toEqual(['pano-b']);
   });
+
+  it('resolves false and keeps the loaded tour when the tour is gone', async () => {
+    // The tour was deleted elsewhere: the sync GET maps to not-found.
+    const queue = [
+      Promise.resolve(tourRes('t1', ['pano-1'])),
+      Promise.resolve({ status: 'not-found' }),
+    ];
+    const api = { getTourWithConfigs: () => queue.shift()! } as unknown as EditorApi;
+
+    const { result } = renderHook(() => useEditor(api, 'tour-1', 'user-1', null));
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    let synced: boolean | undefined;
+    await act(async () => {
+      synced = await result.current.syncAppended();
+    });
+
+    expect(synced).toBe(false);
+    const { docs } = result.current;
+    expect(docs!.tour.etag).toBe('t1');
+    expect(Object.keys(docs!.scenes)).toEqual(['pano-1']);
+    expect(result.current.conflicts).toEqual([]);
+  });
 });
 
 describe('useEditor autoRepublish', () => {
