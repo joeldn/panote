@@ -14,9 +14,9 @@
   "env": {
     "dev": {
       "name": "panote-tiler-consumer-dev",
-      // No fetch handler or routes to route to, but set for consistency
-      // with the other services' dev/production workers_dev policy.
-      "workers_dev": true,
+      // Queue consumer: needs no URL at all. Off like the other dev Workers.
+      "workers_dev": false,
+      "preview_urls": false,
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev ; wrangler secret put ALERT_EMAIL_TO --env dev
       "durable_objects": {

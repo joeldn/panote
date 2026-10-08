@@ -11,8 +11,10 @@
     "dev": {
       "name": "panote-admin-api-dev",
       // routes need panote.dev to be an Active zone before this env can deploy
-      // workers_dev gives a second URL for smoke tests
-      "workers_dev": true,
+      // workers.dev and Preview URLs are off: they would bypass the Access gate on
+      // panote.dev (docs/deploy.md, Cloudflare Access).
+      "workers_dev": false,
+      "preview_urls": false,
       "routes": [{ "pattern": "panote.dev/api/admin/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read)
