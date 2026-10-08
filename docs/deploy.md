@@ -457,10 +457,12 @@ Ops steps, per environment:
    `MISS`/`404`.
 
 **Status: set for dev, outstanding for production** — the dev `CDN_ZONE_ID` is set and
-`CF_PURGE_TOKEN` has been set on dev. Step 4 is still not run as of 2026-10-07: it needs an owner
-token to delete a test pano, and no delete has happened in dev to observe instead (admin-api's
-logs for the 7 days to 2026-10-07 show no `DELETE` and no `cdn purge` line). Production has no
-token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
+`CF_PURGE_TOKEN` has been set on dev. Step 4 passed in dev on 2026-10-08: a test pano's tile and
+`preview.webp` were `HIT` (`age: 3689`) on `cdn.panote.dev`, `DELETE /api/admin/panos/:panoId`
+returned `204`, and 20s later both came back `404` (`cf-cache-status: BYPASS`), the manifest
+`404`. admin-api logged no `cdn purge failed`/`skipped` line, and it logs nothing on success. The
+first `DELETE`, right after upload, got `409` from the recent-upload guard, so wait an hour.
+Production has no token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
 
 ---
 
@@ -1116,19 +1118,18 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   already cached kept returning `200` (`cf-cache-status: HIT`) after its pano was deleted, because
   tiles are `public, max-age=31536000, immutable` and nothing purges the edge cache on delete (see
   "Deleted panos" above for the existing note on this). True revocation needs a Cloudflare cache
-  purge by URL or prefix — B6 adds a best-effort purge on delete (see "CDN purge on delete" for
-  its status).
-- **Hardened (pending dev verification): the presigned upload PUT now pins content-type.**
-  `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`), so a PUT
-  with a different content-type *should* get `403` (`SignatureDoesNotMatch`), per R2's
-  presigned-URL docs — still not verified in dev as of 2026-10-07: B3's dev E2E needs an owner
-  token for `POST /api/upload-url`, and none was available non-interactively. **content-length
-  is not signed, and R2 does not enforce it** — content-length isn't part of the signature, so a
-  PUT with a body size different from what was presigned for still succeeds. The 150 MiB size cap
-  is therefore enforced only at presign (input validation on the presign request in `upload-api`)
-  and in the tiler, which backstops it with its own byte (`MAX_ORIGINAL_BYTES` var,
-  `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel (`packages/tiler/src/pyramid.ts:43`)
-  caps.
+  purge by URL or prefix — B6 adds a best-effort purge on delete, verified in dev on 2026-10-08
+  (see "CDN purge on delete").
+- **Hardened, verified in dev (2026-10-08): the presigned upload PUT pins content-type.**
+  `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`). Against
+  one presigned URL for an `image/jpeg` upload, a PUT with `content-type: image/png` and one with
+  no content-type both got `403` (`SignatureDoesNotMatch`) and wrote nothing; the same PUT with
+  `image/jpeg` got `200`. **content-length is not signed, and R2 does not enforce it** — also
+  checked 2026-10-08: a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`. The
+  150 MiB size cap is therefore enforced only at presign (input validation on the presign request
+  in `upload-api`) and in the tiler, which backstops it with its own byte (`MAX_ORIGINAL_BYTES`
+  var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
+  (`packages/tiler/src/pyramid.ts:43`) caps.
 - **Fixed, live in dev (unit O1).** A tile 404 used to be edge-cached for 4h (`text/html`,
   `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
   `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge
