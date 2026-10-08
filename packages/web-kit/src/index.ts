@@ -11,6 +11,7 @@ export {
   AuthNotConfiguredError,
   AuthRequiredError,
   createAuth,
+  hasCachedSession,
   isAuthError,
   isSessionGoneError,
   safeReturnTo,

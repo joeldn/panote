@@ -1,5 +1,5 @@
 import type { ViewerFactory } from '@internal/ui';
-import { loadConfig, type Auth } from '@internal/web-kit';
+import { loadConfig, type Auth, type Auth0Like } from '@internal/web-kit';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -9,6 +9,7 @@ import { fakeAuth, LOCAL } from '../__fixtures__/auth.js';
 import { AuthEnvContext } from '../auth-context.js';
 import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
+import { createSiteAuth } from '../site-auth.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 type ViewerOptions = Parameters<ViewerFactory>[1];
@@ -549,6 +550,62 @@ describe('owner Edit', () => {
     expect(auth.isAuthenticated).not.toHaveBeenCalled();
     expect(adminCalls()).toHaveLength(0);
     expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+  });
+});
+
+// The real site auth over a fake SDK: `loadSdk` stands in for the lazy chunk import.
+describe('owner Edit with the site auth', () => {
+  const auth0 = { ...config.auth0, clientId: 'client-1', configured: true };
+  const sdkClient: Auth0Like = {
+    loginWithRedirect: vi.fn(async () => {}),
+    handleRedirectCallback: vi.fn(async () => ({})),
+    getTokenSilently: vi.fn(async () => 'jwt-token'),
+    isAuthenticated: vi.fn(async () => true),
+    getUser: vi.fn(async () => ({ sub: 'google-oauth2|1', name: 'Ada' })),
+    logout: vi.fn(async () => {}),
+  };
+  const loadSdk = vi.fn(async () => sdkClient);
+  beforeEach(() => loadSdk.mockClear());
+
+  it('never loads the SDK, or shows Edit, without a cached session', async () => {
+    localStorage.setItem('unrelated', '1');
+    renderAt('/s/old-town', createSiteAuth(auth0, LOCAL, loadSdk));
+    await shown('square');
+    await viewRecorded();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(loadSdk).not.toHaveBeenCalled();
+    expect(adminCalls()).toHaveLength(0);
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+  });
+
+  it('loads the SDK and shows Edit for the owner once the SDK cache has an entry', async () => {
+    localStorage.setItem('@@auth0spajs@@::client-1::@@user@@', '{}');
+    renderAt('/s/old-town', createSiteAuth(auth0, LOCAL, loadSdk));
+    const edit = await screen.findByRole('link', { name: 'Edit' });
+    expect(edit.getAttribute('href')).toBe(`${LOCAL.admin}/app/t/tour-a`);
+    expect(loadSdk).toHaveBeenCalledTimes(1);
+    expect(adminCalls()[0]?.[1]?.headers).toMatchObject({ Authorization: 'Bearer jwt-token' });
+  });
+
+  it('treats unreadable storage as signed out', async () => {
+    vi.spyOn(Storage.prototype, 'key').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError');
+    });
+    localStorage.setItem('@@auth0spajs@@::client-1::@@user@@', '{}');
+    try {
+      renderAt('/s/old-town', createSiteAuth(auth0, LOCAL, loadSdk));
+      await shown('square');
+      await viewRecorded();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(loadSdk).not.toHaveBeenCalled();
+      expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

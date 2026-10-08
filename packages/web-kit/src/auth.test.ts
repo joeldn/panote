@@ -4,6 +4,7 @@ import {
   AuthNotConfiguredError,
   AuthRequiredError,
   createAuth,
+  hasCachedSession,
   isAuthError,
   isSessionGoneError,
   safeReturnTo,
@@ -142,6 +143,62 @@ describe('createAuth', () => {
       AuthNotConfiguredError,
     );
     expect(createClient).not.toHaveBeenCalled();
+  });
+
+  describe('requireCachedSession', () => {
+    const storage = (...keys: string[]) => ({
+      length: keys.length,
+      key: (i: number) => keys[i] ?? null,
+    });
+    const userKey = `@@auth0spajs@@::${config.clientId}::@@user@@`;
+
+    it('answers signed out without loading the SDK when the cache is empty', async () => {
+      const createClient = vi.fn(async () => fakeClient());
+      const auth = createAuth(config, {
+        redirectUri: CB,
+        createClient,
+        requireCachedSession: true,
+        cacheStorage: storage('unrelated', '@@auth0spajs@@::other-client::@@user@@'),
+      });
+      await expect(auth.isAuthenticated()).resolves.toBe(false);
+      await expect(auth.getUser()).resolves.toBeNull();
+      expect(createClient).not.toHaveBeenCalled();
+    });
+
+    it('asks the SDK once its cache has an entry for this client', async () => {
+      const createClient = vi.fn(async () => fakeClient());
+      const auth = createAuth(config, {
+        redirectUri: CB,
+        createClient,
+        requireCachedSession: true,
+        cacheStorage: storage(userKey),
+      });
+      await expect(auth.isAuthenticated()).resolves.toBe(true);
+      await expect(auth.getUser()).resolves.toEqual({ name: 'Ada' });
+      expect(createClient).toHaveBeenCalledTimes(1);
+    });
+
+    it('still loads the SDK to sign in', async () => {
+      const createClient = vi.fn(async () => fakeClient());
+      const auth = createAuth(config, {
+        redirectUri: CB,
+        createClient,
+        requireCachedSession: true,
+        cacheStorage: storage(),
+      });
+      await auth.signIn({ connection: 'google-oauth2' });
+      expect(createClient).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('hasCachedSession treats unreadable storage as no session', () => {
+    const throwing = {
+      get length(): number {
+        throw new DOMException('denied', 'SecurityError');
+      },
+      key: () => null,
+    };
+    expect(hasCachedSession('client', throwing)).toBe(false);
   });
 
   it('signOut passes returnTo through', async () => {

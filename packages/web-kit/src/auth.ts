@@ -123,6 +123,40 @@ export interface CreateAuthOptions {
   /** The callback runs on another origin (local dev ports): keep the PKCE transaction in a cookie. */
   crossOriginCallback?: boolean;
   createClient?: Auth0Factory;
+  /**
+   * Answer `isAuthenticated`/`getUser` as signed out, without loading the SDK, while
+   * its localStorage cache has no entry for this client (see `hasCachedSession`).
+   */
+  requireCachedSession?: boolean;
+  /** Where that cache is read from; defaults to `localStorage`. Tests inject one. */
+  cacheStorage?: Pick<Storage, 'length' | 'key'>;
+}
+
+// The SDK's LocalStorageCache prefixes every key with this (cache/shared.ts in
+// @auth0/auth0-spa-js); entries are `@@auth0spajs@@::<clientId>::<audience>::<scope>`
+// plus `@@auth0spajs@@::<clientId>::@@user@@`.
+const SDK_CACHE_PREFIX = '@@auth0spajs@@';
+
+/**
+ * True when the Auth0 SDK's localStorage cache holds anything for `clientId`. With
+ * `cacheLocation: 'localstorage'` the SDK's own `isAuthenticated()` only reads that
+ * cache, so no entry means it would answer false anyway. Storage that can't be read
+ * (private mode, blocked site data) counts as no session; the SDK couldn't use it either.
+ */
+export function hasCachedSession(
+  clientId: string,
+  storage?: Pick<Storage, 'length' | 'key'>,
+): boolean {
+  try {
+    const s = storage ?? globalThis.localStorage;
+    const prefix = `${SDK_CACHE_PREFIX}::${clientId}::`;
+    for (let i = 0; i < s.length; i++) {
+      if (s.key(i)?.startsWith(prefix)) return true;
+    }
+  } catch {
+    // Fall through: treated as signed out.
+  }
+  return false;
 }
 
 const defaultFactory: Auth0Factory = async (options) => {
@@ -166,6 +200,10 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
     return pending;
   };
 
+  // Skips the ~62 kB gz SDK chunk for visitors who have never signed in on this origin.
+  const noCachedSession = (): boolean =>
+    !!opts.requireCachedSession && !hasCachedSession(config.clientId, opts.cacheStorage);
+
   const connections: SignInConnection[] = config.connections.map((id) => ({
     id,
     ...KNOWN_CONNECTIONS[id],
@@ -201,11 +239,11 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
       }
     },
     async isAuthenticated() {
-      if (!config.configured) return false;
+      if (!config.configured || noCachedSession()) return false;
       return (await getClient()).isAuthenticated();
     },
     async getUser() {
-      if (!config.configured) return null;
+      if (!config.configured || noCachedSession()) return null;
       return (await (await getClient()).getUser()) ?? null;
     },
     async signOut(returnTo) {
