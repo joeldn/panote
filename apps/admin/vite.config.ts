@@ -25,7 +25,8 @@ function workerAssets(mode: string): Plugin {
         // frame-src 'self': the share modal previews the site's /s/<slug>/embed (same origin).
         buildHeadersFile(config, { connectSrc, frameSrc: ["'self'"], indexable }),
       );
-      // Only reachable on the workers.dev URL (the zone routes /robots.txt to the website).
+      // Not reachable while workers.dev is off (the zone routes /robots.txt to the
+      // website); kept for parity.
       await writeFile(resolve(ASSETS_DIR, 'robots.txt'), robotsTxt(indexable));
       await copyFile(resolve(ASSETS_DIR, 'app/index.html'), resolve(ASSETS_DIR, 'index.html'));
     },

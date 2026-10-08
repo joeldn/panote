@@ -26,9 +26,10 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` is `false` in both
-`dev` and `production`, and `dev` also sets `preview_urls: false`: since 2026-10-08 the dev
-Workers are only reachable through their `panote.dev` routes (see Cloudflare Access below). `dev`'s `OAUTH_ISSUER` now points at the real Auth0
-tenant, `https://panote-dev.au.auth0.com/` (`OAUTH_AUDIENCE` `https://api.panote.dev`), provisioned
+`dev` and `production`, and `dev` also sets `preview_urls: false`: from the first dev deploy
+after 2026-10-08 the dev Workers are only reachable through their `panote.dev` routes (see
+Cloudflare Access below). `dev`'s `OAUTH_ISSUER` now points at the real Auth0 tenant,
+`https://panote-dev.au.auth0.com/` (`OAUTH_AUDIENCE` `https://api.panote.dev`), provisioned
 2026-09-25; `production`'s still ships the literal placeholder
 `https://YOUR_PROD_TENANT.auth0.com/` until its own tenant exists — `isIssuerConfigured` in
 `packages/worker-kit/src/auth.ts` rejects an unconfigured or placeholder-shaped issuer before any
@@ -469,8 +470,8 @@ token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
   and `kaiser.ns.cloudflare.com`, zone Active, with the placeholder proxied `AAAA @ 100::` record
   in place; the website and admin Workers' routes will serve it after the first deploy (see Frontends). `admin-api`, `public-api`, and `upload-api`'s
   dev `routes` blocks all target `panote.dev`, and their first dev deploy (see the checklist
-  below) already succeeded against it. Their `*.workers.dev` URLs are off since 2026-10-08, so the
-  route is the only way in.
+  below) already succeeded against it. Their `*.workers.dev` URLs are off from the first dev
+  deploy after 2026-10-08, so the route is the only way in.
 - **`panote.io`** — **moved from AWS Route 53 to Cloudflare on 2026-09-26**: same nameservers as
   `panote.dev` (`jo.ns.cloudflare.com` / `kaiser.ns.cloudflare.com`), set at the registrar
   (Namecheap), with the .io registry delegating to them at ~05:48 UTC. Zone is on the Free plan.
@@ -524,9 +525,9 @@ A page `curl` against `panote.dev` now gets a `302` to `panote.cloudflareaccess.
 not an outage. `/api/*` still answers directly (e.g. `GET /api/tours/x/stats` → `200`,
 `GET /api/admin/panos` with no token → `401`, checked 2026-10-07). Not covered: `cdn.panote.dev`,
 which stays public. The dev `*.workers.dev` URLs and Preview URLs used to bypass Access too; they
-are off since 2026-10-08 (`workers_dev: false`, `preview_urls: false` in every dev env block,
-applied by the next dev deploy). Smoke tests go through `panote.dev/api/*`, which the bypass app
-keeps open. To turn them back on, set both to `true` in the dev env blocks and redeploy. Undo: `DELETE
+are off from the first dev deploy after 2026-10-08 (`workers_dev: false`, `preview_urls: false`
+in every dev env block). Smoke tests go through `panote.dev/api/*`, which the bypass app keeps
+open. To turn them back on, set both to `true` in the dev env blocks and redeploy. Undo: `DELETE
 /accounts/<account>/access/apps/<id>` for each app. Never apply this to `panote.io`.
 
 ---
@@ -643,8 +644,8 @@ In order:
    pnpm --filter @service/admin-api exec wrangler deploy --env dev
    pnpm --filter @service/upload-api exec wrangler deploy --env dev
    ```
-4. **Smoke test** (against the `panote.dev` route; the `*.workers.dev` URL is off since
-   2026-10-08):
+4. **Smoke test** (against the `panote.dev` route; the `*.workers.dev` URL is off from
+   the first dev deploy after 2026-10-08):
    - `GET /api/tours/x/stats` → `200` (no auth required; hits the `TourStats` Durable Object).
    - `admin-api` and `upload-api`'s own routes (e.g. `GET /api/admin/panos`,
      `POST /api/upload-url`) → `401` either way: a plain `curl` with no `Authorization` header at
