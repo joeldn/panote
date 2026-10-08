@@ -29,6 +29,7 @@
       // production is unprovisioned, see docs/deploy.md
       "name": "panote-upload-api",
       "workers_dev": false,
+      "preview_urls": false,
       "routes": [{ "pattern": "panote.io/api/upload-url", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production

@@ -84,6 +84,7 @@
       // production is unprovisioned, see docs/deploy.md
       "name": "panote-tiler-consumer",
       "workers_dev": false,
+      "preview_urls": false,
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production ; wrangler secret put ALERT_EMAIL_TO --env production
       "durable_objects": {
