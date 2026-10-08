@@ -25,8 +25,8 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
-All four: `observability.enabled: true` in both env blocks. `workers_dev` is `false` in both
-`dev` and `production`, and `dev` also sets `preview_urls: false`: from the first dev deploy
+All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
+are `false` in both `dev` and `production`: from the first dev deploy
 after 2026-10-08 the dev Workers are only reachable through their `panote.dev` routes (see
 Cloudflare Access below). `dev`'s `OAUTH_ISSUER` now points at the real Auth0 tenant,
 `https://panote-dev.au.auth0.com/` (`OAUTH_AUDIENCE` `https://api.panote.dev`), provisioned
@@ -62,7 +62,7 @@ build-time config: `docs/decisions.md`.
 | `apps/admin` | `panote-admin-dev` / `panote-admin` | `panote.dev/app` + `panote.dev/app/*` / same on `panote.io` | `/app/` → `dist/app/` |
 
 Both: `assets.not_found_handling: "single-page-application"`, `observability.enabled: true` in
-both env blocks, `workers_dev` `false` in both (dev also `preview_urls: false`), no secrets. Admin has no
+both env blocks, `workers_dev` and `preview_urls` `false` in both, no secrets. Admin has no
 bindings; the website has `BUCKET` (R2, `pano-content-dev` / `pano-content`) and `ASSETS`.
 
 **Route precedence.** The website's `panote.dev/*` overlaps every other route on the host.

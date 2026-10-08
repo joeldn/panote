@@ -26,6 +26,7 @@
       // production is unprovisioned, see docs/deploy.md
       "name": "panote-admin",
       "workers_dev": false,
+      "preview_urls": false,
       "routes": [
         { "pattern": "panote.io/app", "zone_name": "panote.io" },
         { "pattern": "panote.io/app/*", "zone_name": "panote.io" },
