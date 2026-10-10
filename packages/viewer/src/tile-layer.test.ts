@@ -378,6 +378,56 @@ describe('TileLayer failure handling', () => {
       layer.dispose();
     });
 
+    it('moves the wake earlier when a later failure can retry sooner', async () => {
+      // Tile A fails twice, so its next try is 2 s out. Tile B then fails for
+      // the first time, 1 s cooldown, and must not wait behind A's timer.
+      let a: string | undefined;
+      let b: string | undefined;
+      let failB: (() => void) | undefined;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          requests.push(url);
+          const reply = (status: number) => ({
+            ok: status === 200,
+            status,
+            blob: () => Promise.resolve({}),
+          });
+          if (url.includes('/2/') && a === undefined) a = url;
+          else if (url.includes('/2/') && b === undefined) b = url;
+          if (url === a) return Promise.resolve(reply(503));
+          if (url === b) return new Promise((resolve) => (failB = () => resolve(reply(503))));
+          return Promise.resolve(reply(200));
+        }),
+      );
+      const invalidate = vi.fn();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      await drain();
+      expect(a).toBeDefined();
+      expect(failB).toBeDefined();
+
+      advance(TILE_COOLDOWN_MS);
+      await vi.advanceTimersByTimeAsync(TILE_COOLDOWN_MS); // A's first wake
+      frame(layer, 0); // retries A, which fails again: next wake in 2 s
+      await drain();
+      expect(requests.filter((u) => u === a)).toHaveLength(2);
+
+      advance(100);
+      await vi.advanceTimersByTimeAsync(100);
+      failB!(); // B's first failure: it may go again in 1 s
+      await drain();
+      const calls = invalidate.mock.calls.length;
+
+      advance(TILE_COOLDOWN_MS - 1);
+      await vi.advanceTimersByTimeAsync(TILE_COOLDOWN_MS - 1);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+      advance(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(invalidate).toHaveBeenCalledTimes(calls + 1);
+      layer.dispose();
+    });
+
     it('cancels a pending wake on dispose', async () => {
       const invalidate = vi.fn();
       failOneTileOnce();
