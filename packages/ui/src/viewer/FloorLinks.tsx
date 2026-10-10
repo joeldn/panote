@@ -15,14 +15,17 @@ export interface FloorLinksProps {
 /** Floor chevrons to linked scenes, laid along the floor and foreshortened with zoom. */
 export function FloorLinks({ links, onGo }: FloorLinksProps) {
   const refs = useRef(new Map<string, HTMLElement>());
-  useViewerFrame((viewer) => {
+  useViewerFrame((v) => {
     for (const link of links) {
       const el = refs.current.get(link.to);
       if (!el) continue;
-      const near = viewer.project(link.yaw, PITCH_NEAR);
-      const far = viewer.project(link.yaw, PITCH_FAR);
-      el.style.visibility = near.behind ? 'hidden' : 'visible';
-      if (near.behind) continue;
+      const near = v.project(link.yaw, PITCH_NEAR);
+      const far = v.project(link.yaw, PITCH_FAR);
+      // Either point behind the camera projects mirrored, so the chevron
+      // built from it would land in the wrong place or flipped.
+      const behind = near.behind || far.behind;
+      el.style.visibility = behind ? 'hidden' : 'visible';
+      if (behind) continue;
       const dx = far.x - near.x;
       const dy = far.y - near.y;
       const angle = Math.atan2(dx, -dy);
@@ -31,10 +34,10 @@ export function FloorLinks({ links, onGo }: FloorLinksProps) {
       const y = (near.y + far.y) / 2;
       el.style.transform = `translate(${x}px, ${y}px) rotate(${angle}rad) scale(${scale})`;
     }
-  });
+  }, links);
 
   return (
-    <div className="pn-anchors" aria-label="Go to">
+    <div className="pn-anchors" role="group" aria-label="Go to">
       {links.map((link) => (
         <div
           key={link.to}

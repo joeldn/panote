@@ -66,6 +66,27 @@ describe('HotspotMarkers', () => {
     fireEvent.click(kitchen);
     expect(onOpen).toHaveBeenCalledWith(spots[0]);
   });
+
+  it('groups the markers under one name', () => {
+    withViewer(fakeViewer(), <HotspotMarkers hotspots={[]} onOpen={() => {}} />);
+    expect(screen.getByRole('group', { name: 'Points of interest' })).toBeTruthy();
+  });
+
+  it('places a marker added to the list without waiting for a frame', () => {
+    const v = fakeViewer();
+    const a = { id: 'a', yaw: 1, pitch: 0, title: 'Kitchen' };
+    const { rerender } = withViewer(v, <HotspotMarkers hotspots={[a]} onOpen={() => {}} />);
+    const b = { id: 'b', yaw: 0.5, pitch: 0.2, title: 'Hall' };
+    // An idle viewer draws no frame, so nothing else would place the new marker.
+    rerender(
+      <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
+        <HotspotMarkers hotspots={[a, b]} onOpen={() => {}} />
+      </PanoViewerContext.Provider>,
+    );
+    const anchor = screen.getByRole('button', { name: 'Hall' }).parentElement!;
+    expect(anchor.style.visibility).toBe('visible');
+    expect(anchor.style.transform).toBe('translate(50px, 20px)');
+  });
 });
 
 describe('FloorLinks', () => {
@@ -81,6 +102,39 @@ describe('FloorLinks', () => {
     );
     fireEvent.click(btn);
     expect(onGo).toHaveBeenCalledWith(link);
+  });
+
+  it('hides a chevron whose far point is behind the camera, even with the near one in front', () => {
+    const v = fakeViewer();
+    // Pitched down: the near floor point (-0.6) is in front, the far one (-0.2) behind.
+    v.project.mockImplementation((yaw: number, pitch: number) => ({
+      x: yaw * 100,
+      y: pitch * 100,
+      behind: pitch > -0.4,
+    }));
+    withViewer(v, <FloorLinks links={[{ to: 'hall', yaw: 1, label: 'Hall' }]} onGo={() => {}} />);
+    v.frame();
+    const anchor = document.querySelector('[aria-label="Go to Hall"]')!.parentElement!;
+    expect(anchor.style.visibility).toBe('hidden');
+  });
+
+  it('groups the chevrons under one name', () => {
+    withViewer(fakeViewer(), <FloorLinks links={[]} onGo={() => {}} />);
+    expect(screen.getByRole('group', { name: 'Go to' })).toBeTruthy();
+  });
+
+  it('places a chevron added to the list without waiting for a frame', () => {
+    const v = fakeViewer();
+    const hall = { to: 'hall', yaw: 1, label: 'Hall' };
+    const { rerender } = withViewer(v, <FloorLinks links={[hall]} onGo={() => {}} />);
+    rerender(
+      <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
+        <FloorLinks links={[hall, { to: 'yard', yaw: 2, label: 'Yard' }]} onGo={() => {}} />
+      </PanoViewerContext.Provider>,
+    );
+    const anchor = screen.getByRole('button', { name: 'Go to Yard' }).parentElement!;
+    expect(anchor.style.visibility).toBe('visible');
+    expect(anchor.style.transform).toMatch(/^translate\(200px, -40px\) rotate/);
   });
 });
 
@@ -235,5 +289,19 @@ describe('SceneMap', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Kitchen' }));
     expect(onSelect).toHaveBeenCalledWith('b');
     expect(screen.queryByRole('button', { name: 'Kitchen' })).toBeNull();
+  });
+
+  it('never points the toggle at a panel that is not there', () => {
+    render(<SceneMap scenes={[{ id: 'a', title: 'Hall' }]} current="a" onSelect={() => {}} />);
+    const toggle = screen.getByRole('button', { name: 'Map' });
+    const controlled = () => {
+      const id = toggle.getAttribute('aria-controls');
+      return id === null ? null : document.getElementById(id);
+    };
+    expect(toggle.getAttribute('aria-controls')).toBeNull();
+    fireEvent.click(toggle);
+    expect(controlled()?.className).toBe('pn-scenemap__panel');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-controls')).toBeNull();
   });
 });

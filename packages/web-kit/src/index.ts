@@ -95,6 +95,7 @@ export {
   type ViewerLink,
   type ViewerTour,
 } from './tour-adapter.js';
+export type { InfoHotspotData, Tour, TourLink, TourScene } from './tour-types.js';
 export {
   canRetryPoll,
   initialUploadState,

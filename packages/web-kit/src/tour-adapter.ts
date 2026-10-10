@@ -6,7 +6,7 @@ import type {
   TourDoc,
   TourSettings,
 } from '@internal/contracts';
-import type { InfoHotspotData, Tour, TourLink, TourScene } from '@panote/viewer/ui';
+import type { InfoHotspotData, Tour, TourLink, TourScene } from './tour-types.js';
 
 /** Prototype defaults (design `tourCfg`), used when a tour has no saved settings. */
 export const DEFAULT_TOUR_SETTINGS: TourSettings = {

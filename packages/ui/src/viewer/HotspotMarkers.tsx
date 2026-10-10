@@ -13,13 +13,12 @@ export interface HotspotMarkersProps {
 /** Info-point markers pinned to their yaw/pitch; a click opens the point. */
 export function HotspotMarkers({ hotspots, activeId, onOpen }: HotspotMarkersProps) {
   const refs = useRef(new Map<string, HTMLElement>());
-  useViewerFrame((viewer) => {
-    for (const h of hotspots)
-      placeAt(refs.current.get(h.id) ?? null, viewer.project(h.yaw, h.pitch));
-  });
+  useViewerFrame((v) => {
+    for (const h of hotspots) placeAt(refs.current.get(h.id) ?? null, v.project(h.yaw, h.pitch));
+  }, hotspots);
 
   return (
-    <div className="pn-anchors" aria-label="Points of interest">
+    <div className="pn-anchors" role="group" aria-label="Points of interest">
       {hotspots.map((h) => (
         <div
           key={h.id}

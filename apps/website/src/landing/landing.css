@@ -142,8 +142,7 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #fff;
-  background: rgba(20, 18, 14, 0.4);
-  backdrop-filter: blur(6px);
+  background: rgba(20, 18, 14, 0.72);
   padding: 7px 13px;
   border-radius: var(--r-pill);
   margin-bottom: 22px;
@@ -628,8 +627,7 @@
   font: 500 11px var(--fmono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: rgba(20, 18, 14, 0.4);
-  backdrop-filter: blur(6px);
+  background: rgba(20, 18, 14, 0.72);
   padding: 7px 12px;
   border-radius: var(--r-pill);
 }

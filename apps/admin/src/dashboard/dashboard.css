@@ -217,8 +217,7 @@
   gap: 5px;
   padding: 4px 8px;
   border-radius: 7px;
-  background: rgba(20, 18, 14, 0.42);
-  backdrop-filter: blur(4px);
+  background: rgba(20, 18, 14, 0.7);
   color: rgba(255, 255, 255, 0.92);
   font: 600 10px var(--fmono);
   letter-spacing: 0.03em;
