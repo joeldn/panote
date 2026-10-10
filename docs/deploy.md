@@ -499,8 +499,9 @@ one `http_request_cache_settings` entrypoint ruleset, and a PUT replaces all of 
 2. keeps every rule the file doesn't manage exactly as it is (today `tiles-404-short-ttl`, which
    was made in the dashboard), and replaces or appends each managed rule by its `ref`,
 3. prints a unified diff of live vs after, and
-4. PUTs only with `--yes`. Without it, or with `--dry-run`, nothing is written. If nothing
-   changed it says so and exits.
+4. PUTs only with `--yes`. Without it, or with `--dry-run`, nothing is written (both flags
+   together is an error). If nothing changed it says so and exits. Right before the PUT it reads
+   the live rules again and stops without writing if they changed since the diff.
 
 ```bash
 # Token: My Profile → API Tokens → Custom token, Zone → Cache Rules: Edit, scoped to panote.dev

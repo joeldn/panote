@@ -30,8 +30,14 @@ mode=show
 live_file=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) mode=dry-run ;;
-    --yes) mode=apply ;;
+    --dry-run)
+      [ "$mode" != apply ] || die "--dry-run and --yes together; pick one"
+      mode=dry-run
+      ;;
+    --yes)
+      [ "$mode" != dry-run ] || die "--dry-run and --yes together; pick one"
+      mode=apply
+      ;;
     --live-file)
       [ $# -ge 2 ] || die "--live-file needs a path"
       live_file=$2
@@ -116,7 +122,20 @@ case "$mode" in
     ;;
 esac
 
-# 4. PUT the whole phase, then show what Cloudflare now has.
+# 4. Re-read right before writing: if anyone changed the rules since the diff above, the
+#    PUT would silently drop their change, so stop and let the diff be looked at again.
+status=$(cf GET "$entrypoint")
+case "$status" in
+  200) jq -e '.result' "$tmp/out" >"$tmp/again.json" ;;
+  404) echo '{"rules":[]}' >"$tmp/again.json" ;;
+  *) die "re-GET entrypoint: HTTP $status" ;;
+esac
+jq -S '[(.rules // [])[] | del(.version, .last_updated, .categories)]' "$tmp/again.json" >"$tmp/again-rules.json"
+jq -S '.' "$tmp/current.json" >"$tmp/current-sorted.json"
+cmp -s "$tmp/current-sorted.json" "$tmp/again-rules.json" ||
+  die "the live rules changed since the diff; nothing written. Run it again."
+
+# 5. PUT the whole phase, then show what Cloudflare now has.
 jq '{rules: .}' "$tmp/desired.json" >"$tmp/body.json"
 status=$(cf PUT "$entrypoint" "$tmp/body.json")
 [ "$status" = 200 ] || die "PUT entrypoint: HTTP $status: $(jq -c '.errors // .' "$tmp/out" 2>/dev/null || cat "$tmp/out")"
