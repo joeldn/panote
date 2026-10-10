@@ -7,6 +7,11 @@ export interface ControlHost {
   stopMomentum(): void;
 }
 
+export interface ControlsOptions {
+  /** Accessible name for the viewer element. Default "Panorama viewer". */
+  label?: string;
+}
+
 /** Pointer state for one of the (at most two) tracked pointers. */
 interface PointerSlot {
   id: number;
@@ -43,9 +48,16 @@ export class Controls {
   constructor(
     private el: HTMLElement,
     private host: ControlHost,
+    opts: ControlsOptions = {},
   ) {
     el.style.touchAction = 'none';
+    el.style.cursor = 'grab';
     el.tabIndex = 0;
+    // ARIA reflection properties rather than setAttribute: same effect in
+    // every ES2023-era browser, and hosts that hand in a bare canvas stub
+    // (PanoViewer's tests) keep working.
+    el.role = 'application';
+    el.ariaLabel = opts.label ?? 'Panorama viewer';
     el.addEventListener('pointerdown', this.onDown);
     el.addEventListener('pointermove', this.onMove);
     el.addEventListener('pointerup', this.onUp);
@@ -194,6 +206,9 @@ export class Controls {
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
+    // Modified keys belong to the browser and OS: Ctrl/Cmd +/- is page zoom,
+    // which low-vision users rely on, and Alt/Cmd+arrow is history navigation.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     const panStep = 40; // px-equivalent
     switch (e.key) {
       case 'ArrowLeft':

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Controls, type ControlHost } from './controls.js';
+import { Controls, type ControlHost, type ControlsOptions } from './controls.js';
 
 /**
  * Controls only needs a small slice of HTMLElement, so these tests run in Node
@@ -10,16 +10,11 @@ type Listener = (e: unknown) => void;
 class FakeElement {
   style: Record<string, string> = {};
   tabIndex = -1;
-  attrs = new Map<string, string>();
+  role: string | null = null;
+  ariaLabel: string | null = null;
   listeners = new Map<string, Set<Listener>>();
   rect = { left: 0, top: 0, width: 800, height: 600 };
 
-  setAttribute(name: string, value: string) {
-    this.attrs.set(name, value);
-  }
-  getAttribute(name: string) {
-    return this.attrs.get(name) ?? null;
-  }
   addEventListener(type: string, fn: Listener) {
     let set = this.listeners.get(type);
     if (!set) this.listeners.set(type, (set = new Set()));
@@ -62,10 +57,10 @@ function makeHost() {
 let el: FakeElement;
 let host: ReturnType<typeof makeHost>;
 
-function setup() {
+function setup(opts?: ControlsOptions) {
   el = new FakeElement();
   host = makeHost();
-  return new Controls(el as unknown as HTMLElement, host);
+  return new Controls(el as unknown as HTMLElement, host, opts);
 }
 
 function pointer(
@@ -145,5 +140,54 @@ describe('Controls: pointer drag and release', () => {
     pointer('pointerup', { x: 150, y: 100, t: 34, id: 1, ...touch });
     expect(host.panByPixels).not.toHaveBeenCalled();
     expect(host.flick).not.toHaveBeenCalled();
+  });
+});
+
+function key(k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) {
+  return el.dispatch('keydown', {
+    key: k,
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...mods,
+  });
+}
+
+describe('Controls: keyboard and accessibility', () => {
+  it('zooms on a plain "=" and claims the key', () => {
+    setup();
+    const ev = key('=');
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('leaves Ctrl+= and Cmd+- to the browser', () => {
+    setup();
+    const a = key('=', { ctrlKey: true });
+    const b = key('-', { metaKey: true });
+    expect(a.defaultPrevented).toBe(false);
+    expect(b.defaultPrevented).toBe(false);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('leaves Alt+arrow to the browser', () => {
+    setup();
+    const ev = key('ArrowLeft', { altKey: true });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(host.panByPixels).not.toHaveBeenCalled();
+  });
+
+  it('gives the element a role, a default label, a tab stop and a grab cursor', () => {
+    setup();
+    expect(el.role).toBe('application');
+    expect(el.ariaLabel).toBe('Panorama viewer');
+    expect(el.tabIndex).toBe(0);
+    expect(el.style.cursor).toBe('grab');
+  });
+
+  it('uses the label option for the accessible name', () => {
+    setup({ label: 'Lobby panorama' });
+    expect(el.ariaLabel).toBe('Lobby panorama');
   });
 });
