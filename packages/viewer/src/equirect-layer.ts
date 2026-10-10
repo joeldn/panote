@@ -150,8 +150,12 @@ export function buildEquirectPatchGeometry(
     for (let i = 0; i < cols; i++) {
       const a = j * (cols + 1) + i;
       const b = a + cols + 1;
-      index.set([a, b, a + 1, a + 1, b, b + 1], n);
-      n += 6;
+      index[n++] = a;
+      index[n++] = b;
+      index[n++] = a + 1;
+      index[n++] = a + 1;
+      index[n++] = b;
+      index[n++] = b + 1;
     }
   }
   return { pos, uv, index };
