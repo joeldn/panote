@@ -11,9 +11,11 @@ class FakeElement {
   style: Record<string, string> = {};
   tabIndex = -1;
   listeners = new Map<string, Set<Listener>>();
+  listenerOptions = new Map<string, unknown>();
   rect = { left: 0, top: 0, width: 800, height: 600 };
 
-  addEventListener(type: string, fn: Listener) {
+  addEventListener(type: string, fn: Listener, options?: unknown) {
+    this.listenerOptions.set(type, options);
     let set = this.listeners.get(type);
     if (!set) this.listeners.set(type, (set = new Set()));
     set.add(fn);
@@ -397,5 +399,68 @@ describe('Controls: modifier edge cases', () => {
     });
     expect(ev.defaultPrevented).toBe(true);
     expect(host.zoomAt).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Controls: remaining branches', () => {
+  const touch = { pointerType: 'touch' };
+
+  it('pans 40 px on a plain ArrowLeft and claims the key', () => {
+    setup();
+    const ev = key('ArrowLeft');
+    expect(host.panByPixels).toHaveBeenCalledWith(40, 0);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('ignores a ctrl-wheel while a Safari gesture is in progress', () => {
+    setup();
+    el.dispatch('gesturestart', { scale: 1, clientX: 400, clientY: 300 });
+    const ev = wheel({ deltaY: 5, ctrlKey: true });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('does not pan on the deltaX of a ctrl-wheel', () => {
+    setup();
+    wheel({ deltaX: 30, ctrlKey: true });
+    expect(host.panByPixels).not.toHaveBeenCalled();
+  });
+
+  it('registers the wheel listener as non-passive so it can preventDefault', () => {
+    setup();
+    expect(el.listenerOptions.get('wheel')).toEqual({ passive: false });
+  });
+
+  it('ignores a third finger during a pinch', () => {
+    setup();
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    pointer('pointerdown', { x: 500, y: 500, t: 0, id: 3, ...touch });
+    pointer('pointermove', { x: 600, y: 600, t: 16, id: 3, ...touch });
+    pointer('pointerup', { x: 600, y: 600, t: 20, id: 3, ...touch });
+    expect(host.zoomAt).not.toHaveBeenCalled();
+    expect(host.panByPixels).not.toHaveBeenCalled();
+    // The first two fingers still pinch normally.
+    pointer('pointermove', { x: 300, y: 100, t: 32, id: 2, ...touch });
+    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 200, 100);
+  });
+
+  it('carries on pinching when the first finger lifts and a new one lands', () => {
+    setup();
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    pointer('pointerup', { x: 100, y: 100, t: 16, id: 1, ...touch });
+    // The finger left over from the pinch must not pan.
+    pointer('pointermove', { x: 210, y: 100, t: 24, id: 2, ...touch });
+    expect(host.panByPixels).not.toHaveBeenCalled();
+    // A new finger 100 px away, then spreading to 200 px, halves the fov.
+    pointer('pointerdown', { x: 310, y: 100, t: 32, id: 3, ...touch });
+    pointer('pointermove', { x: 410, y: 100, t: 48, id: 3, ...touch });
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 310, 100);
+    pointer('pointerup', { x: 410, y: 100, t: 56, id: 3, ...touch });
+    pointer('pointerup', { x: 210, y: 100, t: 56, id: 2, ...touch });
+    expect(host.panByPixels).not.toHaveBeenCalled();
+    expect(host.flick).not.toHaveBeenCalled();
   });
 });
