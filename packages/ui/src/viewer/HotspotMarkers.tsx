@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type CSSProperties } from 'react';
+import { useRef, type CSSProperties } from 'react';
 
 import { cx } from '../cx.js';
 import type { ViewerHotspot } from './types.js';
@@ -13,14 +13,9 @@ export interface HotspotMarkersProps {
 /** Info-point markers pinned to their yaw/pitch; a click opens the point. */
 export function HotspotMarkers({ hotspots, activeId, onOpen }: HotspotMarkersProps) {
   const refs = useRef(new Map<string, HTMLElement>());
-  const viewer = useViewerFrame((v) => {
+  useViewerFrame((v) => {
     for (const h of hotspots) placeAt(refs.current.get(h.id) ?? null, v.project(h.yaw, h.pitch));
-  });
-  // Markers start hidden until a frame places them, and the viewer only draws
-  // when something changed: a new list on the same viewer asks for a frame.
-  useLayoutEffect(() => {
-    viewer?.requestRender();
-  }, [viewer, hotspots]);
+  }, hotspots);
 
   return (
     <div className="pn-anchors" role="group" aria-label="Points of interest">

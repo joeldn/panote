@@ -36,7 +36,6 @@ class FakeViewer {
       });
     });
   });
-  requestRender = vi.fn();
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
   setNorth = vi.fn();

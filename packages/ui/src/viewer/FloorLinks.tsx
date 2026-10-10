@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useRef } from 'react';
 
 import type { ViewerLinkArrow } from './types.js';
 import { useViewerFrame } from './use-render.js';
@@ -15,7 +15,7 @@ export interface FloorLinksProps {
 /** Floor chevrons to linked scenes, laid along the floor and foreshortened with zoom. */
 export function FloorLinks({ links, onGo }: FloorLinksProps) {
   const refs = useRef(new Map<string, HTMLElement>());
-  const viewer = useViewerFrame((v) => {
+  useViewerFrame((v) => {
     for (const link of links) {
       const el = refs.current.get(link.to);
       if (!el) continue;
@@ -34,12 +34,7 @@ export function FloorLinks({ links, onGo }: FloorLinksProps) {
       const y = (near.y + far.y) / 2;
       el.style.transform = `translate(${x}px, ${y}px) rotate(${angle}rad) scale(${scale})`;
     }
-  });
-  // Chevrons start hidden until a frame places them, and the viewer only draws
-  // when something changed: a new list on the same viewer asks for a frame.
-  useLayoutEffect(() => {
-    viewer?.requestRender();
-  }, [viewer, links]);
+  }, links);
 
   return (
     <div className="pn-anchors" role="group" aria-label="Go to">

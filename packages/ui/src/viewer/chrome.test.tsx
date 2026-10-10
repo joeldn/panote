@@ -26,7 +26,6 @@ function fakeViewer() {
       behind: yaw < 0,
     })),
     heading: vi.fn(() => 0.5),
-    requestRender: vi.fn(),
     getView: vi.fn(() => ({ yaw: 0, pitch: 0, fov: v.fov })),
     setView: vi.fn((view: { fov?: number }) => {
       if (view.fov !== undefined) v.fov = view.fov;
@@ -73,18 +72,20 @@ describe('HotspotMarkers', () => {
     expect(screen.getByRole('group', { name: 'Points of interest' })).toBeTruthy();
   });
 
-  it('asks for a frame when the markers change, so new ones get placed', () => {
+  it('places a marker added to the list without waiting for a frame', () => {
     const v = fakeViewer();
     const a = { id: 'a', yaw: 1, pitch: 0, title: 'Kitchen' };
     const { rerender } = withViewer(v, <HotspotMarkers hotspots={[a]} onOpen={() => {}} />);
-    v.requestRender.mockClear();
-    const b = { id: 'b', yaw: 0.5, pitch: 0, title: 'Hall' };
+    const b = { id: 'b', yaw: 0.5, pitch: 0.2, title: 'Hall' };
+    // An idle viewer draws no frame, so nothing else would place the new marker.
     rerender(
       <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
         <HotspotMarkers hotspots={[a, b]} onOpen={() => {}} />
       </PanoViewerContext.Provider>,
     );
-    expect(v.requestRender).toHaveBeenCalled();
+    const anchor = screen.getByRole('button', { name: 'Hall' }).parentElement!;
+    expect(anchor.style.visibility).toBe('visible');
+    expect(anchor.style.transform).toBe('translate(50px, 20px)');
   });
 });
 
@@ -122,17 +123,18 @@ describe('FloorLinks', () => {
     expect(screen.getByRole('group', { name: 'Go to' })).toBeTruthy();
   });
 
-  it('asks for a frame when the links change, so new ones get placed', () => {
+  it('places a chevron added to the list without waiting for a frame', () => {
     const v = fakeViewer();
     const hall = { to: 'hall', yaw: 1, label: 'Hall' };
     const { rerender } = withViewer(v, <FloorLinks links={[hall]} onGo={() => {}} />);
-    v.requestRender.mockClear();
     rerender(
       <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
         <FloorLinks links={[hall, { to: 'yard', yaw: 2, label: 'Yard' }]} onGo={() => {}} />
       </PanoViewerContext.Provider>,
     );
-    expect(v.requestRender).toHaveBeenCalled();
+    const anchor = screen.getByRole('button', { name: 'Go to Yard' }).parentElement!;
+    expect(anchor.style.visibility).toBe('visible');
+    expect(anchor.style.transform).toMatch(/^translate\(200px, -40px\) rotate/);
   });
 });
 
