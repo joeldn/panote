@@ -190,7 +190,7 @@ describe('PanoStage', () => {
     let failNave!: (e: Error) => void;
     v.load.mockImplementationOnce(
       () =>
-        new Promise<void>((_r, rej) => {
+        new Promise<boolean>((_r, rej) => {
           failNave = rej;
         }),
     );
