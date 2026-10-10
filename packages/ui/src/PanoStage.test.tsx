@@ -820,4 +820,60 @@ describe('PanoStage', () => {
       expect(onLoadError).toHaveBeenCalledWith(lost, 'hall');
     });
   });
+
+  describe('going back after a failed change', () => {
+    async function failedHop(over: { reloadKey?: string } = {}) {
+      const f = factory();
+      const onLoadError = vi.fn();
+      const stage = (panoId: string, reloadKey?: string) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          transition
+          {...(reloadKey !== undefined && { reloadKey })}
+          onLoadError={onLoadError}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      const err = new Error('manifest 500');
+      v.transitionTo.mockRejectedValueOnce(err);
+      await act(async () => rerender(stage('nave')));
+      expect(onLoadError).toHaveBeenCalledWith(err, 'nave');
+      await act(async () => rerender(stage('hall', over.reloadKey)));
+      return { v, rerender, stage };
+    }
+
+    it('does not reload the pano the viewer still has on screen', async () => {
+      const { v, rerender, stage } = await failedHop();
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave']);
+      expect(v.calls).toEqual(['load:hall']);
+
+      // It is the pano on stage again: the same link can be tried again.
+      await act(async () => rerender(stage('nave')));
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
+    });
+
+    it('reloads it when its reloadKey changed meanwhile', async () => {
+      const { v } = await failedHop({ reloadKey: 'v2' });
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
+
+    it('loads it when the change was only superseded, not failed', () => {
+      const f = factory();
+      const stage = (panoId: string) => (
+        <PanoStage baseUrl="b/" panoId={panoId} transition createViewer={f.createViewer} />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      v.transitionTo.mockReturnValueOnce(new Promise(() => {}));
+      rerender(stage('nave'));
+      // The hop is still in flight; only a new load cancels it.
+      rerender(stage('hall'));
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
+  });
 });

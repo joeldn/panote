@@ -350,14 +350,51 @@ describe('TourViewer', () => {
       expect(onLoadError).toHaveBeenCalledWith(err, 'church');
       expect(screen.getByRole('button', { name: 'Fountain' })).toBeTruthy();
       expect(crumb()).toBe('Square');
-      // The stage reloads the pano on screen; landing it again is not a new scene.
-      const back = viewer().pending.at(-1)!;
-      expect(back.pano).toBe('square');
-      await act(async () => back.resolve());
+      // The pano on screen is still the one the viewer landed: no reload of it.
+      expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
+      expect(viewer().load).toHaveBeenCalledTimes(1);
       expect(onSceneChange.mock.calls).toEqual([['square']]);
 
       fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
       await waitFor(() => expect(viewer().pending.at(-1)!.pano).toBe('church'));
+      expect(viewer().transitionTo).toHaveBeenCalledTimes(2);
+    });
+
+    it('stays put when the reload of a scene that never landed fails too', async () => {
+      const onLoadError = vi.fn();
+      let v!: FakeViewer;
+      renderViewer({
+        bar: { home: null },
+        onLoadError,
+        createViewer: () => {
+          v = new FakeViewer();
+          // The start scene never loads, so nothing the stage asked for landed.
+          v.fail = true;
+          return v as unknown as PanoViewer;
+        },
+      });
+      await waitFor(() => expect(onLoadError).toHaveBeenCalledTimes(1));
+      v.defer = true;
+      onLoadError.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(v.pending).toHaveLength(1));
+      const first = new Error('church 500');
+      await act(async () => v.pending[0]!.reject(first));
+      // Back to the start scene, which the stage loads again since it never landed.
+      await waitFor(() => expect(v.pending).toHaveLength(2));
+      expect(v.pending[1]!.pano).toBe('square');
+      const second = new Error('square 500');
+      await act(async () => v.pending[1]!.reject(second));
+
+      expect(onLoadError.mock.calls).toEqual([
+        [first, 'church'],
+        [second, 'square'],
+      ]);
+      // No further loads: the failure of the scene on screen is not chased.
+      expect(v.transitionTo).toHaveBeenCalledTimes(2);
+      expect(crumb()).toBe('Square');
+      expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
     });
   });
 
