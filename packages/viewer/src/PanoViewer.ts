@@ -45,6 +45,12 @@ function unwound(yaw: number): number {
   return yaw - Math.trunc(yaw / TWO_PI) * TWO_PI;
 }
 
+/** Hand a listener's exception to the host's error reporting without unwinding the frame. */
+function report(err: unknown): void {
+  if (typeof reportError === 'function') reportError(err);
+  else console.error(err);
+}
+
 export class PanoViewer implements ControlHost {
   private renderer: GLRenderer;
   private emitter = new Emitter<PanoViewerEvents>();
@@ -303,7 +309,7 @@ export class PanoViewer implements ControlHost {
     this.wasPending = true;
     this.dirty = true;
     this.emitter.emit('ready', manifest);
-    this.emitter.emit('scene-change', manifest.pano);
+    if (!this.disposed) this.emitter.emit('scene-change', manifest.pano);
     return true;
   }
 
@@ -605,12 +611,12 @@ export class PanoViewer implements ControlHost {
     // fails (for good, or until its cooldown ends) does not count, so failed
     // tiles can still end the preview, leaving coarser tiles in their place.
     const pending = this.layer?.hasPending() ?? false;
-    if (this.wasPending && !pending) {
-      if (this.previewUnderlay) this.disposePreview();
-      this.emitter.emit('tiles-settled', undefined);
-    }
+    const tilesSettled = this.wasPending && !pending;
+    if (tilesSettled && this.previewUnderlay) this.disposePreview();
     this.wasPending = pending;
 
+    // Draw before anything outside the viewer runs: a listener that throws
+    // or disposes the viewer must not cost this frame its render.
     this.renderer.render(this.drawList());
     this.hotspots.update(
       this.viewProj,
@@ -618,7 +624,18 @@ export class PanoViewer implements ControlHost {
       this.container.clientWidth || 1,
       this.container.clientHeight || 1,
     );
-    for (const cb of this.renderCbs) cb(this.view);
+    if (tilesSettled) {
+      this.emitter.emit('tiles-settled', undefined);
+      if (this.disposed) return;
+    }
+    for (const cb of this.renderCbs) {
+      try {
+        cb(this.view);
+      } catch (err) {
+        report(err);
+      }
+      if (this.disposed) return;
+    }
   };
 
   project(yaw: number, pitch: number): { x: number; y: number; behind: boolean } {

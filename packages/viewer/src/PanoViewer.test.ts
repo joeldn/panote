@@ -1328,5 +1328,38 @@ describe('PanoViewer', () => {
       expect(viewer.getView().yaw).toBe(0);
       viewer.dispose();
     });
+
+    it('keeps rendering when an onRender callback throws', () => {
+      const report = vi.fn();
+      vi.stubGlobal('reportError', report);
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const boom = new Error('boom');
+      viewer.onRender(() => {
+        throw boom;
+      });
+      const after = vi.fn();
+      viewer.onRender(after);
+      const render = internals(viewer).renderer.render;
+      render.mockClear();
+
+      expect(() => tick(viewer)).not.toThrow();
+      expect(render).toHaveBeenCalledTimes(1);
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(report).toHaveBeenCalledWith(boom);
+    });
+
+    it('renders the frame before emitting tiles-settled', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      internals(viewer).layer = { update: vi.fn(), drawList: () => [], hasPending: () => false };
+      internals(viewer).wasPending = true;
+      const render = internals(viewer).renderer.render;
+      render.mockClear();
+      viewer.on('tiles-settled', () => {
+        expect(render).toHaveBeenCalledTimes(1);
+        throw new Error('listener');
+      });
+      expect(() => tick(viewer)).toThrow('listener');
+      expect(render).toHaveBeenCalledTimes(1);
+    });
   });
 });
