@@ -342,6 +342,24 @@ describe('TourViewer', () => {
       expect(viewer().setNorth).toHaveBeenLastCalledWith(0.9);
     });
 
+    it('goes back to the scene on screen from the map, keeping the camera', async () => {
+      const { viewer } = await startTransition();
+      const pick = (name: string) => {
+        fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+        fireEvent.click(screen.getByRole('button', { name }));
+      };
+      // Already heading there.
+      pick('Church');
+      expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
+
+      pick('Square');
+      await waitFor(() => expect(viewer().pending).toHaveLength(2));
+      expect(viewer().transitionTo).toHaveBeenLastCalledWith('square', undefined);
+      await act(async () => viewer().pending[1]!.resolve());
+      expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
+      expect(crumb()).toBe('Square');
+    });
+
     it('snaps back to the scene on screen when the load fails, and can retry', async () => {
       const onLoadError = vi.fn();
       const onSceneChange = vi.fn();

@@ -291,6 +291,23 @@ describe('SceneMap', () => {
     expect(screen.queryByRole('button', { name: 'Kitchen' })).toBeNull();
   });
 
+  it('while a change is pending, goes back to the scene on screen but not to the pending one', () => {
+    const onSelect = vi.fn();
+    const scenes = [
+      { id: 'a', title: 'Hall' },
+      { id: 'b', title: 'Kitchen' },
+    ];
+    render(<SceneMap scenes={scenes} current="a" pending="b" onSelect={onSelect} />);
+    const pick = (name: string) => {
+      fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+      fireEvent.click(screen.getByRole('button', { name }));
+    };
+    pick('Kitchen');
+    expect(onSelect).not.toHaveBeenCalled();
+    pick('Hall');
+    expect(onSelect).toHaveBeenCalledWith('a');
+  });
+
   it('never points the toggle at a panel that is not there', () => {
     render(<SceneMap scenes={[{ id: 'a', title: 'Hall' }]} current="a" onSelect={() => {}} />);
     const toggle = screen.getByRole('button', { name: 'Map' });

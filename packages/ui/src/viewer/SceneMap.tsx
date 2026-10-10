@@ -12,7 +12,13 @@ export interface SceneMapEntry {
 
 export interface SceneMapProps {
   scenes: readonly SceneMapEntry[];
+  /** The scene on screen. */
   current: string;
+  /**
+   * The scene a change in flight is heading to. Choosing it again does
+   * nothing, while choosing `current` goes back (cancelling the change).
+   */
+  pending?: string;
   onSelect: (id: string) => void;
 }
 
@@ -24,7 +30,7 @@ const toPercent = (v: number, min: number, max: number) =>
   max === min ? 50 : 8 + ((v - min) / (max - min)) * 84;
 
 /** The "Map" corner button and its panel: a floor plan when the tour has one, plus a scene list. */
-export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
+export function SceneMap({ scenes, current, pending, onSelect }: SceneMapProps) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const placed = scenes.filter(isPlaced);
@@ -38,7 +44,7 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
   ];
   const select = (id: string) => {
     setOpen(false);
-    if (id !== current) onSelect(id);
+    if (id !== (pending ?? current)) onSelect(id);
   };
 
   return (

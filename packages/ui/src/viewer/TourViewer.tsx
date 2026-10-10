@@ -327,7 +327,11 @@ export function TourViewer({
           <SceneMap
             scenes={scenes}
             current={panoId}
-            onSelect={(id) => go(id, data.tour?.scenes[id]?.initialView)}
+            {...(moving && { pending: target.id })}
+            // Back to the scene on screen cancels a change and keeps the camera.
+            onSelect={(id) =>
+              go(id, id === panoId ? undefined : data.tour?.scenes[id]?.initialView)
+            }
           />
         )}
         <ViewerControls
