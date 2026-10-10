@@ -14,8 +14,9 @@ export interface TileGeometry {
   index: Uint16Array; // triangle list, 3 indices per triangle
 }
 
-/** Quad UVs (TL,TR,BL,BR), v flipped. Shared by every tile; never mutate. */
-const QUAD_UV = new Float32Array([0, 1, 1, 1, 0, 0, 1, 0]);
+/** Quad UVs (TL,TR,BL,BR). Tile images are upright, so the top-left corner
+ *  samples row 0 at v = 0. Shared by every tile; never mutate. */
+const QUAD_UV = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
 
 /** Quad triangle list. Shared by every tile; never mutate. The renderer
  *  draws 4-vertex geometry from one shared index buffer with this content. */

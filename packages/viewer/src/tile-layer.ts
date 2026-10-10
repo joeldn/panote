@@ -435,11 +435,9 @@ export class TileLayer {
       const res = await fetch(url, { signal: controller.signal });
       if (!res.ok) throw new TileHttpError(res.status);
       const blob = await res.blob();
-      // flipY here matches WebGL's bottom-left texture origin, so
-      // gl-renderer.ts can leave UNPACK_FLIP_Y_WEBGL off.
-      const bitmap = await createImageBitmap(blob, {
-        imageOrientation: 'flipY',
-      });
+      // Decoded upright (row 0 = top). The renderer uploads it unflipped and
+      // the tile UVs address row 0 as v = 0 (see tile-geometry.ts).
+      const bitmap = await createImageBitmap(blob);
       if (this.disposed) {
         bitmap.close();
         return { kind: 'aborted' };

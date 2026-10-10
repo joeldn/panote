@@ -542,6 +542,20 @@ describe('TileLayer failure handling', () => {
       layer.dispose();
     });
 
+    it('decodes tiles upright, with no flipY', async () => {
+      const layer = makeLayer();
+      const base = layer.loadBase();
+      await render(layer, 0);
+      await base;
+      const decode = vi.mocked(createImageBitmap);
+      expect(decode.mock.calls.length).toBeGreaterThan(FACES.length);
+      for (const args of decode.mock.calls) {
+        // Upright is the default; any option that flips it is a regression.
+        expect(args).toHaveLength(1);
+      }
+      layer.dispose();
+    });
+
     it('still closes the bitmap when the upload throws', async () => {
       const bitmaps = trackBitmaps();
       renderer.uploadTile.mockImplementation(() => {
