@@ -80,7 +80,10 @@ describe('owner preview', () => {
     const globalFetch = vi.spyOn(globalThis, 'fetch');
     open();
     await shown();
-    fireEvent.click(await screen.findByRole('button', { name: 'Altar' }));
+    // The markers render before the stage hands its viewer to them; a click in between
+    // opens the panel but has no viewer to report to. load() runs once it has.
+    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    fireEvent.click(screen.getByRole('button', { name: 'Altar' }));
     expect(await screen.findByRole('complementary')).toBeTruthy();
     // The open went through the viewer's hotspot-open event, as it does for visitors.
     expect(lastViewer().reportHotspotOpen).toHaveBeenCalledWith('i1');
