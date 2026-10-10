@@ -27,6 +27,14 @@ export function ViewerControls({
 }: ViewerControlsProps) {
   const viewer = usePanoViewer();
   const [fullscreen, setFullscreen] = useState(false);
+  // Offer fullscreen only when the document doesn't forbid it (false in an embed
+  // without allow="fullscreen") and the target can actually request it: iPhone
+  // Safari's elements can't, and some browsers only have a prefixed version.
+  // Before mount the ref is empty, and the root element answers for it.
+  const fullscreenEl = fullscreenTarget?.current ?? document.documentElement;
+  const canFullscreen =
+    (document.fullscreenEnabled as boolean | undefined) !== false &&
+    typeof fullscreenEl.requestFullscreen === 'function';
   useEffect(() => {
     const sync = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', sync);
@@ -38,8 +46,9 @@ export function ViewerControls({
   };
   const toggleFullscreen = () => {
     const el = fullscreenTarget?.current;
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else if (el?.requestFullscreen) void el.requestFullscreen();
+    // Either can still reject (permissions, no user gesture); nothing to do then.
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
   };
 
   return (
@@ -60,7 +69,7 @@ export function ViewerControls({
       >
         <i className="fa-solid fa-plus" aria-hidden="true" />
       </button>
-      {fullscreenTarget && (
+      {fullscreenTarget && canFullscreen && (
         <button
           type="button"
           className="pn-controls__btn pn-controls__btn--accent"

@@ -6,6 +6,11 @@
   background: #0d0c0a;
   font-family: var(--fbody);
 }
+/* Dark behind the safe areas while the tour loads, like the viewer itself (viewer.css). */
+:root:has(.tour-page--loading),
+:root:has(.tour-page--loading) body {
+  background: #0d0c0a;
+}
 
 .tour-stats {
   display: flex;
@@ -18,9 +23,7 @@
   border: 0;
   padding: 9px 12px;
   border-radius: 11px;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   color: var(--ink);
   font: 500 13px var(--fmono);
@@ -44,15 +47,15 @@
 }
 
 .tour-view--embed .pn-controls--top {
-  top: 16px;
+  top: calc(16px + env(safe-area-inset-top, 0px));
 }
 .pn-stage__overlay > .tour-embed-brand {
   position: absolute;
-  top: 14px;
-  left: 14px;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  left: calc(14px + env(safe-area-inset-left, 0px));
   padding: 6px 10px;
   border-radius: var(--r-pill);
-  background: var(--cbg);
+  background: var(--cbg-solid);
   color: var(--ink);
   text-decoration: none;
   font-size: 12px;
