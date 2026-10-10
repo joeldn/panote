@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FACES, type Manifest } from '@panote/core';
+import { FACES, faceUVToDir, tileCornersUV, type Face, type Manifest } from '@panote/core';
 import { BaseTileLoadError, TileLayer } from './tile-layer.js';
 import { TileFailureMonitor } from './tile-retry.js';
 import { viewProjection } from './render/projection.js';
@@ -515,6 +515,71 @@ describe('TileLayer failure handling', () => {
     expect(requests).toHaveLength(abortedTiles.length);
     expect(monitor.escalationLevel).toBe(0);
     layer.dispose();
+  });
+
+  describe('scheduling', () => {
+    /** Unit direction through the centre of the tile a URL names. */
+    function centreDir(url: string): { x: number; y: number; z: number } {
+      const m = /\/(\d+)\/(\w+)\/(\d+)-(\d+)\.jpg$/.exec(url)!;
+      const corners = tileCornersUV(Number(m[1]), Number(m[3]), Number(m[4]));
+      const d = faceUVToDir(
+        m[2] as Face,
+        (corners[0]!.u + corners[1]!.u) / 2,
+        (corners[0]!.v + corners[2]!.v) / 2,
+      );
+      const len = Math.hypot(d.x, d.y, d.z);
+      return { x: d.x / len, y: d.y / len, z: d.z / len };
+    }
+
+    function facing(url: string, yaw: number): number {
+      const c = centreDir(url);
+      const f = dirFromYawPitch(yaw, 0);
+      return c.x * f.x + c.y * f.y + c.z * f.z;
+    }
+
+    it('requests tiles nearest the centre of the view first', async () => {
+      const layer = makeLayer();
+      await render(layer, 0);
+      expect(requests.length).toBeGreaterThan(8);
+      const dots = requests.map((u) => facing(u, 0));
+      for (let i = 1; i < dots.length; i++) expect(dots[i]).toBeLessThanOrEqual(dots[i - 1]!);
+      layer.dispose();
+    });
+
+    it('never requests a tile behind the camera', async () => {
+      const layer = makeLayer();
+      for (const yaw of [0, Math.PI / 2, Math.PI]) {
+        requests = [];
+        await render(layer, yaw);
+        expect(requests.length).toBeGreaterThan(0);
+        for (const url of requests) expect(facing(url, yaw)).toBeGreaterThan(0);
+      }
+      layer.dispose();
+    });
+
+    it('never has more than maxConcurrent fetches open, across pans and re-requests', async () => {
+      let open = 0;
+      let peak = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          requests.push(url);
+          open++;
+          peak = Math.max(peak, open);
+          return new Promise((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => {
+              open--;
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          });
+        }),
+      );
+      const layer = makeLayer();
+      for (const yaw of [0, Math.PI / 2, 0, Math.PI, 0]) await render(layer, yaw);
+      expect(requests.length).toBeGreaterThan(8);
+      expect(peak).toBe(8);
+      layer.dispose();
+    });
   });
 
   describe('in-flight ownership', () => {

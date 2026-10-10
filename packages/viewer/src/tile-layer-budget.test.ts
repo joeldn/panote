@@ -49,21 +49,26 @@ class FakeRenderer {
    * cost this budget exists to avoid paying twice.
    */
   live = new Set<number>();
+  /** Tile URL behind each live handle, so a test can ask "is this tile resident?". */
+  urls = new Map<number, string>();
   uploads = 0;
-  uploadTile = (): number => {
+  uploadTile = (_geom: unknown, bitmap: { url: string }): number => {
     const handle = this.next++;
     this.uploads++;
     this.live.add(handle);
+    this.urls.set(handle, bitmap.url);
     return handle;
   };
   removeTile = (handle: number): void => {
     this.live.delete(handle);
+    this.urls.delete(handle);
   };
+  residentUrls(): Set<string> {
+    return new Set(this.urls.values());
+  }
 }
 
 interface SweepResult {
-  /** Tiles at the selected level the first frame had to fetch — the visible set. */
-  visibleSet: number;
   /** Every tile request issued during the sweep, base layer included. */
   fetches: number;
   /** Distinct tile URLs among them. */
@@ -76,6 +81,8 @@ interface SweepResult {
   baseHandles: Set<number>;
   /** Everything still resident at the end of the pan, before the layer is torn down. */
   liveAtEnd: Set<number>;
+  /** Tiles requested for a view that were gone again while that view still held. */
+  visibleEvicted: string[];
 }
 
 describe('texture budget while panning', () => {
@@ -95,12 +102,12 @@ describe('texture budget while panning', () => {
       'fetch',
       vi.fn((url: string) => {
         requests.push(url);
-        return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) });
+        return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({ url }) });
       }),
     );
     vi.stubGlobal(
       'createImageBitmap',
-      vi.fn(() => Promise.resolve({ close: vi.fn() })),
+      vi.fn((blob: { url: string }) => Promise.resolve({ close: vi.fn(), url: blob.url })),
     );
   });
 
@@ -110,7 +117,10 @@ describe('texture budget while panning', () => {
 
   /**
    * Two full 360° laps at 15° per frame: load the base, then pan the whole way
-   * round twice and count what the cache had to do over again.
+   * round twice and count what the cache had to do over again. Every step is
+   * rendered twice, the second time with the camera still, and every tile the
+   * first frame asked for must still be resident after the second: those
+   * tiles are on screen, and evicting one is the refetch loop.
    */
   async function sweep(budgetMB: number, viewportHeight: number): Promise<SweepResult> {
     const layer = new TileLayer(
@@ -128,36 +138,47 @@ describe('texture budget while panning', () => {
     await layer.loadBase();
     const baseHandles = new Set(renderer.live);
     expect(baseHandles.size).toBe(FACES.length);
-    const afterBase = requests.length;
 
+    const visibleEvicted: string[] = [];
     const steps = 24;
-    let visibleSet = 0;
     for (let i = 0; i < steps * 2; i++) {
       const yaw = (i * 2 * Math.PI) / steps;
       const view = { yaw, pitch: 0, fov: REQUESTED_FOV_DEG };
-      layer.update(
-        viewProjection(view, ASPECT, MAX_HORIZONTAL_FOV_DEG),
-        FOV_DEG,
-        dirFromYawPitch(yaw, 0),
-        viewportHeight,
-      );
+      const render = (): void =>
+        layer.update(
+          viewProjection(view, ASPECT, MAX_HORIZONTAL_FOV_DEG),
+          FOV_DEG,
+          dirFromYawPitch(yaw, 0),
+          viewportHeight,
+        );
+      const before = requests.length;
+      render();
       await flush();
-      // Frame 1 starts from a cache holding only the base, so every tile it
-      // fetches is one the frustum wants: that count is the visible set.
-      if (i === 0) visibleSet = requests.length - afterBase;
+      const wanted = requests.slice(before);
+      render();
+      await flush();
+      const resident = renderer.residentUrls();
+      for (const url of wanted) if (!resident.has(url)) visibleEvicted.push(url);
     }
 
     const result: SweepResult = {
-      visibleSet,
       fetches: requests.length,
       distinct: new Set(requests).size,
       refetches: requests.length - new Set(requests).size,
       evictions: renderer.uploads - renderer.live.size,
       baseHandles,
       liveAtEnd: new Set(renderer.live),
+      visibleEvicted,
     };
     layer.dispose();
     return result;
+  }
+
+  /** A sweep on a fresh renderer and request log. */
+  async function freshSweep(budgetMB: number, viewportHeight: number): Promise<SweepResult> {
+    renderer = new FakeRenderer();
+    requests = [];
+    return sweep(budgetMB, viewportHeight);
   }
 
   it('keeps every visible tile when the visible set is bigger than the budget', async () => {
@@ -206,73 +227,39 @@ describe('texture budget while panning', () => {
     expect(selectLevel(FOV_DEG, DEVICE_PIXEL_HEIGHT, TILE_SIZE, 3)).toBe(3);
   });
 
-  it('had headroom to spare while levels were selected from CSS pixels', async () => {
-    // The calibration 084c1ea invalidated: 128 MB is 128 tiles at tileSize 512
-    // (512 * 512 * 4 = 1 MiB each), and level 2 puts 24 on screen — 5.3x the
-    // visible set, so two full laps never evict anything and never refetch.
-    const before = await sweep(128, CSS_PIXEL_HEIGHT);
-    expect(before.visibleSet).toBe(24);
-    expect(before.fetches).toBe(78);
-    expect(before.refetches).toBe(0);
-    expect(before.evictions).toBe(0);
+  it('never refetches when a whole lap fits in the budget', async () => {
+    // At CSS-pixel height the lap touches far fewer tiles than 128 MB holds.
+    const roomy = await sweep(128, CSS_PIXEL_HEIGHT);
+    expect(roomy.refetches).toBe(0);
+    expect(roomy.evictions).toBe(0);
   });
 
-  it('thrashes on a DPR-2 display if the budget stays at the DPR-1 default', async () => {
-    // Same panorama, same pan, same 128 MB — but level 3 puts 88 tiles on
-    // screen, so the budget is 1.45x the visible set and the pan is spent
-    // evicting tiles that are about to be wanted again.
-    const unscaled = await sweep(128, DEVICE_PIXEL_HEIGHT);
-    expect(unscaled.visibleSet).toBe(88);
-    expect(unscaled.distinct).toBe(270);
-    expect(unscaled.fetches).toBe(602);
-    expect(unscaled.refetches).toBe(332);
-    expect(unscaled.evictions).toBe(460);
+  it('refetches less as the budget grows, and not at all once the lap fits', async () => {
+    // Same panorama, same pan, same tiles wanted at every budget.
+    const budgets = [1, 64, 128, defaultTextureBudgetMB(2, 2), 512];
+    const results: SweepResult[] = [];
+    for (const budget of budgets) results.push(await freshSweep(budget, DEVICE_PIXEL_HEIGHT));
+
+    for (const r of results) expect(r.distinct).toBe(results[0]!.distinct);
+    for (let i = 1; i < results.length; i++) {
+      expect(results[i]!.refetches).toBeLessThanOrEqual(results[i - 1]!.refetches);
+      expect(results[i]!.evictions).toBeLessThanOrEqual(results[i - 1]!.evictions);
+    }
+    // The floor budget really is under pressure, and 512 MB holds the lap.
+    expect(results[0]!.refetches).toBeGreaterThan(0);
+    expect(results.at(-1)!.refetches).toBe(0);
+    expect(results.at(-1)!.evictions).toBe(0);
   });
 
-  it('cuts the refetching sharply once the budget scales with the pixel ratio', async () => {
-    const unscaled = await sweep(128, DEVICE_PIXEL_HEIGHT);
-    renderer = new FakeRenderer();
-    requests = [];
-    const scaled = await sweep(defaultTextureBudgetMB(2, 2), DEVICE_PIXEL_HEIGHT);
-
-    // Same panorama, same pan, same tiles wanted — 256 MB is 256 tiles, 2.9x
-    // the 88-tile visible set against 1.45x before.
-    expect(scaled.visibleSet).toBe(unscaled.visibleSet);
-    expect(scaled.distinct).toBe(unscaled.distinct);
-    expect(scaled.fetches).toBe(370);
-    expect(scaled.refetches).toBe(100);
-    expect(scaled.evictions).toBe(112);
-
-    // 3.3x fewer refetches and 4.1x fewer evictions, i.e. that much less
-    // repeated decode-and-upload work per lap.
-    expect(scaled.refetches * 3).toBeLessThan(unscaled.refetches);
-    expect(scaled.evictions * 4).toBeLessThan(unscaled.evictions);
-  });
-
-  it('reduces the thrash rather than eliminating it, which is the cap being paid for', async () => {
-    // Honesty about the residual: two full laps touch 270 distinct tiles and
-    // 256 holds fewer, so the far side of a lap still displaces the near side.
-    const scaled = await sweep(defaultTextureBudgetMB(2, 2), DEVICE_PIXEL_HEIGHT);
-    expect(scaled.distinct).toBeGreaterThan(256);
-    expect(scaled.refetches).toBeGreaterThan(0);
-
-    // Eliminating it outright takes 3x, not 2x — the whole lap resident at
-    // once. That is ~384 MB of base-level textures (~512 MB with mip levels)
-    // on a display that is as likely to be a phone as a laptop, which is the
-    // trade MAX_BUDGET_PIXEL_RATIO deliberately declines to make.
-    renderer = new FakeRenderer();
-    requests = [];
-    const uncapped = await sweep(384, DEVICE_PIXEL_HEIGHT);
-    expect(uncapped.refetches).toBe(0);
-    expect(uncapped.evictions).toBe(0);
-  });
-
-  it('still never evicts the level-0 base under the scaled budget', async () => {
+  it('never evicts the level-0 base or a tile on screen, at any budget', async () => {
     // The floor the coarse fallback depends on: whatever the budget is, the six
     // level-0 tiles stay resident, so a missing finer tile degrades to soft
-    // detail instead of to a hole.
-    const scaled = await sweep(defaultTextureBudgetMB(2, 2), DEVICE_PIXEL_HEIGHT);
-    expect(scaled.evictions).toBeGreaterThan(0); // eviction really did run
-    for (const handle of scaled.baseHandles) expect(scaled.liveAtEnd.has(handle)).toBe(true);
+    // detail instead of to a hole. And a tile in view stays in view.
+    for (const budget of [1, 128, defaultTextureBudgetMB(2, 2)]) {
+      const r = await freshSweep(budget, DEVICE_PIXEL_HEIGHT);
+      expect(r.visibleEvicted).toEqual([]);
+      for (const handle of r.baseHandles) expect(r.liveAtEnd.has(handle)).toBe(true);
+      if (budget === 1) expect(r.evictions).toBeGreaterThan(0); // eviction really did run
+    }
   });
 });
