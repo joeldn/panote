@@ -52,6 +52,15 @@ describe('renderMarkdown', () => {
     expect(renderMarkdown('[x](/\\evil.com)')).toBe('<p>x</p>');
   });
 
+  it('rejects links with a tab, CR or LF inside, which browsers strip', () => {
+    // `/\t/evil.com` looks relative, but becomes `//evil.com` once the tab is stripped.
+    expect(renderMarkdown('[x](/\t/evil.com)')).toBe('<p>x</p>');
+    expect(renderMarkdown('[x](/\r/evil.com)')).toBe('<p>x</p>');
+    expect(renderMarkdown('[x](https://ok.com/\ta)')).toBe('<p>x</p>');
+    // A newline also splits the line, so it never forms a link at all.
+    expect(renderMarkdown('[x](/\n/evil.com)')).not.toContain('href');
+  });
+
   it('does not double-escape a URL containing an ampersand', () => {
     // inline() escapes the whole input up front, so by the time the link
     // regex runs, `&` in the URL is already `&amp;`. Escaping it again here

@@ -15,6 +15,9 @@ function escapeHtml(s: string): string {
 // data:, vbscript:) renders as plain text so a description can't smuggle code.
 function safeUrl(url: string): string | null {
   const u = url.trim();
+  // Browsers strip tab, CR and LF from URLs before parsing, so `/\t/evil.com`
+  // would pass the relative check below yet resolve as `//evil.com`.
+  if (/[\t\n\r]/.test(u)) return null;
   if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u)) {
     return u;
   }
