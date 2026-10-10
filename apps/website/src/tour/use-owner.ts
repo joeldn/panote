@@ -1,3 +1,4 @@
+import { createAdminApi } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 
 import { useAccount } from '../account.js';
@@ -19,23 +20,19 @@ export function useIsOwner(tourId: string): boolean {
   useEffect(() => {
     if (!signedIn) return;
     const ac = new AbortController();
-    // Only signed-in visitors ask, so the admin client is fetched on demand.
-    import('@internal/web-kit/admin')
-      .then(({ createAdminApi }) =>
-        createAdminApi({
-          getToken: () => auth.getAccessToken(),
-          baseUrl: apiBase,
-          fetch: (input, init) => globalThis.fetch(input, { ...init, signal: ac.signal }),
-        }).getTour(tourId),
-      )
-      .then(
-        (result) => {
-          if (!ac.signal.aborted && result.status === 'ok') setOwnerOf(tourId);
-        },
-        () => {
-          // Not the owner as far as this page is concerned; the button just stays hidden.
-        },
-      );
+    const api = createAdminApi({
+      getToken: () => auth.getAccessToken(),
+      baseUrl: apiBase,
+      fetch: (input, init) => globalThis.fetch(input, { ...init, signal: ac.signal }),
+    });
+    api.getTour(tourId).then(
+      (result) => {
+        if (!ac.signal.aborted && result.status === 'ok') setOwnerOf(tourId);
+      },
+      () => {
+        // Not the owner as far as this page is concerned; the button just stays hidden.
+      },
+    );
     return () => ac.abort();
   }, [signedIn, auth, apiBase, tourId]);
 

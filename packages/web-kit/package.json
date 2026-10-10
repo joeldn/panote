@@ -15,11 +15,6 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./admin": {
-      "source": "./src/api/admin.ts",
-      "types": "./dist/api/admin.d.ts",
-      "default": "./dist/api/admin.js"
-    },
     "./build": {
       "source": "./src/build.ts",
       "types": "./dist/build.d.ts",
