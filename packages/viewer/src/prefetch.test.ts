@@ -124,6 +124,39 @@ describe('prefetchPano', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('cancels the body of an error response for the manifest and the tiles', async () => {
+    const cancelled: string[] = [];
+    const failing = (url: string) => {
+      const res = new Response('nope', { status: 404 });
+      const cancel = res.body!.cancel.bind(res.body!);
+      vi.spyOn(res.body!, 'cancel').mockImplementation((reason) => {
+        cancelled.push(url);
+        return cancel(reason);
+      });
+      return res;
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => failing(url)),
+    );
+    await prefetchPano(BASE, 'church');
+    expect(cancelled).toEqual([`${BASE}church/manifest.json`]);
+
+    cancelled.length = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('manifest.json')
+          ? ok(manifest)
+          : url.includes('/px/')
+            ? failing(url)
+            : ok('tile'),
+      ),
+    );
+    await prefetchPano(BASE, 'church');
+    expect(cancelled).toEqual([`${BASE}church/v1/0/px/0-0.webp`]);
+  });
+
   it('resolves quietly when a tile fails', async () => {
     vi.stubGlobal(
       'fetch',

@@ -13,6 +13,7 @@ import { createSiteAuth } from '../site-auth.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 type ViewerOptions = Parameters<ViewerFactory>[1];
+type LoadOptions = Parameters<PanoViewer['load']>[1];
 type PanoViewer = ReturnType<ViewerFactory>;
 
 const CDN = 'https://cdn.test/';
@@ -62,13 +63,16 @@ class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
   failLoad = false;
   constructor(readonly options: ViewerOptions) {}
-  load = vi.fn(async (pano: string) => {
+  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
     if (this.failLoad) throw new Error('manifest 404');
     this.emit('scene-change', pano);
+    return true;
   });
   transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
+  isSettled = () => false;
+  focus = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   dispose = vi.fn();
@@ -575,7 +579,7 @@ describe('visitor share', () => {
     expect(x.getAttribute('href')).toContain(encodeURIComponent('https://panote.test/s/old-town'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    // The lazily loaded sheet stays mounted and opens again.
+    // The sheet is part of the page from the start: closed, it opens again.
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     expect(await screen.findByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
   });

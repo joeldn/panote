@@ -20,6 +20,11 @@ function prefetchAllowed(): boolean {
   return c.saveData !== true && c.effectiveType !== '2g' && c.effectiveType !== 'slow-2g';
 }
 
+/** Drop an error response's body unread, so its connection is freed rather than held. */
+function discard(res: Response): void {
+  res.body?.cancel().catch(() => {});
+}
+
 /**
  * Warm the HTTP cache for a pano the visitor may open next: its manifest and
  * the six level-0 tiles that `PanoViewer.load` blocks on. Requests go out at
@@ -36,13 +41,17 @@ export async function prefetchPano(
   const init: RequestInit = { priority: 'low', ...(signal && { signal }) };
   try {
     const res = await fetch(manifestUrl(baseUrl, pano), init);
-    if (!res.ok) return;
+    if (!res.ok) {
+      discard(res);
+      return;
+    }
     const m = parseManifest(await res.json());
     await Promise.allSettled(
       FACES.map(async (face) => {
         const url = tilePath(baseUrl, m.pano, 0, face, 0, 0, m.format, m.version);
         const tile = await fetch(url, init);
         if (tile.ok) await tile.arrayBuffer();
+        else discard(tile);
       }),
     );
   } catch {

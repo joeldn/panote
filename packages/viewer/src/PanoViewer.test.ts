@@ -33,6 +33,7 @@ vi.mock('./render/gl-renderer.js', () => {
       height: 0,
       style: {} as Record<string, string>,
       tabIndex: 0,
+      focus: vi.fn(),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
@@ -160,7 +161,7 @@ type Internals = {
   wasPending: boolean;
   renderer: {
     render: ReturnType<typeof vi.fn>;
-    canvas: { addEventListener: ReturnType<typeof vi.fn> };
+    canvas: { addEventListener: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn> };
   };
 };
 const internals = (viewer: PanoViewer) => viewer as unknown as Internals;
@@ -1670,6 +1671,13 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('focus() focuses its canvas without scrolling the page', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.focus();
+      expect(internals(viewer).renderer.canvas.focus).toHaveBeenCalledWith({ preventScroll: true });
+      viewer.dispose();
+    });
+
     it('keeps rendering when an onRender callback throws', () => {
       const report = vi.fn();
       vi.stubGlobal('reportError', report);
@@ -2195,6 +2203,27 @@ describe('PanoViewer', () => {
           const { error, id } = loadError.mock.calls[0]![0] as { error: Error; id: string };
           expect(id).toBe('pano-a');
           expect(error.name).toBe('BaseTileLoadError');
+          viewer.dispose();
+        });
+
+        it('reports a load-error listener that throws instead of rejecting', async () => {
+          // Without the catch, vitest fails the run on the unhandled rejection.
+          stubNet();
+          const report = vi.fn();
+          vi.stubGlobal('reportError', report);
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          await viewer.load('pano-a');
+          const boom = new Error('listener');
+          viewer.on('load-error', () => {
+            throw boom;
+          });
+          const fake = fakeOf(viewer);
+          fake.loseContext();
+          const notFound = { ok: false, status: 404, blob: () => Promise.resolve({}) };
+          vi.mocked(fetch).mockImplementation(() => Promise.resolve(notFound as Response));
+          fake.restoreContext();
+          for (let i = 0; i < 5; i++) await flush();
+          expect(report).toHaveBeenCalledWith(boom);
           viewer.dispose();
         });
 

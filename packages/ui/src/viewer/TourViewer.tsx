@@ -1,5 +1,5 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import { prefetchPano } from '@panote/viewer';
+import { prefetchPano, type PanoViewer } from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
@@ -166,8 +166,14 @@ function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
       for (const id of ids) void warm(baseUrl, id, { signal: controller.signal });
     };
     viewer.on('tiles-settled', settled);
+    // This effect runs after the scene swapped in, and a scene that needs no
+    // more than its base can settle before that: its event has gone.
+    if (viewer.isSettled()) settled();
     return () => {
       viewer.off('tiles-settled', settled);
+      // Deliberately all of them, even one for the scene being entered: the
+      // real load fetches the same URLs at full priority, and the next
+      // scene's own prefetch should not queue behind this one's.
       controller.abort();
     };
   }, [viewer, baseUrl, key]);
@@ -198,6 +204,7 @@ export function TourViewer({
   prefetch = prefetchPano,
 }: TourViewerProps) {
   const frame = useRef<HTMLDivElement>(null);
+  const [viewer, setViewer] = useState<PanoViewer | null>(null);
   // `target` is the scene asked for; `shown` is the one on screen, which only
   // moves once the viewer reports the new pano drawable. The chrome follows
   // `shown`, so nothing for the next scene lands over the old pano.
@@ -206,6 +213,12 @@ export function TourViewer({
     view: data.tour?.scenes[start]?.initialView,
   }));
   const [shown, setShown] = useState(start);
+  // The viewer (and its baseUrl) that last reported a scene on screen. Until
+  // the current viewer has, it is empty and counts as settled, so the
+  // prefetch would race its first load. The baseUrl is checked too: in the
+  // render where it changes, the old viewer is still the one in hand.
+  const [arrivedOn, setArrivedOn] = useState<{ viewer: PanoViewer; baseUrl: string } | null>(null);
+  const arrived = arrivedOn?.viewer === viewer && arrivedOn.baseUrl === baseUrl;
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(
     () => data.settings.autoRotate && !prefersReducedMotion(),
@@ -236,15 +249,28 @@ export function TourViewer({
   const links = moving ? NONE : sceneLinks;
   const prefetchTargets = useMemo(
     () =>
-      [...new Set(links.map((l) => l.to))].filter((id) => id !== panoId).slice(0, PREFETCH_LIMIT),
-    [links, panoId],
+      arrived
+        ? [...new Set(links.map((l) => l.to))]
+            .filter((id) => id !== panoId)
+            .slice(0, PREFETCH_LIMIT)
+        : NONE,
+    [arrived, links, panoId],
   );
   const go = (id: string, view: Scene['view']) => {
+    // Markers and chevrons hide during a move, so one activated from the
+    // keyboard would take focus down to <body> with it: hand focus to the
+    // viewer before it goes.
+    const focused = document.activeElement;
+    const root = frame.current;
+    if (viewer && root && focused?.closest('.pn-anchors') && root.contains(focused)) {
+      viewer.focus();
+    }
     setActive(null);
     setTarget({ id, view });
   };
   const landed = (id: string) => {
     setShown(id);
+    if (viewer) setArrivedOn({ viewer, baseUrl });
     if (reported.current === id) return;
     reported.current = id;
     onSceneChange?.(id);
@@ -277,6 +303,7 @@ export function TourViewer({
         transition
         {...(createViewer && { createViewer })}
         aria-label={`${title}: ${data.titles[panoId] ?? ''}`}
+        onViewer={setViewer}
         onSceneChange={landed}
         {...(onHotspotOpen && {
           onHotspotOpen: (hotspotId: string) => onHotspotOpen(panoId, hotspotId),
@@ -313,7 +340,11 @@ export function TourViewer({
           <SceneMap
             scenes={scenes}
             current={panoId}
-            onSelect={(id) => go(id, data.tour?.scenes[id]?.initialView)}
+            {...(moving && { pending: target.id })}
+            // Back to the scene on screen cancels a change and keeps the camera.
+            onSelect={(id) =>
+              go(id, id === panoId ? undefined : data.tour?.scenes[id]?.initialView)
+            }
           />
         )}
         <ViewerControls

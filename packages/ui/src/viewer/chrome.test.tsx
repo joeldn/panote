@@ -291,6 +291,45 @@ describe('SceneMap', () => {
     expect(screen.queryByRole('button', { name: 'Kitchen' })).toBeNull();
   });
 
+  it('while a change is pending, goes back to the scene on screen but not to the pending one', () => {
+    const onSelect = vi.fn();
+    const scenes = [
+      { id: 'a', title: 'Hall' },
+      { id: 'b', title: 'Kitchen' },
+    ];
+    render(<SceneMap scenes={scenes} current="a" pending="b" onSelect={onSelect} />);
+    const pick = (name: string) => {
+      fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+      fireEvent.click(screen.getByRole('button', { name }));
+    };
+    pick('Kitchen, loading');
+    expect(onSelect).not.toHaveBeenCalled();
+    pick('Hall');
+    expect(onSelect).toHaveBeenCalledWith('a');
+  });
+
+  it('marks the pending scene busy, with a spinner and a spoken "loading"', () => {
+    const scenes = [
+      { id: 'a', title: 'Hall' },
+      { id: 'b', title: 'Kitchen' },
+    ];
+    const { rerender } = render(
+      <SceneMap scenes={scenes} current="a" pending="b" onSelect={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const kitchen = screen.getByRole('button', { name: 'Kitchen, loading' });
+    expect(kitchen.getAttribute('aria-busy')).toBe('true');
+    expect(kitchen.className).toContain('pn-scenemap__item--pending');
+    expect(kitchen.querySelector('.pn-scenemap__spinner')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Hall' }).getAttribute('aria-busy')).toBeNull();
+
+    // Landed: no longer pending.
+    rerender(<SceneMap scenes={scenes} current="b" onSelect={() => {}} />);
+    const landed = screen.getByRole('button', { name: 'Kitchen' });
+    expect(landed.getAttribute('aria-busy')).toBeNull();
+    expect(landed.className).not.toContain('pn-scenemap__item--pending');
+  });
+
   it('never points the toggle at a panel that is not there', () => {
     render(<SceneMap scenes={[{ id: 'a', title: 'Hall' }]} current="a" onSelect={() => {}} />);
     const toggle = screen.getByRole('button', { name: 'Map' });

@@ -14,7 +14,15 @@ import {
   type ViewerLinkArrow,
 } from '@internal/ui';
 import { MAX_TOUR_SCENES, tilesBaseUrl } from '@internal/web-kit';
-import { useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import {
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { Link, Outlet, useBlocker, useParams, useSearchParams } from 'react-router';
 
 import './editor.css';
@@ -198,7 +206,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const settings = tour.settings ?? DEFAULT_TOUR_SETTINGS;
   const blocker = useUnsavedGuards(dirty.length > 0, docs.tourId);
 
-  const sceneIds = tour.scenes.map((s) => s.panoId);
+  const sceneIds = useMemo(() => tour.scenes.map((s) => s.panoId), [tour.scenes]);
   const startId = tour.startPanoId && sceneIds.includes(tour.startPanoId) ? tour.startPanoId : null;
   // Uploads into this tour, and the ones that have no scene yet (the pending cards).
   const jobs = uploads.pendingFor(docs.tourId);
@@ -319,16 +327,27 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
 
   // Look-only: nothing can be placed or edited on this scene (see `point` below).
   const placingNow = placing && !lookOnly;
-  const points = cfg ? cfg.hotspots.filter((h) => h.type === 'info') : [];
+  // Memoised: the stage's markers and chevrons re-place themselves whenever
+  // these arrays change, so a new one on every editor render would do it on
+  // every keystroke.
+  const points = useMemo(() => (cfg ? cfg.hotspots.filter((h) => h.type === 'info') : []), [cfg]);
+  const markers = useMemo(() => points.map(toViewerHotspot), [points]);
   const point = lookOnly ? null : (points.find((h) => h.id === activePoint) ?? null);
-  const links: ViewerLinkArrow[] = cfg
-    ? cfg.hotspots.flatMap((h) => {
-        const target = h.targetPanoId ? docs.scenes[h.targetPanoId] : undefined;
-        if (h.type !== 'link' || !h.targetPanoId || !sceneIds.includes(h.targetPanoId)) return [];
-        if (h.targetPanoId === currentId || target?.kind !== 'config') return [];
-        return [{ to: h.targetPanoId, yaw: h.yaw, label: target.current.title }];
-      })
-    : [];
+  const links = useMemo<ViewerLinkArrow[]>(
+    () =>
+      cfg
+        ? cfg.hotspots.flatMap((h) => {
+            const target = h.targetPanoId ? docs.scenes[h.targetPanoId] : undefined;
+            if (h.type !== 'link' || !h.targetPanoId || !sceneIds.includes(h.targetPanoId)) {
+              return [];
+            }
+            // Not this scene itself (cfg is the scene on stage's config).
+            if (target?.kind !== 'config' || target.current === cfg) return [];
+            return [{ to: h.targetPanoId, yaw: h.yaw, label: target.current.title }];
+          })
+        : [],
+    [cfg, docs.scenes, sceneIds],
+  );
 
   const view = () => viewer?.getView();
   const place = (e: MouseEvent<HTMLDivElement>) => {
@@ -399,7 +418,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           <FloorLinks key={`links-${currentId}`} links={links} onGo={(l) => select(l.to)} />
           <HotspotMarkers
             key={`points-${currentId}`}
-            hotspots={points.map(toViewerHotspot)}
+            hotspots={markers}
             activeId={activePoint}
             onOpen={(h) => {
               if (lookOnly) return;

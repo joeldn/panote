@@ -180,6 +180,7 @@ export class FakeServer {
 }
 
 type Handler = (payload: string) => void;
+type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 /** jsdom has no WebGL: a PanoViewer stand-in with a scriptable view. */
 export class FakeViewer {
@@ -187,19 +188,24 @@ export class FakeViewer {
   /** What directionAtPixel returns (where a placed point lands). */
   pointAt = { yaw: 0.5, pitch: 0.1 };
   handlers = new Map<string, Set<Handler>>();
-  load = vi.fn(async (pano: string) => this.emit('scene-change', pano));
+  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
+    this.emit('scene-change', pano);
+    return true;
+  });
   transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
   setView = vi.fn((v: Partial<{ yaw: number; pitch: number; fov: number }>) => {
     this.view = { ...this.view, ...v };
   });
   getView = () => ({ ...this.view });
+  isSettled = () => false;
+  focus = vi.fn();
   directionAtPixel = vi.fn(() => ({ ...this.pointAt }));
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   showPreview = vi.fn();
   dispose = vi.fn();
   onRender = () => () => {};
-  project = () => ({ x: 0, y: 0, behind: false });
+  project = vi.fn((_yaw: number, _pitch: number) => ({ x: 0, y: 0, behind: false }));
   heading = () => 0;
   // Like PanoViewer: reporting an open emits it, so onHotspotOpen handlers run.
   reportHotspotOpen = vi.fn((id: string) => this.emit('hotspot-open', id));

@@ -471,8 +471,13 @@ export class PanoViewer {
     this.invalidate();
     if (next) {
       this.reload(next).catch((error: unknown) => {
-        // Nobody awaits this load, so the host hears about it as an event.
-        this.emitter.emit('load-error', { error, id: next.pano });
+        // Nobody awaits this load, so the host hears about it as an event. A
+        // listener that throws here would be an unhandled rejection instead.
+        try {
+          this.emitter.emit('load-error', { error, id: next.pano });
+        } catch (err) {
+          report(err);
+        }
       });
     }
     this.emitter.emit('context-restored', undefined);
@@ -740,6 +745,15 @@ export class PanoViewer {
       this.target.fov = clampFov(view.fov, this.opts.minFov, this.opts.maxFov);
     this.stopMomentumOnly();
     this.invalidate();
+  }
+
+  /**
+   * Give the viewer keyboard focus, so its arrow and zoom keys work. A host
+   * calls this when chrome it put over the viewer goes away while focused,
+   * so focus lands here rather than on the page. The page does not scroll.
+   */
+  focus(): void {
+    this.renderer.canvas.focus({ preventScroll: true });
   }
 
   /** The camera being moved to, with yaw in (−π, π]. */

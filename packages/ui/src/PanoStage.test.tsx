@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PanoStage, type StagePreview } from './PanoStage.js';
 import { usePanoViewer } from './viewer-context.js';
 
-type Handler = (payload: string) => void;
+type Handler = (payload: unknown) => void;
 
 class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
@@ -39,7 +39,7 @@ class FakeViewer {
     this.handlers.get(type)?.add(fn);
   };
   off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
+  emit(type: string, payload?: unknown) {
     this.handlers.get(type)?.forEach((fn) => fn(payload));
   }
 }
@@ -771,5 +771,168 @@ describe('PanoStage', () => {
     rerender(<PanoStage baseUrl="b/" panoId={null} createViewer={f.createViewer} />);
     rerender(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
     expect(v.load).toHaveBeenCalledTimes(2);
+  });
+
+  describe('after a WebGL context restore', () => {
+    it('shows the preview again, with replacesVersion, then loads', () => {
+      const f = factory();
+      const { preview, source, sources } = previewOf('hall', { replacesVersion: 'v1' });
+      render(
+        <PanoStage baseUrl="b/" panoId="hall" preview={preview} createViewer={f.createViewer} />,
+      );
+      const v = f.last();
+      expect(v.calls).toEqual(['show:hall', 'load:hall']);
+
+      act(() => {
+        v.emit('context-lost');
+        v.emit('context-restored');
+      });
+
+      expect(source).toHaveBeenCalledTimes(2);
+      expect(v.calls).toEqual(['show:hall', 'load:hall', 'show:hall', 'load:hall']);
+      expect(v.showPreview).toHaveBeenLastCalledWith('hall', sources[1], { replacesVersion: 'v1' });
+      // A preview is not a pano change: the camera stays where it is.
+      expect(v.setView).not.toHaveBeenCalled();
+      expect(v.load).toHaveBeenLastCalledWith('hall');
+    });
+
+    it('leaves the reload to the viewer without a preview', () => {
+      const f = factory();
+      render(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
+      const v = f.last();
+      act(() => v.emit('context-restored'));
+      expect(v.calls).toEqual(['load:hall']);
+    });
+
+    it("reports the viewer's own failed reload to onLoadError", () => {
+      const f = factory();
+      const onLoadError = vi.fn();
+      render(
+        <PanoStage
+          baseUrl="b/"
+          panoId="hall"
+          onLoadError={onLoadError}
+          createViewer={f.createViewer}
+        />,
+      );
+      const lost = new Error('manifest 503');
+      act(() => f.last().emit('load-error', { error: lost, id: 'hall' }));
+      expect(onLoadError).toHaveBeenCalledWith(lost, 'hall');
+    });
+  });
+
+  describe('going back after a failed change', () => {
+    async function failedHop(over: { reloadKey?: string } = {}) {
+      const f = factory();
+      const onLoadError = vi.fn();
+      const stage = (panoId: string, reloadKey?: string) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          transition
+          {...(reloadKey !== undefined && { reloadKey })}
+          onLoadError={onLoadError}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      const err = new Error('manifest 500');
+      v.transitionTo.mockRejectedValueOnce(err);
+      await act(async () => rerender(stage('nave')));
+      expect(onLoadError).toHaveBeenCalledWith(err, 'nave');
+      await act(async () => rerender(stage('hall', over.reloadKey)));
+      return { v, rerender, stage };
+    }
+
+    it('does not reload the pano the viewer still has on screen', async () => {
+      const { v, rerender, stage } = await failedHop();
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave']);
+      expect(v.calls).toEqual(['load:hall']);
+
+      // It is the pano on stage again: the same link can be tried again.
+      await act(async () => rerender(stage('nave')));
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
+    });
+
+    it('reloads it when its reloadKey changed meanwhile', async () => {
+      const { v } = await failedHop({ reloadKey: 'v2' });
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
+
+    it("loads it when the viewer's own reload of it after a context restore failed", async () => {
+      const f = factory();
+      const stage = (panoId: string) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          transition
+          onLoadError={() => {}}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      act(() => {
+        v.emit('context-lost');
+        v.emit('context-restored');
+        v.emit('load-error', { error: new Error('manifest 503'), id: 'hall' });
+      });
+      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      await act(async () => rerender(stage('nave')));
+      await act(async () => rerender(stage('hall')));
+      // Nothing of hall is on screen any more: it has to be loaded.
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
+
+    it('loads it again when its own load failed after it landed', async () => {
+      const f = factory();
+      const { preview } = previewOf('hall');
+      const stage = (panoId: string) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          preview={preview}
+          transition
+          onLoadError={() => {}}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      // The preview landed (the viewer reports it on screen), then its tiles
+      // failed to load: what the stage has for hall is not settled.
+      v.showPreview.mockImplementation((pano) => {
+        v.calls.push(`show:${pano}`);
+        v.emit('scene-change', pano);
+      });
+      v.load.mockRejectedValueOnce(new Error('manifest 404'));
+      act(() => {
+        v.emit('context-lost');
+        v.emit('context-restored');
+      });
+      await act(async () => {});
+      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      await act(async () => rerender(stage('nave')));
+      await act(async () => rerender(stage('hall')));
+      expect(v.calls.filter((c) => c === 'show:hall')).toHaveLength(3);
+    });
+
+    it('loads it when the change was only superseded, not failed', () => {
+      const f = factory();
+      const stage = (panoId: string) => (
+        <PanoStage baseUrl="b/" panoId={panoId} transition createViewer={f.createViewer} />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      v.transitionTo.mockReturnValueOnce(new Promise(() => {}));
+      rerender(stage('nave'));
+      // The hop is still in flight; only a new load cancels it.
+      rerender(stage('hall'));
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
   });
 });
