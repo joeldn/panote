@@ -40,6 +40,13 @@ describe('ViewerControls fullscreen', () => {
     expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();
   });
 
+  it('hides the button when fullscreen is enabled but the target has no requestFullscreen', () => {
+    // e.g. a browser with only a prefixed API: the button would do nothing.
+    setFullscreenEnabled(true);
+    renderControls(document.createElement('div'));
+    expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();
+  });
+
   it('swallows a rejected fullscreen request', async () => {
     setFullscreenEnabled(true);
     const el = document.createElement('div');

@@ -27,13 +27,13 @@ export function ViewerControls({
 }: ViewerControlsProps) {
   const viewer = usePanoViewer();
   const [fullscreen, setFullscreen] = useState(false);
-  // Trust the browser's answer when it gives one (false in an embed without
-  // allow="fullscreen"). Without one, offer it only if the target can go
-  // fullscreen at all, which iPhone Safari's elements can't. Before mount the
-  // ref is empty, and the root element answers for it.
+  // Offer fullscreen only when the document doesn't forbid it (false in an embed
+  // without allow="fullscreen") and the target can actually request it: iPhone
+  // Safari's elements can't, and some browsers only have a prefixed version.
+  // Before mount the ref is empty, and the root element answers for it.
   const fullscreenEl = fullscreenTarget?.current ?? document.documentElement;
   const canFullscreen =
-    (document.fullscreenEnabled as boolean | undefined) ??
+    (document.fullscreenEnabled as boolean | undefined) !== false &&
     typeof fullscreenEl.requestFullscreen === 'function';
   useEffect(() => {
     const sync = () => setFullscreen(!!document.fullscreenElement);
