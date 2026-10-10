@@ -160,6 +160,38 @@ describe('TourViewer', () => {
     expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('church', 'i2');
   });
 
+  it('closes the open point on a second click of its marker', () => {
+    const onHotspotOpen = vi.fn();
+    renderViewer({ onHotspotOpen });
+    const marker = screen.getByRole('button', { name: 'Fountain' });
+    fireEvent.click(marker);
+    expect(screen.getByRole('complementary')).toBeTruthy();
+    expect(marker.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(marker);
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(marker.getAttribute('aria-pressed')).toBe('false');
+    expect(onHotspotOpen).toHaveBeenCalledOnce();
+  });
+
+  it('starts with auto-rotate off when the visitor prefers reduced motion', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })),
+    );
+    try {
+      const { viewer } = renderViewer({
+        data: data({ settings: { ...settings, autoRotate: true } }),
+      });
+      await waitFor(() => expect(viewer().load).toHaveBeenCalled());
+      expect(viewer().setAutoRotate).not.toHaveBeenCalledWith(true);
+      expect(screen.getByRole('button', { name: 'Auto-rotate' }).getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('honours the tour settings', async () => {
     const { viewer } = renderViewer({
       data: data({
@@ -192,6 +224,39 @@ describe('TourViewer', () => {
     renderViewer({ onShare });
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     expect(onShare).toHaveBeenCalledOnce();
+  });
+
+  it('leaves fullscreen before sharing, and handles a refused exit', () => {
+    const onShare = vi.fn();
+    // A rejection with no handler attached is an unhandled rejection in the page.
+    const refused = Promise.reject(new TypeError('not allowed'));
+    const then = refused.then.bind(refused);
+    let handled = false;
+    refused.then = ((ok?: unknown, fail?: unknown) => {
+      if (fail) handled = true;
+      return then(ok as never, fail as never);
+    }) as typeof refused.then;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      value: document.body,
+    });
+    let exits = 0;
+    // A plain function: a vi.fn would attach its own handlers to track the result.
+    document.exitFullscreen = () => {
+      exits += 1;
+      return refused;
+    };
+    try {
+      renderViewer({ onShare });
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      expect(exits).toBe(1);
+      expect(onShare).toHaveBeenCalledOnce();
+      expect(handled).toBe(true);
+    } finally {
+      void then(undefined, () => {});
+      delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+      delete (document as { exitFullscreen?: unknown }).exitFullscreen;
+    }
   });
 
   it('reports a failed load with the pano and keeps the chrome', async () => {

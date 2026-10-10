@@ -67,6 +67,10 @@ type Scene = { id: string; view: { yaw?: number; pitch?: number; fov?: number } 
 
 const NONE: never[] = [];
 
+// Auto-rotate is motion the visitor didn't start, so it starts off for those who opt out.
+const prefersReducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => {
   const h: ViewerHotspot = {
     id: source.id,
@@ -103,8 +107,11 @@ function PointsLayer({
 }: PointsLayerProps) {
   const viewer = usePanoViewer();
   const open = (h: ViewerHotspot) => {
-    // Clicking the marker of the point already open (e.g. to close it) isn't another open.
-    if (active?.id === h.id) return;
+    // The marker is a toggle (aria-pressed): a second click closes its point.
+    if (active?.id === h.id) {
+      setActive(null);
+      return;
+    }
     setActive(h);
     viewer?.reportHotspotOpen(h.id);
   };
@@ -160,7 +167,9 @@ export function TourViewer({
   }));
   const [shown, setShown] = useState(start);
   const [active, setActive] = useState<ViewerHotspot | null>(null);
-  const [autoRotate, setAutoRotate] = useState(data.settings.autoRotate);
+  const [autoRotate, setAutoRotate] = useState(
+    () => data.settings.autoRotate && !prefersReducedMotion(),
+  );
   // The scene last passed to `onSceneChange`: a reload of the scene on screen
   // (after a failed change) lands it again, and that is not a new visit.
   const reported = useRef<string | null>(null);
@@ -275,7 +284,8 @@ export function TourViewer({
               aria-haspopup="dialog"
               onClick={() => {
                 // A share sheet portals to <body>, which a fullscreen stage would hide.
-                if (document.fullscreenElement) void document.exitFullscreen();
+                // It can be refused (e.g. an embed without allow="fullscreen").
+                if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
                 onShare();
               }}
             >
