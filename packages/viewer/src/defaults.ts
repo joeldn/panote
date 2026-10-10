@@ -24,7 +24,8 @@ export interface ViewerDefaults {
   readonly momentumFriction: number;
   readonly maxPixelRatio: number;
   /**
-   * Cap on backbuffer pixels. About 2560 × 1640: a phone or a laptop is under
+   * Cap on backbuffer pixels: one 4K frame. A phone or a laptop at its
+   * default scaling (a 14" MacBook is 1512 × 982 at DPR 2, 5.9 Mpx) is under
    * it, while a 5K display at DPR 2 (14.7 Mpx) would otherwise fetch, decode
    * and fill a finer pyramid level for little visible gain.
    */
@@ -50,7 +51,7 @@ export const VIEWER_DEFAULTS: ViewerDefaults = Object.freeze({
   damping: 0.25,
   momentumFriction: 0.9,
   maxPixelRatio: 2,
-  maxPixels: 4_200_000,
+  maxPixels: 8_300_000,
   antialias: false,
   maxConcurrent: 8,
   transitionMs: 400,

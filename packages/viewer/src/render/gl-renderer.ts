@@ -99,6 +99,12 @@ export function boundingSphere(pos: Float32Array): Sphere {
   return { cx, cy, cz, r: Math.sqrt(r2) };
 }
 
+/** Hand an error to the host's error reporting without throwing. */
+function report(err: unknown): void {
+  if (typeof reportError === 'function') reportError(err);
+  else console.error(err);
+}
+
 function isQuadIndex(index: Uint16Array): boolean {
   if (index === QUAD_INDEX) return true;
   if (index.length !== QUAD_INDEX.length) return false;
@@ -212,8 +218,14 @@ export class GLRenderer {
     if (this.disposed) return;
     // Every GL object died with the old context.
     this.tiles.clear();
-    // Still lost if this throws (the context went again): nothing is drawn.
-    this.initGL();
+    try {
+      this.initGL();
+    } catch (err) {
+      // The context went again, or the rebuild failed: stay lost, so nothing
+      // draws or uploads, and never throw out of an event listener.
+      report(err);
+      return;
+    }
     this.lost = false;
     this.onContextRestored?.();
   };

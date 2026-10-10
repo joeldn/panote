@@ -59,6 +59,10 @@ export type PanoViewerEvents = {
   // is loaded again by the viewer; a preview is not, since its pixels were
   // released once uploaded.
   'context-restored': undefined;
+  // A load the viewer started on its own (the reload after a context restore)
+  // failed. `id` is the source it was loading. Loads the host starts reject
+  // their own promise instead.
+  'load-error': { error: unknown; id: string };
 };
 
 export interface LoadOptions {

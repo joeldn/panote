@@ -2178,6 +2178,26 @@ describe('PanoViewer', () => {
           viewer.dispose();
         });
 
+        it('emits load-error when the reload after a restore fails', async () => {
+          stubNet();
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          await viewer.load('pano-a');
+          const loadError = vi.fn();
+          viewer.on('load-error', loadError);
+          const fake = fakeOf(viewer);
+          fake.loseContext();
+          // The base tiles are gone from the origin by the time it comes back.
+          const notFound = { ok: false, status: 404, blob: () => Promise.resolve({}) };
+          vi.mocked(fetch).mockImplementation(() => Promise.resolve(notFound as Response));
+          fake.restoreContext();
+          for (let i = 0; i < 5; i++) await flush();
+          expect(loadError).toHaveBeenCalledTimes(1);
+          const { error, id } = loadError.mock.calls[0]![0] as { error: Error; id: string };
+          expect(id).toBe('pano-a');
+          expect(error.name).toBe('BaseTileLoadError');
+          viewer.dispose();
+        });
+
         it('drops the preview, whose pixels are gone with the context', () => {
           const viewer = new PanoViewer(makeContainer(400, 800));
           const image = () =>
@@ -2215,9 +2235,6 @@ describe('PanoViewer', () => {
           runUntilIdle();
           expect(settled).toHaveReturnedWith(true);
           expect(viewer.isSettled()).toBe(true);
-
-          viewer.setView({ yaw: 0.5 });
-          expect(viewer.isSettled()).toBe(false); // the camera is moving
           viewer.dispose();
         });
 
@@ -2239,16 +2256,31 @@ describe('PanoViewer', () => {
           expect(viewer.isSettled()).toBe(true);
         });
 
-        it('is false while momentum is left or auto-rotate turns', () => {
-          const viewer = new PanoViewer(makeContainer(400, 800));
-          runUntilIdle();
+        it('follows the tiles alone, settled while auto-rotate turns', () => {
+          const viewer = new PanoViewer(makeContainer(400, 800), {
+            autoRotate: true,
+            autoRotateSpeed: 1,
+          });
+          let pending = true;
+          internals(viewer).layer = {
+            update: vi.fn(),
+            drawList: () => [],
+            hasPending: () => pending,
+          };
+          internals(viewer).wasPending = true;
+          const settled = vi.fn(() => viewer.isSettled());
+          viewer.on('tiles-settled', settled);
+          raf.step();
+          raf.step();
+          expect(viewer.isSettled()).toBe(false);
+          pending = false;
+          raf.step();
+          // The camera is still turning, and the tiles are settled all the same.
+          expect(raf.pending).toBe(1);
+          expect(settled).toHaveReturnedWith(true);
           expect(viewer.isSettled()).toBe(true);
-          internals(viewer).momentum.yaw = 1e-3;
+          pending = true; // the turn brings new tiles into view
           expect(viewer.isSettled()).toBe(false);
-          internals(viewer).momentum.yaw = 0;
-          viewer.setAutoRotate(true);
-          expect(viewer.isSettled()).toBe(false);
-          viewer.dispose();
         });
       });
 
@@ -2353,8 +2385,8 @@ describe('PanoViewer', () => {
           expect(second.listeners.size).toBe(0);
         });
 
-        it('passes maxPixels to the renderer, 4.2 Mpx unless set', () => {
-          expect(fakeOf(new PanoViewer(makeContainer(400, 800))).opts.maxPixels).toBe(4_200_000);
+        it('passes maxPixels to the renderer, 8.3 Mpx unless set', () => {
+          expect(fakeOf(new PanoViewer(makeContainer(400, 800))).opts.maxPixels).toBe(8_300_000);
           const viewer = new PanoViewer(makeContainer(400, 800), { maxPixels: 1e6 });
           expect(fakeOf(viewer).opts.maxPixels).toBe(1e6);
         });
@@ -2388,6 +2420,11 @@ describe('PanoViewer', () => {
         expect(overlay.style['cssText']).toContain('width:100%');
         await finish(done);
         expect(overlay.remove).toHaveBeenCalled();
+        // Its backing store is released at once, not left for GC.
+        expect([
+          (overlay as { width?: number }).width,
+          (overlay as { height?: number }).height,
+        ]).toEqual([0, 0]);
         viewer.dispose();
       });
     });

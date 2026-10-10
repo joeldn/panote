@@ -53,6 +53,16 @@ function report(err: unknown): void {
   else console.error(err);
 }
 
+/**
+ * Take a transition snapshot off the page, and free its backing store now
+ * rather than at GC: Safari caps the memory all canvases may hold.
+ */
+function dropOverlay(el: HTMLCanvasElement): void {
+  el.remove();
+  el.width = 0;
+  el.height = 0;
+}
+
 /** A load to finish after a context restore. */
 interface Reload {
   pano: string;
@@ -129,7 +139,7 @@ export class PanoViewer {
   // What render callbacks are handed: a copy, so they cannot move the camera
   // by writing to it, reused so a frame allocates nothing.
   private frameView: View = { yaw: 0, pitch: 0, fov: 0 };
-  private transitionOverlay: HTMLElement | undefined;
+  private transitionOverlay: HTMLCanvasElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
   // Matches only at the current device pixel ratio, so it fires when the
   // window moves to a display with another one. Re-armed each time.
@@ -290,6 +300,13 @@ export class PanoViewer {
    * Resolves true when it took effect and false when a newer load, a preview
    * or dispose() superseded it; rejects only for a load that is still current.
    * `options.view` is applied at the swap, with no easing from the old camera.
+   *
+   * WebGL context loss: a load in flight when the context is lost resolves
+   * false, and so does one started while it is lost, which waits (its base
+   * tiles cannot be uploaded) until the context is restored or the viewer is
+   * disposed. Either way the viewer loads that pano itself once the context
+   * is back, with the same view, and emits `ready` and `scene-change` for it;
+   * if that reload fails it emits `load-error` instead.
    */
   async load(pano: string, options: LoadOptions = {}): Promise<boolean> {
     const token = this.supersede();
@@ -452,7 +469,12 @@ export class PanoViewer {
     this.lostRequest = undefined;
     this.disposePreview();
     this.invalidate();
-    if (next) this.reload(next).catch(report);
+    if (next) {
+      this.reload(next).catch((error: unknown) => {
+        // Nobody awaits this load, so the host hears about it as an event.
+        this.emitter.emit('load-error', { error, id: next.pano });
+      });
+    }
     this.emitter.emit('context-restored', undefined);
   };
 
@@ -501,7 +523,7 @@ export class PanoViewer {
     this.manifestAbort = undefined;
     for (const pending of this.pendingLayers) pending.dispose();
     this.pendingLayers.clear();
-    this.transitionOverlay?.remove();
+    if (this.transitionOverlay) dropOverlay(this.transitionOverlay);
     this.transitionOverlay = undefined;
     return token;
   }
@@ -927,20 +949,15 @@ export class PanoViewer {
   }
 
   /**
-   * Whether the viewer is at rest: the camera has stopped (and is not
-   * auto-rotating) and every tile the view needs has landed or failed. It
-   * turns true on the frame that emits `tiles-settled`, so a host that
-   * subscribes late can check whether it missed that. It describes the scene
-   * on screen: a load still in flight does not count until it swaps in.
+   * Whether `tiles-settled` holds right now: the frame that settles has run
+   * and the scene on screen has no tiles pending. A host that subscribes to
+   * `tiles-settled` late can check this instead of waiting for the next one.
+   * Like the event, it says nothing about the camera: a moving or
+   * auto-rotating view is settled whenever its tiles are in. A load still in
+   * flight does not count until it swaps in.
    */
   isSettled(): boolean {
-    return (
-      !this.contextLost &&
-      this.cameraSettled() &&
-      !this.autoRotating() &&
-      !this.wasPending &&
-      !(this.layer?.hasPending() ?? false)
-    );
+    return !this.contextLost && !this.wasPending && !(this.layer?.hasPending() ?? false);
   }
 
   /**
@@ -1009,7 +1026,7 @@ export class PanoViewer {
       // Always tear the overlay down — even if load() rejected — but don't
       // clobber an overlay a newer transitionTo may have installed.
       if (snap) {
-        snap.remove();
+        dropOverlay(snap);
         if (this.transitionOverlay === snap) this.transitionOverlay = undefined;
       }
     }

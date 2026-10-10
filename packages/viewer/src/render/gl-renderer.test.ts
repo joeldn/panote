@@ -325,11 +325,19 @@ describe('GLRenderer', () => {
       dpr(2);
       const { canvas, renderer } = setup();
       renderer.resize(2560, 1440);
-      expect(canvas.width * canvas.height).toBeLessThanOrEqual(4_200_000);
+      expect(canvas.width * canvas.height).toBeLessThanOrEqual(8_300_000);
+      expect(canvas.width * canvas.height).toBeGreaterThan(8_000_000);
       // Lowered evenly, not clipped: same aspect, still sharper than DPR 1.
       expect(canvas.width / canvas.height).toBeCloseTo(2560 / 1440, 2);
       expect(canvas.width).toBeGreaterThan(2560);
       expect(canvas.style['width']).toBe('2560px');
+    });
+
+    it("leaves a 14-inch MacBook's default scaling at DPR 2 at the full ratio", () => {
+      dpr(2);
+      const { canvas, renderer } = setup();
+      renderer.resize(1512, 982);
+      expect([canvas.width, canvas.height]).toEqual([3024, 1964]);
     });
 
     it('leaves a phone at DPR 2 at the full ratio', () => {
@@ -436,6 +444,20 @@ describe('GLRenderer', () => {
       renderer.render([{ handle: old, level: 0 }]);
       expect(gl.drawElements).not.toHaveBeenCalled();
       expect(renderer.uploadTile(grid(), image())).not.toBe(old);
+    });
+
+    it('stays lost and reports, without throwing, when the rebuild on restore fails', () => {
+      const report = vi.fn();
+      vi.stubGlobal('reportError', report);
+      const onContextRestored = vi.fn();
+      const { renderer, fire, gl } = setup({ onContextRestored });
+      fire('webglcontextlost');
+      gl.createProgram.mockReturnValue(null);
+      expect(() => fire('webglcontextrestored')).not.toThrow();
+      expect(report).toHaveBeenCalledTimes(1);
+      expect(renderer.isContextLost()).toBe(true);
+      expect(onContextRestored).not.toHaveBeenCalled();
+      expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
     });
 
     it('does not prevent the loss dispose() causes, so no restore is armed', () => {
