@@ -773,7 +773,19 @@ describe('TileLayer failure handling', () => {
     });
 
     it('keeps a resident parent while it stands in for a missing child', async () => {
-      const layer = await withLevel1(makeLayer());
+      // Slots for every tile in view, so the second frame below has all the
+      // children in flight and none still queued.
+      const layer = await withLevel1(
+        new TileLayer(
+          renderer as unknown as GLRenderer,
+          makeManifest('pano-a'),
+          '/tiles/',
+          128,
+          () => {},
+          64,
+          () => clock,
+        ),
+      );
       vi.stubGlobal(
         'fetch',
         vi.fn(() => new Promise(() => {})),
@@ -788,10 +800,26 @@ describe('TileLayer failure handling', () => {
       };
       expect(cache.size).toBe(20); // four of the 24 went
       expect(desired.size).toBeGreaterThan(0);
+      const parentsResident = (): void => {
+        for (const key of desired) {
+          const [, face, xy] = key.split('/') as [string, string, string];
+          const [x, y] = xy.split('-').map(Number) as [number, number];
+          expect(cache.has(`1/${face}/${x >> 1}-${y >> 1}`)).toBe(true);
+        }
+      };
+      parentsResident();
+
+      // Next frame the children are in flight rather than queued; their
+      // parents still stand in for them, so they are stamped as used again.
+      frame(layer, 0);
+      const { inflight } = layer as unknown as { inflight: Map<string, unknown> };
+      for (const key of desired) expect(inflight.has(key)).toBe(true);
+      const frameNo = (layer as unknown as { clock: number }).clock;
       for (const key of desired) {
         const [, face, xy] = key.split('/') as [string, string, string];
         const [x, y] = xy.split('-').map(Number) as [number, number];
-        expect(cache.has(`1/${face}/${x >> 1}-${y >> 1}`)).toBe(true);
+        const parent = cache.get(`1/${face}/${x >> 1}-${y >> 1}`) as { lastUsed: number };
+        expect(parent.lastUsed).toBe(frameNo);
       }
       layer.dispose();
     });

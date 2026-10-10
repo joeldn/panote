@@ -385,21 +385,24 @@ export class TileLayer {
         // Cached and still wanted — refresh LRU stamp so eviction reflects
         // actual visibility, not upload/insertion order.
         entry.lastUsed = this.clock;
-      } else if (this.inflight.has(key) || this.ready.has(key)) {
+        continue;
+      }
+      const o = i * STRIDE;
+      // Smaller = closer to the view centre.
+      const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
+      const f = Math.floor(i / (g * g));
+      const rest = i - f * g * g;
+      const x = rest % g;
+      const y = Math.floor(rest / g);
+      if (this.inflight.has(key) || this.ready.has(key)) {
         // On its way.
       } else if (this.retry.eligible(key)) {
-        const o = i * STRIDE;
-        // Smaller = closer to the view centre.
-        const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
-        const f = Math.floor(i / (g * g));
-        const rest = i - f * g * g;
-        const x = rest % g;
-        const y = Math.floor(rest / g);
         this.pushCandidate(key, level, FACES[f]!, x, y, priority);
-        if (level >= 2) this.queueParent(f, level - 1, x >> 1, y >> 1, priority);
       } else {
         nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
       }
+      // Missing, however long for: its parent is what shows in its place.
+      if (level >= 2) this.queueParent(f, level - 1, x >> 1, y >> 1, priority);
     }
 
     // Abort in-flight loads that have been out of the view for
