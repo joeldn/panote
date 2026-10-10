@@ -14,16 +14,27 @@ export interface DrawItem {
 }
 
 /**
- * Sort the draw list so coarse tiles (low level) paint first and finer levels
- * paint over them — replaces three's mesh.renderOrder = level. Stable, pure.
+ * The draw list in stacking order, back to front: coarse tiles (low level)
+ * at the back, finer levels over them. Stable, pure. render() gets the same
+ * result with the depth test while drawing in the reverse order.
  */
 export function sortDrawList(list: DrawItem[]): DrawItem[] {
-  return [...list].sort(byLevel);
+  return [...list].sort((a, b) => a.level - b.level);
 }
 
-// Array.prototype.sort is stable, so equal levels keep their list order.
-function byLevel(a: DrawItem, b: DrawItem): number {
-  return a.level - b.level;
+// Finest level first. Array.prototype.sort is stable, so equal levels keep
+// their list order.
+function finestFirst(a: DrawItem, b: DrawItem): number {
+  return b.level - a.level;
+}
+
+/**
+ * Clip-space depth for the `rank`-th distinct level (0 = finest) out of
+ * `count`. Strictly increasing with rank and strictly inside (-1, 1), so
+ * every rank passes LESS against the cleared depth of 1.
+ */
+function rankDepth(rank: number, count: number): number {
+  return -1 + (2 * (rank + 1)) / (count + 1);
 }
 
 interface TileResources {
@@ -71,12 +82,15 @@ function isQuadIndex(index: Uint16Array): boolean {
 const VERT_SRC = `#version 300 es
 precision highp float;
 uniform mat4 uViewProj;
+// Per-level depth (see rankDepth): finer levels sit in front.
+uniform float uZ;
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUv;
 out vec2 vUv;
 void main() {
   vUv = aUv;
   gl_Position = uViewProj * vec4(aPos, 1.0);
+  gl_Position.z = uZ * gl_Position.w;
 }`;
 
 // Textures are plain RGBA8 holding sRGB-encoded bytes, and the canvas shows
@@ -99,6 +113,7 @@ export class GLRenderer {
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
   private uViewProj: WebGLUniformLocation;
+  private uZ: WebGLUniformLocation;
   private anisoExt: EXT_texture_filter_anisotropic | null;
   private pixelRatio: number;
   private maxPixelRatio: number;
@@ -119,10 +134,10 @@ export class GLRenderer {
     this.canvas.style.display = 'block';
     const gl = this.canvas.getContext('webgl2', {
       antialias: opts.antialias ?? false,
-      // three's WebGLRenderer defaulted to an opaque backbuffer (alpha:false);
-      // this restores exact compositing parity, and depth/stencil are unused.
+      // Opaque backbuffer. Depth lets finer levels reject the coarser
+      // fragments behind them (see render()). Stencil is unused.
       alpha: false,
-      depth: false,
+      depth: true,
       stencil: false,
       // no preserveDrawingBuffer — snapshot() reads back synchronously instead.
     });
@@ -141,6 +156,7 @@ export class GLRenderer {
 
     this.program = this.buildProgram(VERT_SRC, FRAG_SRC);
     this.uViewProj = this.getUniform('uViewProj');
+    this.uZ = this.getUniform('uZ');
     // One program and one texture unit for the renderer's whole life, so
     // bind them once here rather than every frame.
     gl.useProgram(this.program);
@@ -154,8 +170,10 @@ export class GLRenderer {
 
     this.pixelRatio = Math.min(window.devicePixelRatio, this.maxPixelRatio);
 
-    // Static GL state — opaque tiles, painter's-order layering, interior faces.
-    gl.disable(gl.DEPTH_TEST);
+    // Static GL state: opaque tiles, layered by depth (see render()), and
+    // interior faces.
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE); // quads visible from the origin looking outward
     gl.clearColor(0, 0, 0, 1);
@@ -315,7 +333,7 @@ export class GLRenderer {
 
   render(drawList: DrawItem[]): void {
     const gl = this.gl;
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.viewProj) return;
     gl.uniformMatrix4fv(this.uViewProj, false, this.viewProj);
 
@@ -328,9 +346,25 @@ export class GLRenderer {
       const t = this.tiles.get(item.handle);
       if (t && intersectsSphere(frustum, t.bounds)) order.push(item);
     }
-    order.sort(byLevel);
+    // Every resident level covers the screen, so painting coarse-first would
+    // shade each pixel once per level. Instead draw finest-first, with each
+    // distinct level (rank) at its own depth, finer in front: coarser
+    // fragments behind a finer tile then fail the depth test early and are
+    // never shaded. Ranks, not raw levels, so fractional preview levels such
+    // as -0.5 or 2.5 slot in between. Tiles of one level never overlap, so
+    // sharing a depth within a level is fine.
+    order.sort(finestFirst);
+    let ranks = 0;
+    for (let i = 0; i < order.length; i++) {
+      if (i === 0 || order[i]!.level !== order[i - 1]!.level) ranks++;
+    }
 
-    for (const item of order) {
+    let rank = -1;
+    for (let i = 0; i < order.length; i++) {
+      const item = order[i]!;
+      if (i === 0 || item.level !== order[i - 1]!.level) {
+        gl.uniform1f(this.uZ, rankDepth(++rank, ranks));
+      }
       const t = this.tiles.get(item.handle)!;
       gl.bindVertexArray(t.vao);
       gl.bindTexture(gl.TEXTURE_2D, t.tex);

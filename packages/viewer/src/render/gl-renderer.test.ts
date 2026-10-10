@@ -350,6 +350,59 @@ describe('GLRenderer', () => {
       expect(drawnTextures(gl)).toEqual([front.tex]);
     });
 
+    it('requests a depth buffer and depth-tests with LESS', () => {
+      const { gl, canvas } = setup();
+      expect(canvas.getContext.mock.calls[0]![1]).toMatchObject({ depth: true });
+      expect(gl.enable).toHaveBeenCalledWith(gl.DEPTH_TEST);
+      expect(gl.depthFunc).toHaveBeenCalledWith(gl.LESS);
+      expect(gl.disable).not.toHaveBeenCalledWith(gl.DEPTH_TEST);
+    });
+
+    it('clears colour and depth every frame', () => {
+      const { gl, renderer } = setup();
+      renderer.setCamera(camera());
+      renderer.render([]);
+      expect(gl.clear).toHaveBeenCalledWith(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    });
+
+    it('draws finest-first with a strictly larger depth per coarser rank', () => {
+      const { gl, renderer, log } = setup();
+      // All in front of the camera, near the nz face centre. 1.5 is a
+      // preview's fractional level, between tile levels 1 and 2.
+      const l0 = tile(renderer, gl, 'nz', 0);
+      const l1 = tile(renderer, gl, 'nz', 1, 1, 1);
+      const l2a = tile(renderer, gl, 'nz', 2, 1, 1);
+      const l2b = tile(renderer, gl, 'nz', 2, 2, 2);
+      const preview = tile(renderer, gl, 'nz', 1, 0, 0);
+      const previewItem = { handle: preview.handle, level: 1.5, tex: preview.tex };
+      renderer.setCamera(camera());
+      const start = log.length;
+      let texCall = gl.bindTexture.mock.calls.length;
+      gl.uniform1f.mockClear();
+      renderer.render([l0, l2a, previewItem, l1, l2b]);
+
+      // Pair each draw with the texture and uZ in effect at that point.
+      const draws: { tex: unknown; z: number }[] = [];
+      let tex: unknown;
+      let z = Number.NaN;
+      let zCall = 0;
+      for (const name of log.slice(start)) {
+        if (name === 'bindTexture') tex = gl.bindTexture.mock.calls[texCall++]![1];
+        if (name === 'uniform1f') z = gl.uniform1f.mock.calls[zCall++]![1] as number;
+        if (name === 'drawElements') draws.push({ tex, z });
+      }
+      expect(draws.map((d) => d.tex)).toEqual([l2a.tex, l2b.tex, preview.tex, l1.tex, l0.tex]);
+      const zs = draws.map((d) => d.z);
+      // Same level, same depth; each coarser rank strictly deeper; all
+      // inside the clip range and short of the cleared depth.
+      expect(zs[0]).toBe(zs[1]);
+      for (let i = 2; i < zs.length; i++) expect(zs[i]!).toBeGreaterThan(zs[i - 1]!);
+      for (const v of zs) {
+        expect(v).toBeGreaterThan(-1);
+        expect(v).toBeLessThan(1);
+      }
+    });
+
     it('skips handles that are not resident', () => {
       const { gl, renderer } = setup();
       const front = tile(renderer, gl, 'nz');
