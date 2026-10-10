@@ -1,7 +1,7 @@
 import type { PublishedTour, ViewBeacon } from '@internal/contracts';
-import { Logo, LogoMark, TourViewer } from '@internal/ui';
+import { Logo, LogoMark, ShareModal, TourViewer } from '@internal/ui';
 import { publishedToViewerTour, tilesBaseUrl } from '@internal/web-kit';
-import { lazy, Suspense, useContext, useMemo, useState } from 'react';
+import { useContext, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import './tour.css';
@@ -27,9 +27,6 @@ const cdnMatcher = (cdnBase: string) => {
     }
   };
 };
-
-// Most visitors never open the share sheet, so it is its own chunk, fetched on first Share.
-const ShareModal = lazy(async () => ({ default: (await import('@internal/ui/share')).ShareModal }));
 
 // Mounted only once a scene is shown, so an unavailable tour never records a view.
 function TourStats({
@@ -73,8 +70,6 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
 
   const [failed, setFailed] = useState(false);
   const [sharing, setSharing] = useState(false);
-  // Stays true after the first Share, so the sheet keeps its close transition.
-  const [shareLoaded, setShareLoaded] = useState(false);
   // Set once a scene is on screen; a view is only counted from then on.
   const [shown, setShown] = useState(false);
   const surface = embed ? 'embed' : 'page';
@@ -104,10 +99,7 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
           end: <OwnerEdit tourId={tour.tourId} />,
         },
         // Visitor share sheet (design README 7); the embed links back here instead.
-        onShare: () => {
-          setShareLoaded(true);
-          setSharing(true);
-        },
+        onShare: () => setSharing(true),
       })}
       overlay={(panoId) =>
         embed && (
@@ -141,18 +133,16 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
     >
       {tour.visibility === 'unlisted' && <meta name="robots" content="noindex" />}
       <title>{`${tour.title} · panote`}</title>
-      {!embed && shareLoaded && (
-        <Suspense fallback={null}>
-          <ShareModal
-            open={sharing}
-            onClose={() => setSharing(false)}
-            variant="visitor"
-            siteOrigin={config.siteOrigin}
-            title={tour.title}
-            slug={tour.slug}
-            visibility={tour.visibility}
-          />
-        </Suspense>
+      {!embed && (
+        <ShareModal
+          open={sharing}
+          onClose={() => setSharing(false)}
+          variant="visitor"
+          siteOrigin={config.siteOrigin}
+          title={tour.title}
+          slug={tour.slug}
+          visibility={tour.visibility}
+        />
       )}
     </TourViewer>
   );
