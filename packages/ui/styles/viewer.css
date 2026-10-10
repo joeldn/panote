@@ -1,4 +1,8 @@
-/* Viewer chrome over PanoStage (design README section 7). Positions update via JS transforms. */
+/*
+ * Viewer chrome over PanoStage (design README section 7). Positions update via JS transforms.
+ * The page uses viewport-fit=cover, so chrome near an edge adds that edge's safe-area inset
+ * (zero on most screens) to keep clear of notches and the home indicator.
+ */
 
 .pn-anchors {
   position: absolute;
@@ -109,10 +113,10 @@
   transform: translateX(-50%);
 }
 .pn-controls--bottom {
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
 }
 .pn-controls--top {
-  top: 84px;
+  top: calc(84px + env(safe-area-inset-top, 0px));
 }
 .pn-controls__btn {
   width: 40px;
@@ -141,8 +145,8 @@
 /* --- Scene map --- */
 .pn-scenemap {
   position: absolute;
-  left: 18px;
-  bottom: 22px;
+  left: calc(18px + env(safe-area-inset-left, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -168,7 +172,11 @@
 .pn-scenemap__panel {
   width: 240px;
   max-height: 60vh;
+  max-height: 60dvh;
   overflow: auto;
+  /* Scroll the list, not the page or the pano, and don't chain past its ends. */
+  touch-action: pan-y;
+  overscroll-behavior: contain;
   padding: 10px;
   border-radius: var(--r-lg);
   background: var(--cbg-solid);
@@ -221,13 +229,15 @@
 /* --- Info-point panel (side panel; bottom sheet on mobile) --- */
 .pn-hspanel {
   position: absolute;
-  top: 84px;
-  right: 18px;
-  bottom: 22px;
+  top: calc(84px + env(safe-area-inset-top, 0px));
+  right: calc(18px + env(safe-area-inset-right, 0px));
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
   width: 340px;
-  max-height: calc(100% - 106px);
+  max-height: calc(100% - 106px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   height: fit-content;
   overflow: auto;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
   padding: 18px 20px 20px;
   border-radius: var(--r-lg);
   background: var(--paper);
@@ -330,14 +340,16 @@
     bottom: 0;
     width: auto;
     max-height: 62%;
+    padding: 18px calc(20px + env(safe-area-inset-right, 0px))
+      calc(20px + env(safe-area-inset-bottom, 0px)) calc(20px + env(safe-area-inset-left, 0px));
     border-radius: var(--r-modal) var(--r-modal) 0 0;
   }
   .pn-controls--bottom {
-    bottom: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   }
   .pn-scenemap {
-    left: 12px;
-    bottom: 78px;
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    bottom: calc(78px + env(safe-area-inset-bottom, 0px));
   }
 }
 .pn-hspanel__medialink {
@@ -357,14 +369,21 @@
   inset: 0;
   background: #0d0c0a;
   font-family: var(--fbody);
+  /* A pinch or drag that starts on a marker, chevron or the pill must not zoom or pan the page. */
+  touch-action: none;
+}
+/* Behind the notch and the home indicator (and the iOS toolbar tint): dark, not the light page. */
+:root:has(.pn-tour),
+:root:has(.pn-tour) body {
+  background: #0d0c0a;
 }
 
 /* Logo, breadcrumb pill, extras, then the end slot. Only its children take pointer events. */
 .pn-stage__overlay > .pn-tourbar {
   position: absolute;
-  top: 16px;
-  left: 18px;
-  right: 84px;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  left: calc(18px + env(safe-area-inset-left, 0px));
+  right: calc(84px + env(safe-area-inset-right, 0px));
   display: flex;
   align-items: center;
   gap: 12px;
@@ -434,8 +453,8 @@
 }
 .pn-stage__overlay > .pn-tour__compass {
   position: absolute;
-  top: 16px;
-  right: 18px;
+  top: calc(16px + env(safe-area-inset-top, 0px));
+  right: calc(18px + env(safe-area-inset-right, 0px));
 }
 @media (max-width: 600px) {
   .pn-crumbs__tour,
