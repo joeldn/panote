@@ -84,8 +84,7 @@ body {
 }
 
 .app-shell__bar--scrolled {
-  background: rgba(250, 248, 244, 0.82);
-  backdrop-filter: blur(12px);
+  background: rgba(250, 248, 244, 0.96);
   box-shadow: 0 1px 0 var(--ink-08);
 }
 
