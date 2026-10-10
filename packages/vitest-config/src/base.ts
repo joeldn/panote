@@ -1,6 +1,23 @@
 import { defineConfig } from 'vitest/config';
 
 /**
+ * Workspace packages publish a `source` export condition that points at
+ * `src/`. Resolving it first makes tests import a sibling package's current
+ * source instead of its `dist/`, which goes stale between builds and caused
+ * false failures in direct `vitest run`s. Builds and `tsc` ignore the
+ * condition and keep using `dist/`.
+ *
+ * Vitest's node environment resolves through Vite's SSR environment and the
+ * jsdom one through the client environment, so both lists are set. Setting a
+ * list replaces Vite's defaults, so each one repeats them (Vite's
+ * `defaultClientConditions` and `defaultServerConditions`, copied rather than
+ * imported because this package does not depend on `vite` directly).
+ */
+const SOURCE_CONDITION = 'source';
+const CLIENT_CONDITIONS = ['module', 'browser', 'development|production'];
+const SERVER_CONDITIONS = ['module', 'node', 'development|production'];
+
+/**
  * Shared Vitest base.
  *
  * Consumers merge it rather than extend it:
@@ -22,6 +39,14 @@ import { defineConfig } from 'vitest/config';
  * repo-level coverage story covers only the Node/browser packages.
  */
 export const baseConfig = defineConfig({
+  resolve: {
+    conditions: [SOURCE_CONDITION, ...CLIENT_CONDITIONS],
+  },
+  ssr: {
+    resolve: {
+      conditions: [SOURCE_CONDITION, ...SERVER_CONDITIONS],
+    },
+  },
   test: {
     globals: false,
     clearMocks: true,
