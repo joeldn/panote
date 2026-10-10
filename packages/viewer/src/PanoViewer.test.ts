@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from '@panote/core';
 import { PanoViewer } from './PanoViewer.js';
+import type { View } from './types.js';
+import { TileLayer } from './tile-layer.js';
 import { TileFailureMonitor, setSharedTileFailureMonitor } from './tile-retry.js';
 
 // This package's vitest config runs under Node, not jsdom (see
@@ -57,16 +59,108 @@ class FakeResizeObserver {
   static instances: FakeResizeObserver[] = [];
   observed: unknown[] = [];
   disconnect = vi.fn();
-  constructor(private cb: () => void) {
+  constructor(private cb: (entries: unknown[]) => void) {
     FakeResizeObserver.instances.push(this);
   }
   observe(el: unknown): void {
     this.observed.push(el);
   }
   unobserve(): void {}
-  trigger(): void {
-    this.cb();
+  trigger(width: number, height: number): void {
+    this.cb([{ contentRect: { width, height } }]);
   }
+}
+
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  observed: unknown[] = [];
+  disconnect = vi.fn();
+  constructor(private cb: (entries: unknown[]) => void) {
+    FakeIntersectionObserver.instances.push(this);
+  }
+  observe(el: unknown): void {
+    this.observed.push(el);
+  }
+  trigger(isIntersecting: boolean): void {
+    this.cb([{ isIntersecting }]);
+  }
+}
+
+const FRAME_MS = 1000 / 60;
+
+/**
+ * requestAnimationFrame stand-in: callbacks queue up and run when the test
+ * calls step(), at a clock that advances one 60 Hz frame per step unless the
+ * test names the time.
+ */
+class FakeRaf {
+  private queue = new Map<number, FrameRequestCallback>();
+  private nextId = 1;
+  now = 0;
+  request = vi.fn((cb: FrameRequestCallback) => {
+    const id = this.nextId++;
+    this.queue.set(id, cb);
+    return id;
+  });
+  cancel = vi.fn((id: number) => {
+    this.queue.delete(id);
+  });
+  get pending(): number {
+    return this.queue.size;
+  }
+  step(t = this.now + FRAME_MS): void {
+    this.now = t;
+    const due = [...this.queue.values()];
+    this.queue.clear();
+    for (const cb of due) cb(t);
+  }
+}
+
+let raf: FakeRaf;
+
+type Internals = {
+  view: { yaw: number; pitch: number; fov: number };
+  target: { yaw: number; pitch: number; fov: number };
+  momentum: { yaw: number; pitch: number };
+  dirty: boolean;
+  invalidate: () => void;
+  panByPixels: (dx: number, dy: number) => void;
+  flick: (vx: number, vy: number) => void;
+  stopMomentum: () => void;
+  controls: unknown;
+  pendingLayers: Set<{ dispose: () => void }>;
+  layer: unknown;
+  wasPending: boolean;
+  renderer: {
+    render: ReturnType<typeof vi.fn>;
+    canvas: { addEventListener: ReturnType<typeof vi.fn> };
+  };
+};
+const internals = (viewer: PanoViewer) => viewer as unknown as Internals;
+
+/** Ask for a frame, as any change does, and draw it at `t` (default: one frame on). */
+function tick(viewer: PanoViewer, t?: number): void {
+  internals(viewer).invalidate();
+  raf.step(t);
+}
+
+/** Run frames `ms` apart until the loop stops asking for them (or give up). */
+function runUntilIdle(ms = FRAME_MS, max = 2000): number {
+  let frames = 0;
+  while (raf.pending > 0 && frames < max) {
+    raf.step(raf.now + ms);
+    frames++;
+  }
+  return frames;
+}
+
+/** The listener the viewer's Controls put on the canvas for `type`. */
+function canvasListener(viewer: PanoViewer, type: string): (e: unknown) => void {
+  const call = internals(viewer).renderer.canvas.addEventListener.mock.calls.find(
+    (c) => c[0] === type,
+  );
+  if (!call) throw new Error(`no ${type} listener`);
+  return call[1] as (e: unknown) => void;
 }
 
 function makeContainer(width: number, height: number): HTMLElement {
@@ -80,12 +174,11 @@ describe('PanoViewer', () => {
       removeEventListener: vi.fn(),
       matchMedia: vi.fn(() => ({ matches: false })),
     });
-    vi.stubGlobal(
-      'requestAnimationFrame',
-      vi.fn(() => 1),
-    );
-    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    raf = new FakeRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.request);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancel);
     FakeResizeObserver.instances = [];
+    FakeIntersectionObserver.instances = [];
     // load() builds a TileLayer on the module-scoped failure monitor; drop it
     // so no backoff state survives from one test to the next.
     setSharedTileFailureMonitor();
@@ -114,13 +207,7 @@ describe('PanoViewer', () => {
         hasPending: () => false,
       };
 
-      // The constructor already runs loop() once (to draw the first frame),
-      // which consumes the initial `dirty = true` and sets it back to false
-      // once the frame settles — so it must be re-armed here for this
-      // explicit call to run the render body instead of early-returning on
-      // the `if (!this.dirty) return;` guard.
-      (viewer as unknown as { dirty: boolean }).dirty = true;
-      (viewer as unknown as { loop: () => void }).loop();
+      tick(viewer);
 
       expect(updateSpy).toHaveBeenCalledTimes(1);
       const viewportHeightArg = updateSpy.mock.calls[0]![3];
@@ -144,8 +231,7 @@ describe('PanoViewer', () => {
         drawList: () => [],
         hasPending: () => false,
       };
-      (viewer as unknown as { dirty: boolean }).dirty = true;
-      (viewer as unknown as { loop: () => void }).loop();
+      tick(viewer);
       expect(updateSpy.mock.calls[0]![3]).toBe(1);
     });
   });
@@ -330,6 +416,9 @@ describe('PanoViewer', () => {
       tileRequests = [];
     });
 
+    /** Level-0 requests; the arrival view's detail tiles are requested alongside them. */
+    const baseRequests = (): string[] => tileRequests.filter((u) => u.includes('/0/'));
+
     it('resolves only once all six base tiles are in', async () => {
       let releaseLast: (() => void) | undefined;
       const lastFace = FACES[FACES.length - 1]!;
@@ -352,7 +441,7 @@ describe('PanoViewer', () => {
 
       // Five faces are already uploaded, and the load is still outstanding —
       // "loaded" means the whole panorama, not most of it.
-      expect(tileRequests).toHaveLength(FACES.length);
+      expect(baseRequests()).toHaveLength(FACES.length);
       for (const face of FACES) expect(tileRequests).toContain(baseTileUrl(face));
       expect(settled).toBe(false);
       expect(ready).not.toHaveBeenCalled();
@@ -362,6 +451,32 @@ describe('PanoViewer', () => {
       expect(settled).toBe(true);
       expect(ready).toHaveBeenCalledTimes(1);
       viewer.dispose();
+    });
+
+    it("requests the arrival view's tiles while the base is still loading", async () => {
+      const held: (() => void)[] = [];
+      stubFetch((url) =>
+        url.includes('/0/')
+          ? new Promise((resolve) => held.push(() => resolve(tileBody)))
+          : Promise.resolve(tileBody),
+      );
+      const update = vi.spyOn(TileLayer.prototype, 'update');
+      try {
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        const load = viewer.load('pano-a', { view: { yaw: 1, fov: 30 } });
+        await flush();
+        // Primed with the camera the pano will arrive with, before the base is in.
+        expect(update).toHaveBeenCalledTimes(1);
+        const [, fovDeg, fwd] = update.mock.calls[0]!;
+        expect(fovDeg).toBeCloseTo(30, 10);
+        expect(fwd.x).toBeCloseTo(Math.sin(1), 10);
+        expect(tileRequests.some((u) => !u.includes('/0/'))).toBe(true);
+        held.splice(0).forEach((release) => release());
+        await expect(load).resolves.toBe(true);
+        viewer.dispose();
+      } finally {
+        update.mockRestore();
+      }
     });
 
     it('emits scene-change with the loaded panoId alongside ready', async () => {
@@ -454,7 +569,8 @@ describe('PanoViewer', () => {
           settled = true;
         });
         await flush();
-        expect(tileRequests).toHaveLength(FACES.length);
+        expect(baseRequests()).toHaveLength(FACES.length);
+        const before = tileRequests.length;
 
         viewer.dispose();
         // Resolving (not rejecting) is the deliberate choice: it matches every
@@ -462,7 +578,7 @@ describe('PanoViewer', () => {
         // the viewer is not waiting to be told its load did not finish.
         await load;
         expect(settled).toBe(true);
-        expect(tileRequests).toHaveLength(FACES.length);
+        expect(tileRequests).toHaveLength(before);
         expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
         expect(ready).not.toHaveBeenCalled();
         expect((viewer as unknown as { layer: unknown }).layer).toBeUndefined();
@@ -485,31 +601,207 @@ describe('PanoViewer', () => {
         const load = viewer.load('pano-a');
         await flush();
         // One failed attempt per face; each is now inside its retry cooldown.
-        expect(tileRequests).toHaveLength(FACES.length);
+        expect(baseRequests()).toHaveLength(FACES.length);
+        const before = tileRequests.length;
 
         status = 200; // the origin recovers — a retry would now succeed
         viewer.dispose();
         await expect(load).resolves.toBe(false);
         await flush();
 
-        expect(tileRequests).toHaveLength(FACES.length);
+        expect(tileRequests).toHaveLength(before);
         expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
       });
     });
   });
 
-  describe('wheel option', () => {
-    it("is passed to the controls, which capture every wheel unless it is 'engaged'", () => {
-      const listener = (viewer: PanoViewer) => {
-        const canvas = (
-          viewer as unknown as {
-            renderer: { canvas: { addEventListener: ReturnType<typeof vi.fn> } };
-          }
-        ).renderer.canvas;
-        return canvas.addEventListener.mock.calls.find((c) => c[0] === 'wheel')![1] as (
-          e: unknown,
-        ) => void;
+  describe('frame loop', () => {
+    it('stops asking for frames once the camera settles, and asks again on a change', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.setView({ yaw: 1 });
+      expect(runUntilIdle()).toBeGreaterThan(5);
+      expect(internals(viewer).view.yaw).toBe(1);
+      const requested = raf.request.mock.calls.length;
+      for (let i = 0; i < 10; i++) raf.step();
+      expect(raf.request.mock.calls.length).toBe(requested);
+      expect(raf.pending).toBe(0);
+      viewer.setNorth(0.3);
+      expect(raf.pending).toBe(1);
+      viewer.dispose();
+    });
+
+    it('draws no frames off screen, even auto-rotating, and restarts the rotation clock on return', () => {
+      vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+      const container = makeContainer(400, 800);
+      const viewer = new PanoViewer(container, {
+        autoRotate: true,
+        autoRotateSpeed: 1,
+        damping: 1,
+      });
+      const io = FakeIntersectionObserver.instances[0]!;
+      expect(io.observed).toEqual([container]);
+      raf.step();
+      raf.step();
+      expect(raf.pending).toBe(1); // turning keeps the loop going
+
+      io.trigger(false);
+      expect(raf.pending).toBe(0);
+      const yaw = internals(viewer).view.yaw;
+      const requested = raf.request.mock.calls.length;
+      viewer.setView({ pitch: 0.1 }); // waits until the viewer is back
+      for (let i = 0; i < 10; i++) raf.step(raf.now + 1000);
+      expect(raf.request.mock.calls.length).toBe(requested);
+      expect(internals(viewer).view.yaw).toBe(yaw);
+
+      io.trigger(true);
+      expect(raf.pending).toBe(1);
+      raf.step(raf.now + 5000); // no turn for the time spent away
+      expect(internals(viewer).view.yaw).toBeCloseTo(yaw, 10);
+      expect(internals(viewer).view.pitch).toBeCloseTo(0.1, 10);
+      raf.step(raf.now + 50);
+      expect(internals(viewer).view.yaw).toBeCloseTo(yaw + 0.05, 10);
+      viewer.dispose();
+      expect(io.disconnect).toHaveBeenCalled();
+    });
+
+    it('glides the same distance, at the same pace, at 30, 60 and 120 Hz', () => {
+      const glide = (hz: number): { at200ms: number; total: number } => {
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        runUntilIdle();
+        internals(viewer).flick(30, 0);
+        raf.step(); // the first frame after an idle spell steps one nominal frame
+        const end = raf.now + 200;
+        while (raf.now < end - 1e-6) raf.step(raf.now + 1000 / hz);
+        // Where the glide has carried the target; the camera eases after it.
+        const at200ms = internals(viewer).target.yaw;
+        runUntilIdle(1000 / hz, 10_000);
+        const total = internals(viewer).view.yaw;
+        viewer.dispose();
+        return { at200ms, total };
       };
+      const at60 = glide(60);
+      expect(Math.abs(at60.total)).toBeGreaterThan(0.1);
+      expect(Math.abs(at60.at200ms)).toBeLessThan(Math.abs(at60.total) * 0.9);
+      for (const hz of [30, 120]) {
+        const g = glide(hz);
+        expect(Math.abs(g.total / at60.total - 1)).toBeLessThan(0.02);
+        expect(Math.abs(g.at200ms / at60.at200ms - 1)).toBeLessThan(0.02);
+      }
+    });
+
+    it('eases toward a new view at the same pace at 30 and 120 Hz', () => {
+      const after100ms = (hz: number): number => {
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        runUntilIdle();
+        viewer.setView({ yaw: 1 });
+        raf.step(); // the first frame after an idle spell steps one nominal frame
+        const end = raf.now + 100;
+        while (raf.now < end - 1e-6) raf.step(raf.now + 1000 / hz);
+        const yaw = internals(viewer).view.yaw;
+        viewer.dispose();
+        return yaw;
+      };
+      const at30 = after100ms(30);
+      expect(at30).toBeGreaterThan(0.1);
+      expect(at30).toBeLessThan(0.99);
+      expect(after100ms(120)).toBeCloseTo(at30, 6);
+    });
+
+    it('reads no layout in frames, project(), directionAtPixel() or drags', () => {
+      let reads = 0;
+      const container = {
+        get clientWidth() {
+          reads++;
+          return 400;
+        },
+        get clientHeight() {
+          reads++;
+          return 800;
+        },
+      } as unknown as HTMLElement;
+      const viewer = new PanoViewer(container, { damping: 1 });
+      reads = 0;
+      let projected = 0;
+      viewer.onRender(() => {
+        viewer.project(0.1, 0);
+        viewer.project(-0.1, 0.2);
+        projected += 2;
+      });
+      for (let i = 0; i < 10; i++) {
+        internals(viewer).panByPixels(5, 0);
+        raf.step();
+        viewer.directionAtPixel(10, 10);
+      }
+      expect(projected).toBe(20);
+      expect(reads).toBe(0);
+      const centre = viewer.project(internals(viewer).view.yaw, 0);
+      expect(centre.x).toBeCloseTo(200, 3);
+      expect(centre.y).toBeCloseTo(400, 3);
+    });
+
+    it('takes the size from ResizeObserver entries', () => {
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      FakeResizeObserver.instances[0]!.trigger(1000, 500);
+      raf.step();
+      const centre = viewer.project(0, 0);
+      expect(centre.x).toBeCloseTo(500, 3);
+      expect(centre.y).toBeCloseTo(250, 3);
+      expect((internals(viewer).renderer.canvas as unknown as { width: number }).width).toBe(2000);
+      viewer.dispose();
+    });
+
+    it('moves the target on an arrow key, so damping eases the camera after it', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      runUntilIdle();
+      const { view, target } = internals(viewer);
+      canvasListener(
+        viewer,
+        'keydown',
+      )({
+        key: 'ArrowRight',
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+      });
+      expect(target.yaw).toBeGreaterThan(0);
+      expect(view.yaw).toBe(0);
+      raf.step();
+      expect(view.yaw).toBeGreaterThan(0);
+      expect(view.yaw).toBeLessThan(target.yaw);
+      viewer.dispose();
+    });
+
+    it('hands render callbacks a copy of the view, which cannot move the camera', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: 0.3 } });
+      const seen: number[] = [];
+      viewer.onRender((v) => {
+        seen.push(v.yaw);
+        (v as View).yaw = 9;
+      });
+      raf.step();
+      tick(viewer);
+      expect(seen).toEqual([0.3, 0.3]);
+      expect(internals(viewer).view.yaw).toBe(0.3);
+      viewer.dispose();
+    });
+
+    it('reuses one view-projection matrix across frames', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const renderer = internals(viewer).renderer as unknown as {
+        setCamera: (m: Float32Array) => void;
+      };
+      const setCamera = vi.spyOn(renderer, 'setCamera');
+      viewer.setView({ yaw: 1 });
+      raf.step();
+      raf.step();
+      expect(setCamera).toHaveBeenCalledTimes(2);
+      expect(setCamera.mock.calls[0]![0]).toBe(setCamera.mock.calls[1]![0]);
+      viewer.dispose();
+    });
+
+    it("passes the wheel option to its controls, capturing every wheel unless it is 'engaged'", () => {
       const wheel = () => ({
         deltaY: 100,
         deltaX: 0,
@@ -522,12 +814,12 @@ describe('PanoViewer', () => {
       });
       const embedded = new PanoViewer(makeContainer(400, 800), { wheel: 'engaged' });
       const scrolls = wheel();
-      listener(embedded)(scrolls);
+      canvasListener(embedded, 'wheel')(scrolls);
       expect(scrolls.preventDefault).not.toHaveBeenCalled();
 
       const plain = new PanoViewer(makeContainer(400, 800));
       const zooms = wheel();
-      listener(plain)(zooms);
+      canvasListener(plain, 'wheel')(zooms);
       expect(zooms.preventDefault).toHaveBeenCalled();
       expect(plain.getView().fov).toBeGreaterThan(70);
       embedded.dispose();
@@ -555,34 +847,39 @@ describe('PanoViewer', () => {
   describe('auto-rotate', () => {
     beforeEach(() => {
       vi.useFakeTimers();
-      // Fake timers auto-invoke requestAnimationFrame as time advances below;
-      // restub it inert so these tests drive the loop only via tick() calls.
-      vi.stubGlobal(
-        'requestAnimationFrame',
-        vi.fn(() => 1),
-      );
-      vi.stubGlobal('cancelAnimationFrame', vi.fn());
+      // Fake timers would run requestAnimationFrame as time advances below;
+      // restub it so these tests drive the loop only via tick() calls.
+      vi.stubGlobal('requestAnimationFrame', raf.request);
+      vi.stubGlobal('cancelAnimationFrame', raf.cancel);
     });
     afterEach(() => {
       vi.useRealTimers();
     });
 
-    /** Force the loop out of its "nothing changed" early return and run one tick. */
+    /** One frame at the fake timers' clock, so advanceTimersByTime is the frame gap. */
     function tick(viewer: PanoViewer): void {
-      (viewer as unknown as { dirty: boolean }).dirty = true;
-      (viewer as unknown as { loop: () => void }).loop();
+      internals(viewer).invalidate();
+      raf.step(performance.now());
     }
 
     function yawOf(viewer: PanoViewer): number {
-      return (viewer as unknown as { view: { yaw: number } }).view.yaw;
+      return internals(viewer).view.yaw;
     }
 
-    it('does not rotate when disabled', () => {
-      const viewer = new PanoViewer(makeContainer(400, 800));
-      const before = yawOf(viewer);
+    it('does not rotate when disabled, where the same frames turn an enabled viewer', () => {
+      const off = new PanoViewer(makeContainer(400, 800), { autoRotateSpeed: 1, damping: 1 });
+      const on = new PanoViewer(makeContainer(400, 800), {
+        autoRotate: true,
+        autoRotateSpeed: 1,
+        damping: 1,
+      });
+      tick(off); // timing baseline for both
+      const offBefore = yawOf(off);
+      const onBefore = yawOf(on);
       vi.advanceTimersByTime(50);
-      tick(viewer);
-      expect(yawOf(viewer)).toBeCloseTo(before, 10);
+      tick(off); // steps both viewers' queued frames
+      expect(yawOf(on)).toBeCloseTo(onBefore + 0.05, 10);
+      expect(yawOf(off)).toBeCloseTo(offBefore, 10);
     });
 
     it('rotates the view forward once real time elapses between frames', () => {
@@ -593,6 +890,7 @@ describe('PanoViewer', () => {
         autoRotateSpeed: 1,
         damping: 1,
       });
+      tick(viewer); // the first frame only sets the timing baseline
       const before = yawOf(viewer);
       vi.advanceTimersByTime(50); // well under the stalled-frame clamp
       tick(viewer);
@@ -606,7 +904,8 @@ describe('PanoViewer', () => {
         autoRotateIdleMs: 1000,
         damping: 1,
       });
-      viewer.stopMomentum(); // stands in for a real interaction's gesture start
+      tick(viewer);
+      internals(viewer).stopMomentum(); // stands in for a real interaction's gesture start
       const paused = yawOf(viewer);
 
       vi.advanceTimersByTime(999);
@@ -629,7 +928,7 @@ describe('PanoViewer', () => {
         autoRotateIdleMs: 1000,
         damping: 1,
       });
-      viewer.stopMomentum();
+      internals(viewer).stopMomentum();
       viewer.setAutoRotate(false);
       const before = yawOf(viewer);
 
@@ -662,6 +961,7 @@ describe('PanoViewer', () => {
         autoRotateSpeed: 1,
         damping: 1,
       });
+      tick(viewer);
       let prev = yawOf(viewer);
       for (let i = 0; i < 5; i++) {
         vi.advanceTimersByTime(20); // small, well under the stall clamp
@@ -683,6 +983,7 @@ describe('PanoViewer', () => {
         autoRotateSpeed: 5, // one clamped 100ms tick crosses the threshold
         damping: 1,
       });
+      tick(viewer);
       vi.advanceTimersByTime(200); // clamped to the 100ms stall cap => 0.5 rad
       tick(viewer);
       // Shifting target and view by the same whole 2π leaves the rendered
@@ -719,11 +1020,6 @@ describe('PanoViewer', () => {
     const lastDrawList = (viewer: PanoViewer): Item[] =>
       rendererOf(viewer).render.mock.calls.at(-1)![0] as Item[];
     const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
-    function tick(viewer: PanoViewer): void {
-      (viewer as unknown as { dirty: boolean }).dirty = true;
-      (viewer as unknown as { loop: () => void }).loop();
-    }
 
     /**
      * Two patches with a 2 px gutter, over a `width`×`width / 2` source. The
@@ -799,7 +1095,7 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
-    it('works with controls, hotspots, directionAtPixel and north as on tiles', () => {
+    it('works with controls, project, directionAtPixel and north as on tiles', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
       viewer.showPreview('pano-a', source());
       viewer.setView({ yaw: 0.5, pitch: 0.2 });
@@ -815,16 +1111,11 @@ describe('PanoViewer', () => {
       expect(centre.pitch).toBeCloseTo(0.2, 6);
       expect(viewer.heading()).toBeCloseTo(0, 6);
 
-      const style: Record<string, string> = {};
-      const el = { style, remove: vi.fn() } as unknown as HTMLElement;
-      const container = viewer.el as unknown as { appendChild: (e: unknown) => void };
-      container.appendChild = vi.fn();
-      viewer.addHotspot(el, { yaw: 0.5, pitch: 0.2 });
-      tick(viewer);
-      expect(style['visibility']).toBe('visible');
-      const [, x, y] = /translate\(([-\d.e]+)px, ([-\d.e]+)px\)$/.exec(style['transform']!)!;
-      expect(Number(x)).toBeCloseTo(200, 3);
-      expect(Number(y)).toBeCloseTo(400, 3);
+      const p = viewer.project(0.5, 0.2);
+      expect(p.behind).toBe(false);
+      expect(p.x).toBeCloseTo(200, 3);
+      expect(p.y).toBeCloseTo(400, 3);
+      expect(viewer.project(0.5 + Math.PI, -0.2).behind).toBe(true);
       viewer.dispose();
     });
 
@@ -898,6 +1189,9 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    /** Holds every tile but the base, which a load primes alongside it. */
+    const detailTile = (url: string) => !url.includes('/0/');
+
     /** Tick until tiles-settled has fired `n` times (or give up), checking each frame draws. */
     async function settle(viewer: PanoViewer, settled: ReturnType<typeof vi.fn>, n = 1) {
       for (let i = 0; i < 20 && settled.mock.calls.length < n; i++) {
@@ -911,7 +1205,8 @@ describe('PanoViewer', () => {
 
     it('keeps the preview on top of an older version of the same pano, past its tiles-settled', async () => {
       // A replace keeps the panoId: the manifest can still be the old image's.
-      stubTiles();
+      // Detail tiles wait, so the frames before they land can be checked.
+      const tiles = stubTiles(detailTile);
       manifestVersion = 'v1';
       const viewer = new PanoViewer(makeContainer(400, 800));
       const settled = vi.fn();
@@ -925,6 +1220,7 @@ describe('PanoViewer', () => {
         { handle: 1, level: 3 },
         { handle: 2, level: 3 },
       ]);
+      tiles.release();
       await settle(viewer, settled);
       expect(settled).toHaveBeenCalledTimes(1);
       expect(rendererOf(viewer).removeTile).not.toHaveBeenCalledWith(1);
@@ -935,6 +1231,7 @@ describe('PanoViewer', () => {
       await viewer.load('pano-a');
       tick(viewer);
       expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
+      tiles.release();
       await settle(viewer, settled, 2);
       expect(settled).toHaveBeenCalledTimes(2);
       expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
@@ -944,7 +1241,7 @@ describe('PanoViewer', () => {
     });
 
     it('takes any manifest as its own without replacesVersion (a new pano)', async () => {
-      stubTiles();
+      const tiles = stubTiles(detailTile);
       manifestVersion = 'v7';
       const viewer = new PanoViewer(makeContainer(400, 800));
       const settled = vi.fn();
@@ -953,6 +1250,7 @@ describe('PanoViewer', () => {
       await viewer.load('pano-a');
       tick(viewer);
       expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
+      tiles.release();
       await settle(viewer, settled);
       expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
       viewer.dispose();
@@ -975,7 +1273,7 @@ describe('PanoViewer', () => {
     it('places a sharper preview above the tile levels it out-resolves', async () => {
       // 8192 wide is 2048 px per face: level 2 of 512 px tiles. Levels 0 to 2
       // paint under it; a level-3 pyramid's finest level would paint over it.
-      stubTiles();
+      stubTiles(detailTile);
       manifestVersion = 'v2';
       const viewer = new PanoViewer(makeContainer(400, 800));
       // Four 2052×4096 patches (2 px gutters), each within the 4096 px cap.
@@ -1002,34 +1300,41 @@ describe('PanoViewer', () => {
     });
 
     it('keeps the preview while the backoff holds its tiles in the queue', async () => {
-      const tiles = stubTiles((url) => !url.includes('/0/'));
+      let holding = true;
+      stubTiles((url) => holding && !url.includes('/0/'));
       let clock = 0;
       const monitor = new TileFailureMonitor({ now: () => clock });
       setSharedTileFailureMonitor(monitor);
-      const viewer = new PanoViewer(makeContainer(400, 800));
+      const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
       const settled = vi.fn();
       viewer.on('tiles-settled', settled);
       viewer.showPreview('pano-a', source());
       await viewer.load('pano-a');
 
-      // Two other panoramas fail: the backoff trips with nothing in flight.
+      // Two other panoramas fail: the backoff trips.
       monitor.fail(monitor.acquire()!, 'other-1', 'transient');
       monitor.fail(monitor.acquire()!, 'other-2', 'transient');
       expect(monitor.canStart()).toBe(false);
+      const detailFetches = () =>
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/2/')).length;
+      const started = detailFetches();
+      // Turning away aborts the tiles the load primed, so only the queue, held
+      // by the backoff, is left pending.
+      viewer.setView({ yaw: Math.PI });
+      holding = false;
       for (let i = 0; i < 3; i++) {
         await flush();
         tick(viewer);
       }
-      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/2/'), expect.anything());
+      expect(detailFetches()).toBe(started);
       expect(settled).not.toHaveBeenCalled();
       expect(previewItems(viewer)).toHaveLength(2);
 
       // The window passes: the held tiles start, land, and only then settle.
       clock += 60_000;
       tick(viewer);
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/2/'), expect.anything());
+      expect(detailFetches()).toBeGreaterThan(started);
       expect(settled).not.toHaveBeenCalled();
-      tiles.release();
       await settle(viewer, settled);
       expect(settled).toHaveBeenCalledTimes(1);
       expect(previewItems(viewer)).toEqual([]);
@@ -1038,7 +1343,7 @@ describe('PanoViewer', () => {
 
     it('cancels a load of the same pano already in flight', async () => {
       let holding = true;
-      const tiles = stubTiles((url) => holding && url.includes('/0/'));
+      const tiles = stubTiles(() => holding);
       const viewer = new PanoViewer(makeContainer(400, 800));
       const ready = vi.fn();
       viewer.on('ready', ready);
@@ -1098,25 +1403,7 @@ describe('PanoViewer', () => {
   });
 
   describe('loads and camera moves', () => {
-    type Internals = {
-      view: { yaw: number; pitch: number; fov: number };
-      target: { yaw: number; pitch: number; fov: number };
-      momentum: { yaw: number; pitch: number };
-      dirty: boolean;
-      loop: () => void;
-      controls: unknown;
-      pendingLayers: Set<{ dispose: () => void }>;
-      layer: unknown;
-      wasPending: boolean;
-      renderer: { render: ReturnType<typeof vi.fn> };
-    };
-    const internals = (viewer: PanoViewer) => viewer as unknown as Internals;
     const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
-
-    function tick(viewer: PanoViewer): void {
-      internals(viewer).dirty = true;
-      internals(viewer).loop();
-    }
 
     const manifestFor = (pano: string) => ({
       pano,
@@ -1222,7 +1509,7 @@ describe('PanoViewer', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
         initialView: { yaw: 2 * Math.PI - 0.01 },
       });
-      viewer.panByPixels(-100, 0); // drag left → look right, past 2π
+      internals(viewer).panByPixels(-100, 0); // drag left → look right, past 2π
       expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(2 * Math.PI);
       expect(internals(viewer).target.yaw).toBe(internals(viewer).view.yaw);
     });
@@ -1241,7 +1528,7 @@ describe('PanoViewer', () => {
 
     it('clears momentum on setView', () => {
       const viewer = new PanoViewer(makeContainer(400, 800));
-      viewer.flick(100, 50);
+      internals(viewer).flick(100, 50);
       expect(internals(viewer).momentum.yaw).not.toBe(0);
       viewer.setView({ yaw: 0.5 });
       expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
@@ -1250,10 +1537,10 @@ describe('PanoViewer', () => {
     it('clears momentum when a pano swaps in and when a preview goes up', async () => {
       stubNet();
       const viewer = new PanoViewer(makeContainer(400, 800));
-      viewer.flick(100, 50);
+      internals(viewer).flick(100, 50);
       await viewer.load('pano-a');
       expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
-      viewer.flick(100, 50);
+      internals(viewer).flick(100, 50);
       viewer.showPreview('pano-b', source());
       expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
       viewer.dispose();
@@ -1261,9 +1548,11 @@ describe('PanoViewer', () => {
 
     it('does not settle while momentum is left, however small', () => {
       const viewer = new PanoViewer(makeContainer(400, 800));
-      internals(viewer).momentum.yaw = 2e-5;
+      // rad/ms: a step's travel is under the position settle threshold.
+      internals(viewer).momentum.yaw = 2e-6;
       tick(viewer);
       expect(internals(viewer).dirty).toBe(true);
+      expect(raf.pending).toBe(1);
     });
 
     it('keeps the same Controls across loads and previews', async () => {
@@ -1289,7 +1578,7 @@ describe('PanoViewer', () => {
       const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
       const viewer = new PanoViewer(makeContainer(400, 800));
       await viewer.load('pano-a');
-      viewer.flick(100, 0);
+      internals(viewer).flick(100, 0);
       const loading = viewer.load('pano-b', { view: { yaw: 1, pitch: 0.2, fov: 50 } });
       await flush();
       // Not applied before the swap: the old pano keeps its camera.
@@ -1400,18 +1689,151 @@ describe('PanoViewer', () => {
       expect(report).toHaveBeenCalledWith(boom);
     });
 
-    it('renders the frame before emitting tiles-settled', () => {
+    it('renders the frame before emitting tiles-settled, and reports a throwing listener', () => {
+      const report = vi.fn();
+      vi.stubGlobal('reportError', report);
       const viewer = new PanoViewer(makeContainer(400, 800));
       internals(viewer).layer = { update: vi.fn(), drawList: () => [], hasPending: () => false };
       internals(viewer).wasPending = true;
       const render = internals(viewer).renderer.render;
       render.mockClear();
+      const boom = new Error('listener');
       viewer.on('tiles-settled', () => {
         expect(render).toHaveBeenCalledTimes(1);
-        throw new Error('listener');
+        throw boom;
       });
-      expect(() => tick(viewer)).toThrow('listener');
+      const after = vi.fn();
+      viewer.onRender(after);
+      expect(() => tick(viewer)).not.toThrow();
       expect(render).toHaveBeenCalledTimes(1);
+      expect(report).toHaveBeenCalledWith(boom);
+      // The frame carries on past the listener: render callbacks still run.
+      expect(after).toHaveBeenCalledTimes(1);
+    });
+
+    /** Let `p` finish, stepping frames for its fade. */
+    async function finish(p: Promise<unknown>): Promise<void> {
+      let done = false;
+      void p.then(() => (done = true));
+      for (let i = 0; i < 50 && !done; i++) {
+        await flush();
+        raf.step();
+      }
+      await p;
+    }
+
+    it('cuts only the axes load(pano, { view }) sets, leaving the others easing', async () => {
+      stubNet();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await viewer.load('pano-a');
+      viewer.setView({ fov: 40 }); // not drawn yet: the camera is still at 70
+      await viewer.load('pano-b', { view: { yaw: 1 } });
+      expect(internals(viewer).view.yaw).toBe(1);
+      expect(internals(viewer).view.fov).toBe(70);
+      expect(internals(viewer).target.fov).toBe(40);
+      viewer.dispose();
+    });
+
+    it('does not announce a scene change for a load a ready listener superseded', async () => {
+      stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const sceneChange = vi.fn();
+      viewer.on('scene-change', sceneChange);
+      let b: Promise<boolean> | undefined;
+      viewer.on('ready', (m) => {
+        if (m.pano === 'pano-a') b = viewer.load('pano-b');
+      });
+      await expect(viewer.load('pano-a')).resolves.toBe(true);
+      expect(b).toBeDefined();
+      expect(sceneChange).not.toHaveBeenCalled();
+      viewer.dispose();
+      await expect(b).resolves.toBe(false);
+    });
+
+    it('does nothing when transitionTo is called after dispose', async () => {
+      stubNet();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.dispose();
+      await expect(viewer.transitionTo('pano-a', { yaw: 1 })).resolves.toBeUndefined();
+      expect(window.matchMedia).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('hands over to a newer transitionTo: the older one applies nothing and loses its overlay', async () => {
+      const net = stubNet({ holdTile: (url) => /\/pano-[ab]\//.test(url) });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transitionMs: 0 });
+      await viewer.load('pano-0');
+      tick(viewer);
+
+      const a = viewer.transitionTo('pano-a', { yaw: 2 });
+      await flush();
+      const b = viewer.transitionTo('pano-b', { yaw: -1 });
+      expect(overlays).toHaveLength(2);
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect(overlays[1]!.remove).not.toHaveBeenCalled();
+      await a;
+      expect(viewer.getView().yaw).toBe(0);
+
+      net.release();
+      await finish(b);
+      expect(viewer.getView().yaw).toBe(-1);
+      expect(overlays[1]!.style['opacity']).toBe('0');
+      expect(overlays[1]!.remove).toHaveBeenCalled();
+      viewer.dispose();
+    });
+
+    it('drops the overlay at once when disposed during the fade', async () => {
+      stubNet();
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transitionMs: 30 });
+      await viewer.load('pano-0');
+      tick(viewer);
+
+      let done = false;
+      const fading = viewer.transitionTo('pano-a').then(() => (done = true));
+      for (let i = 0; i < 50 && overlays[0]?.style['opacity'] !== '0'; i++) {
+        await flush();
+        raf.step();
+      }
+      expect(overlays[0]!.style['opacity']).toBe('0');
+      expect(overlays[0]!.remove).not.toHaveBeenCalled();
+      viewer.dispose();
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect(done).toBe(false);
+      await fading;
+      expect(done).toBe(true);
+    });
+
+    it('runs an A→B→C chain of transitions to C alone', async () => {
+      const net = stubNet({ holdTile: (url) => /\/pano-[abc]\//.test(url) });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transitionMs: 0 });
+      await viewer.load('pano-0');
+      tick(viewer);
+      const sceneChange = vi.fn();
+      viewer.on('scene-change', sceneChange);
+
+      const a = viewer.transitionTo('pano-a', { yaw: 1 });
+      await flush();
+      const b = viewer.transitionTo('pano-b', { yaw: 2 });
+      await flush();
+      const c = viewer.transitionTo('pano-c', { yaw: -1 });
+      expect(overlays).toHaveLength(3);
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect(overlays[1]!.remove).toHaveBeenCalled();
+      expect(overlays[2]!.remove).not.toHaveBeenCalled();
+      await Promise.all([a, b]);
+      expect(viewer.getView().yaw).toBe(0);
+
+      net.release();
+      await finish(c);
+      expect(viewer.getView().yaw).toBe(-1);
+      expect(sceneChange.mock.calls).toEqual([['pano-c']]);
+      expect(overlays[2]!.remove).toHaveBeenCalled();
+      const layer = internals(viewer).layer as { manifest: { pano: string } };
+      expect(layer.manifest.pano).toBe('pano-c');
+      viewer.dispose();
     });
   });
 });

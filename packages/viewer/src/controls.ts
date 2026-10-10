@@ -5,7 +5,10 @@ import type { WheelMode } from './types.js';
 export type { WheelMode };
 
 export interface ControlHost {
+  /** Move the camera now: a drag follows the pointer exactly. */
   panByPixels(dx: number, dy: number): void;
+  /** Move where the camera is heading, and let damping ease it there (keys). */
+  panTargetByPixels(dx: number, dy: number): void;
   zoomAt(scaleFactor: number, clientX: number, clientY: number): void;
   flick(vx: number, vy: number): void;
   stopMomentum(): void;
@@ -83,7 +86,7 @@ export class Controls {
     el.style.cursor = 'grab';
     el.tabIndex = 0;
     this.wheelMode = opts.wheel ?? VIEWER_DEFAULTS.wheel;
-    // The host may rebuild Controls on a focused element (a scene change).
+    // The element may already have focus when Controls is built.
     this.engaged = el.ownerDocument?.activeElement === el;
     el.addEventListener('pointerdown', this.onDown);
     el.addEventListener('pointermove', this.onMove);
@@ -304,19 +307,21 @@ export class Controls {
     // not a modifier here.
     const altGraph = e.getModifierState?.('AltGraph') ?? false;
     if (!altGraph && (e.ctrlKey || e.metaKey || e.altKey)) return;
+    // Keys move the target, not the camera, so damping smooths key repeat
+    // into a glide instead of 40 px jumps.
     const panStep = 40; // px-equivalent
     switch (e.key) {
       case 'ArrowLeft':
-        this.host.panByPixels(panStep, 0);
+        this.host.panTargetByPixels(panStep, 0);
         break;
       case 'ArrowRight':
-        this.host.panByPixels(-panStep, 0);
+        this.host.panTargetByPixels(-panStep, 0);
         break;
       case 'ArrowUp':
-        this.host.panByPixels(0, panStep);
+        this.host.panTargetByPixels(0, panStep);
         break;
       case 'ArrowDown':
-        this.host.panByPixels(0, -panStep);
+        this.host.panTargetByPixels(0, -panStep);
         break;
       case '+':
       case '=':

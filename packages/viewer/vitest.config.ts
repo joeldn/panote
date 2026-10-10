@@ -27,8 +27,6 @@ export default mergeConfig(
           'src/index.ts',
           'src/types.ts',
           'src/PanoViewer.ts',
-          'src/controls.ts',
-          'src/hotspots.ts',
           'src/render/gl-renderer.ts',
           'src/ui/index.ts',
         ],
