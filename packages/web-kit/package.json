@@ -39,12 +39,12 @@
     "@auth0/auth0-spa-js": "catalog:",
     "@internal/contracts": "workspace:*",
     "@panote/core": "workspace:*",
-    "@panote/viewer": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@internal/typescript-config": "workspace:*",
     "@internal/vitest-config": "workspace:*",
+    "@panote/viewer": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
