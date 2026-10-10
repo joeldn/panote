@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FACES, type Manifest } from '@panote/core';
+import { FACES, faceUVToDir, tileCornersUV, type Face, type Manifest } from '@panote/core';
 import { BaseTileLoadError, TileLayer } from './tile-layer.js';
 import { TileFailureMonitor } from './tile-retry.js';
 import { viewProjection } from './render/projection.js';
@@ -16,8 +16,8 @@ import { sortDrawList, type GLRenderer } from './render/gl-renderer.js';
 //
 // Time is injected: the failure monitor owns the clock TileLayer measures
 // retry cooldowns against (see tile-retry.ts), so every delay in these tests
-// is advanced by hand rather than waited on. No timers are faked and no test
-// sleeps.
+// is advanced by hand rather than waited on, and no test sleeps. The wake
+// timer tests fake setTimeout as well and advance both together.
 
 const TILE_COOLDOWN_MS = 1_000; // first per-tile retry delay (tile-retry.ts)
 const BACKOFF_MS = 10_000; // overridden below so it dwarfs the tile cooldown
@@ -67,13 +67,17 @@ describe('TileLayer failure handling', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  function makeLayer(pano = 'pano-a', textureBudgetMB = 128): TileLayer {
+  function makeLayer(
+    pano = 'pano-a',
+    textureBudgetMB = 128,
+    onInvalidate: () => void = () => {},
+  ): TileLayer {
     return new TileLayer(
       renderer as unknown as GLRenderer,
       makeManifest(pano),
       '/tiles/',
       textureBudgetMB,
-      () => {},
+      onInvalidate,
       8,
       monitor,
       // The injected sleep advances the same clock the retry budget measures
@@ -373,17 +377,106 @@ describe('TileLayer failure handling', () => {
     layerC.dispose();
   });
 
-  it('cancels the backoff wake on dispose', async () => {
-    const layerA = makeLayer('pano-a');
-    script = { status: 500 };
-    await render(layerA, 0);
-    const layerB = makeLayer('pano-b');
-    await render(layerB, 0);
-    layerA.dispose();
-    const clears = vi.spyOn(globalThis, 'clearTimeout');
-    layerB.dispose();
-    expect(clears).toHaveBeenCalledWith(expect.anything());
-    clears.mockRestore();
+  describe('idle retry wake', () => {
+    // Fake timers for the wake itself; the retry clock is advanced alongside.
+    // Microtasks are drained by hand, since flush() waits on a real timer.
+    const drain = async (): Promise<void> => {
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Fail exactly one non-base tile once, transiently; everything else loads. */
+    function failOneTileOnce(): () => string | undefined {
+      let failed: string | undefined;
+      respond = (url) => {
+        if (failed === undefined && !url.includes('/0/')) {
+          failed = url;
+          return { status: 503 };
+        }
+        return null;
+      };
+      return () => failed;
+    }
+
+    it('asks for a frame once a failed tile on a still view may be retried', async () => {
+      const invalidate = vi.fn();
+      const failed = failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      await drain();
+      expect(failed()).toBeDefined();
+      const calls = invalidate.mock.calls.length;
+
+      // Nothing else is going to draw a frame: the view is still and every
+      // other tile has landed. The cooldown has to end in a wake.
+      advance(TILE_COOLDOWN_MS - 1);
+      await vi.advanceTimersByTimeAsync(TILE_COOLDOWN_MS - 1);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+      advance(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(invalidate).toHaveBeenCalledTimes(calls + 1);
+
+      // The frame that wake asks for retries the tile, which now loads.
+      frame(layer, 0);
+      await drain();
+      expect(requests.filter((u) => u === failed())).toHaveLength(2);
+      expect(layer.hasPending()).toBe(false);
+      layer.dispose();
+    });
+
+    it('does not wake for a failed tile that is no longer wanted', async () => {
+      const invalidate = vi.fn();
+      failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      frame(layer, Math.PI); // pan away before the failure lands
+      await drain();
+      const calls = invalidate.mock.calls.length;
+      advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+      layer.dispose();
+    });
+
+    it('wakes for a cooling tile that a pan brings back on screen', async () => {
+      const invalidate = vi.fn();
+      failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      frame(layer, Math.PI); // the failure lands while the tile is off screen
+      await drain();
+      advance(TILE_COOLDOWN_MS / 2);
+      frame(layer, 0); // back on screen, still cooling, then the view rests
+      await drain();
+      const calls = invalidate.mock.calls.length;
+      advance(TILE_COOLDOWN_MS / 2);
+      await vi.advanceTimersByTimeAsync(TILE_COOLDOWN_MS / 2);
+      expect(invalidate).toHaveBeenCalledTimes(calls + 1);
+      layer.dispose();
+    });
+
+    it('cancels a pending wake on dispose', async () => {
+      const invalidate = vi.fn();
+      failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      await drain();
+      expect(vi.getTimerCount()).toBe(1);
+
+      layer.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      const calls = invalidate.mock.calls.length;
+      advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+    });
   });
 
   it('leaves an aborted in-flight load fully re-queueable', async () => {
@@ -422,6 +515,185 @@ describe('TileLayer failure handling', () => {
     expect(requests).toHaveLength(abortedTiles.length);
     expect(monitor.escalationLevel).toBe(0);
     layer.dispose();
+  });
+
+  describe('scheduling', () => {
+    /** Unit direction through the centre of the tile a URL names. */
+    function centreDir(url: string): { x: number; y: number; z: number } {
+      const m = /\/(\d+)\/(\w+)\/(\d+)-(\d+)\.jpg$/.exec(url)!;
+      const corners = tileCornersUV(Number(m[1]), Number(m[3]), Number(m[4]));
+      const d = faceUVToDir(
+        m[2] as Face,
+        (corners[0]!.u + corners[1]!.u) / 2,
+        (corners[0]!.v + corners[2]!.v) / 2,
+      );
+      const len = Math.hypot(d.x, d.y, d.z);
+      return { x: d.x / len, y: d.y / len, z: d.z / len };
+    }
+
+    function facing(url: string, yaw: number): number {
+      const c = centreDir(url);
+      const f = dirFromYawPitch(yaw, 0);
+      return c.x * f.x + c.y * f.y + c.z * f.z;
+    }
+
+    it('requests tiles nearest the centre of the view first', async () => {
+      const layer = makeLayer();
+      await render(layer, 0);
+      expect(requests.length).toBeGreaterThan(8);
+      const dots = requests.map((u) => facing(u, 0));
+      for (let i = 1; i < dots.length; i++) expect(dots[i]).toBeLessThanOrEqual(dots[i - 1]!);
+      layer.dispose();
+    });
+
+    it('never requests a tile behind the camera', async () => {
+      const layer = makeLayer();
+      for (const yaw of [0, Math.PI / 2, Math.PI]) {
+        requests = [];
+        await render(layer, yaw);
+        expect(requests.length).toBeGreaterThan(0);
+        for (const url of requests) expect(facing(url, yaw)).toBeGreaterThan(0);
+      }
+      layer.dispose();
+    });
+
+    it('never has more than maxConcurrent fetches open, across pans and re-requests', async () => {
+      let open = 0;
+      let peak = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          requests.push(url);
+          open++;
+          peak = Math.max(peak, open);
+          return new Promise((_resolve, reject) => {
+            init.signal.addEventListener('abort', () => {
+              open--;
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          });
+        }),
+      );
+      const layer = makeLayer();
+      for (const yaw of [0, Math.PI / 2, 0, Math.PI, 0]) await render(layer, yaw);
+      expect(requests.length).toBeGreaterThan(8);
+      expect(peak).toBe(8);
+      layer.dispose();
+    });
+  });
+
+  describe('in-flight ownership', () => {
+    /** The layer's private maps, read to check its accounting directly. */
+    function internals(layer: TileLayer): {
+      cache: Map<string, unknown>;
+      inflight: Map<string, AbortController>;
+    } {
+      return layer as unknown as {
+        cache: Map<string, unknown>;
+        inflight: Map<string, AbortController>;
+      };
+    }
+
+    /** '/tiles/pano-a/2/px/1-0.jpg' -> '2/px/1-0', the layer's cache key. */
+    const keyOf = (url: string): string =>
+      url.replace(/^\/tiles\/[^/]+\//, '').replace(/\.jpg$/, '');
+
+    it('does not leak a texture or lose track of a reload when a tile is aborted mid-decode', async () => {
+      const layer = makeLayer();
+      // Decodes are held until released, so an abort can land between the
+      // response arriving and the bitmap being ready: createImageBitmap does
+      // not take the abort signal.
+      const held: (() => void)[] = [];
+      let holding = true;
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(
+          () =>
+            new Promise((resolve) => {
+              const done = (): void => resolve({ close: vi.fn() });
+              if (holding) held.push(done);
+              else done();
+            }),
+        ),
+      );
+      const live = new Set<number>();
+      renderer.uploadTile.mockImplementation(() => {
+        const handle = renderer.uploadTile.mock.calls.length;
+        live.add(handle);
+        return handle;
+      });
+      renderer.removeTile.mockImplementation((handle: number) => {
+        live.delete(handle);
+      });
+
+      frame(layer, 0);
+      await flush();
+      const first = [...requests];
+      expect(held).toHaveLength(first.length);
+
+      // Pan away while those decode (aborting them), then straight back, which
+      // starts a second load of each one.
+      frame(layer, Math.PI);
+      frame(layer, 0);
+      await flush();
+      for (const url of first) expect(requests.filter((u) => u === url)).toHaveLength(2);
+
+      // The first, aborted round finishes decoding. The reloads are still in
+      // flight and must stay tracked as such.
+      const firstRound = held.splice(0, first.length);
+      for (const release of firstRound) release();
+      await flush();
+      const { cache, inflight } = internals(layer);
+      for (const url of first) expect(inflight.has(keyOf(url))).toBe(true);
+
+      // Then everything else finishes.
+      holding = false;
+      for (const release of held.splice(0)) release();
+      for (let i = 0; i < 5; i++) await flush();
+
+      expect(inflight.size).toBe(0);
+      // Every texture the renderer still holds is one the cache can free.
+      expect(live.size).toBe(cache.size);
+      layer.dispose();
+      expect(live.size).toBe(0);
+    });
+  });
+
+  describe('bitmap lifetime', () => {
+    function trackBitmaps(): { close: ReturnType<typeof vi.fn> }[] {
+      const bitmaps: { close: ReturnType<typeof vi.fn> }[] = [];
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => {
+          const bitmap = { close: vi.fn() };
+          bitmaps.push(bitmap);
+          return Promise.resolve(bitmap);
+        }),
+      );
+      return bitmaps;
+    }
+
+    it('closes every decoded bitmap once it is uploaded', async () => {
+      const bitmaps = trackBitmaps();
+      const layer = makeLayer();
+      await render(layer, 0);
+      expect(bitmaps.length).toBeGreaterThan(0);
+      expect(bitmaps).toHaveLength(renderer.uploadTile.mock.calls.length);
+      for (const bitmap of bitmaps) expect(bitmap.close).toHaveBeenCalledTimes(1);
+      layer.dispose();
+    });
+
+    it('still closes the bitmap when the upload throws', async () => {
+      const bitmaps = trackBitmaps();
+      renderer.uploadTile.mockImplementation(() => {
+        throw new Error('context lost');
+      });
+      const layer = makeLayer();
+      await render(layer, 0);
+      expect(bitmaps.length).toBeGreaterThan(0);
+      for (const bitmap of bitmaps) expect(bitmap.close).toHaveBeenCalledTimes(1);
+      layer.dispose();
+    });
   });
 
   describe('low-resolution base layer', () => {
@@ -568,6 +840,41 @@ describe('TileLayer failure handling', () => {
       expect(requests).toHaveLength(FACES.length);
     });
 
+    it('is not aborted by a frame rendered while the base is still loading', async () => {
+      // Level-0 keys are never in a deeper level's desired set, so a frame that
+      // runs before the base has landed must leave those fetches alone.
+      const signals = new Map<string, AbortSignal>();
+      const pending: (() => void)[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          requests.push(url);
+          const body = { ok: true, status: 200, blob: () => Promise.resolve({}) };
+          if (!url.includes('/0/')) return Promise.resolve(body);
+          signals.set(url, init.signal);
+          return new Promise((resolve, reject) => {
+            pending.push(() => resolve(body));
+            init.signal.addEventListener('abort', () => {
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          });
+        }),
+      );
+      const layer = makeLayer();
+      const load = layer.loadBase();
+      await flush();
+      expect(signals.size).toBe(FACES.length);
+
+      await render(layer, 0); // level 2 at this fov and height
+      expect(requests.some((u) => u.includes('/2/'))).toBe(true);
+      for (const signal of signals.values()) expect(signal.aborted).toBe(false);
+
+      for (const release of pending) release();
+      await expect(load).resolves.toBeUndefined();
+      expect(requests.filter((u) => u.includes('/0/'))).toHaveLength(FACES.length);
+      layer.dispose();
+    });
+
     it('does not reject when the layer is disposed mid-load', async () => {
       const layer = makeLayer();
       vi.stubGlobal(
@@ -703,6 +1010,18 @@ describe('TileLayer failure handling', () => {
       const levels = sortDrawList(list).map((d) => d.level);
       expect(levels[0]).toBe(0);
       expect(levels[levels.length - 1]).toBeGreaterThan(0);
+    });
+
+    it('hands out the same draw items every frame instead of allocating new ones', async () => {
+      const layer = makeLayer();
+      await layer.loadBase();
+      await render(layer, 0);
+      const first = [...layer.drawList()];
+      frame(layer, 0);
+      const second = layer.drawList();
+      expect(second).toHaveLength(first.length);
+      for (let i = 0; i < first.length; i++) expect(second[i]).toBe(first[i]);
+      layer.dispose();
     });
 
     it('never evicts the base, however much finer detail is loaded', async () => {
