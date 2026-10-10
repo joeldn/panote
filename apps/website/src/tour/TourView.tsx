@@ -16,9 +16,16 @@ import { useIsOwner } from './use-owner.js';
 import { useTourStats } from './use-stats.js';
 
 // Inline media must come from the CDN: that is all the CSP's img-src/media-src allow.
+// try/catch, not URL.canParse: that is Safari 17+, and this runs while rendering.
 const cdnMatcher = (cdnBase: string) => {
   const cdn = new URL(cdnBase).origin;
-  return (url: string): boolean => URL.canParse(url) && new URL(url).origin === cdn;
+  return (url: string): boolean => {
+    try {
+      return new URL(url).origin === cdn;
+    } catch {
+      return false;
+    }
+  };
 };
 
 // Mounted only once a scene is shown, so an unavailable tour never records a view.

@@ -88,7 +88,9 @@ class FakeViewer {
 
 let viewers: FakeViewer[];
 let failLoads: boolean;
+let throwOnCreate: boolean;
 const createViewer: ViewerFactory = (_el, options) => {
+  if (throwOnCreate) throw new Error('viewer blew up');
   const v = new FakeViewer(options);
   v.failLoad = failLoads;
   viewers.push(v);
@@ -174,6 +176,7 @@ const viewRecorded = () => waitFor(() => expect(calls('/api/tours/tour-a/view'))
 beforeEach(() => {
   viewers = [];
   failLoads = false;
+  throwOnCreate = false;
   objects = { 'slugs/old-town.json': live, 'pub/tours/tour-a.json': bundle() };
   viewGate = null;
   adminTour = 200;
@@ -255,6 +258,39 @@ describe('/s/:slug', () => {
     expect(screen.getByRole('link', { name: 'Open video ↗' }).getAttribute('href')).toBe(
       'https://other.test/clip.mp4',
     );
+  });
+
+  it('checks media URLs without URL.canParse (Safari 16)', async () => {
+    objects['pub/tours/tour-a.json'] = bundle({
+      scenes: [
+        scene('square', 'Square', [
+          {
+            id: 'm1',
+            type: 'info',
+            yaw: 0,
+            pitch: 0,
+            title: 'Plan',
+            media: { kind: 'image', url: `${CDN}media/plan.jpg` },
+          },
+        ]),
+      ],
+    });
+    // jsdom's URL inherits canParse from Node's, so delete it where it is defined.
+    let owner: object | null = URL;
+    while (owner && !Object.hasOwn(owner, 'canParse')) owner = Object.getPrototypeOf(owner);
+    const canParse = owner && Object.getOwnPropertyDescriptor(owner, 'canParse');
+    if (owner) Reflect.deleteProperty(owner, 'canParse');
+    expect('canParse' in URL).toBe(false);
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+      expect(screen.getByRole('complementary').querySelector('img')?.getAttribute('src')).toBe(
+        `${CDN}media/plan.jpg`,
+      );
+    } finally {
+      if (owner && canParse) Object.defineProperty(owner, 'canParse', canParse);
+    }
   });
 
   it('honours the tour settings', async () => {
@@ -340,6 +376,58 @@ describe('/s/:slug', () => {
   });
 });
 
+describe('tour data inlined by the Worker', () => {
+  const inline = (data: unknown) => {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.id = 'pn-boot';
+    el.textContent = JSON.stringify(data);
+    document.head.append(el);
+  };
+  const cdnReads = () =>
+    fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.startsWith(CDN));
+  afterEach(() => document.getElementById('pn-boot')?.remove());
+
+  it('shows the tour without reading the slug or the bundle', async () => {
+    inline({ slug: 'old-town', record: live, tour: bundle({ title: 'Inlined town' }) });
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Inlined town')).toBeTruthy();
+    await shown('square');
+    expect(cdnReads()).toEqual([]);
+  });
+
+  it('fetches as usual when the inlined data is for another slug', async () => {
+    inline({ slug: 'elsewhere', record: live, tour: bundle({ title: 'Inlined town' }) });
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Old town')).toBeTruthy();
+    expect(new Set(cdnReads())).toEqual(
+      new Set([`${CDN}slugs/old-town.json`, `${CDN}pub/tours/tour-a.json`]),
+    );
+  });
+
+  it('never uses inlined data on a retry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    objects['slugs/old-town.json'] = { v: 9 };
+    renderAt('/s/old-town');
+    await screen.findByRole('heading', { name: "This tour couldn't be loaded" });
+    // Valid data for this slug is on the page now, but a retry must go to the network.
+    inline({ slug: 'old-town', record: live, tour: bundle({ title: 'Inlined town' }) });
+    objects['slugs/old-town.json'] = live;
+    fetchMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Old town')).toBeTruthy();
+    expect(screen.queryByText('Inlined town')).toBeNull();
+    expect(cdnReads()).toContain(`${CDN}slugs/old-town.json`);
+  });
+
+  it('ignores unparseable inlined data', async () => {
+    inline('x');
+    document.getElementById('pn-boot')!.textContent = '{not json';
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Old town')).toBeTruthy();
+  });
+});
+
 describe('unavailable placeholder', () => {
   it('shows for a missing slug', async () => {
     objects = {};
@@ -379,6 +467,21 @@ describe('unavailable placeholder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Old town')).toBeTruthy();
   });
+});
+
+describe('route error boundary', () => {
+  it.each(['/s/old-town', '/s/old-town/embed'])(
+    'shows the retry placeholder when %s throws while rendering',
+    async (path) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      throwOnCreate = true;
+      renderAt(path);
+      expect(
+        await screen.findByRole('heading', { name: "This tour couldn't be loaded" }),
+      ).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    },
+  );
 });
 
 describe('slug aliases fetched by the SPA (no Worker)', () => {
@@ -630,9 +733,20 @@ describe('analytics beacon', () => {
     // The pagehide listener is attached in the same commit that records the view.
     await viewRecorded();
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+    // A minute on the scene, without waiting one: dwell is timed with performance.now().
+    const later = performance.now() + 60_000;
+    vi.spyOn(performance, 'now').mockReturnValue(later);
     window.dispatchEvent(new Event('pagehide'));
+    vi.mocked(performance.now).mockRestore();
     const events = beacons();
     expect(events).toContainEqual({ type: 'scene', panoId: 'square', surface: 'embed' });
+    expect(events).toContainEqual({
+      type: 'dwell',
+      ms: expect.any(Number) as number,
+      surface: 'embed',
+    });
+    const dwell = events.filter((e) => (e as { type: string }).type === 'dwell').at(-1);
+    expect((dwell as { ms: number }).ms).toBeGreaterThanOrEqual(60_000);
     expect(events).toContainEqual({
       type: 'hotspot',
       panoId: 'square',
