@@ -47,12 +47,16 @@ describe('styles', () => {
     expect(used.filter((u) => !defined.has(u) && !local.has(u as string))).toEqual([]);
   });
 
-  it('self-hosts fonts and icons: every @import resolves to an installed file', () => {
-    const packageImports = [...imports(read('fonts.css')), ...imports(read('icons.css'))];
-    expect(packageImports.length).toBeGreaterThanOrEqual(8);
-    for (const spec of packageImports) {
+  it('self-hosts fonts and icons: every url() is a woff2 file that exists', () => {
+    const urls = [...read('fonts.css').matchAll(/url\('([^']+)'\)/g)].map((m) => m[1] as string);
+    const icons = [...read('icons.css').matchAll(/url\('([^']+)'\)/g)].map((m) => m[1] as string);
+    expect(urls.length).toBeGreaterThanOrEqual(12);
+    expect(icons.length).toBe(2);
+    for (const spec of [...urls, ...icons]) {
       expect(spec.startsWith('http')).toBe(false);
-      expect(existsSync(require.resolve(spec))).toBe(true);
+      expect(spec.endsWith('.woff2')).toBe(true);
+      const file = spec.startsWith('./') ? join(stylesDir, spec) : require.resolve(spec);
+      expect(existsSync(file)).toBe(true);
     }
     for (const local of imports(read('index.css'))) {
       expect(existsSync(join(stylesDir, local))).toBe(true);
