@@ -340,6 +340,43 @@ describe('/s/:slug', () => {
   });
 });
 
+describe('tour data inlined by the Worker', () => {
+  const inline = (data: unknown) => {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.id = 'pn-boot';
+    el.textContent = JSON.stringify(data);
+    document.head.append(el);
+  };
+  const cdnReads = () =>
+    fetchMock.mock.calls.map(([u]) => String(u)).filter((u) => u.startsWith(CDN));
+  afterEach(() => document.getElementById('pn-boot')?.remove());
+
+  it('shows the tour without reading the slug or the bundle', async () => {
+    inline({ slug: 'old-town', record: live, tour: bundle({ title: 'Inlined town' }) });
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Inlined town')).toBeTruthy();
+    await shown('square');
+    expect(cdnReads()).toEqual([]);
+  });
+
+  it('fetches as usual when the inlined data is for another slug', async () => {
+    inline({ slug: 'elsewhere', record: live, tour: bundle({ title: 'Inlined town' }) });
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Old town')).toBeTruthy();
+    expect(new Set(cdnReads())).toEqual(
+      new Set([`${CDN}slugs/old-town.json`, `${CDN}pub/tours/tour-a.json`]),
+    );
+  });
+
+  it('ignores unparseable inlined data', async () => {
+    inline('x');
+    document.getElementById('pn-boot')!.textContent = '{not json';
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Old town')).toBeTruthy();
+  });
+});
+
 describe('unavailable placeholder', () => {
   it('shows for a missing slug', async () => {
     objects = {};
