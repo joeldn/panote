@@ -10,8 +10,6 @@ type Listener = (e: unknown) => void;
 class FakeElement {
   style: Record<string, string> = {};
   tabIndex = -1;
-  role: string | null = null;
-  ariaLabel: string | null = null;
   listeners = new Map<string, Set<Listener>>();
   rect = { left: 0, top: 0, width: 800, height: 600 };
 
@@ -154,7 +152,7 @@ function key(k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: b
   });
 }
 
-describe('Controls: keyboard and accessibility', () => {
+describe('Controls: keyboard and focus', () => {
   it('zooms on a plain "=" and claims the key', () => {
     setup();
     const ev = key('=');
@@ -178,17 +176,10 @@ describe('Controls: keyboard and accessibility', () => {
     expect(host.panByPixels).not.toHaveBeenCalled();
   });
 
-  it('gives the element a role, a default label, a tab stop and a grab cursor', () => {
+  it('gives the element a tab stop and a grab cursor', () => {
     setup();
-    expect(el.role).toBe('application');
-    expect(el.ariaLabel).toBe('Panorama viewer');
     expect(el.tabIndex).toBe(0);
     expect(el.style.cursor).toBe('grab');
-  });
-
-  it('uses the label option for the accessible name', () => {
-    setup({ label: 'Lobby panorama' });
-    expect(el.ariaLabel).toBe('Lobby panorama');
   });
 });
 

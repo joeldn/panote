@@ -17,8 +17,6 @@ export interface ControlHost {
 export type WheelMode = 'always' | 'engaged';
 
 export interface ControlsOptions {
-  /** Accessible name for the viewer element. Default "Panorama viewer". */
-  label?: string;
   /** Wheel capture mode. Default `'always'`. */
   wheel?: WheelMode;
 }
@@ -86,11 +84,6 @@ export class Controls {
     el.style.touchAction = 'none';
     el.style.cursor = 'grab';
     el.tabIndex = 0;
-    // ARIA reflection properties rather than setAttribute: same effect in
-    // every ES2023-era browser, and hosts that hand in a bare canvas stub
-    // (PanoViewer's tests) keep working.
-    el.role = 'application';
-    el.ariaLabel = opts.label ?? 'Panorama viewer';
     this.wheelMode = opts.wheel ?? 'always';
     // The host may rebuild Controls on a focused element (a scene change).
     this.engaged = el.ownerDocument?.activeElement === el;
