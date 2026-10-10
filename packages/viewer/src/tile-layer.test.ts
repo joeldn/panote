@@ -109,6 +109,38 @@ describe('TileLayer failure handling', () => {
     for (let i = 0; i <= ABORT_AFTER_FRAMES; i++) frame(layer, yaw);
   }
 
+  /**
+   * Load every level-1 tile, then forget the requests and uploads it took.
+   * At level 2 the layer fetches a missing tile's level-1 parent first; with
+   * them all resident, a test sees only level-2 requests.
+   */
+  async function withLevel1(layer: TileLayer): Promise<TileLayer> {
+    const views = [
+      [0, 0],
+      [Math.PI / 2, 0],
+      [Math.PI, 0],
+      [-Math.PI / 2, 0],
+      [0, 1.5],
+      [0, -1.5],
+    ] as const;
+    for (const [yaw, pitch] of views) {
+      const view = { yaw, pitch, fov: 70 };
+      const at = (): void =>
+        layer.update(viewProjection(view, 1, 100), 70, dirFromYawPitch(yaw, pitch), 800);
+      at();
+      await flush();
+      for (let i = 0; i < 100 && readyCount(layer) > 0; i++) {
+        at();
+        await flush();
+      }
+    }
+    const { cache } = layer as unknown as { cache: Map<string, unknown> };
+    expect([...cache.keys()].filter((k) => k.startsWith('1/'))).toHaveLength(24);
+    requests = [];
+    renderer.uploadTile.mockClear();
+    return layer;
+  }
+
   /** Decoded tiles waiting for a frame to upload them. */
   const readyCount = (layer: TileLayer): number =>
     (layer as unknown as { ready: Map<string, unknown> }).ready.size;
@@ -275,7 +307,7 @@ describe('TileLayer failure handling', () => {
     function failOneTileOnce(): () => string | undefined {
       let failed: string | undefined;
       respond = (url) => {
-        if (failed === undefined && !url.includes('/0/')) {
+        if (failed === undefined && url.includes('/2/')) {
           failed = url;
           return { status: 503 };
         }
@@ -364,7 +396,7 @@ describe('TileLayer failure handling', () => {
   });
 
   it('leaves an aborted in-flight load fully re-queueable', async () => {
-    const layer = makeLayer();
+    const layer = await withLevel1(makeLayer());
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init: { signal: AbortSignal }) => {
@@ -421,7 +453,7 @@ describe('TileLayer failure handling', () => {
     }
 
     it('requests tiles nearest the centre of the view first', async () => {
-      const layer = makeLayer();
+      const layer = await withLevel1(makeLayer());
       await render(layer, 0);
       expect(requests.length).toBeGreaterThan(8);
       const dots = requests.map((u) => facing(u, 0));
@@ -513,7 +545,16 @@ describe('TileLayer failure handling', () => {
       url.replace(/^\/tiles\/[^/]+\//, '').replace(/\.jpg$/, '');
 
     it('does not leak a texture or lose track of a reload when a tile is aborted mid-decode', async () => {
-      const layer = makeLayer();
+      const live = new Set<number>();
+      let next = 0;
+      renderer.uploadTile.mockImplementation(() => {
+        live.add(++next);
+        return next;
+      });
+      renderer.removeTile.mockImplementation((handle: number) => {
+        live.delete(handle);
+      });
+      const layer = await withLevel1(makeLayer());
       // Decodes are held until released, so an abort can land between the
       // response arriving and the bitmap being ready: createImageBitmap does
       // not take the abort signal.
@@ -530,15 +571,6 @@ describe('TileLayer failure handling', () => {
             }),
         ),
       );
-      const live = new Set<number>();
-      renderer.uploadTile.mockImplementation(() => {
-        const handle = renderer.uploadTile.mock.calls.length;
-        live.add(handle);
-        return handle;
-      });
-      renderer.removeTile.mockImplementation((handle: number) => {
-        live.delete(handle);
-      });
 
       frame(layer, 0);
       await flush();
@@ -624,6 +656,105 @@ describe('TileLayer failure handling', () => {
     });
   });
 
+  describe('fetch priority and parents', () => {
+    /** The `priority` each tile request was made with, in request order. */
+    function priorities(): { url: string; priority: unknown }[] {
+      return vi
+        .mocked(fetch)
+        .mock.calls.map(([url, init]) => ({ url: String(url), priority: init?.priority }));
+    }
+
+    it('fetches the base at high priority', async () => {
+      const layer = makeLayer();
+      await layer.loadBase();
+      const base = priorities().filter((r) => r.url.includes('/0/'));
+      expect(base).toHaveLength(FACES.length);
+      for (const r of base) expect(r.priority).toBe('high');
+      layer.dispose();
+    });
+
+    it('fetches the four tiles nearest the centre at high priority and the rest low', async () => {
+      const layer = await withLevel1(makeLayer());
+      vi.mocked(fetch).mockClear();
+      frame(layer, 0);
+      const sent = priorities();
+      expect(sent.length).toBe(8);
+      expect(sent.map((r) => r.priority)).toEqual([
+        'high',
+        'high',
+        'high',
+        'high',
+        'low',
+        'low',
+        'low',
+        'low',
+      ]);
+      layer.dispose();
+    });
+
+    it('fetches the missing parent level first, once per parent', async () => {
+      const layer = makeLayer(); // only level 2 is wanted, and no level 1 is resident
+      await render(layer, 0);
+      const levels = requests.map((u) => Number(/\/tiles\/[^/]+\/(\d+)\//.exec(u)![1]));
+      expect(levels).toContain(1);
+      expect(levels).toContain(2);
+      // Every parent is asked for before the first level-2 tile.
+      expect(levels.lastIndexOf(1)).toBeLessThan(levels.indexOf(2));
+      expect(new Set(requests).size).toBe(requests.length);
+      // Each level-2 tile's parent was among them.
+      const parentOf = (u: string): string =>
+        u.replace(/\/2\/(\w+)\/(\d+)-(\d+)\.jpg$/, (_m, f: string, x: string, y: string) => {
+          return `/1/${f}/${Number(x) >> 1}-${Number(y) >> 1}.jpg`;
+        });
+      for (const u of requests.filter((r) => r.includes('/2/'))) {
+        expect(requests).toContain(parentOf(u));
+      }
+      layer.dispose();
+    });
+
+    it('queues each parent once, however many of its children are missing', () => {
+      const layer = makeLayer();
+      frame(layer, 0);
+      const { candidates } = layer as unknown as { candidates: { key: string }[] };
+      const keys = candidates.map((c) => c.key);
+      expect(keys.some((k) => k.startsWith('1/'))).toBe(true);
+      expect(new Set(keys).size).toBe(keys.length);
+      layer.dispose();
+    });
+
+    it('keeps a resident parent while it stands in for a missing child', async () => {
+      const layer = await withLevel1(makeLayer());
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise(() => {})),
+      );
+      // Over budget by a few tiles. The level-1 tiles loaded first, the ones
+      // facing yaw 0, are the least recently used.
+      (layer as unknown as { maxTiles: number }).maxTiles = 20;
+      frame(layer, 0);
+      const { cache, desired } = layer as unknown as {
+        cache: Map<string, unknown>;
+        desired: Set<string>;
+      };
+      expect(cache.size).toBe(20); // four of the 24 went
+      expect(desired.size).toBeGreaterThan(0);
+      for (const key of desired) {
+        const [, face, xy] = key.split('/') as [string, string, string];
+        const [x, y] = xy.split('-').map(Number) as [number, number];
+        expect(cache.has(`1/${face}/${x >> 1}-${y >> 1}`)).toBe(true);
+      }
+      layer.dispose();
+    });
+
+    it('skips the parents when they are already resident', async () => {
+      const layer = await withLevel1(makeLayer());
+      await render(layer, 0);
+      expect(requests.length).toBeGreaterThan(0);
+      for (const u of requests) expect(u).toContain('/2/');
+      layer.dispose();
+    });
+  });
+
   describe('abort hysteresis', () => {
     /** Fetches that never answer, with each request's signal kept by URL. */
     function holdFetches(): Map<string, AbortSignal> {
@@ -650,8 +781,8 @@ describe('TileLayer failure handling', () => {
     }
 
     it('aborts a load only after it has been out of view for more than ten frames', async () => {
+      const layer = await withLevel1(makeLayer());
       const signals = holdFetches();
-      const layer = makeLayer();
       frame(layer, 0);
       const first = [...requests];
       expect(first.length).toBeGreaterThan(0);
@@ -716,8 +847,8 @@ describe('TileLayer failure handling', () => {
       const signals = holdFetches();
       const layer = makeLayer();
       frameAt(layer, 0, 1600);
-      const fine = [...requests];
-      for (const url of fine) expect(url).toContain('/2/');
+      const fine = requests.filter((u) => u.includes('/2/'));
+      expect(fine.length).toBeGreaterThan(0);
       for (let i = 0; i <= ABORT_AFTER_FRAMES; i++) frameAt(layer, 0, 800);
       for (const url of fine) expect(signals.get(url)!.aborted).toBe(true);
       layer.dispose();
@@ -788,8 +919,8 @@ describe('TileLayer failure handling', () => {
     });
 
     it('closes a decoded tile that left the view instead of uploading it', async () => {
+      const layer = await withLevel1(makeLayer());
       const decodes = holdDecodes();
-      const layer = makeLayer();
       frame(layer, 0);
       await flush();
       const first = [...decodes.bitmaps];

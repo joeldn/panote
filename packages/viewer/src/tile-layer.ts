@@ -125,6 +125,8 @@ const UPLOAD_BUDGET_MS = 4;
  * when it comes back.
  */
 const ABORT_AFTER_FRAMES = 10;
+/** Candidates at the head of each frame's queue fetched at high priority. */
+const HIGH_PRIORITY_CANDIDATES = 4;
 
 interface Candidate {
   key: string;
@@ -219,6 +221,8 @@ export class TileLayer {
   private stale = new Map<string, number>();
   // `${level}/` for every level, the start of that level's keys.
   private levelPrefix: string[];
+  // Parents already queued this frame, so siblings queue one between them.
+  private parentsQueued = new Set<string>();
   private queue: Candidate[] = [];
   // Next queue index pump() takes. A cursor rather than shift(), which is
   // O(n) per dequeue; update() replaces the queue and resets it every frame.
@@ -313,7 +317,7 @@ export class TileLayer {
     const key = tileKey(0, face, 0, 0);
     let cause: unknown;
     for (;;) {
-      const result = await this.ensureTile(0, face, 0, 0);
+      const result = await this.ensureTile(0, face, 0, 0, 'high');
       if (result.kind === 'loaded') return;
       // Disposal (or a newer load superseding this one) tears the layer down
       // mid-flight. That is not the base layer failing — the caller already
@@ -369,6 +373,7 @@ export class TileLayer {
     // The candidates are rebuilt even for a still view: a tile that landed,
     // failed or finished its cooldown since the last frame changes them.
     this.candidates.length = 0;
+    this.parentsQueued.clear();
     // Soonest a wanted tile that is cooling down after a failure may go again.
     let nextRetryMs = Infinity;
     const { g, data, keys } = this.table(level);
@@ -388,7 +393,10 @@ export class TileLayer {
         const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
         const f = Math.floor(i / (g * g));
         const rest = i - f * g * g;
-        this.pushCandidate(key, level, FACES[f]!, rest % g, Math.floor(rest / g), priority);
+        const x = rest % g;
+        const y = Math.floor(rest / g);
+        this.pushCandidate(key, level, FACES[f]!, x, y, priority);
+        if (level >= 2) this.queueParent(f, level - 1, x >> 1, y >> 1, priority);
       } else {
         nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
       }
@@ -455,8 +463,35 @@ export class TileLayer {
       if (this.cache.has(next.key) || this.inflight.has(next.key) || this.ready.has(next.key)) {
         continue;
       }
-      void this.ensureTile(next.level, next.face, next.x, next.y);
+      // The head of the queue is what the view is centred on (or the parents
+      // it needs first); the rest can wait behind other requests.
+      const priority = this.queueHead <= HIGH_PRIORITY_CANDIDATES ? 'high' : 'low';
+      void this.ensureTile(next.level, next.face, next.x, next.y, priority);
     }
+  }
+
+  /**
+   * Queue the parent of a missing tile ahead of every tile at the target
+   * level. Its nearest resident ancestor is then at least two levels up (the
+   * base always is), so a big zoom would show that soft ancestor until the
+   * target level lands; the parent costs a quarter of its children and gives
+   * a sharper step in between.
+   */
+  private queueParent(f: number, level: number, x: number, y: number, childPriority: number): void {
+    const t = this.table(level);
+    const key = t.keys[(f * t.g + y) * t.g + x]!;
+    const entry = this.cache.get(key);
+    if (entry) {
+      // On screen as the fallback for its missing child: not to be evicted.
+      entry.lastUsed = this.clock;
+      return;
+    }
+    if (this.inflight.has(key) || this.ready.has(key)) return;
+    if (this.parentsQueued.has(key) || !this.retry.eligible(key)) return;
+    this.parentsQueued.add(key);
+    // Centre-first priorities are 1 - cos, in [0, 2]: minus 2 sorts every
+    // parent before every target-level tile, still centre-first among them.
+    this.pushCandidate(key, level, FACES[f]!, x, y, childPriority - 2);
   }
 
   /**
@@ -551,6 +586,7 @@ export class TileLayer {
     face: Face,
     x: number,
     y: number,
+    priority: RequestPriority,
   ): Promise<TileLoadOutcome> {
     if (this.disposed) return { kind: 'aborted' };
     const key = tileKey(level, face, x, y);
@@ -569,7 +605,8 @@ export class TileLayer {
     const controller = new AbortController();
     this.inflight.set(key, controller);
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      // `priority` is a hint; browsers without it ignore the field.
+      const res = await fetch(url, { signal: controller.signal, priority });
       if (!res.ok) throw new TileHttpError(res.status);
       const blob = await res.blob();
       // Decoded upright (row 0 = top). The renderer uploads it unflipped and
@@ -776,6 +813,7 @@ export class TileLayer {
     for (const tile of this.ready.values()) tile.bitmap.close();
     this.ready.clear();
     this.stale.clear();
+    this.parentsQueued.clear();
     for (const e of this.cache.values()) {
       this.renderer.removeTile(e.handle);
     }

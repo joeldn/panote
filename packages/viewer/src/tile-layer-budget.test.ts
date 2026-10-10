@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Manifest } from '@panote/core';
 import { FACES } from './cube.js';
+import { selectLevel } from './lod.js';
 import { TileLayer } from './tile-layer.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
@@ -168,7 +169,10 @@ describe('texture budget while panning', () => {
       render();
       await flush();
       await drawUntilUploaded(layer, render);
-      const wanted = requests.slice(before);
+      // The target-level tiles this view asked for. The layer may also have
+      // fetched their parents first; those step aside once the children land.
+      const level = selectLevel(FOV_DEG, viewportHeight, TILE_SIZE, 3);
+      const wanted = requests.slice(before).filter((u) => u.includes(`/${level}/`));
       render();
       await flush();
       await drawUntilUploaded(layer, render);
