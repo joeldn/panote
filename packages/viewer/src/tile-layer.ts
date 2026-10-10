@@ -26,6 +26,7 @@ import {
  */
 type TileLoadOutcome =
   | { kind: 'loaded' } // in the cache now — this call, or already there
+  | { kind: 'decoded' } // waiting in the ready queue for update() to upload it
   | { kind: 'skipped' } // another call owns it
   | { kind: 'aborted' } // cancelled: panned away, or the layer was disposed
   | { kind: 'failed'; failure: FailureKind; error: unknown };
@@ -99,6 +100,24 @@ interface TileEntry {
   /** Built once at upload, so drawList() pushes it without allocating. */
   item: DrawItem;
 }
+
+/** A decoded tile waiting for update() to upload it. */
+interface ReadyTile {
+  level: number;
+  face: Face;
+  x: number;
+  y: number;
+  bitmap: ImageBitmap;
+}
+
+/**
+ * Uploads per update(). Each one is a texStorage2D, a texSubImage2D and a
+ * mipmap generation, about 1-3 ms for a 512 px tile on a phone, so eight
+ * decodes landing together would otherwise make one long frame.
+ */
+const MAX_UPLOADS_PER_UPDATE = 3;
+/** Stop uploading for this update once this much time has gone. */
+const UPLOAD_BUDGET_MS = 4;
 
 interface Candidate {
   key: string;
@@ -187,6 +206,8 @@ const byPriority = (a: Candidate, b: Candidate): number => a.priority - b.priori
 export class TileLayer {
   private cache = new Map<string, TileEntry>();
   private inflight = new Map<string, AbortController>();
+  // Decoded and not yet uploaded, in arrival order. See drainReady().
+  private ready = new Map<string, ReadyTile>();
   private queue: Candidate[] = [];
   // Next queue index pump() takes. A cursor rather than shift(), which is
   // O(n) per dequeue; update() replaces the queue and resets it every frame.
@@ -331,6 +352,8 @@ export class TileLayer {
       for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
     }
 
+    this.drainReady();
+
     // The candidates are rebuilt even for a still view: a tile that landed,
     // failed or finished its cooldown since the last frame changes them.
     this.candidates.length = 0;
@@ -345,14 +368,16 @@ export class TileLayer {
         // Cached and still wanted — refresh LRU stamp so eviction reflects
         // actual visibility, not upload/insertion order.
         entry.lastUsed = this.clock;
-      } else if (!this.inflight.has(key) && this.retry.eligible(key)) {
+      } else if (this.inflight.has(key) || this.ready.has(key)) {
+        // On its way.
+      } else if (this.retry.eligible(key)) {
         const o = i * STRIDE;
         // Smaller = closer to the view centre.
         const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
         const f = Math.floor(i / (g * g));
         const rest = i - f * g * g;
         this.pushCandidate(key, level, FACES[f]!, rest % g, Math.floor(rest / g), priority);
-      } else if (!this.inflight.has(key)) {
+      } else {
         nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
       }
     }
@@ -414,7 +439,9 @@ export class TileLayer {
     if (this.disposed) return;
     while (this.inflight.size < this.maxConcurrent && this.queueHead < this.queue.length) {
       const next = this.queue[this.queueHead++]!;
-      if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
+      if (this.cache.has(next.key) || this.inflight.has(next.key) || this.ready.has(next.key)) {
+        continue;
+      }
       void this.ensureTile(next.level, next.face, next.x, next.y);
     }
   }
@@ -515,7 +542,7 @@ export class TileLayer {
     if (this.disposed) return { kind: 'aborted' };
     const key = tileKey(level, face, x, y);
     if (this.cache.has(key)) return { kind: 'loaded' };
-    if (this.inflight.has(key)) return { kind: 'skipped' };
+    if (this.inflight.has(key) || this.ready.has(key)) return { kind: 'skipped' };
     const url = tilePath(
       this.baseUrl,
       this.manifest.pano,
@@ -544,30 +571,20 @@ export class TileLayer {
       // load aborted mid-decode still lands — after a reload has started. The
       // second one to land must not upload over the first, or the first
       // texture is never freed.
-      if (this.cache.has(key)) {
+      if (this.cache.has(key) || this.ready.has(key)) {
         bitmap.close();
         return { kind: 'loaded' };
       }
-      const geom = buildTileGeometry(face, level, x, y);
-      let handle: TileHandle;
-      try {
-        handle = this.renderer.uploadTile(geom, bitmap);
-      } finally {
-        // The GPU texture owns the pixels now (or the upload failed, e.g. on a
-        // lost context): free the CPU copy either way.
-        bitmap.close();
+      // The base goes up at once: loadBase() is waiting on it, and no frame
+      // runs while the layer is still loading. Everything else waits for
+      // update() to upload it, a few per frame.
+      if (level === 0) {
+        this.upload(key, level, face, x, y, bitmap);
+        return { kind: 'loaded' };
       }
-      this.cache.set(key, {
-        key,
-        handle,
-        lastUsed: this.clock,
-        level,
-        visible: true,
-        item: { handle, level },
-      });
-      this.retry.recordSuccess(key);
+      this.ready.set(key, { level, face, x, y, bitmap });
       this.onInvalidate();
-      return { kind: 'loaded' };
+      return { kind: 'decoded' };
     } catch (err) {
       // Abort (from AbortController) is expected churn — leave re-queueable
       // and spend no attempt. Everything else is classified: a permanent
@@ -575,11 +592,7 @@ export class TileLayer {
       // one costs an attempt. Either way the coarser parent tile stays as
       // fallback.
       if (isAbortError(err)) return { kind: 'aborted' };
-      const failure = classifyFailure(err);
-      this.retry.recordFailure(key, failure);
-      // Still on screen: come back for it when its cooldown ends, even if
-      // nothing else asks for a frame before then.
-      if (this.desired.has(key)) this.armWake(this.retry.waitMs(key));
+      const failure = this.recordFailure(key, err);
       return { kind: 'failed', failure, error: err };
     } finally {
       // Only clear the slot this call owns. After an abort the key may already
@@ -588,6 +601,74 @@ export class TileLayer {
       if (this.inflight.get(key) === controller) this.inflight.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
+  }
+
+  /** Upload a decoded tile and cache it. Closes the bitmap, even on a throw. */
+  private upload(
+    key: string,
+    level: number,
+    face: Face,
+    x: number,
+    y: number,
+    bitmap: ImageBitmap,
+  ): void {
+    const geom = buildTileGeometry(face, level, x, y);
+    let handle: TileHandle;
+    try {
+      handle = this.renderer.uploadTile(geom, bitmap);
+    } finally {
+      // The GPU texture owns the pixels now (or the upload failed, e.g. on a
+      // lost context): free the CPU copy either way.
+      bitmap.close();
+    }
+    this.cache.set(key, {
+      key,
+      handle,
+      lastUsed: this.clock,
+      level,
+      visible: true,
+      item: { handle, level },
+    });
+    this.retry.recordSuccess(key);
+    this.onInvalidate();
+  }
+
+  private recordFailure(key: string, err: unknown): FailureKind {
+    const failure = classifyFailure(err);
+    this.retry.recordFailure(key, failure);
+    // Still on screen: come back for it when its cooldown ends, even if
+    // nothing else asks for a frame before then.
+    if (this.desired.has(key)) this.armWake(this.retry.waitMs(key));
+    return failure;
+  }
+
+  /**
+   * Upload what has decoded since the last frame: at most
+   * MAX_UPLOADS_PER_UPDATE, and none once UPLOAD_BUDGET_MS has gone, so a
+   * burst of decodes is spread over several frames instead of one long one.
+   * A tile that left the view while it waited is dropped and its bitmap
+   * closed. Anything left over asks for another frame.
+   */
+  private drainReady(): void {
+    if (this.ready.size === 0) return;
+    const start = this.now();
+    let uploads = 0;
+    for (const [key, tile] of this.ready) {
+      if (!this.desired.has(key)) {
+        tile.bitmap.close();
+        this.ready.delete(key);
+        continue;
+      }
+      if (uploads >= MAX_UPLOADS_PER_UPDATE || this.now() - start >= UPLOAD_BUDGET_MS) continue;
+      this.ready.delete(key);
+      uploads++;
+      try {
+        this.upload(key, tile.level, tile.face, tile.x, tile.y, tile.bitmap);
+      } catch (err) {
+        this.recordFailure(key, err);
+      }
+    }
+    if (this.ready.size > 0) this.onInvalidate();
   }
 
   private evict(): void {
@@ -614,7 +695,8 @@ export class TileLayer {
   }
 
   /**
-   * Is any tile for the current view still to come? In flight, or queued: the
+   * Is any tile for the current view still to come? In flight, decoded and
+   * waiting to be uploaded, or queued: the
    * queue is non-empty after pump() only when every slot is busy, and a held
    * queue is work that has not happened yet, not work that is done. A tile that failed is in neither
    * (it is out of the queue while it waits out a per-tile cooldown, and for
@@ -622,7 +704,7 @@ export class TileLayer {
    * this true.
    */
   hasPending(): boolean {
-    return this.inflight.size > 0 || this.queueHead < this.queue.length;
+    return this.inflight.size > 0 || this.ready.size > 0 || this.queueHead < this.queue.length;
   }
 
   dispose(): void {
@@ -643,6 +725,8 @@ export class TileLayer {
     this.visibleLevel = -1;
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
+    for (const tile of this.ready.values()) tile.bitmap.close();
+    this.ready.clear();
     for (const e of this.cache.values()) {
       this.renderer.removeTile(e.handle);
     }

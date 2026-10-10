@@ -103,9 +103,22 @@ describe('TileLayer failure handling', () => {
     layer.update(viewProjection(view, 1, 100), 70, dirFromYawPitch(yaw, 0), 1600);
   }
 
+  /** Decoded tiles waiting for a frame to upload them. */
+  const readyCount = (layer: TileLayer): number =>
+    (layer as unknown as { ready: Map<string, unknown> }).ready.size;
+
+  /**
+   * One frame and the loads it starts, then the frames the layer asks for
+   * while decoded tiles wait to be uploaded (a few go up per frame), as the
+   * viewer's invalidate-driven loop would draw them.
+   */
   async function render(layer: TileLayer, yaw: number): Promise<void> {
     frame(layer, yaw);
     await flush();
+    for (let i = 0; i < 100 && readyCount(layer) > 0; i++) {
+      frame(layer, yaw);
+      await flush();
+    }
   }
 
   beforeEach(() => {
@@ -283,9 +296,14 @@ describe('TileLayer failure handling', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(invalidate).toHaveBeenCalledTimes(calls + 1);
 
-      // The frame that wake asks for retries the tile, which now loads.
+      // The frame that wake asks for retries the tile, which now loads, and
+      // the frames after it upload what decoded.
       frame(layer, 0);
       await drain();
+      for (let i = 0; i < 100 && readyCount(layer) > 0; i++) {
+        frame(layer, 0);
+        await drain();
+      }
       expect(requests.filter((u) => u === failed())).toHaveLength(2);
       expect(layer.hasPending()).toBe(false);
       layer.dispose();
@@ -566,6 +584,115 @@ describe('TileLayer failure handling', () => {
       expect(bitmaps.length).toBeGreaterThan(0);
       for (const bitmap of bitmaps) expect(bitmap.close).toHaveBeenCalledTimes(1);
       layer.dispose();
+    });
+  });
+
+  describe('upload batching', () => {
+    /** Decodes held until released, each bitmap tracked. */
+    function holdDecodes(): {
+      bitmaps: { close: ReturnType<typeof vi.fn> }[];
+      release: () => void;
+    } {
+      const bitmaps: { close: ReturnType<typeof vi.fn> }[] = [];
+      const held: (() => void)[] = [];
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(
+          () =>
+            new Promise((resolve) => {
+              const bitmap = { close: vi.fn() };
+              bitmaps.push(bitmap);
+              held.push(() => resolve(bitmap));
+            }),
+        ),
+      );
+      return { bitmaps, release: () => held.splice(0).forEach((r) => r()) };
+    }
+
+    it('uploads at most three decoded tiles per frame', async () => {
+      const decodes = holdDecodes();
+      const layer = makeLayer();
+      frame(layer, 0);
+      await flush();
+      expect(decodes.bitmaps).toHaveLength(8);
+      decodes.release(); // all eight land together
+      await flush();
+      expect(renderer.uploadTile).not.toHaveBeenCalled();
+
+      const perFrame: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const before = renderer.uploadTile.mock.calls.length;
+        frame(layer, 0);
+        perFrame.push(renderer.uploadTile.mock.calls.length - before);
+        decodes.release();
+        await flush();
+      }
+      expect(perFrame[0]).toBe(3);
+      for (const n of perFrame) expect(n).toBeLessThanOrEqual(3);
+      layer.dispose();
+    });
+
+    it('stops uploading for the frame once the time budget is spent', async () => {
+      const decodes = holdDecodes();
+      const layer = makeLayer();
+      frame(layer, 0);
+      await flush();
+      decodes.release();
+      await flush();
+      // Each upload takes 3 ms on the layer's clock: two fit in 4 ms, a third
+      // would start after it.
+      renderer.uploadTile.mockImplementation(() => {
+        advance(3);
+        return renderer.uploadTile.mock.calls.length;
+      });
+      frame(layer, 0);
+      expect(renderer.uploadTile).toHaveBeenCalledTimes(2);
+      layer.dispose();
+    });
+
+    it('closes a decoded tile that left the view instead of uploading it', async () => {
+      const decodes = holdDecodes();
+      const layer = makeLayer();
+      frame(layer, 0);
+      await flush();
+      const first = [...decodes.bitmaps];
+      decodes.release();
+      await flush();
+      frame(layer, Math.PI); // the decoded tiles are behind the camera now
+      expect(renderer.uploadTile).not.toHaveBeenCalled();
+      for (const bitmap of first) expect(bitmap.close).toHaveBeenCalledTimes(1);
+      expect(readyCount(layer)).toBe(0);
+      layer.dispose();
+    });
+
+    it('stays pending while decoded tiles wait, and asks for frames to upload them', async () => {
+      const invalidate = vi.fn();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      // No further frames: every wanted tile is fetched and decoded, so
+      // nothing is in flight or queued, and all of it waits to be uploaded.
+      for (let i = 0; i < 5; i++) await flush();
+      const { inflight } = layer as unknown as { inflight: Map<string, unknown> };
+      expect(inflight.size).toBe(0);
+      expect(readyCount(layer)).toBeGreaterThan(3);
+      expect(layer.hasPending()).toBe(true);
+      expect(invalidate).toHaveBeenCalled();
+      for (let i = 0; i < 100 && readyCount(layer) > 0; i++) frame(layer, 0);
+      expect(layer.hasPending()).toBe(false);
+      layer.dispose();
+    });
+
+    it('closes queued bitmaps on dispose', async () => {
+      const decodes = holdDecodes();
+      const layer = makeLayer();
+      frame(layer, 0);
+      await flush();
+      const queued = [...decodes.bitmaps];
+      decodes.release();
+      await flush();
+      expect(readyCount(layer)).toBe(queued.length);
+      layer.dispose();
+      for (const bitmap of queued) expect(bitmap.close).toHaveBeenCalledTimes(1);
     });
   });
 

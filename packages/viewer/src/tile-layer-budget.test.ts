@@ -118,6 +118,19 @@ describe('texture budget while panning', () => {
   });
 
   /**
+   * Frames until nothing decoded is waiting: the layer uploads a few tiles
+   * per frame and asks for another while any are left, so the viewer keeps
+   * drawing until they are all up.
+   */
+  async function drawUntilUploaded(layer: TileLayer, render: () => void): Promise<void> {
+    const ready = (layer as unknown as { ready: Map<string, unknown> }).ready;
+    for (let i = 0; i < 100 && ready.size > 0; i++) {
+      render();
+      await flush();
+    }
+  }
+
+  /**
    * Two full 360° laps at 15° per frame: load the base, then pan the whole way
    * round twice and count what the cache had to do over again. Every step is
    * rendered twice, the second time with the camera still, and every tile the
@@ -154,9 +167,11 @@ describe('texture budget while panning', () => {
       const before = requests.length;
       render();
       await flush();
+      await drawUntilUploaded(layer, render);
       const wanted = requests.slice(before);
       render();
       await flush();
+      await drawUntilUploaded(layer, render);
       const resident = renderer.residentUrls();
       for (const url of wanted) if (!resident.has(url)) visibleEvicted.push(url);
     }
@@ -206,6 +221,7 @@ describe('texture budget while panning', () => {
       );
     still();
     for (let i = 0; i < 3; i++) await flush();
+    await drawUntilUploaded(layer, still);
     const loaded = requests.length;
     const resident = new Set(renderer.live);
     expect(resident.size).toBeGreaterThan(24);
