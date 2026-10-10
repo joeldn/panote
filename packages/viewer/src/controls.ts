@@ -1,6 +1,6 @@
 import { pinchFactor } from './camera-math.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
-import type { WheelMode } from './types.js';
+import type { InteractionOptions, ResolvedViewerOptions, WheelMode } from './types.js';
 
 export type { WheelMode };
 
@@ -14,10 +14,16 @@ export interface ControlHost {
   stopMomentum(): void;
 }
 
-export interface ControlsOptions {
-  /** Wheel capture mode. Default `VIEWER_DEFAULTS.wheel`. */
-  wheel?: WheelMode;
-}
+/** The input half of InteractionOptions; unset fields take VIEWER_DEFAULTS.interaction. */
+export type ControlsOptions = Pick<
+  InteractionOptions,
+  'cursor' | 'wheel' | 'wheelGain' | 'pinchGain' | 'keyboard' | 'doubleClickZoom' | 'inertia'
+>;
+
+type ResolvedControls = Pick<
+  ResolvedViewerOptions['interaction'],
+  'cursor' | 'wheel' | 'wheelGain' | 'pinchGain' | 'keyboard' | 'doubleClickZoom' | 'inertia'
+>;
 
 /** Pointer state for one of the (at most two) tracked pointers. */
 interface PointerSlot {
@@ -32,12 +38,9 @@ const FLING_STALE_MS = 60;
 const FLING_WINDOW_MS = 100;
 // The host's flick() takes px per 60 Hz frame.
 const FRAME_MS = 1000 / 60;
-// Wheel zoom gain per normalised pixel. Chrome and Firefox report a trackpad
-// pinch as a ctrl-wheel with small pixel deltas (about 1-10), so that shape
-// gets ten times the gain. Ctrl plus a mouse notch (deltaY about 100, or line
-// mode) keeps the plain gain.
-const WHEEL_GAIN = 0.001;
-const PINCH_GAIN = 0.01;
+// A ctrl-wheel with a pixel delta under this is a trackpad pinch and gets the
+// pinch gain. Ctrl plus a mouse notch (deltaY about 100, or line mode) keeps
+// the plain wheel gain.
 const PINCH_MAX_DELTA = 50;
 // Cap on |ln(scale)| from one wheel event, so a page-mode delta or a
 // high-resolution wheel burst can't jump the fov.
@@ -73,6 +76,7 @@ export class Controls {
   private gestureConsumed = false;
   // Last cumulative scale of an in-progress Safari pinch, or null.
   private gestureScale: number | null = null;
+  private readonly opts: ResolvedControls;
   private readonly wheelMode: WheelMode;
   // Whether the user has engaged the viewer (see WheelMode 'engaged').
   private engaged = false;
@@ -82,26 +86,42 @@ export class Controls {
     private host: ControlHost,
     opts: ControlsOptions = {},
   ) {
+    const d = VIEWER_DEFAULTS.interaction;
+    const keyboard = opts.keyboard ?? d.keyboard;
+    this.opts = {
+      cursor: opts.cursor ?? d.cursor,
+      wheel: opts.wheel ?? d.wheel,
+      wheelGain: opts.wheelGain ?? d.wheelGain,
+      pinchGain: opts.pinchGain ?? d.pinchGain,
+      keyboard: keyboard && { ...d.keyboard, ...keyboard },
+      doubleClickZoom: opts.doubleClickZoom ?? d.doubleClickZoom,
+      inertia: opts.inertia ?? d.inertia,
+    };
     el.style.touchAction = 'none';
-    el.style.cursor = 'grab';
-    el.tabIndex = 0;
-    this.wheelMode = opts.wheel ?? VIEWER_DEFAULTS.wheel;
+    this.setCursor('grab');
+    // Focusable for its keys; without them it stays out of the tab order.
+    if (this.opts.keyboard) el.tabIndex = 0;
+    this.wheelMode = this.opts.wheel;
     // The element may already have focus when Controls is built.
     this.engaged = el.ownerDocument?.activeElement === el;
     el.addEventListener('pointerdown', this.onDown);
     el.addEventListener('pointermove', this.onMove);
     el.addEventListener('pointerup', this.onUp);
     el.addEventListener('pointercancel', this.onCancel);
-    el.addEventListener('wheel', this.onWheel, { passive: false });
+    if (this.wheelMode !== 'off') el.addEventListener('wheel', this.onWheel, { passive: false });
     el.addEventListener('contextmenu', this.onContextMenu);
-    el.addEventListener('dblclick', this.onDblClick);
-    el.addEventListener('keydown', this.onKeyDown);
+    if (this.opts.doubleClickZoom !== false) el.addEventListener('dblclick', this.onDblClick);
+    if (this.opts.keyboard) el.addEventListener('keydown', this.onKeyDown);
     el.addEventListener('gesturestart', this.onGestureStart);
     el.addEventListener('gesturechange', this.onGestureChange);
     el.addEventListener('gestureend', this.onGestureEnd);
     el.addEventListener('focus', this.onEngage);
     el.addEventListener('blur', this.onDisengage);
     el.addEventListener('pointerleave', this.onPointerLeave);
+  }
+
+  private setCursor(cursor: 'grab' | 'grabbing'): void {
+    if (this.opts.cursor) this.el.style.cursor = cursor;
   }
 
   private onEngage = () => {
@@ -182,7 +202,7 @@ export class Controls {
     this.host.stopMomentum();
     this.sampleCount = 0;
     this.pushSample(e.timeStamp, e.clientX, e.clientY);
-    this.el.style.cursor = 'grabbing';
+    this.setCursor('grabbing');
   };
 
   private onMove = (e: PointerEvent) => {
@@ -233,14 +253,14 @@ export class Controls {
     this.prevDist = 0;
     if (this.p0 || this.p1) return;
     // Only fling from a real drag — not from the tail of a pinch.
-    if (fling && !this.gestureConsumed) {
+    if (fling && this.opts.inertia && !this.gestureConsumed) {
       const [vx, vy] = this.releaseVelocity(e.timeStamp);
       this.host.flick(vx, vy);
     }
     this.gestureConsumed = false;
     this.sampleCount = 0;
     this.last = { x: 0, y: 0 };
-    this.el.style.cursor = 'grab';
+    this.setCursor('grab');
   }
 
   private onWheel = (e: WheelEvent) => {
@@ -254,7 +274,7 @@ export class Controls {
     const dx = e.deltaX * unit;
     if (dy) {
       const pinch = e.ctrlKey && e.deltaMode === 0 && Math.abs(e.deltaY) < PINCH_MAX_DELTA;
-      const gain = pinch ? PINCH_GAIN : WHEEL_GAIN;
+      const gain = pinch ? this.opts.pinchGain : this.opts.wheelGain;
       const logScale = Math.max(-MAX_WHEEL_LOG_SCALE, Math.min(MAX_WHEEL_LOG_SCALE, dy * gain));
       this.host.zoomAt(Math.exp(logScale), e.clientX, e.clientY);
     }
@@ -296,8 +316,10 @@ export class Controls {
   private onContextMenu = (e: Event) => e.preventDefault();
 
   private onDblClick = (e: MouseEvent) => {
+    const factor = this.opts.doubleClickZoom;
+    if (factor === false) return;
     e.preventDefault();
-    this.host.zoomAt(0.6, e.clientX, e.clientY); // step in toward the point
+    this.host.zoomAt(factor, e.clientX, e.clientY); // step in toward the point
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
@@ -308,9 +330,11 @@ export class Controls {
     if (e.metaKey) return;
     const altGraph = e.getModifierState?.('AltGraph') ?? false;
     if (!altGraph && (e.ctrlKey || e.altKey)) return;
+    const keys = this.opts.keyboard;
+    if (!keys) return;
     // Keys move the target, not the camera, so damping smooths key repeat
     // into a glide instead of 40 px jumps.
-    const panStep = 40; // px-equivalent
+    const panStep = keys.panStepPx; // px-equivalent
     switch (e.key) {
       case 'ArrowLeft':
         this.host.panTargetByPixels(panStep, 0);
@@ -326,11 +350,11 @@ export class Controls {
         break;
       case '+':
       case '=':
-        this.zoomCenter(0.8);
+        this.zoomCenter(keys.zoomStep);
         break;
       case '-':
       case '_':
-        this.zoomCenter(1.25);
+        this.zoomCenter(1 / keys.zoomStep);
         break;
       default:
         return;

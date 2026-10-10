@@ -1,5 +1,5 @@
 import { FACES, manifestUrl, tilePath, type Manifest } from '@panote/core';
-import type { PanoViewer } from '@panote/viewer';
+import { resolveViewerOptions, type PanoViewer } from '@panote/viewer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -144,17 +144,90 @@ describe('panoteSourceResolver', () => {
 });
 
 describe('panoteViewerPreset', () => {
-  it('gives the viewer the resolver for the base and the preload-matching request init', async () => {
-    const preset = panoteViewerPreset({ baseUrl: BASE });
-    expect(Object.keys(preset).sort()).toEqual(['requestInit', 'resolveSource']);
-    expect(preset.requestInit).toBe(PANOTE_REQUEST_INIT);
+  /** The preset as data: everything but the resolver, which is a function. */
+  const pinned = (o: { label?: string; embed?: boolean } = {}) => {
+    const { resolveSource, ...rest } = panoteViewerPreset({ baseUrl: BASE, ...o });
+    expect(resolveSource).toEqual(expect.any(Function));
+    return rest;
+  };
+
+  // panote's viewer, value by value. A change here is a change to how every
+  // panote viewer behaves: make it on purpose, not because a viewer default
+  // moved.
+  const PANOTE = {
+    camera: {
+      minFov: 15,
+      maxFov: 80,
+      defaultFov: 70,
+      maxHorizontalFov: 100,
+      minPitch: -(Math.PI / 2 - 0.001),
+      maxPitch: Math.PI / 2 - 0.001,
+      damping: 0.25,
+      momentumFriction: 0.9,
+      north: 0,
+    },
+    interaction: {
+      enabled: true,
+      label: 'Panorama viewer',
+      a11y: true,
+      cursor: true,
+      wheel: 'always',
+      wheelGain: 0.001,
+      pinchGain: 0.01,
+      keyboard: { panStepPx: 40, zoomStep: 0.8 },
+      doubleClickZoom: 0.6,
+      inertia: true,
+    },
+    rendering: {
+      maxPixelRatio: 2,
+      maxPixels: 8_300_000,
+      antialias: false,
+      anisotropy: 'max',
+      background: [0, 0, 0],
+      lodBias: 0,
+    },
+    network: {
+      maxConcurrent: 8,
+      requestInit: { mode: 'cors', credentials: 'same-origin' },
+      retry: { maxAttempts: 3, baseDelayMs: 1000 },
+    },
+    memory: { textureBudgetMB: 'auto', minResidentTiles: 24 },
+    transition: { durationMs: 400, respectReducedMotion: true },
+    autoRotate: { enabled: false, speed: 0.036, idleMs: 3000 },
+  };
+
+  it('pins every option to the values panote runs with', () => {
+    expect(pinned()).toStrictEqual(PANOTE);
+  });
+
+  it('sets every option the viewer has, so no viewer default reaches panote', () => {
+    // A new viewer option shows up here as a key the preset leaves to the
+    // default; pin it above.
+    expect(resolveViewerOptions(pinned())).toEqual(pinned());
+  });
+
+  it('labels the canvas, and engages the wheel only for an embed', () => {
+    expect(pinned({ label: 'Old town: Square' }).interaction?.label).toBe('Old town: Square');
+    expect(pinned({ embed: true })).toStrictEqual({
+      ...PANOTE,
+      interaction: { ...PANOTE.interaction, wheel: 'engaged' },
+    });
+    expect(pinned({ embed: false }).interaction?.wheel).toBe('always');
+  });
+
+  it('sends tile requests with the preload-matching init, the frozen PANOTE_REQUEST_INIT', () => {
+    expect(pinned().network?.requestInit).toBe(PANOTE_REQUEST_INIT);
     expect(PANOTE_REQUEST_INIT).toEqual({ mode: 'cors', credentials: 'same-origin' });
     expect(Object.isFrozen(PANOTE_REQUEST_INIT)).toBe(true);
+  });
 
+  it('resolves ids through the manifest under the base', async () => {
     const fetchMock = vi.fn(async () => Response.json(manifest()));
     vi.stubGlobal('fetch', fetchMock);
-    await preset.resolveSource!('church', new AbortController().signal);
+    const preset = panoteViewerPreset({ baseUrl: BASE });
+    const source = await preset.resolveSource!('church', new AbortController().signal);
     expect(fetchMock).toHaveBeenCalledWith(manifestUrl(BASE, 'church'), expect.anything());
+    expect(manifestOf(source)).toEqual(manifest());
   });
 });
 

@@ -1,3 +1,5 @@
+import { VIEWER_DEFAULTS } from './defaults.js';
+
 /**
  * The default texture budget, in MB, for a viewer whose caller did not name
  * one — scaled by the device pixel ratio the renderer will actually draw at.
@@ -70,18 +72,19 @@ export function defaultTextureBudgetMB(
   return BASE_TEXTURE_BUDGET_MB * scale;
 }
 
-/** Fewest tiles the cache may hold, however small the budget. */
-export const MIN_RESIDENT_TILES = 24;
-
 /** Mip levels add a third on top of the base level: 1 + 1/4 + 1/16 + … = 4/3. */
 const MIP_CHAIN_FACTOR = 4 / 3;
 
 /**
  * How many tiles of `tileSize`² fit in `budgetMB` of VRAM, counting each
  * tile's full mip chain as the renderer allocates it. Never below
- * `MIN_RESIDENT_TILES`.
+ * `minResidentTiles` (VIEWER_DEFAULTS.memory).
  */
-export function maxTilesForBudget(budgetMB: number, tileSize: number): number {
+export function maxTilesForBudget(
+  budgetMB: number,
+  tileSize: number,
+  minResidentTiles: number = VIEWER_DEFAULTS.memory.minResidentTiles,
+): number {
   const tileMB = (tileSize * tileSize * 4 * MIP_CHAIN_FACTOR) / (1024 * 1024);
-  return Math.max(MIN_RESIDENT_TILES, Math.floor(budgetMB / tileMB));
+  return Math.max(minResidentTiles, Math.floor(budgetMB / tileMB));
 }

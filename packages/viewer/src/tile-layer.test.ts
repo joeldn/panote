@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
-import { BaseTileLoadError, TileLayer } from './tile-layer.js';
+import { BaseTileLoadError, TileLayer, type TileLayerOptions } from './tile-layer.js';
 import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
@@ -71,22 +71,18 @@ describe('TileLayer failure handling', () => {
     textureBudgetMB = 128,
     onInvalidate: () => void = () => {},
   ): TileLayer {
-    return new TileLayer(
-      renderer as unknown as GLRenderer,
-      makeSource(pano),
+    return new TileLayer(renderer as unknown as GLRenderer, makeSource(pano), onInvalidate, {
       textureBudgetMB,
-      onInvalidate,
-      8,
-      () => clock,
+      now: () => clock,
       // The injected sleep advances the same clock the retry budget measures
       // its cooldowns against, so a base-layer retry is exercised for real
       // without any test waiting on a real timer.
-      (ms: number) => {
+      sleep: (ms: number) => {
         sleeps.push(ms);
         clock += ms;
         return Promise.resolve();
       },
-    );
+    });
   }
 
   /** URL of the level-0 base tile for a face. */
@@ -824,14 +820,11 @@ describe('TileLayer failure handling', () => {
       // Slots for every tile in view, so the second frame below has all the
       // children in flight and none still queued.
       const layer = await withLevel1(
-        new TileLayer(
-          renderer as unknown as GLRenderer,
-          makeSource('pano-a'),
-          128,
-          () => {},
-          64,
-          () => clock,
-        ),
+        new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+          textureBudgetMB: 128,
+          maxConcurrent: 64,
+          now: () => clock,
+        }),
       );
       vi.stubGlobal(
         'fetch',
@@ -1356,16 +1349,17 @@ describe('TileLayer failure handling', () => {
       const layer = new TileLayer(
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
-        128,
         () => {},
-        8,
-        () => clock,
-        (ms: number, signal: AbortSignal) => {
-          sleeps.push(ms);
-          waitSignal = signal;
-          return new Promise<void>((resolve) => {
-            signal.addEventListener('abort', () => resolve(), { once: true });
-          });
+        {
+          textureBudgetMB: 128,
+          now: () => clock,
+          sleep: (ms: number, signal: AbortSignal) => {
+            sleeps.push(ms);
+            waitSignal = signal;
+            return new Promise<void>((resolve) => {
+              signal.addEventListener('abort', () => resolve(), { once: true });
+            });
+          },
         },
       );
       script = { status: 503 };
@@ -1635,19 +1629,15 @@ describe('tile sources', () => {
   });
 
   const layerFor = (source: CubeTileSource, network = {}): TileLayer =>
-    new TileLayer(
-      renderer as unknown as GLRenderer,
-      source,
-      128,
-      () => {},
-      8,
-      () => clock,
-      (ms: number) => {
+    new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+      textureBudgetMB: 128,
+      now: () => clock,
+      sleep: (ms: number) => {
         clock += ms;
         return Promise.resolve();
       },
       network,
-    );
+    });
 
   it("requests exactly the URLs the source's tileUrl gives, with the request init", async () => {
     const globalFetch = vi.fn();
@@ -1751,5 +1741,94 @@ describe('tile sources', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(close).toHaveBeenCalled();
     expect(renderer.uploadTile).not.toHaveBeenCalled();
+  });
+});
+
+describe('layer options', () => {
+  let renderer: FakeRenderer;
+  let urls: string[];
+  const fetch = (url: string) => {
+    urls.push(url);
+    return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) });
+  };
+
+  beforeEach(() => {
+    renderer = new FakeRenderer();
+    urls = [];
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(() => Promise.resolve({ close: vi.fn() })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const layerWith = (opts: Partial<TileLayerOptions>): TileLayer =>
+    new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+      textureBudgetMB: 128,
+      now: () => 0,
+      sleep: () => Promise.resolve(),
+      network: { fetch: fetch as unknown as typeof globalThis.fetch },
+      ...opts,
+    });
+
+  /** The finest level a 70° frame `height` device px tall asks for. */
+  async function levelFor(opts: Partial<TileLayerOptions>, height: number): Promise<number> {
+    const layer = layerWith(opts);
+    await layer.loadBase();
+    urls.length = 0;
+    const view = { yaw: 0, pitch: 0, fov: 70 };
+    layer.update(viewProjection(view, 1, 100), 70, dirFromYawPitch(0, 0), height);
+    layer.dispose();
+    // /tiles/pano-a/<level>/<face>/<x>-<y>.jpg
+    return Math.max(...urls.map((u) => Number(u.split('/')[3])));
+  }
+
+  // The ideal level is log2(90 · height / (tileSize · fov)): 1.30 for 980 px
+  // and 0.81 for 700 px at 512 px tiles and 70°. The level asked for is
+  // ceil(ideal − 0.2 tolerance − lodBias).
+  it('adds lodBias to the LOD tolerance: positive is coarser, negative finer', async () => {
+    expect(await levelFor({}, 980)).toBe(2);
+    expect(await levelFor({ lodBias: 0 }, 980)).toBe(2);
+    expect(await levelFor({ lodBias: 0.2 }, 980)).toBe(1);
+    expect(await levelFor({}, 700)).toBe(1);
+    expect(await levelFor({ lodBias: -0.5 }, 700)).toBe(2);
+  });
+
+  it('decodes through network.decode when given', async () => {
+    const decode = vi.fn((_blob: Blob) =>
+      Promise.resolve({ close: vi.fn() } as unknown as ImageBitmap),
+    );
+    const layer = layerWith({
+      network: { fetch: fetch as unknown as typeof globalThis.fetch, decode },
+    });
+    await layer.loadBase();
+    expect(decode).toHaveBeenCalledTimes(FACES.length);
+    expect(createImageBitmap).not.toHaveBeenCalled();
+    layer.dispose();
+  });
+
+  it('keeps at least minResidentTiles, however small the budget', () => {
+    const maxTiles = (layer: TileLayer) => (layer as unknown as { maxTiles: number }).maxTiles;
+    expect(maxTiles(layerWith({ textureBudgetMB: 0 }))).toBe(24);
+    expect(maxTiles(layerWith({ textureBudgetMB: 0, minResidentTiles: 40 }))).toBe(40);
+  });
+
+  it('spends the retry budget it is given', async () => {
+    let calls = 0;
+    const failing = () => {
+      calls++;
+      return Promise.resolve({ ok: false, status: 503, body: null });
+    };
+    const layer = layerWith({
+      network: { fetch: failing as unknown as typeof globalThis.fetch },
+      retry: { maxAttempts: 2, baseDelayMs: 10 },
+    });
+    await expect(layer.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
+    // Six faces, two attempts each.
+    expect(calls).toBe(FACES.length * 2);
+    layer.dispose();
   });
 });

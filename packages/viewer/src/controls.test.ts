@@ -514,3 +514,72 @@ describe('Controls: remaining branches', () => {
     expect(host.flick).not.toHaveBeenCalled();
   });
 });
+
+describe('Controls: interaction options', () => {
+  it('scales a plain wheel by wheelGain and a pinch by pinchGain', () => {
+    setup({ wheelGain: 0.002 });
+    wheel({ deltaY: 50 });
+    expect(Math.log(onlyZoom())).toBeCloseTo(0.1, 10);
+    setup({ pinchGain: 0.02 });
+    wheel({ deltaY: 5, ctrlKey: true });
+    expect(Math.log(onlyZoom())).toBeCloseTo(0.1, 10);
+  });
+
+  it("ignores the wheel entirely with wheel: 'off'", () => {
+    setup({ wheel: 'off' });
+    const plain = wheel({ deltaY: 50 });
+    const pinch = wheel({ deltaY: 5, ctrlKey: true });
+    expect(plain.defaultPrevented).toBe(false);
+    expect(pinch.defaultPrevented).toBe(false);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('steps the keys by keyboard.panStepPx and zoomStep (and its inverse)', () => {
+    setup({ keyboard: { panStepPx: 10, zoomStep: 0.5 } });
+    key('ArrowLeft');
+    expect(host.panTargetByPixels).toHaveBeenCalledWith(10, 0);
+    key('=');
+    key('-');
+    expect(host.zoomAt.mock.calls.map(([s]) => s)).toEqual([0.5, 2]);
+  });
+
+  it('fills an unset keyboard field from the defaults', () => {
+    setup({ keyboard: { zoomStep: 0.5 } });
+    key('ArrowUp');
+    expect(host.panTargetByPixels).toHaveBeenCalledWith(0, 40);
+  });
+
+  it('ignores keys, and gives no tab stop, with keyboard: false', () => {
+    setup({ keyboard: false });
+    const ev = key('ArrowLeft');
+    expect(ev.defaultPrevented).toBe(false);
+    expect(host.panTargetByPixels).not.toHaveBeenCalled();
+    expect(el.tabIndex).toBe(-1);
+  });
+
+  it('zooms a double click by doubleClickZoom, or not at all with false', () => {
+    setup({ doubleClickZoom: 0.5 });
+    el.dispatch('dblclick', { clientX: 10, clientY: 20 });
+    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 10, 20);
+    setup();
+    el.dispatch('dblclick', { clientX: 10, clientY: 20 });
+    expect(host.zoomAt).toHaveBeenCalledWith(0.6, 10, 20);
+    setup({ doubleClickZoom: false });
+    const ev = el.dispatch('dblclick', { clientX: 10, clientY: 20 });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('does not fling with inertia: false', () => {
+    setup({ inertia: false });
+    const t = drag(5);
+    pointer('pointerup', { x: 50, y: 0, t: t + 5 });
+    expect(host.flick).not.toHaveBeenCalled();
+  });
+
+  it('leaves the cursor alone with cursor: false', () => {
+    setup({ cursor: false });
+    pointer('pointerdown', { x: 0, y: 0, t: 0 });
+    expect(el.style.cursor).toBeUndefined();
+  });
+});

@@ -20,7 +20,7 @@ import type { DrawItem } from './render/gl-renderer.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
-import { VIEWER_DEFAULTS } from './defaults.js';
+import { resolveViewerOptions } from './defaults.js';
 import { Emitter } from './emitter.js';
 import {
   clampPitch,
@@ -37,6 +37,8 @@ import type {
   PanoViewerEvents,
   LoadOptions,
   PrefetchOptions,
+  ResolvedViewerOptions,
+  ShowPreviewOptions,
 } from './types.js';
 import { dirInto, isBehind, ndcToPixel, type Vec3 } from './project.js';
 
@@ -84,7 +86,8 @@ interface Reload {
 export class PanoViewer {
   private renderer: GLRenderer;
   private emitter = new Emitter<PanoViewerEvents>();
-  private controls: Controls;
+  // Undefined with `interaction.enabled: false`.
+  private controls: Controls | undefined;
   private layer: TileLayer | undefined;
   // Layers still loading their base. Until a layer's base is resident it is not
   // assigned to `this.layer`, so without this set dispose() cannot reach it:
@@ -132,22 +135,12 @@ export class PanoViewer {
   private wasPending = false;
   private view: View;
   private target: View;
-  // north/autoRotate* are runtime-mutable (setNorth/setAutoRotate), so they
-  // live in their own fields below rather than this fixed-at-construction set.
-  private opts: Required<
-    Omit<
-      ViewerOptions,
-      | 'initialView'
-      | 'north'
-      | 'autoRotate'
-      | 'autoRotateSpeed'
-      | 'autoRotateIdleMs'
-      | 'wheel'
-      | 'resolveSource'
-      | 'fetch'
-      | 'requestInit'
-    >
-  >;
+  // Every option with its default filled in, fixed at construction. north
+  // and autoRotate.enabled change at runtime (setNorth, setAutoRotate), so
+  // the live values are the fields below.
+  private opts: ResolvedViewerOptions;
+  private camera: ResolvedViewerOptions['camera'];
+  private textureBudgetMB: number;
   private resolveSource: ViewerOptions['resolveSource'];
   private network: TileNetwork;
   private loadToken = 0;
@@ -193,50 +186,45 @@ export class PanoViewer {
     private container: HTMLElement,
     options: ViewerOptions = {},
   ) {
-    const d = VIEWER_DEFAULTS;
-    const maxPixelRatio = options.maxPixelRatio ?? d.maxPixelRatio;
-    this.opts = {
-      minFov: options.minFov ?? d.minFov,
-      maxFov: options.maxFov ?? d.maxFov,
-      maxHorizontalFov: options.maxHorizontalFov ?? d.maxHorizontalFov,
-      // Only the default scales with the display: a caller who names a budget
-      // is naming an absolute one, and gets exactly that. See texture-budget.ts
-      // for why the scale is linear in the pixel ratio and capped. Read once,
-      // here, so every panorama this viewer loads shares one budget — a window
-      // dragged to a different-DPR monitor keeps the budget it was built with.
-      textureBudgetMB:
-        options.textureBudgetMB ?? defaultTextureBudgetMB(window.devicePixelRatio, maxPixelRatio),
-      damping: options.damping ?? d.damping,
-      momentumFriction: options.momentumFriction ?? d.momentumFriction,
-      maxPixelRatio,
-      maxPixels: options.maxPixels ?? d.maxPixels,
-      antialias: options.antialias ?? d.antialias,
-      maxConcurrent: options.maxConcurrent ?? d.maxConcurrent,
-      transitionMs: options.transitionMs ?? d.transitionMs,
-    };
+    const opts = resolveViewerOptions(options);
+    this.opts = opts;
+    const camera = opts.camera;
+    this.camera = camera;
+    const { memory, rendering, interaction } = opts;
+    // Only 'auto' scales with the display: a caller who names a budget is
+    // naming an absolute one, and gets exactly that. See texture-budget.ts
+    // for why the scale is linear in the pixel ratio and capped. Read once,
+    // here, so every panorama this viewer loads shares one budget — a window
+    // dragged to a different-DPR monitor keeps the budget it was built with.
+    this.textureBudgetMB =
+      memory.textureBudgetMB === 'auto'
+        ? defaultTextureBudgetMB(window.devicePixelRatio, rendering.maxPixelRatio)
+        : memory.textureBudgetMB;
     this.resolveSource = options.resolveSource;
-    this.network = { fetch: options.fetch, requestInit: options.requestInit ?? d.requestInit };
-    this.north = options.north ?? d.north;
-    this.autoRotateSpeed = options.autoRotateSpeed ?? d.autoRotateSpeed;
-    this.autoRotateIdleMs = options.autoRotateIdleMs ?? d.autoRotateIdleMs;
-    this.autoRotateEnabled = options.autoRotate ?? d.autoRotate;
+    this.network = {
+      fetch: options.network?.fetch,
+      requestInit: opts.network.requestInit,
+      decode: options.network?.decode,
+    };
+    this.north = camera.north;
+    this.autoRotateSpeed = opts.autoRotate.speed;
+    this.autoRotateIdleMs = opts.autoRotate.idleMs;
+    this.autoRotateEnabled = opts.autoRotate.enabled;
     // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
     this.autoRotateActive = this.autoRotateEnabled;
     // Clamped like setView: an embed config can say anything, and an
     // unclamped pitch past ±π/2 reaches viewMatrix as a mirrored view.
     const initialYaw = options.initialView?.yaw ?? 0;
-    const initialPitch = clampPitch(options.initialView?.pitch ?? 0);
-    const initialFov = clampFov(
-      options.initialView?.fov ?? d.fov,
-      this.opts.minFov,
-      this.opts.maxFov,
-    );
+    const initialPitch = this.clampPitch(options.initialView?.pitch ?? 0);
+    const initialFov = this.clampFov(options.initialView?.fov ?? camera.defaultFov);
     this.view = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
     this.target = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
     this.renderer = new GLRenderer(container, {
-      antialias: this.opts.antialias,
-      maxPixelRatio: this.opts.maxPixelRatio,
-      maxPixels: this.opts.maxPixels,
+      antialias: rendering.antialias,
+      maxPixelRatio: rendering.maxPixelRatio,
+      maxPixels: rendering.maxPixels,
+      anisotropy: rendering.anisotropy,
+      background: rendering.background,
       onContextLost: this.onContextLost,
       onContextRestored: this.onContextRestored,
     });
@@ -246,7 +234,7 @@ export class PanoViewer {
     this.resizeTo(container.clientWidth, container.clientHeight, false);
     // project() works before the first frame too (chrome places itself as
     // soon as the viewer exists), so the camera it reads starts out current.
-    viewProjection(this.view, this.aspect, this.opts.maxHorizontalFov, this.viewProj);
+    viewProjection(this.view, this.aspect, camera.maxHorizontalFov, this.viewProj);
     dirInto(this.fwd, this.view.yaw, this.view.pitch);
     // Built once: the canvas and this host never change, and rebuilding it on
     // each load would drop a drag that is in progress when a scene swaps in.
@@ -259,9 +247,14 @@ export class PanoViewer {
       flick: (vx, vy) => this.flick(vx, vy),
       stopMomentum: () => this.stopMomentum(),
     };
-    this.controls = new Controls(this.renderer.canvas, host, {
-      wheel: options.wheel ?? d.wheel,
-    });
+    if (interaction.enabled) this.controls = new Controls(this.renderer.canvas, host, interaction);
+    if (interaction.a11y) {
+      // Attributes, not the role and ariaLabel properties: Firefox ESR does
+      // not reflect those, and would leave the canvas unnamed. A viewer that
+      // takes no input is a picture to assistive tech, not an application.
+      this.renderer.canvas.setAttribute('role', interaction.enabled ? 'application' : 'img');
+      this.setLabel(interaction.label);
+    }
     // ResizeObserver sees the container itself resized by layout (flex/grid
     // reflow, a sidebar toggling, display:none → visible, splitter panes),
     // not just the browser window, so the canvas never keeps a stale size.
@@ -383,16 +376,14 @@ export class PanoViewer {
   private async swapIn(token: number, req: Reload & { source: CubeTileSource }): Promise<boolean> {
     const stale = () => this.disposed || token !== this.loadToken;
     const { source } = req;
-    const layer = new TileLayer(
-      this.renderer,
-      source,
-      this.opts.textureBudgetMB,
-      this.invalidate,
-      this.opts.maxConcurrent,
-      undefined,
-      undefined,
-      this.network,
-    );
+    const layer = new TileLayer(this.renderer, source, this.invalidate, {
+      textureBudgetMB: this.textureBudgetMB,
+      maxConcurrent: this.opts.network.maxConcurrent,
+      minResidentTiles: this.opts.memory.minResidentTiles,
+      lodBias: this.opts.rendering.lodBias,
+      retry: this.opts.network.retry,
+      network: this.network,
+    });
     layer.setPaused(!this.onScreen);
 
     // Blocking: the panorama is not loaded until its low-resolution base is.
@@ -436,15 +427,7 @@ export class PanoViewer {
     this.layer?.dispose();
     this.layer = layer;
     this.scene = source;
-    // A scene's own view is cut to, not eased to from the old scene's camera.
-    // Only the axes it sets are cut; any other axis keeps easing as it was.
-    const arrival = req.view;
-    if (arrival) {
-      this.setView(arrival);
-      if (arrival.yaw !== undefined) this.view.yaw = this.target.yaw;
-      if (arrival.pitch !== undefined) this.view.pitch = this.target.pitch;
-      if (arrival.fov !== undefined) this.view.fov = this.target.fov;
-    }
+    if (req.view) this.cutTo(req.view);
     this.stopMomentumOnly();
     if (this.preview && this.previewId === source.id) {
       // Replacing an image keeps the id, so the source can still be the old
@@ -541,11 +524,11 @@ export class PanoViewer {
     const t = this.target;
     const arrival: View = {
       yaw: view?.yaw ?? t.yaw,
-      pitch: view?.pitch === undefined ? t.pitch : clampPitch(view.pitch),
-      fov: view?.fov === undefined ? t.fov : clampFov(view.fov, this.opts.minFov, this.opts.maxFov),
+      pitch: view?.pitch === undefined ? t.pitch : this.clampPitch(view.pitch),
+      fov: view?.fov === undefined ? t.fov : this.clampFov(view.fov),
     };
     layer.update(
-      viewProjection(arrival, this.aspect, this.opts.maxHorizontalFov),
+      viewProjection(arrival, this.aspect, this.camera.maxHorizontalFov),
       this.effectiveVFovDeg(arrival.fov),
       dirInto({ x: 0, y: 0, z: 0 }, arrival.yaw, arrival.pitch),
       this.renderer.canvas.height || 1,
@@ -572,7 +555,7 @@ export class PanoViewer {
 
   /**
    * Show a local decode of the scene `id` now, in place of whatever is on
-   * screen, keeping the camera.
+   * screen. The camera stays where it is, or cuts to `options.view`.
    *
    * A later `load()` of a source with that id swaps the tiles in under it:
    * once they are on screen the preview paints over the tile levels no
@@ -594,7 +577,7 @@ export class PanoViewer {
    * resolves without swapping anything in. Call `load(id)` again after
    * this to get the tiles.
    */
-  showPreview(id: string, source: PreviewSource, options: { replacesVersion?: string } = {}): void {
+  showPreview(id: string, source: PreviewSource, options: ShowPreviewOptions = {}): void {
     if (this.disposed) {
       closePreviewSource(source);
       return;
@@ -610,6 +593,7 @@ export class PanoViewer {
     this.layer = undefined;
     this.scene = undefined;
     this.wasPending = false;
+    if (options.view) this.cutTo(options.view);
     this.stopMomentumOnly();
     this.invalidate();
     this.emitter.emit('scene-change', id);
@@ -671,7 +655,26 @@ export class PanoViewer {
   }
 
   private effectiveVFovDeg(requestedDeg: number): number {
-    return effectiveVFovDeg(requestedDeg, this.opts.maxHorizontalFov, this.aspect);
+    return effectiveVFovDeg(requestedDeg, this.camera.maxHorizontalFov, this.aspect);
+  }
+
+  private clampPitch(pitch: number): number {
+    return clampPitch(pitch, this.camera.minPitch, this.camera.maxPitch);
+  }
+
+  private clampFov(fov: number): number {
+    return clampFov(fov, this.camera.minFov, this.camera.maxFov);
+  }
+
+  /**
+   * Move the camera to `view` at once, with no easing: a scene's own view.
+   * Only the axes it sets are cut; any other axis keeps easing as it was.
+   */
+  private cutTo(view: Partial<View>): void {
+    this.setView(view);
+    if (view.yaw !== undefined) this.view.yaw = this.target.yaw;
+    if (view.pitch !== undefined) this.view.pitch = this.target.pitch;
+    if (view.fov !== undefined) this.view.fov = this.target.fov;
   }
 
   /** Horizontal fov (rad) for a vertical one at the current aspect. */
@@ -685,7 +688,7 @@ export class PanoViewer {
     const hfov = this.hfovOf(vfov);
     // drag right → look left
     const yaw = unwound(this.view.yaw - dx * anglePerPixel(hfov, this.cssW));
-    const pitch = clampPitch(this.view.pitch + dy * anglePerPixel(vfov, this.cssH));
+    const pitch = this.clampPitch(this.view.pitch + dy * anglePerPixel(vfov, this.cssH));
     this.view.yaw = yaw;
     this.target.yaw = yaw;
     this.view.pitch = pitch;
@@ -700,7 +703,7 @@ export class PanoViewer {
     const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const hfov = this.hfovOf(vfov);
     this.target.yaw -= dx * anglePerPixel(hfov, this.cssW);
-    this.target.pitch = clampPitch(this.target.pitch + dy * anglePerPixel(vfov, this.cssH));
+    this.target.pitch = this.clampPitch(this.target.pitch + dy * anglePerPixel(vfov, this.cssH));
     this.boundYaw();
     this.invalidate();
   }
@@ -747,11 +750,11 @@ export class PanoViewer {
     const ny = -(((clientY - rect.top) / (rect.height || 1)) * 2 - 1);
     const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const hfov0 = this.hfovOf(vfov0);
-    const newReqDeg = clampFov(this.target.fov * scaleFactor, this.opts.minFov, this.opts.maxFov);
+    const newReqDeg = this.clampFov(this.target.fov * scaleFactor);
     const vfov1 = this.effectiveVFovDeg(newReqDeg) * DEG2RAD;
     const hfov1 = this.hfovOf(vfov1);
     const yaw = unwound(this.view.yaw + zoomAnchorDelta(nx, hfov0, hfov1));
-    const pitch = clampPitch(this.view.pitch + zoomAnchorDelta(ny, vfov0, vfov1));
+    const pitch = this.clampPitch(this.view.pitch + zoomAnchorDelta(ny, vfov0, vfov1));
     this.view.yaw = yaw;
     this.target.yaw = yaw;
     this.view.pitch = pitch;
@@ -767,9 +770,8 @@ export class PanoViewer {
     // which could be several turns away.
     if (view.yaw !== undefined)
       this.target.yaw = this.view.yaw + normalizeAngle(view.yaw - this.view.yaw);
-    if (view.pitch !== undefined) this.target.pitch = clampPitch(view.pitch);
-    if (view.fov !== undefined)
-      this.target.fov = clampFov(view.fov, this.opts.minFov, this.opts.maxFov);
+    if (view.pitch !== undefined) this.target.pitch = this.clampPitch(view.pitch);
+    if (view.fov !== undefined) this.target.fov = this.clampFov(view.fov);
     this.stopMomentumOnly();
     this.invalidate();
   }
@@ -781,6 +783,14 @@ export class PanoViewer {
    */
   focus(): void {
     this.renderer.canvas.focus({ preventScroll: true });
+  }
+
+  /**
+   * Set the canvas's accessible name (`interaction.label`), e.g. to the scene
+   * on screen. Does nothing with `interaction.a11y` off.
+   */
+  setLabel(label: string): void {
+    if (this.opts.interaction.a11y) this.renderer.canvas.setAttribute('aria-label', label);
   }
 
   /** The camera being moved to, with yaw in (−π, π]. */
@@ -888,11 +898,11 @@ export class PanoViewer {
       // Momentum decays exponentially, so a step travels the integral of the
       // decay over dt. Scaled so a 60 Hz step travels exactly one frame's
       // worth, the total glide is the same at every frame rate.
-      const f = this.opts.momentumFriction;
+      const f = this.camera.momentumFriction;
       const keep = f ** steps;
       const travel = f < 1 ? (FRAME_MS * (1 - keep)) / (1 - f) : dt;
       this.target.yaw += this.momentum.yaw * travel;
-      this.target.pitch = clampPitch(this.target.pitch + this.momentum.pitch * travel);
+      this.target.pitch = this.clampPitch(this.target.pitch + this.momentum.pitch * travel);
       this.momentum.yaw *= keep;
       this.momentum.pitch *= keep;
       if (Math.hypot(this.momentum.yaw, this.momentum.pitch) < MOMENTUM_EPS) {
@@ -901,7 +911,7 @@ export class PanoViewer {
       }
     }
 
-    const k = 1 - (1 - this.opts.damping) ** steps;
+    const k = 1 - (1 - this.camera.damping) ** steps;
     const view = this.view;
     const target = this.target;
     view.yaw = damp(view.yaw, target.yaw, k);
@@ -917,7 +927,7 @@ export class PanoViewer {
     }
 
     const vfovDeg = this.effectiveVFovDeg(view.fov);
-    viewProjection(view, this.aspect, this.opts.maxHorizontalFov, this.viewProj);
+    viewProjection(view, this.aspect, this.camera.maxHorizontalFov, this.viewProj);
     this.renderer.setCamera(this.viewProj);
     dirInto(this.fwd, view.yaw, view.pitch);
     // selectLevel()'s math (see lod.ts) compares texel
@@ -1059,8 +1069,10 @@ export class PanoViewer {
 
   async transitionTo(source: CubeTileSource | string, view?: Partial<View>): Promise<void> {
     if (this.disposed) return;
-    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const ms = reduce ? 0 : this.opts.transitionMs;
+    const { durationMs, respectReducedMotion } = this.opts.transition;
+    const reduce =
+      respectReducedMotion && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const ms = reduce ? 0 : durationMs;
 
     // Only snapshot when there is something to draw; snapshotting an empty draw
     // list would crossfade from a black frame.
@@ -1119,7 +1131,7 @@ export class PanoViewer {
     this.pixelRatioQuery = undefined;
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
-    this.controls.dispose();
+    this.controls?.dispose();
     // Pending layers first: they are the ones with fetches still in flight, and
     // they must stop before the renderer's GL context is destroyed below.
     this.supersede();

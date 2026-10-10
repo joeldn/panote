@@ -660,3 +660,62 @@ describe('GLRenderer', () => {
     });
   });
 });
+
+describe('GLRenderer options', () => {
+  const ANISO = { MAX_TEXTURE_MAX_ANISOTROPY_EXT: 0x84ff, TEXTURE_MAX_ANISOTROPY_EXT: 0x84fe };
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { devicePixelRatio: 1 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A renderer on a device whose anisotropic filtering goes up to `deviceMax`. */
+  function withAnisotropy(deviceMax: number, opts: ConstructorParameters<typeof GLRenderer>[1]) {
+    const fake = makeFakeGl();
+    fake.extensions['EXT_texture_filter_anisotropic'] = ANISO;
+    fake.gl.getParameter.mockImplementation((p: number) =>
+      p === ANISO.MAX_TEXTURE_MAX_ANISOTROPY_EXT
+        ? deviceMax
+        : p === GL_CONSTANTS.MAX_TEXTURE_SIZE
+          ? 8192
+          : 1,
+    );
+    const dom = makeFakeDocumentAndContainer(fake.gl);
+    const renderer = new GLRenderer(dom.container as unknown as HTMLElement, opts);
+    renderer.uploadTile(grid(), image());
+    const set = fake.gl.texParameterf.mock.calls.find(
+      (c) => c[1] === ANISO.TEXTURE_MAX_ANISOTROPY_EXT,
+    );
+    return set?.[2] as number | undefined;
+  }
+
+  it("samples tiles at the device's maximum anisotropy by default", () => {
+    expect(withAnisotropy(16, {})).toBe(16);
+  });
+
+  it('takes rendering.anisotropy, capped at the device maximum', () => {
+    expect(withAnisotropy(16, { anisotropy: 4 })).toBe(4);
+    expect(withAnisotropy(8, { anisotropy: 32 })).toBe(8);
+    expect(withAnisotropy(16, { anisotropy: 1 })).toBeUndefined();
+  });
+
+  it('clears to rendering.background, black by default', () => {
+    expect(setup().gl.clearColor).toHaveBeenCalledWith(0, 0, 0, 1);
+    expect(setup({ background: [0.05, 0.04, 0.03] }).gl.clearColor).toHaveBeenCalledWith(
+      0.05,
+      0.04,
+      0.03,
+      1,
+    );
+  });
+
+  it('says what it needs when the browser has no WebGL2', () => {
+    const { container } = makeFakeDocumentAndContainer(null);
+    expect(() => new GLRenderer(container as unknown as HTMLElement)).toThrow(
+      'PanoViewer needs WebGL2, which this browser does not provide.',
+    );
+  });
+});

@@ -55,6 +55,10 @@ export interface GLRendererOptions {
   maxPixelRatio?: number;
   /** Cap on backbuffer pixels; the pixel ratio drops to stay under it. */
   maxPixels?: number;
+  /** Anisotropic filtering samples, or the device's maximum. */
+  anisotropy?: number | 'max';
+  /** Clear colour, 0..1 per channel. */
+  background?: readonly [r: number, g: number, b: number];
   /** The context was lost. Drawing and uploads are no-ops until it is restored. */
   onContextLost?: () => void;
   /**
@@ -143,6 +147,7 @@ void main() {
 
 export class GLRenderer {
   readonly canvas: HTMLCanvasElement;
+  /** The anisotropy tiles are sampled with: the option, capped at the device's maximum. */
   maxAnisotropy = 1;
   maxTextureSize = 0;
 
@@ -156,6 +161,8 @@ export class GLRenderer {
   private quadIbo!: WebGLBuffer;
   private maxPixelRatio: number;
   private maxPixels: number;
+  private anisotropy: number | 'max';
+  private background: readonly [number, number, number];
   // The CSS size the backbuffer was last sized for.
   private cssW = 0;
   private cssH = 0;
@@ -173,8 +180,11 @@ export class GLRenderer {
   private onContextRestored: (() => void) | undefined;
 
   constructor(container: HTMLElement, opts: GLRendererOptions = {}) {
-    this.maxPixelRatio = opts.maxPixelRatio ?? VIEWER_DEFAULTS.maxPixelRatio;
-    this.maxPixels = opts.maxPixels ?? VIEWER_DEFAULTS.maxPixels;
+    const d = VIEWER_DEFAULTS.rendering;
+    this.maxPixelRatio = opts.maxPixelRatio ?? d.maxPixelRatio;
+    this.maxPixels = opts.maxPixels ?? d.maxPixels;
+    this.anisotropy = opts.anisotropy ?? d.anisotropy;
+    this.background = opts.background ?? d.background;
     this.onContextLost = opts.onContextLost;
     this.onContextRestored = opts.onContextRestored;
     this.canvas = document.createElement('canvas');
@@ -182,7 +192,7 @@ export class GLRenderer {
     // its line box a few px taller than itself. The cursor belongs to Controls.
     this.canvas.style.display = 'block';
     const gl = this.canvas.getContext('webgl2', {
-      antialias: opts.antialias ?? false,
+      antialias: opts.antialias ?? d.antialias,
       // Opaque backbuffer. Depth lets finer levels reject the coarser
       // fragments behind them (see render()). Stencil is unused.
       alpha: false,
@@ -191,7 +201,7 @@ export class GLRenderer {
       // no preserveDrawingBuffer — snapshot() copies the frame in the same task instead.
     });
     if (!gl) {
-      throw new Error('WebGL2 is not available in this browser; the pano viewer requires WebGL2.');
+      throw new Error('PanoViewer needs WebGL2, which this browser does not provide.');
     }
     this.gl = gl;
     container.appendChild(this.canvas);
@@ -234,9 +244,11 @@ export class GLRenderer {
   private initGL(): void {
     const gl = this.gl;
     this.anisoExt = gl.getExtension('EXT_texture_filter_anisotropic');
-    this.maxAnisotropy = this.anisoExt
+    const deviceMax: number = this.anisoExt
       ? gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
       : 1;
+    this.maxAnisotropy =
+      this.anisotropy === 'max' ? deviceMax : Math.max(1, Math.min(this.anisotropy, deviceMax));
 
     this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
@@ -260,7 +272,8 @@ export class GLRenderer {
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE); // quads visible from the origin looking outward
-    gl.clearColor(0, 0, 0, 1);
+    const [r, g, b] = this.background;
+    gl.clearColor(r, g, b, 1);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
@@ -421,7 +434,7 @@ export class GLRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    if (this.anisoExt) {
+    if (this.anisoExt && this.maxAnisotropy > 1) {
       gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, this.maxAnisotropy);
     }
 

@@ -8,6 +8,8 @@ export interface TileNetwork {
   fetch?: typeof fetch | undefined;
   /** Spread into every tile request, under the viewer's own signal and priority. */
   requestInit?: RequestInit | undefined;
+  /** Turns a fetched body into an image; `createImageBitmap` when unset. */
+  decode?: ((blob: Blob) => Promise<TileImage>) | undefined;
 }
 
 /**
@@ -42,7 +44,7 @@ export async function loadTileImage(
   const blob = await res.blob();
   // Decoded upright (row 0 = top). The renderer uploads it unflipped and the
   // tile UVs address row 0 as v = 0 (see tile-geometry.ts).
-  return createImageBitmap(blob);
+  return net.decode ? net.decode(blob) : createImageBitmap(blob);
 }
 
 /** Drop an error response's body unread, so its connection is freed rather than held. */

@@ -1,8 +1,8 @@
+import { VIEWER_DEFAULTS } from './defaults.js';
 import { describe, it, expect } from 'vitest';
 import {
   BASE_TEXTURE_BUDGET_MB,
   MAX_BUDGET_PIXEL_RATIO,
-  MIN_RESIDENT_TILES,
   defaultTextureBudgetMB,
   maxTilesForBudget,
 } from './texture-budget.js';
@@ -75,7 +75,7 @@ describe('maxTilesForBudget', () => {
   });
 
   it('never goes below the resident-tile floor', () => {
-    expect(maxTilesForBudget(1, 512)).toBe(MIN_RESIDENT_TILES);
-    expect(maxTilesForBudget(0, 1024)).toBe(MIN_RESIDENT_TILES);
+    expect(maxTilesForBudget(1, 512)).toBe(VIEWER_DEFAULTS.memory.minResidentTiles);
+    expect(maxTilesForBudget(0, 1024)).toBe(VIEWER_DEFAULTS.memory.minResidentTiles);
   });
 });

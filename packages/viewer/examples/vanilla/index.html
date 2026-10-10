@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@panote/viewer: vanilla example</title>
+    <style>
+      body {
+        margin: 0;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+        background: #111;
+        color: #eee;
+      }
+      /* The viewer needs a positioned container with a size. */
+      #viewer {
+        position: relative;
+        height: 75vh;
+      }
+      #viewer > canvas:focus-visible {
+        outline: 2px solid #8ab4f8;
+        outline-offset: -2px;
+      }
+      p {
+        margin: 12px 16px;
+      }
+      code {
+        color: #8ab4f8;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <p>
+      <label><input id="rotate" type="checkbox" /> Auto-rotate</label>
+      <button id="ahead" type="button">Look ahead</button>
+      <span id="status">Loading…</span>
+    </p>
+    <p id="view"></p>
+    <p>
+      Drag, pinch, wheel or use the arrow keys and <code>+</code>/<code>-</code>. Each face reads
+      upright and unmirrored, with its id and the way you look to see it; each tile shows its level
+      and <code>x-y</code>. Level 1 replaces level 0 once it loads (in a small window, zoom in).
+    </p>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

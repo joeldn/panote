@@ -1,4 +1,10 @@
-import { PanoViewer, type PreviewSource, type View, type ViewerOptions } from '@panote/viewer';
+import {
+  mergeViewerOptions,
+  PanoViewer,
+  type PreviewSource,
+  type View,
+  type ViewerOptions,
+} from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { cx } from './cx.js';
@@ -10,13 +16,15 @@ export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => 
 
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
-// The stage sets these itself: the source resolver and request init from
-// panote's preset (the Worker's preloads depend on them), and the camera and
-// auto-rotate from its props.
-export type StageViewerOptions = Omit<
-  ViewerOptions,
-  'resolveSource' | 'fetch' | 'requestInit' | 'initialView' | 'north' | 'autoRotate'
->;
+/**
+ * Viewer options for one stage, deep-merged over `panoteViewerPreset`: set
+ * only what differs, e.g. `{ camera: { maxFov: 90 } }`. The resolver is the
+ * stage's own (from `baseUrl`), and the stage's props win over these:
+ * `view`, `north`, `autoRotate`, `aria-label` and `embed`. Leave
+ * `network.requestInit` alone: the Worker's preloads are only reused by
+ * requests that match them.
+ */
+export type StageViewerOptions = Omit<ViewerOptions, 'resolveSource' | 'initialView'>;
 
 /**
  * A local decode to show for a pano before (or instead of) its tiles; see
@@ -82,6 +90,12 @@ export interface PanoStageProps {
   preview?: StagePreview | null;
   /** Crossfade between panos with `transitionTo` instead of a plain `load`. */
   transition?: boolean;
+  /**
+   * The stage sits in someone else's page (the website's /embed): a plain
+   * wheel scrolls that page until the visitor engages the viewer (a click,
+   * a tap or focus), rather than zooming. Changing it recreates the viewer.
+   */
+  embed?: boolean;
   /** Read once when the viewer is created. */
   options?: StageViewerOptions;
   onViewer?: (viewer: PanoViewer | null) => void;
@@ -100,6 +114,7 @@ export interface PanoStageProps {
   children?: ReactNode;
   className?: string;
   style?: CSSProperties;
+  /** The viewer canvas's accessible name; it is `role="application"`. */
   'aria-label'?: string;
   /** Test seam: builds the viewer (defaults to `new PanoViewer`). */
   createViewer?: ViewerFactory;
@@ -127,6 +142,7 @@ export function PanoStage({
   north,
   autoRotate = false,
   transition = false,
+  embed = false,
   options,
   onViewer,
   onSceneChange,
@@ -147,7 +163,16 @@ export function PanoStage({
   const [restores, setRestores] = useState(0);
 
   // Latest props for use inside long-lived effects without re-running them.
-  const latest = useRef({ view, north, autoRotate, options, createViewer, transition, preview });
+  const latest = useRef({
+    view,
+    north,
+    autoRotate,
+    options,
+    createViewer,
+    transition,
+    preview,
+    ariaLabel,
+  });
   const callbacks = useRef({
     onViewer,
     onSceneChange,
@@ -156,7 +181,16 @@ export function PanoStage({
     onPreviewError,
   });
   useEffect(() => {
-    latest.current = { view, north, autoRotate, options, createViewer, transition, preview };
+    latest.current = {
+      view,
+      north,
+      autoRotate,
+      options,
+      createViewer,
+      transition,
+      preview,
+      ariaLabel,
+    };
     callbacks.current = { onViewer, onSceneChange, onHotspotOpen, onLoadError, onPreviewError };
   });
 
@@ -176,13 +210,15 @@ export function PanoStage({
     const host = hostRef.current;
     if (!host) return;
     const l = latest.current;
-    const opts: ViewerOptions = {
-      ...l.options,
-      ...panoteViewerPreset({ baseUrl }),
-      autoRotate: l.autoRotate,
-    };
+    const opts = mergeViewerOptions(
+      panoteViewerPreset({ baseUrl, label: l.ariaLabel, embed }),
+      l.options ?? {},
+      {
+        autoRotate: { enabled: l.autoRotate },
+        ...(l.north !== undefined && { camera: { north: l.north } }),
+      },
+    );
     if (l.view) opts.initialView = l.view;
-    if (l.north !== undefined) opts.north = l.north;
     const v = l.createViewer(host, opts);
     const onScene = (id: string) => {
       const cur = loaded.current;
@@ -212,7 +248,7 @@ export function PanoStage({
       setViewer(null);
       v.dispose();
     };
-  }, [baseUrl]);
+  }, [baseUrl, embed]);
 
   const stagePreviewKey =
     preview && panoId !== null && preview.panoId === panoId ? preview.key : null;
@@ -305,14 +341,15 @@ export function PanoStage({
         return;
       }
       entry.previewKey = newPreview.key;
-      const opts =
-        newPreview.replacesVersion === undefined
-          ? {}
-          : { replacesVersion: newPreview.replacesVersion };
-      // A preview goes on screen at once with the camera as it is, so aim the
-      // camera just before it goes up, and not before: an async source may
-      // land late, or never.
-      if (sceneView) viewer.setView(sceneView);
+      // The scene's view is cut to as the preview goes up, as a load cuts to
+      // it as the tiles swap in, so the new scene does not swing round. Not
+      // before: an async source may land late, or never.
+      const opts = {
+        ...(newPreview.replacesVersion !== undefined && {
+          replacesVersion: newPreview.replacesVersion,
+        }),
+        ...(sceneView && { view: sceneView }),
+      };
       try {
         viewer.showPreview(panoId, source, opts);
       } catch (err) {
@@ -350,9 +387,14 @@ export function PanoStage({
     viewer?.setAutoRotate(autoRotate);
   }, [viewer, autoRotate]);
 
+  useEffect(() => {
+    viewer?.setLabel(ariaLabel);
+  }, [viewer, ariaLabel]);
+
   return (
     <div className={cx('pn-stage', className)} style={style}>
-      <div ref={hostRef} className="pn-stage__viewer" role="application" aria-label={ariaLabel} />
+      {/* The viewer's canvas is the application landmark, named by aria-label. */}
+      <div ref={hostRef} className="pn-stage__viewer" />
       <PanoViewerContext.Provider value={viewer}>
         <StageEventsContext.Provider value={stageEvents}>
           <div className="pn-stage__overlay">{children}</div>

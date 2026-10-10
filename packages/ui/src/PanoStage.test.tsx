@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { panoteViewerPreset } from './panote-viewer.js';
 import { PanoStage, type StagePreview } from './PanoStage.js';
 import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
@@ -19,6 +20,7 @@ class FakeViewer {
   setView = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
+  setLabel = vi.fn();
   dispose = vi.fn();
   constructor(
     readonly container: HTMLElement,
@@ -125,24 +127,72 @@ describe('PanoStage', () => {
         view={{ yaw: 1, fov: 60 }}
         north={0.5}
         autoRotate
-        options={{ maxFov: 90 }}
+        options={{ camera: { maxFov: 90 }, autoRotate: { speed: 0.1 } }}
+        aria-label="Town hall"
         createViewer={f.createViewer}
       />,
     );
     expect(f.createViewer).toHaveBeenCalledTimes(1);
     const v = f.last();
     expect(v.container.className).toBe('pn-stage__viewer');
+    // panote's preset, with the options merged over it and the props over those.
+    const { resolveSource, ...preset } = panoteViewerPreset({ baseUrl: 'https://cdn.test/tiles/' });
     expect(v.options).toEqual({
-      maxFov: 90,
+      ...preset,
       resolveSource: expect.any(Function),
-      requestInit: { mode: 'cors', credentials: 'same-origin' },
-      autoRotate: true,
+      camera: { ...preset.camera, maxFov: 90, north: 0.5 },
+      interaction: { ...preset.interaction, label: 'Town hall' },
+      autoRotate: { enabled: true, speed: 0.1, idleMs: 3000 },
       initialView: { yaw: 1, fov: 60 },
-      north: 0.5,
     });
+    expect(resolveSource).toEqual(expect.any(Function));
     expect(v.load).toHaveBeenCalledWith('hall', { view: { yaw: 1, fov: 60 } });
     expect(v.setNorth).toHaveBeenLastCalledWith(0.5);
     expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+  });
+
+  it('names the viewer canvas, not its own host, and renames it in place', () => {
+    const f = factory();
+    const { rerender } = render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        aria-label="Tour: Hall"
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    expect(v.options.interaction?.label).toBe('Tour: Hall');
+    // One application landmark: the canvas. The stage's own elements have no role.
+    expect(document.querySelector('[role]')).toBeNull();
+    expect(document.querySelector('[aria-label]')).toBeNull();
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        aria-label="Tour: Nave"
+        createViewer={f.createViewer}
+      />,
+    );
+    expect(f.createViewer).toHaveBeenCalledTimes(1);
+    expect(v.setLabel).toHaveBeenLastCalledWith('Tour: Nave');
+  });
+
+  it('labels the canvas "Panorama viewer" without an aria-label', () => {
+    const f = factory();
+    render(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
+    expect(f.last().options.interaction?.label).toBe('Panorama viewer');
+  });
+
+  it('engages the wheel only for an embed, recreating the viewer when that changes', () => {
+    const f = factory();
+    const { rerender } = render(
+      <PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />,
+    );
+    expect(f.last().options.interaction?.wheel).toBe('always');
+    rerender(<PanoStage baseUrl="b/" panoId="hall" embed createViewer={f.createViewer} />);
+    expect(f.createViewer).toHaveBeenCalledTimes(2);
+    expect(f.last().options.interaction?.wheel).toBe('engaged');
   });
 
   it('applies the scene view and loads on pano change; crossfades when transition is on', () => {
@@ -396,8 +446,13 @@ describe('PanoStage', () => {
     );
     const v = f.last();
     expect(source).toHaveBeenCalledTimes(1);
-    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall']);
-    expect(v.showPreview).toHaveBeenCalledWith('hall', sources[0], { replacesVersion: 'v1' });
+    // The scene's view goes up with the preview, cut to rather than eased.
+    expect(v.calls).toEqual(['show:hall', 'load:hall']);
+    expect(v.setView).not.toHaveBeenCalled();
+    expect(v.showPreview).toHaveBeenCalledWith('hall', sources[0], {
+      replacesVersion: 'v1',
+      view: { yaw: 1 },
+    });
   });
 
   it('waits for an async source before showing it and loading', async () => {
@@ -429,9 +484,10 @@ describe('PanoStage', () => {
     const v = f.last();
     // Nothing moves while the source is still decoding.
     expect(v.calls).toEqual([]);
-    await act(async () => pending[0]?.resolve(fakeSource()));
-    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall']);
-    expect(v.setView).toHaveBeenCalledWith({ yaw: 1 });
+    const s = fakeSource();
+    await act(async () => pending[0]?.resolve(s));
+    expect(v.calls).toEqual(['show:hall', 'load:hall']);
+    expect(v.showPreview).toHaveBeenCalledWith('hall', s, { view: { yaw: 1 } });
 
     // A new pano whose preview fails: the tiles still arrive at its view.
     const failing = asyncPreviewOf('nave', 'job-2');
@@ -446,7 +502,8 @@ describe('PanoStage', () => {
       />,
     );
     await act(async () => failing.pending[0]?.reject(new Error('stash gone')));
-    expect(v.setView).toHaveBeenCalledTimes(1);
+    expect(v.showPreview).toHaveBeenCalledTimes(1);
+    expect(v.setView).not.toHaveBeenCalled();
     expect(v.load).toHaveBeenLastCalledWith('nave', { view: { yaw: 2 } });
   });
 
@@ -528,7 +585,8 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall', 'show:hall', 'load:hall']);
+    expect(v.calls).toEqual(['show:hall', 'load:hall', 'show:hall', 'load:hall']);
+    expect(v.showPreview.mock.calls[0]![2]).toEqual({ view: { yaw: 1 } });
     expect(v.showPreview).toHaveBeenLastCalledWith('hall', second.sources[0], {
       replacesVersion: 'v2',
     });
@@ -721,7 +779,7 @@ describe('PanoStage', () => {
         createViewer={createViewer}
       />,
     );
-    expect(screen.getByRole('application')).toBeTruthy();
+    expect(document.querySelector('.pn-stage__viewer')).toBeTruthy();
     expect(onPreviewError).toHaveBeenCalledWith(refused, 'hall');
     expect(onLoadError).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();

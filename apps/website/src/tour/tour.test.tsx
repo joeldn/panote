@@ -75,6 +75,7 @@ class FakeViewer {
   focus = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
+  setLabel = vi.fn();
   dispose = vi.fn();
   onRender = () => () => {};
   project = () => ({ x: 0, y: 0, behind: false });
@@ -194,6 +195,12 @@ afterEach(() => {
 });
 
 describe('/s/:slug', () => {
+  it('keeps every wheel for zooming on the full-page tour', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    expect(lastViewer().options.interaction?.wheel).toBe('always');
+  });
+
   it('loads the slug, then the pub bundle, then the start scene from the CDN tiles', async () => {
     renderAt('/s/old-town');
     expect(await screen.findByText('Old town')).toBeTruthy();
@@ -310,7 +317,7 @@ describe('/s/:slug', () => {
     expect(screen.getByRole('toolbar').className).toContain('pn-controls--top');
     expect(screen.queryByRole('img', { name: 'Compass' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Map' })).toBeNull();
-    expect(lastViewer().options.autoRotate).toBe(true);
+    expect(lastViewer().options.autoRotate).toMatchObject({ enabled: true });
   });
 
   it('shows the compass and scene map by default', async () => {
@@ -524,6 +531,12 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
 });
 
 describe('/s/:slug/embed', () => {
+  it('lets a plain wheel scroll the host page until the viewer is engaged', async () => {
+    renderAt('/s/old-town/embed');
+    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    expect(lastViewer().options.interaction?.wheel).toBe('engaged');
+  });
+
   it('has no site chrome and keeps whole-tour navigation', async () => {
     renderAt('/s/old-town/embed');
     await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));

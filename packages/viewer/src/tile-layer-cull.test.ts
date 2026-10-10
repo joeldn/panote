@@ -99,11 +99,8 @@ describe('TileLayer cull', () => {
     layer = new TileLayer(
       { uploadTile: vi.fn(() => 1), removeTile: vi.fn() } as unknown as GLRenderer,
       source(),
-      512,
       () => {},
-      8,
-      () => 0,
-      () => Promise.resolve(),
+      { textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
     );
   });
 
