@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FACES, faceUVToDir, tileCornersUV, type Face, type Manifest } from '@panote/core';
+import type { Manifest } from '@panote/core';
+import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
 import { BaseTileLoadError, TileLayer } from './tile-layer.js';
 import { TileFailureMonitor } from './tile-retry.js';
 import { viewProjection } from './render/projection.js';

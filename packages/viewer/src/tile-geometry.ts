@@ -1,4 +1,4 @@
-import { faceUVToDir, tileCornersUV, type Face } from '@panote/core';
+import { faceUVToDir, tileCornersUV, type Face } from './cube.js';
 
 // Builds flat cube-face quad geometry for a tile: a 4-vert quad on the cube
 // face at RADIUS, textured with the tile's colour. No depth/displacement.

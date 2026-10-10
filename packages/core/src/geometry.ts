@@ -41,14 +41,3 @@ export function dirToEquirectUV(dir: Vec3): { u: number; v: number } {
   const v = 0.5 - lat / Math.PI;
   return { u, v };
 }
-
-/**
- * Inverse of dirToEquirectUV: the unit direction an equirect UV samples.
- * u = yaw/2π + 0.5 and v = 0.5 − pitch/π, with yaw measured from −z towards +x.
- */
-export function equirectUVToDir(u: number, v: number): Vec3 {
-  const lon = (u - 0.5) * TAU;
-  const lat = (0.5 - v) * Math.PI;
-  const c = Math.cos(lat);
-  return { x: Math.sin(lon) * c, y: Math.sin(lat), z: -Math.cos(lon) * c };
-}

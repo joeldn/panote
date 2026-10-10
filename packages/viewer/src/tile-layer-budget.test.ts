@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FACES, selectLevel, type Manifest } from '@panote/core';
+import type { Manifest } from '@panote/core';
+import { FACES } from './cube.js';
+import { selectLevel } from './lod.js';
 import { TileLayer } from './tile-layer.js';
 import { TileFailureMonitor } from './tile-retry.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';

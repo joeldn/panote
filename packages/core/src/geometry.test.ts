@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { faceUVToDir, dirToEquirectUV, equirectUVToDir, FACES } from './geometry.js';
+import { faceUVToDir, dirToEquirectUV, FACES } from './geometry.js';
 
 const near = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
 
@@ -68,23 +68,5 @@ describe('faceUVToDir off-center', () => {
     expect(d.z).toBe(1);
     expect(d.x).toBeGreaterThan(0);
     expect(d.y).toBe(0);
-  });
-});
-
-describe('equirectUVToDir', () => {
-  it('maps the centre to -z (front) and the top edge to +y', () => {
-    const front = equirectUVToDir(0.5, 0.5);
-    expect(near(front.x, 0) && near(front.y, 0) && near(front.z, -1)).toBe(true);
-    expect(near(equirectUVToDir(0.3, 0).y, 1)).toBe(true);
-  });
-
-  it('round-trips through dirToEquirectUV', () => {
-    for (const u of [0.01, 0.25, 0.5, 0.73, 0.99]) {
-      for (const v of [0.02, 0.3, 0.5, 0.81, 0.98]) {
-        const back = dirToEquirectUV(equirectUVToDir(u, v));
-        expect(near(back.u, u)).toBe(true);
-        expect(near(back.v, v)).toBe(true);
-      }
-    }
   });
 });

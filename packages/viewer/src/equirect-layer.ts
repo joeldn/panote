@@ -1,4 +1,4 @@
-import { equirectUVToDir } from '@panote/core';
+import { equirectUVToDir } from './cube.js';
 import type { DrawItem, GLRenderer, TileHandle } from './render/gl-renderer.js';
 import { RADIUS, type TileGeometry } from './tile-geometry.js';
 

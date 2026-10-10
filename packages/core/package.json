@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Pure cube/equirect geometry, tile addressing, LOD selection, and the tile-pyramid manifest contract",
+  "description": "Pure cube/equirect geometry, tile addressing, and the tile-pyramid manifest contract",
   "license": "UNLICENSED",
   "sideEffects": false,
   "files": [

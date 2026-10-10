@@ -1,13 +1,6 @@
-import {
-  FACES,
-  faceUVToDir,
-  selectLevel,
-  tileCornersUV,
-  tilePath,
-  tilesPerEdge,
-  type Face,
-  type Manifest,
-} from '@panote/core';
+import { tilePath, type Manifest } from '@panote/core';
+import { FACES, faceUVToDir, tileCornersUV, tilesPerEdge, type Face } from './cube.js';
+import { selectLevel } from './lod.js';
 import { selectEvictions } from './tile-cache.js';
 import { RADIUS, buildTileGeometry } from './tile-geometry.js';
 import {
