@@ -40,21 +40,16 @@ void main() {
   gl_Position = uViewProj * vec4(aPos, 1.0);
 }`;
 
-// Sampling happens in linear space (texture is SRGB8_ALPHA8, decoded on read),
-// so convert linear→sRGB on output to match three's default renderer.
+// Textures are plain RGBA8 holding sRGB-encoded bytes, and the canvas shows
+// the bytes it is given as sRGB, so texels pass straight through. Filtering
+// and mips work in gamma space, as browsers' own image scaling does.
 const FRAG_SRC = `#version 300 es
 precision highp float;
 uniform sampler2D uTex;
 in vec2 vUv;
 out vec4 fragColor;
-vec3 linearToSRGB(vec3 c) {
-  vec3 lo = c * 12.92;
-  vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-  return mix(hi, lo, step(c, vec3(0.0031308)));
-}
 void main() {
-  vec4 texel = texture(uTex, vUv);
-  fragColor = vec4(linearToSRGB(texel.rgb), texel.a);
+  fragColor = texture(uTex, vUv);
 }`;
 
 export class GLRenderer {
@@ -65,7 +60,6 @@ export class GLRenderer {
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
   private uViewProj: WebGLUniformLocation;
-  private uTex: WebGLUniformLocation;
   private anisoExt: EXT_texture_filter_anisotropic | null;
   private pixelRatio: number;
   private maxPixelRatio: number;
@@ -76,7 +70,9 @@ export class GLRenderer {
   constructor(container: HTMLElement, opts: { antialias?: boolean; maxPixelRatio?: number } = {}) {
     this.maxPixelRatio = opts.maxPixelRatio ?? 2;
     this.canvas = document.createElement('canvas');
-    this.canvas.style.cursor = 'grab';
+    // Block, not inline: an inline canvas sits on a text baseline and makes
+    // its line box a few px taller than itself. The cursor belongs to Controls.
+    this.canvas.style.display = 'block';
     const gl = this.canvas.getContext('webgl2', {
       antialias: opts.antialias ?? false,
       // three's WebGLRenderer defaulted to an opaque backbuffer (alpha:false);
@@ -92,10 +88,7 @@ export class GLRenderer {
     this.gl = gl;
     container.appendChild(this.canvas);
 
-    this.anisoExt =
-      gl.getExtension('EXT_texture_filter_anisotropic') ??
-      gl.getExtension('MOZ_EXT_texture_filter_anisotropic') ??
-      gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+    this.anisoExt = gl.getExtension('EXT_texture_filter_anisotropic');
     this.maxAnisotropy = this.anisoExt
       ? gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
       : 1;
@@ -104,7 +97,11 @@ export class GLRenderer {
 
     this.program = this.buildProgram(VERT_SRC, FRAG_SRC);
     this.uViewProj = this.getUniform('uViewProj');
-    this.uTex = this.getUniform('uTex');
+    // One program and one texture unit for the renderer's whole life, so
+    // bind them once here rather than every frame.
+    gl.useProgram(this.program);
+    gl.uniform1i(this.getUniform('uTex'), 0);
+    gl.activeTexture(gl.TEXTURE0);
 
     this.pixelRatio = Math.min(window.devicePixelRatio, this.maxPixelRatio);
 
@@ -158,6 +155,7 @@ export class GLRenderer {
     this.canvas.style.height = `${h}px`;
     this.canvas.width = Math.max(1, Math.round(w * this.pixelRatio));
     this.canvas.height = Math.max(1, Math.round(h * this.pixelRatio));
+    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
   setCamera(viewProj: Mat4): void {
@@ -195,20 +193,16 @@ export class GLRenderer {
     const tex = gl.createTexture();
     if (!tex) throw new Error('createTexture failed: context lost or resource exhaustion');
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    // SRGB8_ALPHA8: the sampler-side decode on read is what's guaranteed to be
-    // linear. Mip generation via generateMipmap for an sRGB texture is
-    // implementation-defined (drivers may filter in encoded space); this matches
-    // three's exposure exactly regardless — parity holds either way.
     gl.texStorage2D(
       gl.TEXTURE_2D,
       mipLevels(bitmap.width, bitmap.height),
-      gl.SRGB8_ALPHA8,
+      gl.RGBA8,
       bitmap.width,
       bitmap.height,
     );
-    // Tile bitmaps are decoded with imageOrientation:'flipY' and their UVs flip v
-    // to match; other images upload unflipped and address row 0 as v = 0.
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    // UNPACK_FLIP_Y_WEBGL stays at its default (false). Tile bitmaps are
+    // decoded with imageOrientation:'flipY' and their UVs flip v to match;
+    // other images upload unflipped and address row 0 as v = 0.
     gl.texSubImage2D(
       gl.TEXTURE_2D,
       0,
@@ -245,13 +239,9 @@ export class GLRenderer {
 
   render(drawList: DrawItem[]): void {
     const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (!this.viewProj) return;
-    gl.useProgram(this.program);
     gl.uniformMatrix4fv(this.uViewProj, false, this.viewProj);
-    gl.uniform1i(this.uTex, 0);
-    gl.activeTexture(gl.TEXTURE0);
 
     const sorted = sortDrawList(drawList);
     const stride = 5 * 4; // 5 floats × 4 bytes
