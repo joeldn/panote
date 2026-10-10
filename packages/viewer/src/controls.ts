@@ -34,12 +34,15 @@ const FLING_STALE_MS = 60;
 const FLING_WINDOW_MS = 100;
 // The host's flick() takes px per 60 Hz frame.
 const FRAME_MS = 1000 / 60;
-// Wheel zoom gain per normalised pixel. A ctrl-wheel is a trackpad pinch,
-// which sends small deltas (about 1-10), so it gets ten times the gain.
+// Wheel zoom gain per normalised pixel. Chrome and Firefox report a trackpad
+// pinch as a ctrl-wheel with small pixel deltas (about 1-10), so that shape
+// gets ten times the gain. Ctrl plus a mouse notch (deltaY about 100, or line
+// mode) keeps the plain gain.
 const WHEEL_GAIN = 0.001;
 const PINCH_GAIN = 0.01;
-// Cap on |ln(scale)| from one wheel event, so a ctrl+mouse-notch (deltaY
-// about 100 at pinch gain) or a page-mode delta can't jump the fov.
+const PINCH_MAX_DELTA = 50;
+// Cap on |ln(scale)| from one wheel event, so a page-mode delta or a
+// high-resolution wheel burst can't jump the fov.
 const MAX_WHEEL_LOG_SCALE = 0.3;
 // deltaMode 1 (lines) is converted at a 16 px line height.
 const LINE_PX = 16;
@@ -246,7 +249,8 @@ export class Controls {
     const dy = e.deltaY * unit;
     const dx = e.deltaX * unit;
     if (dy) {
-      const gain = e.ctrlKey ? PINCH_GAIN : WHEEL_GAIN;
+      const pinch = e.ctrlKey && e.deltaMode === 0 && Math.abs(e.deltaY) < PINCH_MAX_DELTA;
+      const gain = pinch ? PINCH_GAIN : WHEEL_GAIN;
       const logScale = Math.max(-MAX_WHEEL_LOG_SCALE, Math.min(MAX_WHEEL_LOG_SCALE, dy * gain));
       this.host.zoomAt(Math.exp(logScale), e.clientX, e.clientY);
     }
@@ -295,7 +299,10 @@ export class Controls {
   private onKeyDown = (e: KeyboardEvent) => {
     // Modified keys belong to the browser and OS: Ctrl/Cmd +/- is page zoom,
     // which low-vision users rely on, and Alt/Cmd+arrow is history navigation.
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // AltGr arrives as Ctrl+Alt on Windows and types characters, so it is
+    // not a modifier here.
+    const altGraph = e.getModifierState?.('AltGraph') ?? false;
+    if (!altGraph && (e.ctrlKey || e.metaKey || e.altKey)) return;
     const panStep = 40; // px-equivalent
     switch (e.key) {
       case 'ArrowLeft':

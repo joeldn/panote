@@ -141,7 +141,15 @@ describe('Controls: pointer drag and release', () => {
   });
 });
 
-function key(k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) {
+function key(
+  k: string,
+  mods: {
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    altKey?: boolean;
+    getModifierState?: (key: string) => boolean;
+  } = {},
+) {
   return el.dispatch('keydown', {
     key: k,
     ctrlKey: false,
@@ -349,5 +357,36 @@ describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
     for (const args of host.zoomAt.mock.calls) {
       expect(args.every((n) => Number.isFinite(n))).toBe(true);
     }
+  });
+});
+
+describe('Controls: modifier edge cases', () => {
+  it('zooms ctrl plus a mouse notch like a plain notch, not at pinch gain', () => {
+    setup();
+    wheel({ deltaY: 100, ctrlKey: true });
+    const ctrlNotch = onlyZoom();
+    setup();
+    wheel({ deltaY: 100 });
+    expect(ctrlNotch).toBeCloseTo(onlyZoom(), 10);
+  });
+
+  it('zooms a ctrl line-mode wheel at the plain gain', () => {
+    setup();
+    wheel({ deltaY: 3, deltaMode: 1, ctrlKey: true });
+    const ctrlLines = onlyZoom();
+    setup();
+    wheel({ deltaY: 48 });
+    expect(ctrlLines).toBeCloseTo(onlyZoom(), 10);
+  });
+
+  it('does not treat AltGr (reported as Ctrl+Alt) as a modifier', () => {
+    setup();
+    const ev = key('+', {
+      ctrlKey: true,
+      altKey: true,
+      getModifierState: (k: string) => k === 'AltGraph',
+    });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
   });
 });
