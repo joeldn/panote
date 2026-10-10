@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FACES, type Face } from './cube.js';
 import { PanoViewer } from './PanoViewer.js';
-import type { CubeTileSource, SourceResolver, TileAddress } from './source.js';
+import {
+  urlTemplateSource,
+  type CubeTileSource,
+  type SourceResolver,
+  type TileAddress,
+} from './source.js';
 
 // The viewer with nothing of panote's: no options, sources built here, and
 // (for the loadTile cases) no network at all. Same harness as
@@ -407,5 +412,46 @@ describe('prefetch', () => {
     expect(signals.every((s) => s.aborted)).toBe(true);
     await viewer.prefetch('church');
     expect(signals).toHaveLength(6);
+  });
+});
+
+describe('PanoViewer with a urlTemplateSource and network options', () => {
+  it('fetches the template URLs through network.fetch with the requestInit, and decodes through network.decode', async () => {
+    const seen: Array<[string, RequestInit]> = [];
+    const net = vi.fn((url: string, init: RequestInit) => {
+      seen.push([url, init]);
+      return Promise.resolve(new Response(new Blob(['x'])));
+    });
+    const decode = vi.fn((_blob: Blob) =>
+      Promise.resolve({ close: vi.fn() } as unknown as ImageBitmap),
+    );
+    const source = urlTemplateSource({
+      id: 'cube',
+      template: 'https://tiles.example/cube/{level}/{face}/{y}_{x}.png',
+      tileSize: 256,
+      maxLevel: 1,
+      faceNames: { px: 'right', nx: 'left' },
+    });
+    const viewer = new PanoViewer(container(), {
+      network: {
+        fetch: net as unknown as typeof fetch,
+        requestInit: { credentials: 'include', headers: { 'x-key': 'k' } },
+        decode,
+      },
+    });
+    await expect(viewer.load(source)).resolves.toBe(true);
+
+    const names: Record<string, string> = { px: 'right', nx: 'left' };
+    expect(seen.slice(0, 6).map(([url]) => url)).toEqual(
+      FACES.map((f) => `https://tiles.example/cube/0/${names[f] ?? f}/0_0.png`),
+    );
+    for (const [, init] of seen) {
+      expect(init).toMatchObject({ credentials: 'include', headers: { 'x-key': 'k' } });
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    }
+    expect(decode).toHaveBeenCalledTimes(6);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(decodeSpy).not.toHaveBeenCalled();
+    viewer.dispose();
   });
 });
