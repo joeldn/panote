@@ -424,6 +424,83 @@ describe('TileLayer failure handling', () => {
     layer.dispose();
   });
 
+  describe('in-flight ownership', () => {
+    /** The layer's private maps, read to check its accounting directly. */
+    function internals(layer: TileLayer): {
+      cache: Map<string, unknown>;
+      inflight: Map<string, AbortController>;
+    } {
+      return layer as unknown as {
+        cache: Map<string, unknown>;
+        inflight: Map<string, AbortController>;
+      };
+    }
+
+    /** '/tiles/pano-a/2/px/1-0.jpg' -> '2/px/1-0', the layer's cache key. */
+    const keyOf = (url: string): string =>
+      url.replace(/^\/tiles\/[^/]+\//, '').replace(/\.jpg$/, '');
+
+    it('does not leak a texture or lose track of a reload when a tile is aborted mid-decode', async () => {
+      const layer = makeLayer();
+      // Decodes are held until released, so an abort can land between the
+      // response arriving and the bitmap being ready: createImageBitmap does
+      // not take the abort signal.
+      const held: (() => void)[] = [];
+      let holding = true;
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(
+          () =>
+            new Promise((resolve) => {
+              const done = (): void => resolve({ close: vi.fn() });
+              if (holding) held.push(done);
+              else done();
+            }),
+        ),
+      );
+      const live = new Set<number>();
+      renderer.uploadTile.mockImplementation(() => {
+        const handle = renderer.uploadTile.mock.calls.length;
+        live.add(handle);
+        return handle;
+      });
+      renderer.removeTile.mockImplementation((handle: number) => {
+        live.delete(handle);
+      });
+
+      frame(layer, 0);
+      await flush();
+      const first = [...requests];
+      expect(held).toHaveLength(first.length);
+
+      // Pan away while those decode (aborting them), then straight back, which
+      // starts a second load of each one.
+      frame(layer, Math.PI);
+      frame(layer, 0);
+      await flush();
+      for (const url of first) expect(requests.filter((u) => u === url)).toHaveLength(2);
+
+      // The first, aborted round finishes decoding. The reloads are still in
+      // flight and must stay tracked as such.
+      const firstRound = held.splice(0, first.length);
+      for (const release of firstRound) release();
+      await flush();
+      const { cache, inflight } = internals(layer);
+      for (const url of first) expect(inflight.has(keyOf(url))).toBe(true);
+
+      // Then everything else finishes.
+      holding = false;
+      for (const release of held.splice(0)) release();
+      for (let i = 0; i < 5; i++) await flush();
+
+      expect(inflight.size).toBe(0);
+      // Every texture the renderer still holds is one the cache can free.
+      expect(live.size).toBe(cache.size);
+      layer.dispose();
+      expect(live.size).toBe(0);
+    });
+  });
+
   describe('low-resolution base layer', () => {
     it('loads exactly one level-0 tile per cube face — the whole panorama, coarsely', async () => {
       const layer = makeLayer();

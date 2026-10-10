@@ -449,6 +449,15 @@ export class TileLayer {
         bitmap.close();
         return { kind: 'aborted' };
       }
+      // An earlier load of this key can finish first: update() aborts a tile
+      // that leaves the view, but createImageBitmap ignores the signal, so a
+      // load aborted mid-decode still lands — after a reload has started. The
+      // second one to land must not upload over the first, or the first
+      // texture is never freed.
+      if (this.cache.has(key)) {
+        bitmap.close();
+        return { kind: 'loaded' };
+      }
       const geom = buildTileGeometry(face, level, x, y);
       const handle = this.renderer.uploadTile(geom, bitmap);
       bitmap.close(); // GPU texture owns the pixels now; free the CPU copy.
@@ -478,7 +487,10 @@ export class TileLayer {
       // No-op when succeed()/fail() already settled it; this covers the
       // abort and disposed-mid-load paths, which must still free the probe.
       this.monitor.release(permit);
-      this.inflight.delete(key);
+      // Only clear the slot this call owns. After an abort the key may already
+      // belong to a reload, which must stay tracked: it still counts against
+      // maxConcurrent and update() must still be able to abort it.
+      if (this.inflight.get(key) === controller) this.inflight.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
   }
