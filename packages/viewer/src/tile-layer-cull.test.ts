@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Manifest } from '@panote/core';
 import * as cube from './cube.js';
 import * as projection from './render/projection.js';
+import * as tileCache from './tile-cache.js';
 import { TileLayer } from './tile-layer.js';
 import { RADIUS } from './tile-geometry.js';
 import { dirFromYawPitch } from './project.js';
@@ -13,6 +14,10 @@ import type { GLRenderer } from './render/gl-renderer.js';
 vi.mock('./cube.js', async (importOriginal) => {
   const actual = await importOriginal<typeof cube>();
   return { ...actual, faceUVToDir: vi.fn(actual.faceUVToDir) };
+});
+vi.mock('./tile-cache.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof tileCache>();
+  return { ...actual, selectEvictions: vi.fn(actual.selectEvictions) };
 });
 vi.mock('./render/projection.js', async (importOriginal) => {
   const actual = await importOriginal<typeof projection>();
@@ -175,5 +180,41 @@ describe('TileLayer cull', () => {
     frame(0.05, 0, 70, 16 / 9, 4);
     expect(candidates().length).toBeGreaterThan(0);
     for (const c of candidates()) expect(first.has(c)).toBe(true);
+  });
+
+  it('does not build eviction candidates while the cache is within the on-screen overshoot', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) })),
+    );
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(() => Promise.resolve({ close: vi.fn() })),
+    );
+    // A budget far smaller than the view: everything on screen stays anyway.
+    (layer as unknown as { maxTiles: number }).maxTiles = 4;
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 100 && (i === 0 || layer.hasPending()); i++) {
+      frame(0, 0, 70, 16 / 9, 3);
+      await flush();
+    }
+    // The parents fetched on the way are off screen now; this frame lets
+    // them go, leaving exactly what is on screen.
+    frame(0, 0, 70, 16 / 9, 3);
+    const { cache, desired } = layer as unknown as {
+      cache: Map<string, unknown>;
+      desired: Set<string>;
+    };
+    expect(cache.size).toBeGreaterThan(4);
+    expect(cache.size).toBe(desired.size);
+    vi.mocked(tileCache.selectEvictions).mockClear();
+    frame(0, 0, 70, 16 / 9, 3);
+    expect(tileCache.selectEvictions).not.toHaveBeenCalled();
+    // Past the overshoot (here: a turn to the side) eviction runs again.
+    for (let i = 0; i < 100 && (i === 0 || layer.hasPending()); i++) {
+      frame(Math.PI / 2, 0, 70, 16 / 9, 3);
+      await flush();
+    }
+    expect(tileCache.selectEvictions).toHaveBeenCalled();
   });
 });

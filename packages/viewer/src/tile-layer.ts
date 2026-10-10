@@ -752,9 +752,12 @@ export class TileLayer {
   }
 
   private evict(): void {
-    // Nothing can be evicted while under budget — skip the O(cacheSize)
-    // candidate array allocation entirely.
-    if (this.cache.size <= this.maxTiles) return;
+    // selectEvictions() keeps every tile on screen and the six base tiles
+    // whatever the budget, so the cache may overshoot up to that many. Inside
+    // that bound there is nothing to do: skip the O(cacheSize) candidate
+    // array, which a view wider than the budget would otherwise build every
+    // frame for nothing.
+    if (this.cache.size <= Math.max(this.maxTiles, this.desired.size + FACES.length)) return;
     const keysToRemove = selectEvictions(
       [...this.cache.values()].map((e) => ({
         key: e.key,
