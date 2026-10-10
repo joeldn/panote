@@ -471,8 +471,13 @@ export class PanoViewer {
     this.invalidate();
     if (next) {
       this.reload(next).catch((error: unknown) => {
-        // Nobody awaits this load, so the host hears about it as an event.
-        this.emitter.emit('load-error', { error, id: next.pano });
+        // Nobody awaits this load, so the host hears about it as an event. A
+        // listener that throws here would be an unhandled rejection instead.
+        try {
+          this.emitter.emit('load-error', { error, id: next.pano });
+        } catch (err) {
+          report(err);
+        }
       });
     }
     this.emitter.emit('context-restored', undefined);

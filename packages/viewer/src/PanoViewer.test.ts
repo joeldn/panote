@@ -2198,6 +2198,34 @@ describe('PanoViewer', () => {
           viewer.dispose();
         });
 
+        it('reports a load-error listener that throws instead of rejecting', async () => {
+          stubNet();
+          const report = vi.fn();
+          vi.stubGlobal('reportError', report);
+          const unhandled = vi.fn();
+          process.on('unhandledRejection', unhandled);
+          try {
+            const viewer = new PanoViewer(makeContainer(400, 800));
+            await viewer.load('pano-a');
+            const boom = new Error('listener');
+            viewer.on('load-error', () => {
+              throw boom;
+            });
+            const fake = fakeOf(viewer);
+            fake.loseContext();
+            const notFound = { ok: false, status: 404, blob: () => Promise.resolve({}) };
+            vi.mocked(fetch).mockImplementation(() => Promise.resolve(notFound as Response));
+            fake.restoreContext();
+            for (let i = 0; i < 5; i++) await flush();
+            await new Promise((r) => setTimeout(r, 0));
+            expect(report).toHaveBeenCalledWith(boom);
+            expect(unhandled).not.toHaveBeenCalled();
+            viewer.dispose();
+          } finally {
+            process.off('unhandledRejection', unhandled);
+          }
+        });
+
         it('drops the preview, whose pixels are gone with the context', () => {
           const viewer = new PanoViewer(makeContainer(400, 800));
           const image = () =>
