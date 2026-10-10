@@ -14,6 +14,13 @@ interface PendingTransition {
 }
 
 class FakeViewer {
+  /** Like the real viewer's: in the host, focusable for its keys. */
+  canvas = document.createElement('canvas');
+  constructor(host?: HTMLElement) {
+    this.canvas.tabIndex = 0;
+    host?.appendChild(this.canvas);
+  }
+  focus = vi.fn(() => this.canvas.focus({ preventScroll: true }));
   handlers = new Map<string, Set<Handler>>();
   fail = false;
   /** When set, transitionTo stays pending until the test settles it from `pending`. */
@@ -345,9 +352,7 @@ describe('TourViewer', () => {
     it('hands focus to the stage when the focused chevron hides for the move', async () => {
       renderViewer({
         createViewer: (el) => {
-          // As the viewer's controls do, so the stage takes keyboard focus.
-          el.tabIndex = 0;
-          const v = new FakeViewer();
+          const v = new FakeViewer(el);
           v.defer = true;
           return v as unknown as PanoViewer;
         },
@@ -356,14 +361,13 @@ describe('TourViewer', () => {
       chevron.focus();
       fireEvent.click(chevron);
       expect(screen.queryByRole('button', { name: 'Go to To the church' })).toBeNull();
-      expect(document.activeElement).toBe(screen.getByRole('application'));
+      expect(document.activeElement).toBe(screen.getByRole('application').querySelector('canvas'));
     });
 
     it('leaves focus alone when the move starts from outside the markers', async () => {
       renderViewer({
         createViewer: (el) => {
-          el.tabIndex = 0;
-          const v = new FakeViewer();
+          const v = new FakeViewer(el);
           v.defer = true;
           return v as unknown as PanoViewer;
         },

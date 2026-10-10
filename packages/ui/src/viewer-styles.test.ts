@@ -52,6 +52,12 @@ describe('viewer chrome styles', () => {
     for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toMatch(/backdrop-filter/);
   });
 
+  it('rings the focused stage canvas like the chrome, inside the clipped stage', () => {
+    const ring = rule(viewer, '.pn-stage__viewer > canvas:focus-visible');
+    expect(ring).toContain('outline: 2px solid var(--accent);');
+    expect(ring).toContain('outline-offset: -2px;');
+  });
+
   it('stacks the hotspot sheet above the controls pill and the map button', () => {
     expect(rule(viewer, '.pn-hspanel')).toMatch(/z-index: 2;/);
   });

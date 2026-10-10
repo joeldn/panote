@@ -1,5 +1,5 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import { prefetchPano } from '@panote/viewer';
+import { prefetchPano, type PanoViewer } from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
@@ -204,6 +204,7 @@ export function TourViewer({
   prefetch = prefetchPano,
 }: TourViewerProps) {
   const frame = useRef<HTMLDivElement>(null);
+  const [viewer, setViewer] = useState<PanoViewer | null>(null);
   // `target` is the scene asked for; `shown` is the one on screen, which only
   // moves once the viewer reports the new pano drawable. The chrome follows
   // `shown`, so nothing for the next scene lands over the old pano.
@@ -255,11 +256,11 @@ export function TourViewer({
   const go = (id: string, view: Scene['view']) => {
     // Markers and chevrons hide during a move, so one activated from the
     // keyboard would take focus down to <body> with it: hand focus to the
-    // stage (the viewer makes it focusable for its keys) before it goes.
+    // viewer before it goes.
     const focused = document.activeElement;
     const root = frame.current;
-    if (root && focused?.closest('.pn-anchors') && root.contains(focused)) {
-      root.querySelector<HTMLElement>('.pn-stage__viewer')?.focus();
+    if (viewer && root && focused?.closest('.pn-anchors') && root.contains(focused)) {
+      viewer.focus();
     }
     setActive(null);
     setTarget({ id, view });
@@ -299,6 +300,7 @@ export function TourViewer({
         transition
         {...(createViewer && { createViewer })}
         aria-label={`${title}: ${data.titles[panoId] ?? ''}`}
+        onViewer={setViewer}
         onSceneChange={landed}
         {...(onHotspotOpen && {
           onHotspotOpen: (hotspotId: string) => onHotspotOpen(panoId, hotspotId),

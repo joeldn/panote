@@ -33,6 +33,7 @@ vi.mock('./render/gl-renderer.js', () => {
       height: 0,
       style: {} as Record<string, string>,
       tabIndex: 0,
+      focus: vi.fn(),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
       getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
@@ -160,7 +161,7 @@ type Internals = {
   wasPending: boolean;
   renderer: {
     render: ReturnType<typeof vi.fn>;
-    canvas: { addEventListener: ReturnType<typeof vi.fn> };
+    canvas: { addEventListener: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn> };
   };
 };
 const internals = (viewer: PanoViewer) => viewer as unknown as Internals;
@@ -1667,6 +1668,13 @@ describe('PanoViewer', () => {
       expect(overlays[0]!.remove).toHaveBeenCalled();
       await a;
       expect(viewer.getView().yaw).toBe(0);
+      viewer.dispose();
+    });
+
+    it('focus() focuses its canvas without scrolling the page', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.focus();
+      expect(internals(viewer).renderer.canvas.focus).toHaveBeenCalledWith({ preventScroll: true });
       viewer.dispose();
     });
 

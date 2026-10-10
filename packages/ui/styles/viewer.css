@@ -52,6 +52,12 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* The viewer's canvas takes focus for its keys. It fills a stage that clips
+   its overflow, so the ring sits inside its edge. */
+.pn-stage__viewer > canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 
 /* --- Floor chevrons: laid on the floor with a fixed perspective tilt --- */
 .pn-floorlink {

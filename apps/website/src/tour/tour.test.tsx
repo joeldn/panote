@@ -72,6 +72,7 @@ class FakeViewer {
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
   isSettled = () => false;
+  focus = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   dispose = vi.fn();

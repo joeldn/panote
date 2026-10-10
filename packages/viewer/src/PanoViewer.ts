@@ -747,6 +747,15 @@ export class PanoViewer {
     this.invalidate();
   }
 
+  /**
+   * Give the viewer keyboard focus, so its arrow and zoom keys work. A host
+   * calls this when chrome it put over the viewer goes away while focused,
+   * so focus lands here rather than on the page. The page does not scroll.
+   */
+  focus(): void {
+    this.renderer.canvas.focus({ preventScroll: true });
+  }
+
   /** The camera being moved to, with yaw in (−π, π]. */
   getView(): View {
     return { ...this.target, yaw: normalizeAngle(this.target.yaw) };

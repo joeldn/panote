@@ -198,6 +198,7 @@ export class FakeViewer {
   });
   getView = () => ({ ...this.view });
   isSettled = () => false;
+  focus = vi.fn();
   directionAtPixel = vi.fn(() => ({ ...this.pointAt }));
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
