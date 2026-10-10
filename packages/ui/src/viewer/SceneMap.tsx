@@ -30,6 +30,12 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
   const placed = scenes.filter(isPlaced);
   const xs = placed.map((s) => s.x);
   const ys = placed.map((s) => s.y);
+  const [minX, maxX, minY, maxY] = [
+    Math.min(...xs),
+    Math.max(...xs),
+    Math.min(...ys),
+    Math.max(...ys),
+  ];
   const select = (id: string) => {
     setOpen(false);
     if (id !== current) onSelect(id);
@@ -46,8 +52,8 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
                   key={s.id}
                   className={cx('pn-scenemap__dot', s.id === current && 'pn-scenemap__dot--on')}
                   style={{
-                    left: `${toPercent(s.x, Math.min(...xs), Math.max(...xs))}%`,
-                    top: `${toPercent(s.y, Math.min(...ys), Math.max(...ys))}%`,
+                    left: `${toPercent(s.x, minX, maxX)}%`,
+                    top: `${toPercent(s.y, minY, maxY)}%`,
                   }}
                 />
               ))}
@@ -73,7 +79,8 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
         type="button"
         className="pn-scenemap__toggle"
         aria-expanded={open}
-        aria-controls={panelId}
+        // Only while open: the panel isn't in the DOM when closed.
+        aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((o) => !o)}
       >
         <i className="fa-solid fa-table-cells-large" aria-hidden="true" />
