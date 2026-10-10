@@ -1,18 +1,29 @@
 import type { PanoViewer } from '@panote/viewer';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 
 import { usePanoViewer } from '../viewer-context.js';
 
 /**
  * Run `cb` on every rendered frame of the stage's viewer. Chrome writes
  * transforms straight to DOM refs here instead of re-rendering React per frame.
+ *
+ * `cb` also runs once, before paint, when the viewer arrives and whenever
+ * `items` changes: an idle viewer draws no frames, so without this a marker
+ * added to the list would stay unplaced (and hidden) until the camera moved.
  */
-export function useViewerFrame(cb: (viewer: PanoViewer) => void): PanoViewer | null {
+export function useViewerFrame(
+  cb: (viewer: PanoViewer) => void,
+  items?: unknown,
+): PanoViewer | null {
   const viewer = usePanoViewer();
   const latest = useRef(cb);
-  useEffect(() => {
+  // A layout effect, so the placement below already sees the new `cb`.
+  useLayoutEffect(() => {
     latest.current = cb;
   });
+  useLayoutEffect(() => {
+    if (viewer) latest.current(viewer);
+  }, [viewer, items]);
   useEffect(() => {
     if (!viewer) return;
     return viewer.onRender(() => latest.current(viewer));

@@ -53,8 +53,9 @@ describe('buildHeadersFile', () => {
     const file = buildHeadersFile(loadConfig(env), {
       framable: ['/s/:slug/embed', '/s/:slug/embed/'],
     });
-    const [all, embed, embedSlash, ...rest] = file.trimEnd().split('\n\n');
+    const [all, embed, embedSlash, assets, ...rest] = file.trimEnd().split('\n\n');
     expect(rest).toEqual([]);
+    expect(assets).toMatch(/^\/assets\/\*\n/);
     expect(embedSlash).toMatch(/^\/s\/:slug\/embed\/\n {2}! Content-Security-Policy\n/);
     expect(embedSlash).toMatch(/frame-ancestors \*$/);
     expect(all).toMatch(/^\/\*\n {2}Content-Security-Policy: .*frame-ancestors 'none'\n/);
@@ -70,8 +71,22 @@ describe('buildHeadersFile', () => {
     expect(file).toContain("frame-src 'self' https://www.youtube-nocookie.com;");
   });
 
-  it('emits a single block with no framable paths', () => {
-    expect(buildHeadersFile(loadConfig(env)).trimEnd().split('\n\n')).toHaveLength(1);
+  it('emits only the catch-all and assets blocks with no framable paths', () => {
+    expect(buildHeadersFile(loadConfig(env)).trimEnd().split('\n\n')).toHaveLength(2);
+  });
+
+  it('marks the content-hashed assets immutable, and nothing else', () => {
+    const blocks = buildHeadersFile(loadConfig(env), { framable: ['/s/:slug/embed'] })
+      .trimEnd()
+      .split('\n\n');
+    expect(blocks.at(-1)).toBe('/assets/*\n  Cache-Control: public, max-age=31536000, immutable');
+    expect(blocks.filter((b) => b.includes('Cache-Control'))).toHaveLength(1);
+  });
+
+  it('puts the assets block under the app base', () => {
+    const file = buildHeadersFile(loadConfig(env), { assetsBase: '/app/' });
+    expect(file).toContain('/app/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n');
+    expect(file).not.toMatch(/^\/assets\/\*/m);
   });
 
   it('adds noindex on every path unless explicitly indexable', () => {

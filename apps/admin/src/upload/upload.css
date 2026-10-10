@@ -101,8 +101,6 @@
   padding: 15px 16px;
   border-radius: var(--r-card);
   background: var(--chip-bg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
   box-shadow: var(--shadow-chip);
   color: var(--chip-text);
   font-family: var(--fbody);

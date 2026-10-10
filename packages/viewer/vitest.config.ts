@@ -30,7 +30,6 @@ export default mergeConfig(
           'src/controls.ts',
           'src/hotspots.ts',
           'src/render/gl-renderer.ts',
-          'src/ui/index.ts',
         ],
         thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
       },

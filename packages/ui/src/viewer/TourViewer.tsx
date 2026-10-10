@@ -1,6 +1,6 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import type { Tour } from '@panote/viewer/ui';
-import { useRef, useState, type ReactNode } from 'react';
+import { prefetchPano } from '@panote/viewer';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
 import { PanoStage, type ViewerFactory } from '../PanoStage.js';
@@ -10,7 +10,7 @@ import { FloorLinks } from './FloorLinks.js';
 import { HotspotMarkers } from './HotspotMarkers.js';
 import { HotspotPanel } from './HotspotPanel.js';
 import { SceneMap } from './SceneMap.js';
-import type { ViewerHotspot, ViewerLinkArrow } from './types.js';
+import type { ViewerHotspot, ViewerLinkArrow, ViewerTourGraph } from './types.js';
 import { ViewerControls } from './ViewerControls.js';
 
 /**
@@ -18,7 +18,7 @@ import { ViewerControls } from './ViewerControls.js';
  * the chrome reads, so `toViewerTour(...)` output can be passed as is.
  */
 export interface TourViewerData {
-  tour: Tour | null;
+  tour: ViewerTourGraph | null;
   hotspots: Record<string, Array<{ source: Hotspot }>>;
   links: Record<string, Array<{ to: string; yaw: number; label?: string }>>;
   north: Record<string, number>;
@@ -61,9 +61,17 @@ export interface TourViewerProps {
   children?: ReactNode;
   /** Test seam: builds the viewer. */
   createViewer?: ViewerFactory;
+  /** Test seam: warms the cache for a linked scene (defaults to `prefetchPano`). */
+  prefetch?: typeof prefetchPano;
 }
 
 type Scene = { id: string; view: { yaw?: number; pitch?: number; fov?: number } | undefined };
+
+const NONE: never[] = [];
+
+// Auto-rotate is motion the visitor didn't start, so it starts off for those who opt out.
+const prefersReducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => {
   const h: ViewerHotspot = {
@@ -101,8 +109,11 @@ function PointsLayer({
 }: PointsLayerProps) {
   const viewer = usePanoViewer();
   const open = (h: ViewerHotspot) => {
-    // Clicking the marker of the point already open (e.g. to close it) isn't another open.
-    if (active?.id === h.id) return;
+    // The marker is a toggle (aria-pressed): a second click closes its point.
+    if (active?.id === h.id) {
+      setActive(null);
+      return;
+    }
     setActive(h);
     viewer?.reportHotspotOpen(h.id);
   };
@@ -126,6 +137,43 @@ function PointsLayer({
   );
 }
 
+// Linked scenes warmed per scene: each costs a manifest and six base tiles.
+const PREFETCH_LIMIT = 3;
+
+interface LinkPrefetchProps {
+  baseUrl: string;
+  /** Scenes to warm, in order; empty while a change is in flight. */
+  targets: readonly string[];
+  prefetch: typeof prefetchPano;
+}
+
+// Once the scene on screen has its tiles, warm the next scenes' bases so a
+// floor-link hop starts from the cache. Rendered inside PanoStage for the viewer.
+function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
+  const viewer = usePanoViewer();
+  const key = targets.join('\n');
+  const latest = useRef({ targets, prefetch });
+  useEffect(() => {
+    latest.current = { targets, prefetch };
+  });
+  useEffect(() => {
+    if (!viewer || key === '') return;
+    const controller = new AbortController();
+    const settled = () => {
+      // Once per scene: later settles follow pans, not a new scene.
+      viewer.off('tiles-settled', settled);
+      const { targets: ids, prefetch: warm } = latest.current;
+      for (const id of ids) void warm(baseUrl, id, { signal: controller.signal });
+    };
+    viewer.on('tiles-settled', settled);
+    return () => {
+      viewer.off('tiles-settled', settled);
+      controller.abort();
+    };
+  }, [viewer, baseUrl, key]);
+  return null;
+}
+
 /**
  * Screen 05's viewer: the pano with its points, floor links, compass, map and
  * controls, under an optional top bar. Honours the tour's settings. It sends
@@ -147,52 +195,95 @@ export function TourViewer({
   className,
   children,
   createViewer,
+  prefetch = prefetchPano,
 }: TourViewerProps) {
   const frame = useRef<HTMLDivElement>(null);
-  const [scene, setScene] = useState<Scene>(() => ({
+  // `target` is the scene asked for; `shown` is the one on screen, which only
+  // moves once the viewer reports the new pano drawable. The chrome follows
+  // `shown`, so nothing for the next scene lands over the old pano.
+  const [target, setTarget] = useState<Scene>(() => ({
     id: start,
     view: data.tour?.scenes[start]?.initialView,
   }));
+  const [shown, setShown] = useState(start);
   const [active, setActive] = useState<ViewerHotspot | null>(null);
-  const [autoRotate, setAutoRotate] = useState(data.settings.autoRotate);
+  const [autoRotate, setAutoRotate] = useState(
+    () => data.settings.autoRotate && !prefersReducedMotion(),
+  );
+  // The scene last passed to `onSceneChange`: a reload of the scene on screen
+  // (after a failed change) lands it again, and that is not a new visit.
+  const reported = useRef<string | null>(null);
 
-  const panoId = scene.id;
-  const hotspots = (data.hotspots[panoId] ?? []).map(toHotspot);
-  const links: ViewerLinkArrow[] = single
-    ? []
-    : (data.links[panoId] ?? []).map((l) => ({
-        to: l.to,
-        yaw: l.yaw,
-        label: l.label ?? data.titles[l.to] ?? '',
-      }));
+  const panoId = shown;
+  const moving = target.id !== shown;
+  const sceneHotspots = useMemo(
+    () => (data.hotspots[panoId] ?? []).map(toHotspot),
+    [data.hotspots, panoId],
+  );
+  const sceneLinks = useMemo<ViewerLinkArrow[]>(
+    () =>
+      single
+        ? []
+        : (data.links[panoId] ?? []).map((l) => ({
+            to: l.to,
+            yaw: l.yaw,
+            label: l.label ?? data.titles[l.to] ?? '',
+          })),
+    [single, data.links, data.titles, panoId],
+  );
+  // Like the vanilla nav arrows: no points or chevrons while the pano is changing.
+  const hotspots = moving ? NONE : sceneHotspots;
+  const links = moving ? NONE : sceneLinks;
+  const prefetchTargets = useMemo(
+    () =>
+      [...new Set(links.map((l) => l.to))].filter((id) => id !== panoId).slice(0, PREFETCH_LIMIT),
+    [links, panoId],
+  );
   const go = (id: string, view: Scene['view']) => {
     setActive(null);
-    setScene({ id, view });
+    setTarget({ id, view });
   };
-  const scenes = Object.keys(data.tour?.scenes ?? {}).map((id) => ({
-    id,
-    title: data.titles[id] ?? id,
-    ...data.mapPositions[id],
-  }));
+  const landed = (id: string) => {
+    setShown(id);
+    if (reported.current === id) return;
+    reported.current = id;
+    onSceneChange?.(id);
+  };
+  const loadFailed = (error: unknown, id: string) => {
+    // A failed change leaves the old pano on screen: go back to it, which
+    // also lets the visitor try the same link again.
+    if (id === target.id && id !== shown) setTarget({ id: shown, view: undefined });
+    onLoadError?.(error, id);
+  };
+  const scenes = useMemo(
+    () =>
+      Object.keys(data.tour?.scenes ?? {}).map((id) => ({
+        id,
+        title: data.titles[id] ?? id,
+        ...data.mapPositions[id],
+      })),
+    [data.tour, data.titles, data.mapPositions],
+  );
   const { controls, showCompass, showMap } = data.settings;
 
   return (
     <div ref={frame} className={cx('pn-tour', className)}>
       <PanoStage
         baseUrl={baseUrl}
-        panoId={panoId}
-        {...(scene.view && { view: scene.view })}
+        panoId={target.id}
+        {...(target.view && { view: target.view })}
         north={data.north[panoId] ?? 0}
         autoRotate={autoRotate}
         transition
         {...(createViewer && { createViewer })}
         aria-label={`${title}: ${data.titles[panoId] ?? ''}`}
-        {...(onSceneChange && { onSceneChange })}
+        onSceneChange={landed}
         {...(onHotspotOpen && {
           onHotspotOpen: (hotspotId: string) => onHotspotOpen(panoId, hotspotId),
         })}
-        {...(onLoadError && { onLoadError })}
+        onLoadError={loadFailed}
       >
+        <LinkPrefetch baseUrl={baseUrl} targets={prefetchTargets} prefetch={prefetch} />
         <PointsLayer
           isAllowedMediaUrl={isAllowedMediaUrl}
           panoId={panoId}
@@ -239,7 +330,8 @@ export function TourViewer({
               aria-haspopup="dialog"
               onClick={() => {
                 // A share sheet portals to <body>, which a fullscreen stage would hide.
-                if (document.fullscreenElement) void document.exitFullscreen();
+                // It can be refused (e.g. an embed without allow="fullscreen").
+                if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
                 onShare();
               }}
             >

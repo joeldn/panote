@@ -1,5 +1,6 @@
 export * from './types.js';
 export { PanoViewer } from './PanoViewer.js';
+export { prefetchPano, type PrefetchOptions } from './prefetch.js';
 export {
   PREVIEW_GUTTER_PX,
   PREVIEW_MAX_PATCH_PX,

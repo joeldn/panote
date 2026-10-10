@@ -6,14 +6,36 @@ import { TourViewer, type TourViewerData, type TourViewerProps } from './TourVie
 
 type Handler = (payload: string) => void;
 
+interface PendingTransition {
+  pano: string;
+  /** Lands the pano: emits scene-change, as the viewer does once it is drawable, then resolves. */
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}
+
 class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
   fail = false;
+  /** When set, transitionTo stays pending until the test settles it from `pending`. */
+  defer = false;
+  pending: PendingTransition[] = [];
   load = vi.fn(async (pano: string) => {
     if (this.fail) throw new Error('manifest 404');
     this.emit('scene-change', pano);
   });
-  transitionTo = vi.fn(async (pano: string, _view?: unknown) => this.emit('scene-change', pano));
+  transitionTo = vi.fn(async (pano: string, _view?: unknown) => {
+    if (!this.defer) return this.emit('scene-change', pano);
+    return new Promise<void>((resolve, reject) => {
+      this.pending.push({
+        pano,
+        resolve: () => {
+          this.emit('scene-change', pano);
+          resolve();
+        },
+        reject,
+      });
+    });
+  });
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
   setNorth = vi.fn();
@@ -139,6 +161,38 @@ describe('TourViewer', () => {
     expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('church', 'i2');
   });
 
+  it('closes the open point on a second click of its marker', () => {
+    const onHotspotOpen = vi.fn();
+    renderViewer({ onHotspotOpen });
+    const marker = screen.getByRole('button', { name: 'Fountain' });
+    fireEvent.click(marker);
+    expect(screen.getByRole('complementary')).toBeTruthy();
+    expect(marker.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(marker);
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(marker.getAttribute('aria-pressed')).toBe('false');
+    expect(onHotspotOpen).toHaveBeenCalledOnce();
+  });
+
+  it('starts with auto-rotate off when the visitor prefers reduced motion', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' })),
+    );
+    try {
+      const { viewer } = renderViewer({
+        data: data({ settings: { ...settings, autoRotate: true } }),
+      });
+      await waitFor(() => expect(viewer().load).toHaveBeenCalled());
+      expect(viewer().setAutoRotate).not.toHaveBeenCalledWith(true);
+      expect(screen.getByRole('button', { name: 'Auto-rotate' }).getAttribute('aria-pressed')).toBe(
+        'false',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('honours the tour settings', async () => {
     const { viewer } = renderViewer({
       data: data({
@@ -173,6 +227,39 @@ describe('TourViewer', () => {
     expect(onShare).toHaveBeenCalledOnce();
   });
 
+  it('leaves fullscreen before sharing, and handles a refused exit', () => {
+    const onShare = vi.fn();
+    // A rejection with no handler attached is an unhandled rejection in the page.
+    const refused = Promise.reject(new TypeError('not allowed'));
+    const then = refused.then.bind(refused);
+    let handled = false;
+    refused.then = ((ok?: unknown, fail?: unknown) => {
+      if (fail) handled = true;
+      return then(ok as never, fail as never);
+    }) as typeof refused.then;
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      value: document.body,
+    });
+    let exits = 0;
+    // A plain function: a vi.fn would attach its own handlers to track the result.
+    document.exitFullscreen = () => {
+      exits += 1;
+      return refused;
+    };
+    try {
+      renderViewer({ onShare });
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      expect(exits).toBe(1);
+      expect(onShare).toHaveBeenCalledOnce();
+      expect(handled).toBe(true);
+    } finally {
+      void then(undefined, () => {});
+      delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+      delete (document as { exitFullscreen?: unknown }).exitFullscreen;
+    }
+  });
+
   it('reports a failed load with the pano and keeps the chrome', async () => {
     const onLoadError = vi.fn();
     const viewers: FakeViewer[] = [];
@@ -195,6 +282,133 @@ describe('TourViewer', () => {
     );
     await waitFor(() => expect(onLoadError).toHaveBeenCalledWith(expect.any(Error), 'square'));
     expect(screen.getByRole('navigation', { name: 'Tour' })).toBeTruthy();
+  });
+
+  describe('while a scene change is in flight', () => {
+    const crumb = () =>
+      within(screen.getByRole('navigation', { name: 'Tour' })).getByText(
+        (_, el) => el?.getAttribute('aria-current') === 'location',
+      ).textContent;
+    const mapCurrent = () => {
+      const toggle = screen.getByRole('button', { name: 'Map' });
+      if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+      return document.querySelector('.pn-scenemap__item[aria-current="location"]')?.textContent;
+    };
+
+    async function startTransition(props: Partial<TourViewerProps> = {}) {
+      const r = renderViewer({
+        data: data({ north: { square: 0.3, church: 0.9 } }),
+        bar: { home: null },
+        ...props,
+      });
+      await waitFor(() => expect(r.viewer().load.mock.calls[0]?.[0]).toBe('square'));
+      r.viewer().defer = true;
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(r.viewer().pending).toHaveLength(1));
+      return r;
+    }
+
+    it('hides the markers and chevrons and keeps the rest on the scene on screen', async () => {
+      const { viewer } = await startTransition();
+      // Neither the old scene's points nor the new one's are clickable over the old pano.
+      expect(screen.queryByRole('button', { name: 'Fountain' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Altar' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Go to To the church' })).toBeNull();
+      expect(crumb()).toBe('Square');
+      expect(mapCurrent()).toBe('Square');
+      expect(screen.getByLabelText('Old town: Square')).toBeTruthy();
+      expect(viewer().setNorth).toHaveBeenLastCalledWith(0.3);
+
+      await act(async () => viewer().pending[0]!.resolve());
+
+      expect(screen.getByRole('button', { name: 'Altar' })).toBeTruthy();
+      expect(crumb()).toBe('Church');
+      expect(mapCurrent()).toBe('Church');
+      expect(screen.getByLabelText('Old town: Church')).toBeTruthy();
+      expect(viewer().setNorth).toHaveBeenLastCalledWith(0.9);
+    });
+
+    it('snaps back to the scene on screen when the load fails, and can retry', async () => {
+      const onLoadError = vi.fn();
+      const onSceneChange = vi.fn();
+      const { viewer } = await startTransition({ onLoadError, onSceneChange });
+      const err = new Error('manifest 500');
+
+      await act(async () => viewer().pending[0]!.reject(err));
+
+      expect(onLoadError).toHaveBeenCalledWith(err, 'church');
+      expect(screen.getByRole('button', { name: 'Fountain' })).toBeTruthy();
+      expect(crumb()).toBe('Square');
+      // The stage reloads the pano on screen; landing it again is not a new scene.
+      const back = viewer().pending.at(-1)!;
+      expect(back.pano).toBe('square');
+      await act(async () => back.resolve());
+      expect(onSceneChange.mock.calls).toEqual([['square']]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(viewer().pending.at(-1)!.pano).toBe('church'));
+    });
+  });
+
+  describe('prefetching linked scenes', () => {
+    const many = () =>
+      data({
+        links: {
+          square: [
+            { to: 'church', yaw: 1, label: 'To the church' },
+            { to: 'church', yaw: 1.2, label: 'Also the church' },
+            { to: 'tower', yaw: 2 },
+            { to: 'bridge', yaw: 3 },
+            { to: 'market', yaw: 4 },
+          ],
+          church: [],
+        },
+        titles: { square: 'Square', church: 'Church', tower: 'Tower', bridge: 'Bridge' },
+      });
+    const settle = (v: FakeViewer) =>
+      act(() => v.emit('tiles-settled', undefined as unknown as string));
+
+    it('fetches up to three link targets, only once the scene on screen has settled', async () => {
+      const prefetch = vi.fn(async () => {});
+      const { viewer } = renderViewer({ data: many(), prefetch });
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
+      expect(prefetch).not.toHaveBeenCalled();
+
+      settle(viewer());
+
+      expect(prefetch.mock.calls.map((c: unknown[]) => c.slice(0, 2))).toEqual([
+        ['https://cdn.test/tiles/', 'church'],
+        ['https://cdn.test/tiles/', 'tower'],
+        ['https://cdn.test/tiles/', 'bridge'],
+      ]);
+      // Later settles (after each pan) don't fetch again.
+      settle(viewer());
+      expect(prefetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('cancels them when the visitor moves on', async () => {
+      const signals: AbortSignal[] = [];
+      const prefetch = vi.fn(async (_b: string, _p: string, o?: { signal?: AbortSignal }) => {
+        if (o?.signal) signals.push(o.signal);
+      });
+      const { viewer } = renderViewer({ data: many(), prefetch });
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
+      settle(viewer());
+      expect(signals).toHaveLength(3);
+      expect(signals.some((s) => s.aborted)).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Go to Tower' }));
+
+      expect(signals.every((s) => s.aborted)).toBe(true);
+    });
+
+    it('fetches nothing for a single scene', async () => {
+      const prefetch = vi.fn(async () => {});
+      const { viewer } = renderViewer({ data: many(), prefetch, single: true });
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
+      settle(viewer());
+      expect(prefetch).not.toHaveBeenCalled();
+    });
   });
 
   it('renders overlay and children', async () => {
