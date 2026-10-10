@@ -530,10 +530,6 @@ importers:
         version: 4.1.10(@types/node@26.2.0)(@vitest/coverage-v8@4.1.10)(jsdom@30.1.1)(vite@8.2.1)
 
   packages/viewer:
-    dependencies:
-      '@panote/core':
-        specifier: workspace:*
-        version: link:../core
     devDependencies:
       '@internal/typescript-config':
         specifier: workspace:*
@@ -541,6 +537,12 @@ importers:
       '@internal/vitest-config':
         specifier: workspace:*
         version: link:../vitest-config
+      '@panote/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.2.0
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 4.1.10(vitest@4.1.10)

@@ -18,6 +18,27 @@ export default tseslint.config(
   },
   node,
   {
+    // @panote/viewer is a standalone viewer: no runtime dependency on any
+    // workspace package. Tests may import @panote/core to check parity with
+    // the tiler's conventions (it is a devDependency for that alone).
+    files: ['packages/viewer/src/**/*.ts'],
+    ignores: ['packages/viewer/src/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@panote/*', '@internal/*'],
+              message:
+                '@panote/viewer has no workspace runtime dependencies; vendor what you need (design rule 1).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Root-level tooling config files are allowed to use default exports and
     // to reach for devDependencies.
     files: ['*.config.ts'],
