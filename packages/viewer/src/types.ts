@@ -202,6 +202,19 @@ export interface LoadOptions {
   view?: Partial<View>;
 }
 
+export interface ShowPreviewOptions {
+  /**
+   * For a replace: the `version` of the source the preview replaces (`''`
+   * for one without). Leave it out for a new scene.
+   */
+  replacesVersion?: string;
+  /**
+   * Camera for the preview, cut to as it goes up (like `LoadOptions.view`),
+   * not eased to. Unset axes keep their current value.
+   */
+  view?: Partial<View>;
+}
+
 export interface PrefetchOptions {
   // Aborting cancels the resolve and every request still in flight.
   signal?: AbortSignal;

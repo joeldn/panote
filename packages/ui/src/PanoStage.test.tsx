@@ -446,8 +446,13 @@ describe('PanoStage', () => {
     );
     const v = f.last();
     expect(source).toHaveBeenCalledTimes(1);
-    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall']);
-    expect(v.showPreview).toHaveBeenCalledWith('hall', sources[0], { replacesVersion: 'v1' });
+    // The scene's view goes up with the preview, cut to rather than eased.
+    expect(v.calls).toEqual(['show:hall', 'load:hall']);
+    expect(v.setView).not.toHaveBeenCalled();
+    expect(v.showPreview).toHaveBeenCalledWith('hall', sources[0], {
+      replacesVersion: 'v1',
+      view: { yaw: 1 },
+    });
   });
 
   it('waits for an async source before showing it and loading', async () => {
@@ -479,9 +484,10 @@ describe('PanoStage', () => {
     const v = f.last();
     // Nothing moves while the source is still decoding.
     expect(v.calls).toEqual([]);
-    await act(async () => pending[0]?.resolve(fakeSource()));
-    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall']);
-    expect(v.setView).toHaveBeenCalledWith({ yaw: 1 });
+    const s = fakeSource();
+    await act(async () => pending[0]?.resolve(s));
+    expect(v.calls).toEqual(['show:hall', 'load:hall']);
+    expect(v.showPreview).toHaveBeenCalledWith('hall', s, { view: { yaw: 1 } });
 
     // A new pano whose preview fails: the tiles still arrive at its view.
     const failing = asyncPreviewOf('nave', 'job-2');
@@ -496,7 +502,8 @@ describe('PanoStage', () => {
       />,
     );
     await act(async () => failing.pending[0]?.reject(new Error('stash gone')));
-    expect(v.setView).toHaveBeenCalledTimes(1);
+    expect(v.showPreview).toHaveBeenCalledTimes(1);
+    expect(v.setView).not.toHaveBeenCalled();
     expect(v.load).toHaveBeenLastCalledWith('nave', { view: { yaw: 2 } });
   });
 
@@ -578,7 +585,8 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall', 'show:hall', 'load:hall']);
+    expect(v.calls).toEqual(['show:hall', 'load:hall', 'show:hall', 'load:hall']);
+    expect(v.showPreview.mock.calls[0]![2]).toEqual({ view: { yaw: 1 } });
     expect(v.showPreview).toHaveBeenLastCalledWith('hall', second.sources[0], {
       replacesVersion: 'v2',
     });

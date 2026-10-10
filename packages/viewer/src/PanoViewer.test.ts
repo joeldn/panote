@@ -1150,6 +1150,19 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('cuts to options.view as the preview goes up, and keeps easing the other axes', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.setView({ pitch: 0.3 });
+      viewer.showPreview('pano-a', source(), { view: { yaw: 1, fov: 50 } });
+      const { view } = internals(viewer);
+      expect(view.yaw).toBe(1);
+      expect(view.fov).toBe(50);
+      // Pitch was on its way to 0.3 and is left to get there.
+      expect(view.pitch).toBe(0);
+      expect(viewer.getView()).toEqual({ yaw: 1, pitch: 0.3, fov: 50 });
+      viewer.dispose();
+    });
+
     it('works with controls, project, directionAtPixel and north as on tiles', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), { camera: { damping: 1 } });
       viewer.showPreview('pano-a', source());

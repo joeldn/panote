@@ -341,14 +341,15 @@ export function PanoStage({
         return;
       }
       entry.previewKey = newPreview.key;
-      const opts =
-        newPreview.replacesVersion === undefined
-          ? {}
-          : { replacesVersion: newPreview.replacesVersion };
-      // A preview goes on screen at once with the camera as it is, so aim the
-      // camera just before it goes up, and not before: an async source may
-      // land late, or never.
-      if (sceneView) viewer.setView(sceneView);
+      // The scene's view is cut to as the preview goes up, as a load cuts to
+      // it as the tiles swap in, so the new scene does not swing round. Not
+      // before: an async source may land late, or never.
+      const opts = {
+        ...(newPreview.replacesVersion !== undefined && {
+          replacesVersion: newPreview.replacesVersion,
+        }),
+        ...(sceneView && { view: sceneView }),
+      };
       try {
         viewer.showPreview(panoId, source, opts);
       } catch (err) {

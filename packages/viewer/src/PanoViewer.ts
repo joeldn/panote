@@ -38,6 +38,7 @@ import type {
   LoadOptions,
   PrefetchOptions,
   ResolvedViewerOptions,
+  ShowPreviewOptions,
 } from './types.js';
 import { dirInto, isBehind, ndcToPixel, type Vec3 } from './project.js';
 
@@ -426,15 +427,7 @@ export class PanoViewer {
     this.layer?.dispose();
     this.layer = layer;
     this.scene = source;
-    // A scene's own view is cut to, not eased to from the old scene's camera.
-    // Only the axes it sets are cut; any other axis keeps easing as it was.
-    const arrival = req.view;
-    if (arrival) {
-      this.setView(arrival);
-      if (arrival.yaw !== undefined) this.view.yaw = this.target.yaw;
-      if (arrival.pitch !== undefined) this.view.pitch = this.target.pitch;
-      if (arrival.fov !== undefined) this.view.fov = this.target.fov;
-    }
+    if (req.view) this.cutTo(req.view);
     this.stopMomentumOnly();
     if (this.preview && this.previewId === source.id) {
       // Replacing an image keeps the id, so the source can still be the old
@@ -562,7 +555,7 @@ export class PanoViewer {
 
   /**
    * Show a local decode of the scene `id` now, in place of whatever is on
-   * screen, keeping the camera.
+   * screen. The camera stays where it is, or cuts to `options.view`.
    *
    * A later `load()` of a source with that id swaps the tiles in under it:
    * once they are on screen the preview paints over the tile levels no
@@ -584,7 +577,7 @@ export class PanoViewer {
    * resolves without swapping anything in. Call `load(id)` again after
    * this to get the tiles.
    */
-  showPreview(id: string, source: PreviewSource, options: { replacesVersion?: string } = {}): void {
+  showPreview(id: string, source: PreviewSource, options: ShowPreviewOptions = {}): void {
     if (this.disposed) {
       closePreviewSource(source);
       return;
@@ -600,6 +593,7 @@ export class PanoViewer {
     this.layer = undefined;
     this.scene = undefined;
     this.wasPending = false;
+    if (options.view) this.cutTo(options.view);
     this.stopMomentumOnly();
     this.invalidate();
     this.emitter.emit('scene-change', id);
@@ -670,6 +664,17 @@ export class PanoViewer {
 
   private clampFov(fov: number): number {
     return clampFov(fov, this.camera.minFov, this.camera.maxFov);
+  }
+
+  /**
+   * Move the camera to `view` at once, with no easing: a scene's own view.
+   * Only the axes it sets are cut; any other axis keeps easing as it was.
+   */
+  private cutTo(view: Partial<View>): void {
+    this.setView(view);
+    if (view.yaw !== undefined) this.view.yaw = this.target.yaw;
+    if (view.pitch !== undefined) this.view.pitch = this.target.pitch;
+    if (view.fov !== undefined) this.view.fov = this.target.fov;
   }
 
   /** Horizontal fov (rad) for a vertical one at the current aspect. */
