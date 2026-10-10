@@ -191,3 +191,87 @@ describe('Controls: keyboard and accessibility', () => {
     expect(el.ariaLabel).toBe('Lobby panorama');
   });
 });
+
+function wheel(init: {
+  deltaY?: number;
+  deltaX?: number;
+  deltaMode?: number;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+}) {
+  return el.dispatch('wheel', {
+    deltaX: 0,
+    deltaY: 0,
+    deltaMode: 0,
+    ctrlKey: false,
+    metaKey: false,
+    clientX: 400,
+    clientY: 300,
+    ...init,
+  });
+}
+
+/** The zoom factor of the only zoomAt call so far. */
+function onlyZoom(): number {
+  expect(host.zoomAt).toHaveBeenCalledTimes(1);
+  return host.zoomAt.mock.calls[0]![0];
+}
+
+describe('Controls: wheel and trackpad', () => {
+  it('zooms the same for 3 lines as for 48 pixels', () => {
+    setup();
+    wheel({ deltaMode: 1, deltaY: 3 });
+    const lines = onlyZoom();
+    setup();
+    wheel({ deltaMode: 0, deltaY: 48 });
+    const pixels = onlyZoom();
+    expect(lines).toBeCloseTo(pixels, 10);
+    expect(lines).toBeGreaterThan(1);
+  });
+
+  it('treats one page as the element height', () => {
+    setup();
+    el.rect.height = 100;
+    wheel({ deltaMode: 2, deltaY: 1 });
+    const page = onlyZoom();
+    setup();
+    wheel({ deltaMode: 0, deltaY: 100 });
+    expect(page).toBeCloseTo(onlyZoom(), 10);
+  });
+
+  it('zooms a ctrl-wheel (trackpad pinch) much harder than a plain wheel', () => {
+    setup();
+    wheel({ deltaY: 5 });
+    const plain = Math.abs(Math.log(onlyZoom()));
+    setup();
+    wheel({ deltaY: 5, ctrlKey: true });
+    const pinch = Math.abs(Math.log(onlyZoom()));
+    expect(pinch).toBeGreaterThan(plain * 5);
+  });
+
+  it('caps the zoom from one huge wheel event', () => {
+    setup();
+    wheel({ deltaY: 1000, ctrlKey: true });
+    const z = onlyZoom();
+    expect(z).toBeGreaterThan(1);
+    expect(z).toBeLessThan(1.5);
+  });
+
+  it('pans on a horizontal swipe instead of zooming', () => {
+    setup();
+    const ev = wheel({ deltaX: 30 });
+    expect(host.panByPixels).toHaveBeenCalledWith(-30, 0);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('zooms on a Safari pinch gesture and stops the page zooming', () => {
+    setup();
+    const start = el.dispatch('gesturestart', { scale: 1, clientX: 400, clientY: 300 });
+    const change = el.dispatch('gesturechange', { scale: 2, clientX: 400, clientY: 300 });
+    el.dispatch('gestureend', { scale: 2, clientX: 400, clientY: 300 });
+    expect(start.defaultPrevented).toBe(true);
+    expect(change.defaultPrevented).toBe(true);
+    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 400, 300);
+  });
+});

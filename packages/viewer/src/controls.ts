@@ -25,6 +25,23 @@ const FLING_STALE_MS = 60;
 const FLING_WINDOW_MS = 100;
 // The host's flick() takes px per 60 Hz frame.
 const FRAME_MS = 1000 / 60;
+// Wheel zoom gain per normalised pixel. A ctrl-wheel is a trackpad pinch,
+// which sends small deltas (about 1-10), so it gets ten times the gain.
+const WHEEL_GAIN = 0.001;
+const PINCH_GAIN = 0.01;
+// Cap on |ln(scale)| from one wheel event, so a ctrl+mouse-notch (deltaY
+// about 100 at pinch gain) or a page-mode delta can't jump the fov.
+const MAX_WHEEL_LOG_SCALE = 0.3;
+// deltaMode 1 (lines) is converted at a 16 px line height.
+const LINE_PX = 16;
+
+/** Safari's non-standard GestureEvent, fired for trackpad pinch on macOS. */
+interface SafariGestureEvent extends UIEvent {
+  scale: number;
+  clientX: number;
+  clientY: number;
+}
+
 // Ring buffer size for drag samples. 100 ms of 240 Hz input fits in 24.
 const SAMPLES = 32;
 
@@ -44,6 +61,8 @@ export class Controls {
   // Set once a gesture goes multi-touch (pinch). Blocks single-finger panning
   // until ALL fingers lift, so a finger lingering after a pinch can't pan.
   private gestureConsumed = false;
+  // Last cumulative scale of an in-progress Safari pinch, or null.
+  private gestureScale: number | null = null;
 
   constructor(
     private el: HTMLElement,
@@ -66,6 +85,9 @@ export class Controls {
     el.addEventListener('contextmenu', this.onContextMenu);
     el.addEventListener('dblclick', this.onDblClick);
     el.addEventListener('keydown', this.onKeyDown);
+    el.addEventListener('gesturestart', this.onGestureStart);
+    el.addEventListener('gesturechange', this.onGestureChange);
+    el.addEventListener('gestureend', this.onGestureEnd);
   }
 
   private slotFor(id: number): PointerSlot | null {
@@ -194,8 +216,38 @@ export class Controls {
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
-    const scale = Math.exp(e.deltaY * 0.001);
-    this.host.zoomAt(scale, e.clientX, e.clientY);
+    // Safari may send ctrl-wheel alongside its pinch gesture; zoom once.
+    if (e.ctrlKey && this.gestureScale !== null) return;
+    const unit = e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? this.el.clientHeight || 800 : 1;
+    const dy = e.deltaY * unit;
+    const dx = e.deltaX * unit;
+    if (dy) {
+      const gain = e.ctrlKey ? PINCH_GAIN : WHEEL_GAIN;
+      const logScale = Math.max(-MAX_WHEEL_LOG_SCALE, Math.min(MAX_WHEEL_LOG_SCALE, dy * gain));
+      this.host.zoomAt(Math.exp(logScale), e.clientX, e.clientY);
+    }
+    // A horizontal two-finger swipe pans like a drag in the same direction.
+    if (dx && !e.ctrlKey) this.host.panByPixels(-dx, 0);
+  };
+
+  // Best effort: these events exist only in Safari, which reports a trackpad
+  // pinch as a gesture with a cumulative scale instead of a ctrl-wheel.
+  private onGestureStart = (e: Event) => {
+    e.preventDefault();
+    this.gestureScale = (e as SafariGestureEvent).scale || 1;
+  };
+
+  private onGestureChange = (e: Event) => {
+    e.preventDefault();
+    const g = e as SafariGestureEvent;
+    if (this.gestureScale === null || !g.scale) return;
+    this.host.zoomAt(pinchFactor(this.gestureScale, g.scale), g.clientX, g.clientY);
+    this.gestureScale = g.scale;
+  };
+
+  private onGestureEnd = (e: Event) => {
+    e.preventDefault();
+    this.gestureScale = null;
   };
 
   private onContextMenu = (e: Event) => e.preventDefault();
@@ -251,5 +303,8 @@ export class Controls {
     this.el.removeEventListener('contextmenu', this.onContextMenu);
     this.el.removeEventListener('dblclick', this.onDblClick);
     this.el.removeEventListener('keydown', this.onKeyDown);
+    this.el.removeEventListener('gesturestart', this.onGestureStart);
+    this.el.removeEventListener('gesturechange', this.onGestureChange);
+    this.el.removeEventListener('gestureend', this.onGestureEnd);
   }
 }
