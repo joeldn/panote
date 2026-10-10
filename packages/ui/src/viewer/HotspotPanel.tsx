@@ -1,6 +1,6 @@
-import { renderMarkdown } from '@panote/viewer/ui';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
+import { renderMarkdown } from '../markdown.js';
 import type { ViewerHotspot, ViewerMedia } from './types.js';
 
 const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';

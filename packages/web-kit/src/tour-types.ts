@@ -1,4 +1,4 @@
-import type { View } from '../types.js';
+import type { View } from '@panote/viewer';
 
 export interface TourLink {
   to: string;

@@ -1,12 +1,25 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 const stylesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'styles');
+const repoRoot = join(stylesDir, '..', '..', '..');
 const read = (f: string) => readFileSync(join(stylesDir, f), 'utf8');
 const viewer = read('viewer.css');
+
+function cssFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory()
+      ? e.name === 'node_modules'
+        ? []
+        : cssFiles(join(dir, e.name))
+      : e.name.endsWith('.css')
+        ? [join(dir, e.name)]
+        : [],
+  );
+}
 
 /** Body of the first rule whose selector list is exactly `selector`, optionally inside `@media`. */
 function rule(css: string, selector: string, media?: string): string {
@@ -24,10 +37,19 @@ function rule(css: string, selector: string, media?: string): string {
 
 describe('viewer chrome styles', () => {
   it('never blurs the backdrop: the pano under the chrome repaints every frame', () => {
-    for (const f of ['tokens.css', 'components.css', 'viewer.css']) {
-      expect(read(f), f).not.toMatch(/backdrop-filter/);
-    }
     expect(read('tokens.css')).toContain('--cbg-solid: rgba(255, 255, 255, 0.94);');
+    expect(read('tokens.css')).not.toMatch(/--cb[gf]:/);
+  });
+
+  it('ships no backdrop-filter in any stylesheet', () => {
+    const roots = [
+      stylesDir,
+      join(repoRoot, 'apps', 'admin', 'src'),
+      join(repoRoot, 'apps', 'website', 'src'),
+    ];
+    const files = roots.flatMap((r) => cssFiles(r));
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) expect(readFileSync(f, 'utf8'), f).not.toMatch(/backdrop-filter/);
   });
 
   it('stacks the hotspot sheet above the controls pill and the map button', () => {
