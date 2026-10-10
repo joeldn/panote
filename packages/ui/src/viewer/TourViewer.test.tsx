@@ -299,7 +299,7 @@ describe('TourViewer', () => {
         bar: { home: null },
         ...props,
       });
-      await waitFor(() => expect(r.viewer().load).toHaveBeenCalledWith('square'));
+      await waitFor(() => expect(r.viewer().load.mock.calls[0]?.[0]).toBe('square'));
       r.viewer().defer = true;
       fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
       await waitFor(() => expect(r.viewer().pending).toHaveLength(1));
@@ -369,7 +369,7 @@ describe('TourViewer', () => {
     it('fetches up to three link targets, only once the scene on screen has settled', async () => {
       const prefetch = vi.fn(async () => {});
       const { viewer } = renderViewer({ data: many(), prefetch });
-      await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
       expect(prefetch).not.toHaveBeenCalled();
 
       settle(viewer());
@@ -390,7 +390,7 @@ describe('TourViewer', () => {
         if (o?.signal) signals.push(o.signal);
       });
       const { viewer } = renderViewer({ data: many(), prefetch });
-      await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
       settle(viewer());
       expect(signals).toHaveLength(3);
       expect(signals.some((s) => s.aborted)).toBe(false);
@@ -403,7 +403,7 @@ describe('TourViewer', () => {
     it('fetches nothing for a single scene', async () => {
       const prefetch = vi.fn(async () => {});
       const { viewer } = renderViewer({ data: many(), prefetch, single: true });
-      await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
       settle(viewer());
       expect(prefetch).not.toHaveBeenCalled();
     });
