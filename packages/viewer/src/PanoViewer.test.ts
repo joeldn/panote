@@ -1721,7 +1721,7 @@ describe('PanoViewer', () => {
     });
 
     describe('asks for exactly one frame, from idle, when', () => {
-      type Row = [string, () => Promise<{ viewer?: PanoViewer; fire: () => unknown }>];
+      type Row = [string, () => Promise<{ viewer: PanoViewer | undefined; fire: () => unknown }>];
       const idleViewer = (options = {}) => new PanoViewer(makeContainer(400, 800), options);
       const rows: Row[] = [
         [
