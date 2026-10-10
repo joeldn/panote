@@ -60,4 +60,16 @@ describe('selectEvictions', () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toBe('1/front/0-0');
   });
+
+  it('never evicts a tile used in the current frame, even over budget', () => {
+    const entries = [
+      { key: '1/front/0-0', lastUsed: 7 },
+      { key: '1/front/1-0', lastUsed: 7 },
+      { key: '1/front/2-0', lastUsed: 6 },
+      { key: '0/front/0-0', lastUsed: 1 },
+    ];
+    // budget=1, overflow=3 -> only the stale tile can go; the cache stays
+    // over budget rather than dropping what is on screen.
+    expect(selectEvictions(entries, 1, 7)).toEqual(['1/front/2-0']);
+  });
 });

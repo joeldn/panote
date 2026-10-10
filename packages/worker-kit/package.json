@@ -11,22 +11,27 @@
   ],
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./r2-binding": {
+      "source": "./src/r2-binding.ts",
       "types": "./dist/r2-binding.d.ts",
       "default": "./dist/r2-binding.js"
     },
     "./r2-s3": {
+      "source": "./src/r2-s3.ts",
       "types": "./dist/r2-s3.d.ts",
       "default": "./dist/r2-s3.js"
     },
     "./hono": {
+      "source": "./src/hono.ts",
       "types": "./dist/hono.d.ts",
       "default": "./dist/hono.js"
     },
     "./testing": {
+      "source": "./src/testing.ts",
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
     }
