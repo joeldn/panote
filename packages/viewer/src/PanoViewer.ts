@@ -18,6 +18,7 @@ import type { DrawItem } from './render/gl-renderer.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
 import { Emitter } from './emitter.js';
 import {
   clampPitch,
@@ -86,7 +87,7 @@ export class PanoViewer implements ControlHost {
   private opts: Required<
     Omit<
       ViewerOptions,
-      'initialView' | 'north' | 'autoRotate' | 'autoRotateSpeed' | 'autoRotateIdleMs'
+      'initialView' | 'north' | 'autoRotate' | 'autoRotateSpeed' | 'autoRotateIdleMs' | 'wheel'
     >
   >;
   private loadToken = 0;
@@ -114,12 +115,13 @@ export class PanoViewer implements ControlHost {
     private container: HTMLElement,
     options: ViewerOptions = {},
   ) {
-    const maxPixelRatio = options.maxPixelRatio ?? 2;
+    const d = VIEWER_DEFAULTS;
+    const maxPixelRatio = options.maxPixelRatio ?? d.maxPixelRatio;
     this.opts = {
-      baseUrl: options.baseUrl ?? '/tiles/',
-      minFov: options.minFov ?? 15,
-      maxFov: options.maxFov ?? 80,
-      maxHorizontalFov: options.maxHorizontalFov ?? 100,
+      baseUrl: options.baseUrl ?? d.baseUrl,
+      minFov: options.minFov ?? d.minFov,
+      maxFov: options.maxFov ?? d.maxFov,
+      maxHorizontalFov: options.maxHorizontalFov ?? d.maxHorizontalFov,
       // Only the default scales with the display: a caller who names a budget
       // is naming an absolute one, and gets exactly that. See texture-budget.ts
       // for why the scale is linear in the pixel ratio and capped. Read once,
@@ -127,17 +129,17 @@ export class PanoViewer implements ControlHost {
       // dragged to a different-DPR monitor keeps the budget it was built with.
       textureBudgetMB:
         options.textureBudgetMB ?? defaultTextureBudgetMB(window.devicePixelRatio, maxPixelRatio),
-      damping: options.damping ?? 0.25,
-      momentumFriction: options.momentumFriction ?? 0.9,
+      damping: options.damping ?? d.damping,
+      momentumFriction: options.momentumFriction ?? d.momentumFriction,
       maxPixelRatio,
-      antialias: options.antialias ?? false,
-      maxConcurrent: options.maxConcurrent ?? 8,
-      transitionMs: options.transitionMs ?? 400,
+      antialias: options.antialias ?? d.antialias,
+      maxConcurrent: options.maxConcurrent ?? d.maxConcurrent,
+      transitionMs: options.transitionMs ?? d.transitionMs,
     };
-    this.north = options.north ?? 0;
-    this.autoRotateSpeed = options.autoRotateSpeed ?? 0.036;
-    this.autoRotateIdleMs = options.autoRotateIdleMs ?? 3000;
-    this.autoRotateEnabled = options.autoRotate ?? false;
+    this.north = options.north ?? d.north;
+    this.autoRotateSpeed = options.autoRotateSpeed ?? d.autoRotateSpeed;
+    this.autoRotateIdleMs = options.autoRotateIdleMs ?? d.autoRotateIdleMs;
+    this.autoRotateEnabled = options.autoRotate ?? d.autoRotate;
     // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
     this.autoRotateActive = this.autoRotateEnabled;
     // Clamped like setView: an embed config can say anything, and an
@@ -145,7 +147,7 @@ export class PanoViewer implements ControlHost {
     const initialYaw = options.initialView?.yaw ?? 0;
     const initialPitch = clampPitch(options.initialView?.pitch ?? 0);
     const initialFov = clampFov(
-      options.initialView?.fov ?? Math.min(70, this.opts.maxFov),
+      options.initialView?.fov ?? d.fov,
       this.opts.minFov,
       this.opts.maxFov,
     );
@@ -159,7 +161,9 @@ export class PanoViewer implements ControlHost {
     this.viewProj = viewProjection(this.view, this.aspect(), this.opts.maxHorizontalFov);
     // Built once: the canvas and this host never change, and rebuilding it on
     // each load would drop a drag that is in progress when a scene swaps in.
-    this.controls = new Controls(this.renderer.canvas, this);
+    this.controls = new Controls(this.renderer.canvas, this, {
+      wheel: options.wheel ?? d.wheel,
+    });
     window.addEventListener('resize', this.onResize);
     // window's resize event only fires on the browser viewport changing size,
     // not on the container itself being resized by layout — flex/grid

@@ -6,28 +6,40 @@ export interface View {
   fov: number; // vertical fov in degrees
 }
 
+/**
+ * When the wheel drives the viewer.
+ * - `'always'`: every wheel event zooms (or pans) and never scrolls the page.
+ * - `'engaged'`: for embeds. A plain wheel scrolls the host page until the
+ *   viewer is engaged; ctrl/cmd + wheel (and a trackpad pinch) always zooms.
+ *   A pointerdown or focus engages; a mouse leaving or blur disengages.
+ */
+export type WheelMode = 'always' | 'engaged';
+
+// Every default lives in defaults.ts (VIEWER_DEFAULTS); the notes here only
+// say what each option means.
 export interface ViewerOptions {
-  baseUrl?: string; // default '/tiles/'
-  minFov?: number; // default 15 (vertical, degrees)
-  maxFov?: number; // default 80 (vertical, degrees)
-  maxHorizontalFov?: number; // default 100 — caps horizontal fov so wide screens don't over-stretch
+  baseUrl?: string;
+  minFov?: number; // vertical, degrees
+  maxFov?: number; // vertical, degrees
+  maxHorizontalFov?: number; // degrees; caps horizontal fov so wide screens don't over-stretch
   // Resident tile textures, in MB of base-level RGBA. Defaults to 128 on a
   // devicePixelRatio-1 display and scales linearly with the ratio the viewer
   // renders at, capped at 2x (256) — a finer display selects a finer pyramid
   // level and so needs more tiles resident to pan without re-decoding them.
   // An explicit value is absolute: it is used as given, unscaled and uncapped.
   textureBudgetMB?: number;
-  initialView?: Partial<View>; // fov defaults to 70 (vertical, degrees)
-  damping?: number; // 0..1 per-frame camera easing toward target; 1 = instant. default 0.25
-  momentumFriction?: number; // 0..1 per-frame decay of release inertia; higher = longer glide. default 0.9
-  maxPixelRatio?: number; // cap devicePixelRatio (default 2)
-  antialias?: boolean; // default false
-  maxConcurrent?: number; // max simultaneous tile requests (default 8)
-  transitionMs?: number; // crossfade duration in ms (default 400)
-  north?: number; // radians offset defining compass north for the loaded pano; default 0
-  autoRotate?: boolean; // slowly pan when idle; default false
-  autoRotateSpeed?: number; // radians of yaw per second while rotating; default 0.036 (~1 turn/3min)
-  autoRotateIdleMs?: number; // interaction-free time before auto-rotate (re)starts; default 3000
+  initialView?: Partial<View>; // unset axes take the defaults
+  damping?: number; // 0..1 camera easing toward target per 60 Hz frame (16.67 ms); 1 = instant
+  momentumFriction?: number; // 0..1 decay of release inertia per 60 Hz frame; higher = longer glide
+  maxPixelRatio?: number; // cap on devicePixelRatio
+  antialias?: boolean;
+  maxConcurrent?: number; // max simultaneous tile requests
+  transitionMs?: number; // crossfade duration in ms
+  north?: number; // radians offset defining compass north for the loaded pano
+  autoRotate?: boolean; // slowly pan when idle
+  autoRotateSpeed?: number; // radians of yaw per second while rotating
+  autoRotateIdleMs?: number; // interaction-free time before auto-rotate (re)starts
+  wheel?: WheelMode; // wheel capture; 'engaged' leaves page scroll alone until the viewer is used
 }
 
 export type PanoViewerEvents = {

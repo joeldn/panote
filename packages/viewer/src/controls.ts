@@ -1,4 +1,8 @@
 import { pinchFactor } from './camera-math.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+import type { WheelMode } from './types.js';
+
+export type { WheelMode };
 
 export interface ControlHost {
   panByPixels(dx: number, dy: number): void;
@@ -7,17 +11,8 @@ export interface ControlHost {
   stopMomentum(): void;
 }
 
-/**
- * When the wheel drives the viewer.
- * - `'always'`: every wheel event zooms (or pans) and never scrolls the page.
- * - `'engaged'`: for embeds. A plain wheel scrolls the host page until the
- *   viewer is engaged; ctrl/cmd + wheel (and a trackpad pinch) always zooms.
- *   A pointerdown or focus engages; a mouse leaving or blur disengages.
- */
-export type WheelMode = 'always' | 'engaged';
-
 export interface ControlsOptions {
-  /** Wheel capture mode. Default `'always'`. */
+  /** Wheel capture mode. Default `VIEWER_DEFAULTS.wheel`. */
   wheel?: WheelMode;
 }
 
@@ -87,7 +82,7 @@ export class Controls {
     el.style.touchAction = 'none';
     el.style.cursor = 'grab';
     el.tabIndex = 0;
-    this.wheelMode = opts.wheel ?? 'always';
+    this.wheelMode = opts.wheel ?? VIEWER_DEFAULTS.wheel;
     // The host may rebuild Controls on a focused element (a scene change).
     this.engaged = el.ownerDocument?.activeElement === el;
     el.addEventListener('pointerdown', this.onDown);

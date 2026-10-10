@@ -33,6 +33,7 @@ vi.mock('./render/gl-renderer.js', () => {
       tabIndex: 0,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
     };
     nextHandle = 1;
     maxTextureSize = 16384;
@@ -494,6 +495,43 @@ describe('PanoViewer', () => {
         expect(tileRequests).toHaveLength(FACES.length);
         expect(fakeRendererOf(viewer).uploadTile).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe('wheel option', () => {
+    it("is passed to the controls, which capture every wheel unless it is 'engaged'", () => {
+      const listener = (viewer: PanoViewer) => {
+        const canvas = (
+          viewer as unknown as {
+            renderer: { canvas: { addEventListener: ReturnType<typeof vi.fn> } };
+          }
+        ).renderer.canvas;
+        return canvas.addEventListener.mock.calls.find((c) => c[0] === 'wheel')![1] as (
+          e: unknown,
+        ) => void;
+      };
+      const wheel = () => ({
+        deltaY: 100,
+        deltaX: 0,
+        deltaMode: 0,
+        ctrlKey: false,
+        metaKey: false,
+        clientX: 0,
+        clientY: 0,
+        preventDefault: vi.fn(),
+      });
+      const embedded = new PanoViewer(makeContainer(400, 800), { wheel: 'engaged' });
+      const scrolls = wheel();
+      listener(embedded)(scrolls);
+      expect(scrolls.preventDefault).not.toHaveBeenCalled();
+
+      const plain = new PanoViewer(makeContainer(400, 800));
+      const zooms = wheel();
+      listener(plain)(zooms);
+      expect(zooms.preventDefault).toHaveBeenCalled();
+      expect(plain.getView().fov).toBeGreaterThan(70);
+      embedded.dispose();
+      plain.dispose();
     });
   });
 
