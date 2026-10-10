@@ -1,4 +1,5 @@
 import { cleanup, configure, fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,15 +15,16 @@ const STALE = new TypeError(
 );
 
 /** The real routes, with the Shell's lazy import failing the way a stale chunk does. */
-function renderFailingShell(error: Error) {
+function renderFailingShell(error: Error, { strict = false } = {}) {
   const [tour, embed, shell] = routes as [RouteObject, RouteObject, RouteObject];
   const failing = { ...shell, lazy: () => Promise.reject(error) } as RouteObject;
   const router = createMemoryRouter([tour, embed, failing], { initialEntries: ['/'] });
-  render(
+  const tree = (
     <AuthEnvContext value={{ auth: fakeAuth(), origins: LOCAL }}>
       <RouterProvider router={router} />
-    </AuthEnvContext>,
+    </AuthEnvContext>
   );
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   return router;
 }
 
@@ -55,6 +57,24 @@ describe('a lazy Shell chunk that fails to load', () => {
     expect(reload).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it('reloads once, and never shows the retry card, under StrictMode', async () => {
+    renderFailingShell(STALE, { strict: true });
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    // Give a stray second render or effect the chance to show the card or reload again.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('heading')).toBeNull();
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it('shows the retry card when storage refuses the timestamp', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    renderFailingShell(STALE);
+    expect(await failedCard()).toBeTruthy();
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it('reloads again once the window has passed', async () => {
