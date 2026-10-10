@@ -391,6 +391,42 @@ describe('PanoStage', () => {
     expect(v.showPreview).toHaveBeenCalledWith('hall', s, {});
   });
 
+  it('aims the camera only as an async preview goes up, and keeps the scene view if it never does', async () => {
+    const f = factory();
+    const { preview, pending } = asyncPreviewOf('hall');
+    const { rerender } = render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        view={{ yaw: 1 }}
+        preview={preview}
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    // Nothing moves while the source is still decoding.
+    expect(v.calls).toEqual([]);
+    await act(async () => pending[0]?.resolve(fakeSource()));
+    expect(v.calls).toEqual(['setView', 'show:hall', 'load:hall']);
+    expect(v.setView).toHaveBeenCalledWith({ yaw: 1 });
+
+    // A new pano whose preview fails: the tiles still arrive at its view.
+    const failing = asyncPreviewOf('nave', 'job-2');
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="nave"
+        view={{ yaw: 2 }}
+        preview={failing.preview}
+        onPreviewError={() => {}}
+        createViewer={f.createViewer}
+      />,
+    );
+    await act(async () => failing.pending[0]?.reject(new Error('stash gone')));
+    expect(v.setView).toHaveBeenCalledTimes(1);
+    expect(v.load).toHaveBeenLastCalledWith('nave', { view: { yaw: 2 } });
+  });
+
   it('ignores a preview for another pano', () => {
     const f = factory();
     const { preview, source } = previewOf('nave');

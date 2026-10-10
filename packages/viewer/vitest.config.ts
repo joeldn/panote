@@ -23,14 +23,7 @@ export default mergeConfig(
     test: {
       name: '@panote/viewer',
       coverage: {
-        exclude: [
-          'src/index.ts',
-          'src/types.ts',
-          'src/PanoViewer.ts',
-          'src/controls.ts',
-          'src/hotspots.ts',
-          'src/render/gl-renderer.ts',
-        ],
+        exclude: ['src/index.ts', 'src/types.ts', 'src/PanoViewer.ts', 'src/render/gl-renderer.ts'],
         thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
       },
     },

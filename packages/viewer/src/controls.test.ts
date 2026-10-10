@@ -48,6 +48,7 @@ class FakeElement {
 function makeHost() {
   return {
     panByPixels: vi.fn<ControlHost['panByPixels']>(),
+    panTargetByPixels: vi.fn<ControlHost['panTargetByPixels']>(),
     zoomAt: vi.fn<ControlHost['zoomAt']>(),
     flick: vi.fn<ControlHost['flick']>(),
     stopMomentum: vi.fn<ControlHost['stopMomentum']>(),
@@ -183,7 +184,7 @@ describe('Controls: keyboard and focus', () => {
     setup();
     const ev = key('ArrowLeft', { altKey: true });
     expect(ev.defaultPrevented).toBe(false);
-    expect(host.panByPixels).not.toHaveBeenCalled();
+    expect(host.panTargetByPixels).not.toHaveBeenCalled();
   });
 
   it('gives the element a tab stop and a grab cursor', () => {
@@ -423,16 +424,42 @@ describe('Controls: modifier edge cases', () => {
     expect(ev.defaultPrevented).toBe(true);
     expect(host.zoomAt).toHaveBeenCalledTimes(1);
   });
+
+  it('leaves Cmd to the browser even alongside AltGr', () => {
+    setup();
+    const ev = key('+', {
+      metaKey: true,
+      ctrlKey: true,
+      altKey: true,
+      getModifierState: (k: string) => k === 'AltGraph',
+    });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
 });
 
 describe('Controls: remaining branches', () => {
   const touch = { pointerType: 'touch' };
 
-  it('pans 40 px on a plain ArrowLeft and claims the key', () => {
+  it('moves the target 40 px on a plain ArrowLeft and claims the key', () => {
     setup();
     const ev = key('ArrowLeft');
-    expect(host.panByPixels).toHaveBeenCalledWith(40, 0);
+    expect(host.panTargetByPixels).toHaveBeenCalledWith(40, 0);
+    // The camera itself is left to ease after the target.
+    expect(host.panByPixels).not.toHaveBeenCalled();
     expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('moves the target on the other arrows too', () => {
+    setup();
+    key('ArrowRight');
+    key('ArrowUp');
+    key('ArrowDown');
+    expect(host.panTargetByPixels.mock.calls).toEqual([
+      [-40, 0],
+      [0, 40],
+      [0, -40],
+    ]);
   });
 
   it('ignores a ctrl-wheel while a Safari gesture is in progress', () => {
