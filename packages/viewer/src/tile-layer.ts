@@ -104,6 +104,8 @@ interface TileEntry {
   lastUsed: number;
   level: number;
   visible: boolean;
+  /** Built once at upload, so drawList() pushes it without allocating. */
+  item: DrawItem;
 }
 
 interface Candidate {
@@ -123,6 +125,9 @@ export class TileLayer {
   private cache = new Map<string, TileEntry>();
   private inflight = new Map<string, AbortController>();
   private queue: Candidate[] = [];
+  // Next queue index pump() takes. A cursor rather than shift(), which is
+  // O(n) per dequeue; update() replaces the queue and resets it every frame.
+  private queueHead = 0;
   private clock = 0;
   private maxTiles: number;
   private maxConcurrent: number;
@@ -307,6 +312,7 @@ export class TileLayer {
     // Sort candidates by priority ascending (nearest-to-centre first).
     this.candidates.sort((a, b) => a.priority - b.priority);
     this.queue = this.candidates;
+    this.queueHead = 0;
 
     // Hide tiles finer than the current target level to prevent stale
     // higher-LOD tiles from drawing on top after a zoom-out.
@@ -334,7 +340,7 @@ export class TileLayer {
     this._drawList.length = 0;
     for (const entry of this.cache.values()) {
       if (entry.visible) {
-        this._drawList.push({ handle: entry.handle, level: entry.level });
+        this._drawList.push(entry.item);
       }
     }
     return this._drawList;
@@ -347,7 +353,7 @@ export class TileLayer {
     // fresh round of fetches that are downloaded and decoded only to be
     // discarded.
     if (this.disposed) return;
-    while (this.inflight.size < this.maxConcurrent && this.queue.length > 0) {
+    while (this.inflight.size < this.maxConcurrent && this.queueHead < this.queue.length) {
       // Global backoff: hold the queue intact rather than draining it into
       // no-op ensureTile calls. update() rebuilds it next frame anyway, and
       // the one probe the monitor allows is started from here too.
@@ -355,7 +361,7 @@ export class TileLayer {
         this.armWake(this.monitor.msUntilStart());
         return;
       }
-      const next = this.queue.shift()!;
+      const next = this.queue[this.queueHead++]!;
       if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
       void this.ensureTile(next.level, next.face, next.x, next.y);
     }
@@ -493,6 +499,7 @@ export class TileLayer {
         lastUsed: this.clock,
         level,
         visible: true,
+        item: { handle, level },
       });
       this.retry.recordSuccess(key);
       this.monitor.succeed(permit);
@@ -557,7 +564,7 @@ export class TileLayer {
    * this true.
    */
   hasPending(): boolean {
-    return this.inflight.size > 0 || this.queue.length > 0;
+    return this.inflight.size > 0 || this.queueHead < this.queue.length;
   }
 
   dispose(): void {
@@ -571,6 +578,7 @@ export class TileLayer {
     // The queue is what pump() would otherwise drain the moment those aborts
     // free their concurrency slots.
     this.queue = [];
+    this.queueHead = 0;
     this.candidates.length = 0;
     this.desired.clear();
     for (const c of this.inflight.values()) c.abort();

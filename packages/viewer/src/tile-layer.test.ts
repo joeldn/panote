@@ -947,6 +947,18 @@ describe('TileLayer failure handling', () => {
       expect(levels[levels.length - 1]).toBeGreaterThan(0);
     });
 
+    it('hands out the same draw items every frame instead of allocating new ones', async () => {
+      const layer = makeLayer();
+      await layer.loadBase();
+      await render(layer, 0);
+      const first = [...layer.drawList()];
+      frame(layer, 0);
+      const second = layer.drawList();
+      expect(second).toHaveLength(first.length);
+      for (let i = 0; i < first.length; i++) expect(second[i]).toBe(first[i]);
+      layer.dispose();
+    });
+
     it('never evicts the base, however much finer detail is loaded', async () => {
       // A budget small enough that a full sweep at maximum detail overflows it
       // — the whole pyramid at maxLevel 2 fits inside the default one.
