@@ -67,6 +67,13 @@
   --dur-bar: 0.18s;
 }
 
+/* The panels' slide-up is decoration: skip it for people who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fadeup: 0s;
+  }
+}
+
 @keyframes pn-fadeup {
   from {
     transform: translateY(12px);

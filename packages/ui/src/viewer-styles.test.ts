@@ -58,4 +58,10 @@ describe('viewer chrome styles', () => {
   it('paints the page dark behind a tour, not the light app background', () => {
     expect(rule(viewer, ':root:has(.pn-tour) body')).toMatch(/background: #0d0c0a;/);
   });
+
+  it('skips the slide-up animation under prefers-reduced-motion', () => {
+    expect(rule(read('tokens.css'), ':root', '(prefers-reduced-motion: reduce)')).toMatch(
+      /--dur-fadeup: 0s;/,
+    );
+  });
 });
