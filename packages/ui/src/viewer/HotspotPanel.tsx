@@ -1,5 +1,5 @@
 import { renderMarkdown } from '@panote/viewer/ui';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type { ViewerHotspot, ViewerMedia } from './types.js';
 
@@ -68,8 +68,39 @@ const NONE = () => false;
 export function HotspotPanel({ hotspot, onClose, isAllowedMediaUrl = NONE }: HotspotPanelProps) {
   // renderMarkdown escapes all HTML first and only allows http(s)/mailto/relative links.
   const html = useMemo(() => (hotspot.body ? renderMarkdown(hotspot.body) : ''), [hotspot.body]);
+
+  // Keyboard and screen-reader users land in the panel when a point opens, and
+  // go back to whatever opened it (the marker) when it closes. Switching points
+  // while open re-focuses the panel and remembers the newer opener.
+  const panel = useRef<HTMLElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const el = document.activeElement;
+    if (el instanceof HTMLElement && el !== document.body && !panel.current?.contains(el)) {
+      opener.current = el;
+    }
+    panel.current?.focus({ preventScroll: true });
+  }, [hotspot.id]);
+  useEffect(
+    () => () => {
+      if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+    },
+    [],
+  );
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    onClose();
+  };
+
   return (
-    <aside className="pn-hspanel" aria-label={hotspot.title}>
+    <aside
+      ref={panel}
+      className="pn-hspanel"
+      aria-label={hotspot.title}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+    >
       <header className="pn-hspanel__head">
         <i
           className={`pn-hspanel__icon fa-solid fa-${hotspot.icon ?? 'info'}`}

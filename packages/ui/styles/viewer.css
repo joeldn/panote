@@ -244,6 +244,10 @@
   color: var(--ink);
   animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
 }
+/* Focus moves here when a point opens; the panel itself needs no ring. */
+.pn-hspanel:focus {
+  outline: none;
+}
 .pn-hspanel__head {
   display: flex;
   align-items: flex-start;
