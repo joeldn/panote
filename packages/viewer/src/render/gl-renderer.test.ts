@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import { sortDrawList, mipLevels, GLRenderer, type DrawItem } from './gl-renderer.js';
+import type { Face } from '@panote/core';
+import {
+  boundingSphere,
+  sortDrawList,
+  mipLevels,
+  GLRenderer,
+  type DrawItem,
+} from './gl-renderer.js';
+import { viewProjection } from './projection.js';
+import { buildTileGeometry } from '../tile-geometry.js';
 
 describe('sortDrawList', () => {
   it('orders coarse levels before finer levels (ascending, stable)', () => {
@@ -24,6 +33,13 @@ describe('sortDrawList', () => {
 
   it('returns [] for an empty list', () => {
     expect(sortDrawList([])).toEqual([]);
+  });
+});
+
+describe('boundingSphere', () => {
+  it('centres on the vertex centroid and reaches the farthest vertex', () => {
+    const s = boundingSphere(new Float32Array([0, 0, 0, 2, 0, 0, 0, 2, 0, 2, 2, 0]));
+    expect(s).toEqual({ cx: 1, cy: 1, cz: 0, r: Math.SQRT2 });
   });
 });
 
@@ -120,7 +136,7 @@ const GL_METHODS = [
   'drawElements',
 ] as const;
 
-type FakeGl = typeof GL_CONSTANTS & Record<(typeof GL_METHODS)[number], Mock>;
+type FakeGl = typeof GL_CONSTANTS & Record<(typeof GL_METHODS)[number], Mock> & { __log: string[] };
 
 function makeFakeGl() {
   const log: string[] = [];
@@ -150,6 +166,7 @@ function makeFakeGl() {
       return impl?.(...args);
     });
   }
+  gl['__log'] = log;
   return { gl: gl as FakeGl, log, loseContext, extensions };
 }
 
@@ -245,7 +262,9 @@ describe('GLRenderer', () => {
       const { gl, renderer } = setup();
       const img = image(64, 32);
       renderer.uploadTile(grid(), img);
-      const vbo = gl.bufferData.mock.calls[0]![1] as Float32Array;
+      const vbo = gl.bufferData.mock.calls.find(
+        (c) => c[0] === gl.ARRAY_BUFFER,
+      )![1] as Float32Array;
       expect(vbo).toHaveLength(9 * 5);
       expect([...vbo.slice(40, 45)]).toEqual([24, 25, 26, 116, 117]);
       expect(gl.texStorage2D.mock.calls[0]!.slice(3)).toEqual([64, 32]);
@@ -265,12 +284,96 @@ describe('GLRenderer', () => {
       expect(() => renderer.uploadTile(g, {} as ImageBitmap)).toThrow(/vertex counts/);
     });
 
-    it('frees the buffers and texture on removeTile', () => {
+    it('frees the buffers, texture and VAO on removeTile', () => {
       const { gl, renderer } = setup();
       const h = renderer.uploadTile(grid(), image());
+      const vao = gl.createVertexArray.mock.results[0]!.value as unknown;
       renderer.removeTile(h);
       expect(gl.deleteBuffer).toHaveBeenCalledTimes(2);
       expect(gl.deleteTexture).toHaveBeenCalledTimes(1);
+      expect(gl.deleteVertexArray).toHaveBeenCalledExactlyOnceWith(vao);
+    });
+
+    it('draws 4-vertex quads from one shared index buffer', () => {
+      const { gl, renderer } = setup();
+      const shared = gl.createBuffer.mock.calls.length;
+      expect(shared).toBe(1); // the static quad IBO, made once
+      renderer.uploadTile(buildTileGeometry('pz', 1, 0, 0), image());
+      renderer.uploadTile(buildTileGeometry('nx', 1, 1, 1), image());
+      // One VBO per quad tile, no per-tile IBO.
+      expect(gl.createBuffer).toHaveBeenCalledTimes(shared + 2);
+      // N-vertex patches still get their own IBO.
+      renderer.uploadTile(grid(), image());
+      expect(gl.createBuffer).toHaveBeenCalledTimes(shared + 4);
+    });
+
+    it('frees only the VBO of a quad tile, never the shared index buffer', () => {
+      const { gl, renderer } = setup();
+      renderer.removeTile(renderer.uploadTile(buildTileGeometry('pz', 0, 0, 0), image()));
+      expect(gl.deleteBuffer).toHaveBeenCalledTimes(1);
+      renderer.dispose();
+      expect(gl.deleteBuffer).toHaveBeenCalledTimes(2); // the shared IBO, on dispose
+    });
+  });
+
+  describe('render', () => {
+    // Yaw 0 looks down -z, so the nz face is in front and pz is behind.
+    const camera = () => viewProjection({ yaw: 0, pitch: 0, fov: 90 }, 1, 179);
+
+    function drawnTextures(gl: FakeGl): unknown[] {
+      // The texture bound right before each draw call.
+      const out: unknown[] = [];
+      let bound: unknown;
+      let bindCall = 0;
+      for (const name of gl.__log) {
+        if (name === 'bindTexture') bound = gl.bindTexture.mock.calls[bindCall++]![1];
+        if (name === 'drawElements') out.push(bound);
+      }
+      return out;
+    }
+
+    function tile(renderer: GLRenderer, gl: FakeGl, face: Face, level = 0, x = 0, y = 0) {
+      const handle = renderer.uploadTile(buildTileGeometry(face, level, x, y), image());
+      const tex = gl.createTexture.mock.results.at(-1)!.value as unknown;
+      return { handle, level, tex };
+    }
+
+    it('does not draw a tile whose bounding sphere is behind the camera', () => {
+      const { gl, renderer } = setup();
+      // Level 2 tiles near the face centres: a whole level-0 face is large
+      // enough that its sphere reaches past the camera.
+      const front = tile(renderer, gl, 'nz', 2, 1, 1);
+      const behind = tile(renderer, gl, 'pz', 2, 1, 1);
+      renderer.setCamera(camera());
+      renderer.render([front, behind]);
+      expect(gl.drawElements).toHaveBeenCalledTimes(1);
+      expect(drawnTextures(gl)).toEqual([front.tex]);
+    });
+
+    it('skips handles that are not resident', () => {
+      const { gl, renderer } = setup();
+      const front = tile(renderer, gl, 'nz');
+      renderer.setCamera(camera());
+      renderer.render([{ handle: 999, level: 0 }, front]);
+      expect(gl.drawElements).toHaveBeenCalledTimes(1);
+    });
+
+    it('issues at most 3 GL calls per visible tile', () => {
+      const { gl, renderer, log } = setup();
+      renderer.setCamera(camera());
+      const g = 4; // level 2: 4×4 tiles per face
+      const tiles = [];
+      for (let y = 0; y < g; y++)
+        for (let x = 0; x < g; x++) tiles.push(tile(renderer, gl, 'nz', 2, x, y));
+      const callsFor = (list: DrawItem[]) => {
+        const start = log.length;
+        renderer.render(list);
+        return log.length - start;
+      };
+      const one = callsFor(tiles.slice(0, 1));
+      const all = callsFor(tiles);
+      expect(gl.drawElements).toHaveBeenCalledTimes(1 + tiles.length);
+      expect(all - one).toBeLessThanOrEqual(3 * (tiles.length - 1));
     });
   });
 });

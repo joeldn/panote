@@ -1,5 +1,5 @@
-import type { Mat4 } from './projection.js';
-import type { TileGeometry } from '../tile-geometry.js';
+import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from './projection.js';
+import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
@@ -18,15 +18,54 @@ export interface DrawItem {
  * paint over them — replaces three's mesh.renderOrder = level. Stable, pure.
  */
 export function sortDrawList(list: DrawItem[]): DrawItem[] {
-  // Array.prototype.sort is stable in modern engines; key on level only.
-  return [...list].sort((a, b) => a.level - b.level);
+  return [...list].sort(byLevel);
+}
+
+// Array.prototype.sort is stable, so equal levels keep their list order.
+function byLevel(a: DrawItem, b: DrawItem): number {
+  return a.level - b.level;
 }
 
 interface TileResources {
+  vao: WebGLVertexArrayObject;
   vbo: WebGLBuffer;
-  ibo: WebGLBuffer;
+  /** Null when the tile draws from the shared quad IBO. */
+  ibo: WebGLBuffer | null;
   tex: WebGLTexture;
   indexCount: number;
+  /** Bounds of the vertices, for frustum culling. */
+  bounds: Sphere;
+}
+
+/** Bounding sphere of xyz positions: their centroid and the farthest vertex. */
+export function boundingSphere(pos: Float32Array): Sphere {
+  const n = pos.length / 3;
+  let cx = 0,
+    cy = 0,
+    cz = 0;
+  for (let i = 0; i < n; i++) {
+    cx += pos[i * 3]!;
+    cy += pos[i * 3 + 1]!;
+    cz += pos[i * 3 + 2]!;
+  }
+  cx /= n;
+  cy /= n;
+  cz /= n;
+  let r2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = pos[i * 3]! - cx,
+      dy = pos[i * 3 + 1]! - cy,
+      dz = pos[i * 3 + 2]! - cz;
+    r2 = Math.max(r2, dx * dx + dy * dy + dz * dz);
+  }
+  return { cx, cy, cz, r: Math.sqrt(r2) };
+}
+
+function isQuadIndex(index: Uint16Array): boolean {
+  if (index === QUAD_INDEX) return true;
+  if (index.length !== QUAD_INDEX.length) return false;
+  for (let i = 0; i < index.length; i++) if (index[i] !== QUAD_INDEX[i]) return false;
+  return true;
 }
 
 const VERT_SRC = `#version 300 es
@@ -66,6 +105,11 @@ export class GLRenderer {
   private viewProj: Mat4 | null = null;
   private tiles = new Map<TileHandle, TileResources>();
   private nextHandle = 1;
+  /** One static IBO shared by every 4-vertex quad. */
+  private quadIbo: WebGLBuffer;
+  /** Reused every frame: the frustum and the culled, sorted draw order. */
+  private frustum = new Float32Array(24);
+  private order: DrawItem[] = [];
 
   constructor(container: HTMLElement, opts: { antialias?: boolean; maxPixelRatio?: number } = {}) {
     this.maxPixelRatio = opts.maxPixelRatio ?? 2;
@@ -102,6 +146,11 @@ export class GLRenderer {
     gl.useProgram(this.program);
     gl.uniform1i(this.getUniform('uTex'), 0);
     gl.activeTexture(gl.TEXTURE0);
+
+    // No VAO is bound here, so this binding is not captured by one.
+    this.quadIbo = this.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, QUAD_INDEX, gl.STATIC_DRAW);
 
     this.pixelRatio = Math.min(window.devicePixelRatio, this.maxPixelRatio);
 
@@ -143,6 +192,12 @@ export class GLRenderer {
     return prog;
   }
 
+  private createBuffer(): WebGLBuffer {
+    const buf = this.gl.createBuffer();
+    if (!buf) throw new Error('createBuffer failed: context lost or resource exhaustion');
+    return buf;
+  }
+
   private getUniform(name: string): WebGLUniformLocation {
     const loc = this.gl.getUniformLocation(this.program, name);
     if (!loc) throw new Error(`uniform ${name} not found`);
@@ -180,15 +235,28 @@ export class GLRenderer {
       interleaved[i * 5 + 3] = geom.uv[i * 2]!;
       interleaved[i * 5 + 4] = geom.uv[i * 2 + 1]!;
     }
-    const vbo = gl.createBuffer();
-    if (!vbo) throw new Error('createBuffer failed: context lost or resource exhaustion');
+    // Record the vertex layout and index buffer in a VAO once, so a draw is
+    // just bindVertexArray + bindTexture + drawElements.
+    const vao = gl.createVertexArray();
+    if (!vao) throw new Error('createVertexArray failed: context lost or resource exhaustion');
+    gl.bindVertexArray(vao);
+    const vbo = this.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, interleaved, gl.STATIC_DRAW);
-
-    const ibo = gl.createBuffer();
-    if (!ibo) throw new Error('createBuffer failed: context lost or resource exhaustion');
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.index, gl.STATIC_DRAW);
+    const stride = 5 * 4; // 5 floats × 4 bytes
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
+    let ibo: WebGLBuffer | null = null;
+    if (count === 4 && isQuadIndex(geom.index)) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
+    } else {
+      ibo = this.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.index, gl.STATIC_DRAW);
+    }
+    gl.bindVertexArray(null);
 
     const tex = gl.createTexture();
     if (!tex) throw new Error('createTexture failed: context lost or resource exhaustion');
@@ -224,15 +292,23 @@ export class GLRenderer {
     }
 
     const handle = this.nextHandle++;
-    this.tiles.set(handle, { vbo, ibo, tex, indexCount: geom.index.length });
+    this.tiles.set(handle, {
+      vao,
+      vbo,
+      ibo,
+      tex,
+      indexCount: geom.index.length,
+      bounds: boundingSphere(geom.pos),
+    });
     return handle;
   }
 
   removeTile(handle: TileHandle): void {
     const t = this.tiles.get(handle);
     if (!t) return;
+    this.gl.deleteVertexArray(t.vao);
     this.gl.deleteBuffer(t.vbo);
-    this.gl.deleteBuffer(t.ibo);
+    if (t.ibo) this.gl.deleteBuffer(t.ibo);
     this.gl.deleteTexture(t.tex);
     this.tiles.delete(handle);
   }
@@ -243,20 +319,24 @@ export class GLRenderer {
     if (!this.viewProj) return;
     gl.uniformMatrix4fv(this.uViewProj, false, this.viewProj);
 
-    const sorted = sortDrawList(drawList);
-    const stride = 5 * 4; // 5 floats × 4 bytes
-    for (const item of sorted) {
+    // Cull here rather than in the layers, so tiles and preview patches
+    // outside the view cost no draw call.
+    const frustum = frustumFromViewProj(this.viewProj, this.frustum);
+    const order = this.order;
+    order.length = 0;
+    for (const item of drawList) {
       const t = this.tiles.get(item.handle);
-      if (!t) continue;
-      gl.bindBuffer(gl.ARRAY_BUFFER, t.vbo);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, t.ibo);
+      if (t && intersectsSphere(frustum, t.bounds)) order.push(item);
+    }
+    order.sort(byLevel);
+
+    for (const item of order) {
+      const t = this.tiles.get(item.handle)!;
+      gl.bindVertexArray(t.vao);
       gl.bindTexture(gl.TEXTURE_2D, t.tex);
       gl.drawElements(gl.TRIANGLES, t.indexCount, gl.UNSIGNED_SHORT, 0);
     }
+    order.length = 0;
   }
 
   /**
@@ -273,6 +353,7 @@ export class GLRenderer {
 
   dispose(): void {
     for (const handle of [...this.tiles.keys()]) this.removeTile(handle);
+    this.gl.deleteBuffer(this.quadIbo);
     this.gl.deleteProgram(this.program);
     // Deleting individual resources frees GPU memory but does not release the
     // context slot itself — browsers cap live WebGL contexts per page
