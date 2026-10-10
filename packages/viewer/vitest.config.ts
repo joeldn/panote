@@ -4,13 +4,11 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 /**
  * Node, not jsdom - deliberately.
  *
- * Every test in this package exercises pure functions (projection math, camera
- * math, LRU eviction, markdown rendering, share-URL building). None touches
- * `document`, `window`, or a WebGL context, and no module has a top-level DOM
- * side effect, so the DOM-owning modules import cleanly under Node.
- *
- * When the first DOM-level test lands, switch to
- * `@internal/vitest-config/browser` and add `jsdom` to devDependencies.
+ * Most tests exercise pure functions (projection math, camera math, LRU
+ * eviction, markdown rendering). The few that drive DOM- or GL-owning code
+ * (PanoViewer, the GL renderer) stub just the `window`, `document` and canvas
+ * surface they touch with small fakes instead of a full jsdom, and no module
+ * has a top-level DOM side effect, so everything imports cleanly under Node.
  *
  * The coverage `exclude` list is the DOM/GL surface that has no unit tests: it is
  * exercised by running the viewer, not by assertions about mocks. `exclude` is
@@ -29,15 +27,10 @@ export default mergeConfig(
           'src/index.ts',
           'src/types.ts',
           'src/PanoViewer.ts',
-          'src/tile-layer.ts',
           'src/controls.ts',
           'src/hotspots.ts',
           'src/render/gl-renderer.ts',
           'src/ui/index.ts',
-          'src/ui/controls.ts',
-          'src/ui/nav-arrows.ts',
-          'src/ui/share-ui.ts',
-          'src/ui/info-hotspots.ts',
         ],
         thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
       },
