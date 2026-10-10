@@ -630,9 +630,20 @@ describe('analytics beacon', () => {
     // The pagehide listener is attached in the same commit that records the view.
     await viewRecorded();
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+    // A minute on the scene, without waiting one: dwell is timed with performance.now().
+    const later = performance.now() + 60_000;
+    vi.spyOn(performance, 'now').mockReturnValue(later);
     window.dispatchEvent(new Event('pagehide'));
+    vi.mocked(performance.now).mockRestore();
     const events = beacons();
     expect(events).toContainEqual({ type: 'scene', panoId: 'square', surface: 'embed' });
+    expect(events).toContainEqual({
+      type: 'dwell',
+      ms: expect.any(Number) as number,
+      surface: 'embed',
+    });
+    const dwell = events.filter((e) => (e as { type: string }).type === 'dwell').at(-1);
+    expect((dwell as { ms: number }).ms).toBeGreaterThanOrEqual(60_000);
     expect(events).toContainEqual({
       type: 'hotspot',
       panoId: 'square',
