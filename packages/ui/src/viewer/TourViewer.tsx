@@ -171,6 +171,9 @@ function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
     if (viewer.isSettled()) settled();
     return () => {
       viewer.off('tiles-settled', settled);
+      // Deliberately all of them, even one for the scene being entered: the
+      // real load fetches the same URLs at full priority, and the next
+      // scene's own prefetch should not queue behind this one's.
       controller.abort();
     };
   }, [viewer, baseUrl, key]);
