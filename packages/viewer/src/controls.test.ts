@@ -275,3 +275,61 @@ describe('Controls: wheel and trackpad', () => {
     expect(host.zoomAt).toHaveBeenCalledWith(0.5, 400, 300);
   });
 });
+
+describe('Controls: wheel capture mode', () => {
+  it('captures every wheel by default', () => {
+    setup();
+    const ev = wheel({ deltaY: 100 });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a plain wheel scroll the page in 'engaged' mode until the viewer is engaged", () => {
+    setup({ wheel: 'engaged' });
+    const down = wheel({ deltaY: 100 });
+    const side = wheel({ deltaX: 40 });
+    expect(down.defaultPrevented).toBe(false);
+    expect(side.defaultPrevented).toBe(false);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+    expect(host.panByPixels).not.toHaveBeenCalled();
+  });
+
+  it("zooms on ctrl or cmd + wheel in 'engaged' mode without engagement", () => {
+    setup({ wheel: 'engaged' });
+    const ctrl = wheel({ deltaY: 5, ctrlKey: true });
+    const cmd = wheel({ deltaY: 100, metaKey: true });
+    expect(ctrl.defaultPrevented).toBe(true);
+    expect(cmd.defaultPrevented).toBe(true);
+    expect(host.zoomAt).toHaveBeenCalledTimes(2);
+  });
+
+  it('captures the wheel after a pointerdown, until the pointer leaves', () => {
+    setup({ wheel: 'engaged' });
+    pointer('pointerdown', { x: 10, y: 10, t: 0 });
+    pointer('pointerup', { x: 10, y: 10, t: 100 });
+    const engaged = wheel({ deltaY: 100 });
+    expect(engaged.defaultPrevented).toBe(true);
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+    el.dispatch('pointerleave', { pointerId: 1 });
+    const left = wheel({ deltaY: 100 });
+    expect(left.defaultPrevented).toBe(false);
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures the wheel while focused, until blur', () => {
+    setup({ wheel: 'engaged' });
+    el.dispatch('focus', {});
+    expect(wheel({ deltaY: 100 }).defaultPrevented).toBe(true);
+    el.dispatch('blur', {});
+    expect(wheel({ deltaY: 100 }).defaultPrevented).toBe(false);
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes the engagement listeners on dispose', () => {
+    const c = setup({ wheel: 'engaged' });
+    c.dispose();
+    for (const type of ['wheel', 'focus', 'blur', 'pointerleave', 'gesturestart']) {
+      expect(el.listeners.get(type)?.size ?? 0).toBe(0);
+    }
+  });
+});

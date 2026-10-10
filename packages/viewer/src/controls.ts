@@ -7,9 +7,20 @@ export interface ControlHost {
   stopMomentum(): void;
 }
 
+/**
+ * When the wheel drives the viewer.
+ * - `'always'`: every wheel event zooms (or pans) and never scrolls the page.
+ * - `'engaged'`: for embeds. A plain wheel scrolls the host page until the
+ *   viewer is engaged by a pointerdown or focus; ctrl/cmd + wheel (and a
+ *   trackpad pinch) always zooms. Engagement ends on pointerleave or blur.
+ */
+export type WheelMode = 'always' | 'engaged';
+
 export interface ControlsOptions {
   /** Accessible name for the viewer element. Default "Panorama viewer". */
   label?: string;
+  /** Wheel capture mode. Default `'always'`. */
+  wheel?: WheelMode;
 }
 
 /** Pointer state for one of the (at most two) tracked pointers. */
@@ -63,6 +74,9 @@ export class Controls {
   private gestureConsumed = false;
   // Last cumulative scale of an in-progress Safari pinch, or null.
   private gestureScale: number | null = null;
+  private readonly wheelMode: WheelMode;
+  // Whether the user has engaged the viewer (see WheelMode 'engaged').
+  private engaged = false;
 
   constructor(
     private el: HTMLElement,
@@ -77,6 +91,9 @@ export class Controls {
     // (PanoViewer's tests) keep working.
     el.role = 'application';
     el.ariaLabel = opts.label ?? 'Panorama viewer';
+    this.wheelMode = opts.wheel ?? 'always';
+    // The host may rebuild Controls on a focused element (a scene change).
+    this.engaged = el.ownerDocument?.activeElement === el;
     el.addEventListener('pointerdown', this.onDown);
     el.addEventListener('pointermove', this.onMove);
     el.addEventListener('pointerup', this.onUp);
@@ -88,7 +105,18 @@ export class Controls {
     el.addEventListener('gesturestart', this.onGestureStart);
     el.addEventListener('gesturechange', this.onGestureChange);
     el.addEventListener('gestureend', this.onGestureEnd);
+    el.addEventListener('focus', this.onEngage);
+    el.addEventListener('blur', this.onDisengage);
+    el.addEventListener('pointerleave', this.onDisengage);
   }
+
+  private onEngage = () => {
+    this.engaged = true;
+  };
+
+  private onDisengage = () => {
+    this.engaged = false;
+  };
 
   private slotFor(id: number): PointerSlot | null {
     if (this.p0?.id === id) return this.p0;
@@ -131,6 +159,7 @@ export class Controls {
   }
 
   private onDown = (e: PointerEvent) => {
+    this.engaged = true;
     // Only the primary mouse button drags; right-click and middle-click don't.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (this.slotFor(e.pointerId)) return;
@@ -215,6 +244,8 @@ export class Controls {
   }
 
   private onWheel = (e: WheelEvent) => {
+    // An unengaged embed leaves a plain wheel to the page, so it scrolls.
+    if (this.wheelMode === 'engaged' && !this.engaged && !e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     // Safari may send ctrl-wheel alongside its pinch gesture; zoom once.
     if (e.ctrlKey && this.gestureScale !== null) return;
@@ -306,5 +337,8 @@ export class Controls {
     this.el.removeEventListener('gesturestart', this.onGestureStart);
     this.el.removeEventListener('gesturechange', this.onGestureChange);
     this.el.removeEventListener('gestureend', this.onGestureEnd);
+    this.el.removeEventListener('focus', this.onEngage);
+    this.el.removeEventListener('blur', this.onDisengage);
+    this.el.removeEventListener('pointerleave', this.onDisengage);
   }
 }
