@@ -47,6 +47,11 @@ export interface TourViewerProps {
   start: string;
   /** Pins `start`: no floor links and no map, so there is no way to another scene. */
   single?: boolean;
+  /**
+   * The tour sits in someone else's page (an iframe embed): a plain wheel
+   * scrolls that page until the visitor engages the viewer. See PanoStage.
+   */
+  embed?: boolean;
   /** Inline hotspot media is only shown from URLs this accepts. */
   isAllowedMediaUrl: (url: string) => boolean;
   /** Left out for chrome-free use (the embed). */
@@ -195,6 +200,7 @@ export function TourViewer({
   baseUrl,
   start,
   single = false,
+  embed = false,
   isAllowedMediaUrl,
   bar,
   overlay,
@@ -305,6 +311,7 @@ export function TourViewer({
         north={data.north[panoId] ?? 0}
         autoRotate={autoRotate}
         transition
+        embed={embed}
         {...(createViewer && { createViewer })}
         aria-label={`${title}: ${data.titles[panoId] ?? ''}`}
         onViewer={setViewer}

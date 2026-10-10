@@ -20,7 +20,7 @@ const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(con
  * Viewer options for one stage, deep-merged over `panoteViewerPreset`: set
  * only what differs, e.g. `{ camera: { maxFov: 90 } }`. The resolver is the
  * stage's own (from `baseUrl`), and the stage's props win over these:
- * `view`, `north`, `autoRotate` and `aria-label`. Leave
+ * `view`, `north`, `autoRotate`, `aria-label` and `embed`. Leave
  * `network.requestInit` alone: the Worker's preloads are only reused by
  * requests that match them.
  */
@@ -90,6 +90,12 @@ export interface PanoStageProps {
   preview?: StagePreview | null;
   /** Crossfade between panos with `transitionTo` instead of a plain `load`. */
   transition?: boolean;
+  /**
+   * The stage sits in someone else's page (the website's /embed): a plain
+   * wheel scrolls that page until the visitor engages the viewer (a click,
+   * a tap or focus), rather than zooming. Changing it recreates the viewer.
+   */
+  embed?: boolean;
   /** Read once when the viewer is created. */
   options?: StageViewerOptions;
   onViewer?: (viewer: PanoViewer | null) => void;
@@ -136,6 +142,7 @@ export function PanoStage({
   north,
   autoRotate = false,
   transition = false,
+  embed = false,
   options,
   onViewer,
   onSceneChange,
@@ -204,7 +211,7 @@ export function PanoStage({
     if (!host) return;
     const l = latest.current;
     const opts = mergeViewerOptions(
-      panoteViewerPreset({ baseUrl, label: l.ariaLabel }),
+      panoteViewerPreset({ baseUrl, label: l.ariaLabel, embed }),
       l.options ?? {},
       {
         autoRotate: { enabled: l.autoRotate },
@@ -241,7 +248,7 @@ export function PanoStage({
       setViewer(null);
       v.dispose();
     };
-  }, [baseUrl]);
+  }, [baseUrl, embed]);
 
   const stagePreviewKey =
     preview && panoId !== null && preview.panoId === panoId ? preview.key : null;

@@ -195,6 +195,12 @@ afterEach(() => {
 });
 
 describe('/s/:slug', () => {
+  it('keeps every wheel for zooming on the full-page tour', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    expect(lastViewer().options.interaction?.wheel).toBe('always');
+  });
+
   it('loads the slug, then the pub bundle, then the start scene from the CDN tiles', async () => {
     renderAt('/s/old-town');
     expect(await screen.findByText('Old town')).toBeTruthy();
@@ -525,6 +531,12 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
 });
 
 describe('/s/:slug/embed', () => {
+  it('lets a plain wheel scroll the host page until the viewer is engaged', async () => {
+    renderAt('/s/old-town/embed');
+    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    expect(lastViewer().options.interaction?.wheel).toBe('engaged');
+  });
+
   it('has no site chrome and keeps whole-tour navigation', async () => {
     renderAt('/s/old-town/embed');
     await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));

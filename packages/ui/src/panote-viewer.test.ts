@@ -145,7 +145,7 @@ describe('panoteSourceResolver', () => {
 
 describe('panoteViewerPreset', () => {
   /** The preset as data: everything but the resolver, which is a function. */
-  const pinned = (o: { label?: string } = {}) => {
+  const pinned = (o: { label?: string; embed?: boolean } = {}) => {
     const { resolveSource, ...rest } = panoteViewerPreset({ baseUrl: BASE, ...o });
     expect(resolveSource).toEqual(expect.any(Function));
     return rest;
@@ -206,11 +206,13 @@ describe('panoteViewerPreset', () => {
     expect(resolveViewerOptions(pinned())).toEqual(pinned());
   });
 
-  it('labels the canvas', () => {
-    expect(pinned({ label: 'Old town: Square' })).toStrictEqual({
+  it('labels the canvas, and engages the wheel only for an embed', () => {
+    expect(pinned({ label: 'Old town: Square' }).interaction?.label).toBe('Old town: Square');
+    expect(pinned({ embed: true })).toStrictEqual({
       ...PANOTE,
-      interaction: { ...PANOTE.interaction, label: 'Old town: Square' },
+      interaction: { ...PANOTE.interaction, wheel: 'engaged' },
     });
+    expect(pinned({ embed: false }).interaction?.wheel).toBe('always');
   });
 
   it('sends tile requests with the preload-matching init, the frozen PANOTE_REQUEST_INIT', () => {

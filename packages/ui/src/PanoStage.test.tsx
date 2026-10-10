@@ -184,6 +184,17 @@ describe('PanoStage', () => {
     expect(f.last().options.interaction?.label).toBe('Panorama viewer');
   });
 
+  it('engages the wheel only for an embed, recreating the viewer when that changes', () => {
+    const f = factory();
+    const { rerender } = render(
+      <PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />,
+    );
+    expect(f.last().options.interaction?.wheel).toBe('always');
+    rerender(<PanoStage baseUrl="b/" panoId="hall" embed createViewer={f.createViewer} />);
+    expect(f.createViewer).toHaveBeenCalledTimes(2);
+    expect(f.last().options.interaction?.wheel).toBe('engaged');
+  });
+
   it('applies the scene view and loads on pano change; crossfades when transition is on', () => {
     const f = factory();
     const { rerender } = render(

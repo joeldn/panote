@@ -472,6 +472,16 @@ describe('TourViewer', () => {
     expect(viewer().handlers.has('hotspot-open')).toBe(false);
   });
 
+  it('passes embed to the stage, which engages the wheel', () => {
+    const { viewer } = renderViewer({ embed: true });
+    expect(viewer().options?.interaction?.wheel).toBe('engaged');
+  });
+
+  it('keeps the wheel captured outside an embed', () => {
+    const { viewer } = renderViewer();
+    expect(viewer().options?.interaction?.wheel).toBe('always');
+  });
+
   describe('prefetching linked scenes', () => {
     const many = () =>
       data({

@@ -85,6 +85,9 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
       baseUrl={tilesBaseUrl(config)}
       start={start}
       single={single}
+      // In someone else's page the wheel scrolls it until the visitor engages
+      // the viewer; the full-page tour keeps every wheel for zooming.
+      embed={embed}
       isAllowedMediaUrl={isCdnUrl}
       {...(createViewer && { createViewer })}
       {...(!embed && {
