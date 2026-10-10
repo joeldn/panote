@@ -11,8 +11,8 @@ export interface ControlHost {
  * When the wheel drives the viewer.
  * - `'always'`: every wheel event zooms (or pans) and never scrolls the page.
  * - `'engaged'`: for embeds. A plain wheel scrolls the host page until the
- *   viewer is engaged by a pointerdown or focus; ctrl/cmd + wheel (and a
- *   trackpad pinch) always zooms. Engagement ends on pointerleave or blur.
+ *   viewer is engaged; ctrl/cmd + wheel (and a trackpad pinch) always zooms.
+ *   A pointerdown or focus engages; a mouse leaving or blur disengages.
  */
 export type WheelMode = 'always' | 'engaged';
 
@@ -103,7 +103,7 @@ export class Controls {
     el.addEventListener('gestureend', this.onGestureEnd);
     el.addEventListener('focus', this.onEngage);
     el.addEventListener('blur', this.onDisengage);
-    el.addEventListener('pointerleave', this.onDisengage);
+    el.addEventListener('pointerleave', this.onPointerLeave);
   }
 
   private onEngage = () => {
@@ -112,6 +112,12 @@ export class Controls {
 
   private onDisengage = () => {
     this.engaged = false;
+  };
+
+  // Touch and pen pointers "leave" on every lift, which says nothing about
+  // whether the user is done with the viewer; only a mouse leaving does.
+  private onPointerLeave = (e: PointerEvent) => {
+    if (e.pointerType === 'mouse') this.engaged = false;
   };
 
   private slotFor(id: number): PointerSlot | null {
@@ -350,6 +356,6 @@ export class Controls {
     this.el.removeEventListener('gestureend', this.onGestureEnd);
     this.el.removeEventListener('focus', this.onEngage);
     this.el.removeEventListener('blur', this.onDisengage);
-    this.el.removeEventListener('pointerleave', this.onDisengage);
+    this.el.removeEventListener('pointerleave', this.onPointerLeave);
   }
 }

@@ -309,10 +309,19 @@ describe('Controls: wheel capture mode', () => {
     const engaged = wheel({ deltaY: 100 });
     expect(engaged.defaultPrevented).toBe(true);
     expect(host.zoomAt).toHaveBeenCalledTimes(1);
-    el.dispatch('pointerleave', { pointerId: 1 });
+    el.dispatch('pointerleave', { pointerId: 1, pointerType: 'mouse' });
     const left = wheel({ deltaY: 100 });
     expect(left.defaultPrevented).toBe(false);
     expect(host.zoomAt).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays engaged when a touch or pen pointer leaves', () => {
+    setup({ wheel: 'engaged' });
+    pointer('pointerdown', { x: 10, y: 10, t: 0, pointerType: 'touch' });
+    pointer('pointerup', { x: 10, y: 10, t: 100, pointerType: 'touch' });
+    el.dispatch('pointerleave', { pointerId: 1, pointerType: 'touch' });
+    el.dispatch('pointerleave', { pointerId: 2, pointerType: 'pen' });
+    expect(wheel({ deltaY: 100 }).defaultPrevented).toBe(true);
   });
 
   it('captures the wheel while focused, until blur', () => {
