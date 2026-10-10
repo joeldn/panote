@@ -466,6 +466,22 @@ describe('editor: points, connections, views and settings', () => {
     });
   });
 
+  it('does not re-place the markers and chevrons on an unrelated editor render', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() => expect(document.querySelector('[data-hotspot-id="i1"]')).not.toBeNull());
+    await ui.findByRole('button', { name: 'Go to Church' });
+    const { project } = lastViewer();
+    project.mockClear();
+
+    // Placing mode re-renders the editor without touching the points or links.
+    fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
+    await ui.findByText(/Click the pano to drop the point/);
+
+    expect(project).not.toHaveBeenCalled();
+  });
+
   it('deletes a point through the confirm modal', async () => {
     const { ui } = openTab();
     await loaded(ui);
