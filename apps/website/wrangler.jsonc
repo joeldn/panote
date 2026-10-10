@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Static assets plus a small script that only runs for /s/* (slug alias 308s,
-  // docs/deploy.md Frontends). Deploy with --env, after `vite build`.
+  // Static assets plus a small script that only runs for /s/*: slug alias 308s and tour
+  // page priming (docs/deploy.md Frontends). Deploy with --env, after `vite build`.
   "name": "panote-website",
   "main": "worker/index.ts",
   "compatibility_date": "2026-01-01",

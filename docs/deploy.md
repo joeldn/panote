@@ -53,7 +53,7 @@ anonymous).
 
 `apps/website` and `apps/admin` are Vite + React SPAs, each deployed as a Worker with **static
 assets** on the same host as the APIs. Admin is assets-only; the website also has a small `main`
-script that only runs for `/s/*` (slug redirects, below). Why not Pages, and why
+script that only runs for `/s/*` (slug redirects and tour page priming, below). Why not Pages, and why
 build-time config: `docs/decisions.md`.
 
 | App | Script (dev / production) | Route (dev / production) | Vite `base` / output |
