@@ -186,9 +186,9 @@ describe('PanoViewer', () => {
 
     /**
      * The budget as the tile layer actually received it, in tiles. This
-     * manifest's tileSize is 512, so one tile is 512 * 512 * 4 = 1 MiB and the
-     * tile count equals the budget in MB — the layer having the right number of
-     * them is the only thing the budget is for.
+     * manifest's tileSize is 512, so one tile with its mips is 4/3 MiB and the
+     * tile count is three quarters of the budget in MB — the layer having the
+     * right number of them is the only thing the budget is for.
      */
     async function loadedMaxTiles(viewer: PanoViewer): Promise<number> {
       await viewer.load('pano-a');
@@ -198,21 +198,21 @@ describe('PanoViewer', () => {
     it('doubles the default budget on a devicePixelRatio-2 display', async () => {
       stubDisplay(2);
       const viewer = new PanoViewer(makeContainer(1422, 800));
-      expect(await loadedMaxTiles(viewer)).toBe(256);
+      expect(await loadedMaxTiles(viewer)).toBe(192);
       viewer.dispose();
     });
 
     it('leaves the default budget alone when the host reports no pixel ratio', async () => {
       stubDisplay(undefined);
       const viewer = new PanoViewer(makeContainer(1422, 800));
-      expect(await loadedMaxTiles(viewer)).toBe(128);
+      expect(await loadedMaxTiles(viewer)).toBe(96);
       viewer.dispose();
     });
 
     it('does not scale past the cap on a devicePixelRatio-3 display', async () => {
       stubDisplay(3);
       const viewer = new PanoViewer(makeContainer(1422, 800));
-      expect(await loadedMaxTiles(viewer)).toBe(256);
+      expect(await loadedMaxTiles(viewer)).toBe(192);
       viewer.dispose();
     });
 
@@ -222,11 +222,11 @@ describe('PanoViewer', () => {
       // default is subject to.
       stubDisplay(2);
       const small = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 64 });
-      expect(await loadedMaxTiles(small)).toBe(64);
+      expect(await loadedMaxTiles(small)).toBe(48);
       small.dispose();
 
       const large = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 512 });
-      expect(await loadedMaxTiles(large)).toBe(512);
+      expect(await loadedMaxTiles(large)).toBe(384);
       large.dispose();
     });
   });

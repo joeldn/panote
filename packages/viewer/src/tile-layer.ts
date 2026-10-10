@@ -2,6 +2,7 @@ import { tilePath, type Manifest } from '@panote/core';
 import { FACES, faceUVToDir, tileCornersUV, tilesPerEdge, type Face } from './cube.js';
 import { selectLevel } from './lod.js';
 import { selectEvictions } from './tile-cache.js';
+import { maxTilesForBudget } from './texture-budget.js';
 import { RADIUS, buildTileGeometry } from './tile-geometry.js';
 import {
   frustumFromViewProj,
@@ -160,8 +161,7 @@ export class TileLayer {
     private now: () => number = () => performance.now(),
     private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
   ) {
-    const tileMB = (manifest.tileSize * manifest.tileSize * 4) / (1024 * 1024);
-    this.maxTiles = Math.max(24, Math.floor(textureBudgetMB / tileMB));
+    this.maxTiles = maxTilesForBudget(textureBudgetMB, manifest.tileSize);
     this.maxConcurrent = maxConcurrent;
     // Cooldowns and the wake timer share one clock (faked together in tests).
     this.retry = new TileRetryBudget(this.now);
