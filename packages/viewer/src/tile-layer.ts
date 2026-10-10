@@ -423,10 +423,11 @@ export class TileLayer {
     // higher-LOD tiles from drawing on top after a zoom-out.
     //
     // The converse is the coarse fallback, and it is why a hole can never show
-    // through: every *coarser* resident tile stays visible, drawList() emits
-    // them all and the renderer paints them low-level-first (sortDrawList in
-    // render/gl-renderer.ts, with depth testing off), so a finer tile that is
-    // absent simply leaves its ancestor's texels on screen. loadBase()
+    // through: every *coarser* resident tile stays visible and drawList()
+    // emits them all. The renderer draws finest-first with each level at its
+    // own depth, finer in front (see render() in render/gl-renderer.ts), so a
+    // coarser tile only shows where no finer tile covers it, and a finer tile
+    // that is absent simply leaves its ancestor's texels on screen. loadBase()
     // guarantees the level-0 ancestor is resident and selectEvictions() never
     // evicts it, so that floor always exists.
     for (const entry of this.cache.values()) {
@@ -440,7 +441,7 @@ export class TileLayer {
     this.armWake(nextRetryMs);
   }
 
-  /** Current visible draw list (coarse first is enforced by the renderer sort). */
+  /** Every resident tile at or below the target level; the renderer orders them. */
   drawList(): DrawItem[] {
     this._drawList.length = 0;
     for (const entry of this.cache.values()) {
