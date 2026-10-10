@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   BASE_TEXTURE_BUDGET_MB,
   MAX_BUDGET_PIXEL_RATIO,
+  MIN_RESIDENT_TILES,
   defaultTextureBudgetMB,
+  maxTilesForBudget,
 } from './texture-budget.js';
 
 describe('defaultTextureBudgetMB', () => {
@@ -61,5 +63,19 @@ describe('defaultTextureBudgetMB', () => {
     expect(defaultTextureBudgetMB(0.5, 2)).toBe(BASE_TEXTURE_BUDGET_MB);
     expect(defaultTextureBudgetMB(2, Number.NaN)).toBe(256);
     expect(defaultTextureBudgetMB(2, 0)).toBe(256);
+  });
+});
+
+describe('maxTilesForBudget', () => {
+  it('counts the mip chain, so a tile costs 4/3 of its base level', () => {
+    // 512² × 4 bytes is 1 MiB at the base level and 1.33 MiB with mips.
+    expect(maxTilesForBudget(256, 512)).toBe(192);
+    expect(maxTilesForBudget(128, 512)).toBe(96);
+    expect(maxTilesForBudget(256, 1024)).toBe(48);
+  });
+
+  it('never goes below the resident-tile floor', () => {
+    expect(maxTilesForBudget(1, 512)).toBe(MIN_RESIDENT_TILES);
+    expect(maxTilesForBudget(0, 1024)).toBe(MIN_RESIDENT_TILES);
   });
 });

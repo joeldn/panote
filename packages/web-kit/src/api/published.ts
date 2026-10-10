@@ -2,12 +2,13 @@ import {
   PANO_PATTERN,
   PublishedTourSchema,
   pubTourKey,
+  SlugPointerSchema,
   SlugRecordSchema,
   storedSlugKey,
   type PublishedTour,
   type SlugRecord,
 } from '@internal/contracts';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import { ApiError, parseWith, readJson, type FetchLike } from './http.js';
 
@@ -23,6 +24,25 @@ export interface LoadPublishedTourOptions {
   fetch?: FetchLike;
   signal?: AbortSignal;
   now?: () => number;
+  /**
+   * The website Worker's `#pn-boot` payload (`{slug, record, tour}`), unvalidated. Used instead of the
+   * two CDN reads when it is for this slug and passes the same schemas; otherwise ignored.
+   */
+  boot?: unknown;
+}
+
+const BootDataSchema = z.object({
+  slug: z.string(),
+  record: SlugPointerSchema,
+  tour: PublishedTourSchema,
+});
+
+function tourFromBoot(boot: unknown, slug: string): PublishedTour | null {
+  const parsed = BootDataSchema.safeParse(boot);
+  if (!parsed.success) return null;
+  const { slug: bootSlug, record, tour } = parsed.data;
+  if (bootSlug !== slug || !PANO_PATTERN.test(record.tourId)) return null;
+  return tour.tourId === record.tourId ? tour : null;
 }
 
 const UNAVAILABLE = { kind: 'unavailable' } as const;
@@ -30,12 +50,16 @@ const UNAVAILABLE = { kind: 'unavailable' } as const;
 /**
  * Resolve a share-link slug: `slugs/<slug>.json`, then `pub/tours/<tourId>.json`.
  * Mirrors the website Worker's alias rule so local dev without the Worker behaves the same.
+ * Matching `boot` data short-circuits both reads.
  */
 export async function loadPublishedTour(
   cdnBase: string,
   slug: string,
   opts: LoadPublishedTourOptions = {},
 ): Promise<PublishedTourResult> {
+  const booted = opts.boot == null ? null : tourFromBoot(opts.boot, slug);
+  if (booted) return { kind: 'tour', tour: booted };
+
   const doFetch: FetchLike = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const now = opts.now ?? Date.now;
 

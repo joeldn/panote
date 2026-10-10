@@ -9,6 +9,15 @@ export { Chip, type ChipProps, type ChipTone } from './Chip.js';
 export { ConfirmModal, type ConfirmModalProps } from './ConfirmModal.js';
 export { COPY_CONFIRM_MS, MOBILE_MAX_WIDTH, MOBILE_MEDIA_QUERY } from './constants.js';
 export { cx } from './cx.js';
+export {
+  BRAND_ICONS,
+  DEFAULT_POINT_ICON,
+  FALLBACK_ICON,
+  POINT_ICONS,
+  pointIcon,
+  SOLID_ICONS,
+  UI_ICONS,
+} from './icons/names.js';
 export { Logo, LogoMark, type LogoMarkProps, type LogoProps } from './Logo.js';
 export { Modal, ModalHeader, type ModalHeaderProps, type ModalProps } from './Modal.js';
 export {

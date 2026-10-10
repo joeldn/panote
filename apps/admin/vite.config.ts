@@ -8,6 +8,7 @@ import { defineConfig, loadEnv, type Plugin } from 'vite';
 const MODES = ['dev', 'production'];
 const API_TARGET = 'https://panote.dev';
 const ASSETS_DIR = resolve(import.meta.dirname, 'dist');
+const BASE = '/app/';
 
 // Assets build into dist/app/ to match the /app/ base, but the Worker's assets root is
 // dist/: _headers must live there, and SPA fallback always serves dist/index.html.
@@ -23,7 +24,13 @@ function workerAssets(mode: string): Plugin {
       await writeFile(
         resolve(ASSETS_DIR, '_headers'),
         // frame-src 'self': the share modal previews the site's /s/<slug>/embed (same origin).
-        buildHeadersFile(config, { connectSrc, frameSrc: ["'self'"], indexable }),
+        // assetsBase: the hashed assets are served from /app/assets/, so that block is immutable.
+        buildHeadersFile(config, {
+          connectSrc,
+          frameSrc: ["'self'"],
+          indexable,
+          assetsBase: BASE,
+        }),
       );
       // Not reachable while workers.dev is off (the zone routes /robots.txt to the
       // website); kept for parity.
@@ -36,7 +43,7 @@ function workerAssets(mode: string): Plugin {
 export default defineConfig(({ mode }) => {
   if (!MODES.includes(mode)) throw new Error(`unknown mode "${mode}", expected ${MODES.join('|')}`);
   return {
-    base: '/app/',
+    base: BASE,
     plugins: [react(), workerAssets(mode)],
     // No data: URIs: the CSP's font-src is 'self' only.
     build: { outDir: 'dist/app', emptyOutDir: true, assetsInlineLimit: 0 },

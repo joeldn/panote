@@ -23,7 +23,8 @@ describe('buildTileGeometry', () => {
       -RADIUS,
       RADIUS,
     ]);
-    expect([...uv]).toEqual([0, 1, 1, 1, 0, 0, 1, 0]);
+    // Upright images: TL samples (0,0), BR samples (1,1).
+    expect([...uv]).toEqual([0, 0, 1, 0, 0, 1, 1, 1]);
     expect([...index]).toEqual([0, 2, 1, 1, 2, 3]);
   });
 

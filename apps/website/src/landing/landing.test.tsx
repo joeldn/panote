@@ -1,9 +1,17 @@
 import type { ViewerFactory } from '@internal/ui';
 import type * as webKit from '@internal/web-kit';
 import { loadConfig, signInPath, type Auth } from '@internal/web-kit';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, LOCAL, renderSite } from '../__fixtures__/auth.js';
 import { AuthEnvContext } from '../auth-context.js';
@@ -28,6 +36,15 @@ const signedIn = () =>
 
 const dropTarget = () => screen.getByRole('link', { name: /^Upload your first tour free/ });
 
+// The Shell and its pages are lazy routes: load their modules once up front, so the first
+// test's queries don't time out on the module transform.
+// The first render of a lazy page can take over the default 1s on a loaded CI runner
+// (seen under coverage); only the wait gets longer, the assertions are unchanged.
+configure({ asyncUtilTimeout: 5000 });
+beforeAll(async () => {
+  await Promise.all([import('../Shell.js'), import('../pages.js')]);
+});
+
 afterEach(() => {
   cleanup();
   stash.mockClear();
@@ -37,7 +54,7 @@ afterEach(() => {
 describe('landing', () => {
   it('says it is free and sign-in is with Google (Q1)', async () => {
     renderSite('/');
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+    expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe(
       'Your 360° tours. Full resolution. Free.',
     );
     expect(dropTarget().textContent).toContain('free — sign in with Google, live in seconds');
@@ -106,9 +123,9 @@ describe('landing', () => {
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(admin);
   });
 
-  it('links the section nav and keeps one FAQ answer open at a time', () => {
+  it('links the section nav and keeps one FAQ answer open at a time', async () => {
     renderSite('/');
-    const nav = screen.getByRole('navigation', { name: 'Sections' });
+    const nav = await screen.findByRole('navigation', { name: 'Sections' });
     const hrefs = within(nav)
       .getAllByRole('link')
       .map((a) => a.getAttribute('href'));
@@ -126,8 +143,10 @@ describe('landing', () => {
     );
   });
 
-  it('only shows the section nav on the landing', () => {
+  it('only shows the section nav on the landing', async () => {
     renderSite('/privacy');
+    // Wait for the page itself, so the missing nav isn't just a page still loading.
+    expect(await screen.findByRole('heading', { level: 1, name: 'Privacy' })).toBeTruthy();
     expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Upload a pano' })).toBeTruthy();
   });
@@ -222,18 +241,18 @@ describe('landing showcase', () => {
 });
 
 describe('legal pages', () => {
-  it('says visits are counted without personal data', () => {
+  it('says visits are counted without personal data', async () => {
     renderSite('/privacy');
-    expect(screen.getByRole('heading', { level: 1, name: 'Privacy' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Privacy' })).toBeTruthy();
     const text = document.querySelector('.legal')?.textContent ?? '';
     expect(text).toContain('Visits are counted without personal data.');
     expect(text).toContain('Cloudflare Workers Analytics Engine');
     expect(text).toContain('no cookies for analytics');
   });
 
-  it('renders the terms and the footer links between them', () => {
+  it('renders the terms and the footer links between them', async () => {
     renderSite('/terms');
-    expect(screen.getByRole('heading', { level: 1, name: 'Terms' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Terms' })).toBeTruthy();
     const legal = screen.getByRole('navigation', { name: 'Legal' });
     expect(within(legal).getByRole('link', { name: 'Privacy' }).getAttribute('href')).toBe(
       '/privacy',

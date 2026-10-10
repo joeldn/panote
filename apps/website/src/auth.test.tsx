@@ -1,11 +1,21 @@
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, configure, fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, LOCAL, renderSite } from './__fixtures__/auth.js';
 
+// The Shell and its pages are lazy routes: load their modules once up front, so the first
+// test's queries don't time out on the module transform.
+// The first render of a lazy page can take over the default 1s on a loaded CI runner
+// (seen under coverage); only the wait gets longer, the assertions are unchanged.
+configure({ asyncUtilTimeout: 5000 });
+beforeAll(async () => {
+  await Promise.all([import('./Shell.js'), import('./pages.js')]);
+});
 afterEach(cleanup);
 
 const google = () => screen.getByRole('button', { name: 'Continue with Google' });
+// The modal renders once the lazy Shell route has loaded.
+const findGoogle = () => screen.findByRole('button', { name: 'Continue with Google' });
 
 describe('sign-in modal', () => {
   it('opens from ?signin=1 with Google only (Q2)', async () => {
@@ -17,7 +27,7 @@ describe('sign-in modal', () => {
 
   it('starts Google sign-in back to next, keeping its query flag (Q1)', async () => {
     const { auth } = renderSite('/?signin=1&next=%2Fapp%2Fnew%3Fresume%3Dupload');
-    fireEvent.click(google());
+    fireEvent.click(await findGoogle());
     expect(auth.signIn).toHaveBeenCalledWith({
       connection: 'google-oauth2',
       returnTo: '/app/new?resume=upload',
@@ -25,9 +35,9 @@ describe('sign-in modal', () => {
     await waitFor(() => expect((google() as HTMLButtonElement).disabled).toBe(true));
   });
 
-  it('defaults to the dashboard without next', () => {
+  it('defaults to the dashboard without next', async () => {
     const { auth } = renderSite('/?signin=1');
-    fireEvent.click(google());
+    fireEvent.click(await findGoogle());
     expect(auth.signIn).toHaveBeenCalledWith({ connection: 'google-oauth2', returnTo: '/app/' });
   });
 
@@ -36,22 +46,22 @@ describe('sign-in modal', () => {
     '//evil.example',
     '/\\evil.example',
     'javascript:alert(1)',
-  ])('drops an off-site next (%s)', (next) => {
+  ])('drops an off-site next (%s)', async (next) => {
     const { auth } = renderSite(`/?signin=1&next=${encodeURIComponent(next)}`);
-    fireEvent.click(google());
+    fireEvent.click(await findGoogle());
     expect(auth.signIn).toHaveBeenCalledWith({ connection: 'google-oauth2', returnTo: '/app/' });
   });
 
   it('shows a failed start', async () => {
     const auth = fakeAuth({ signIn: vi.fn().mockRejectedValue(new Error('network down')) });
     renderSite('/?signin=1', auth);
-    fireEvent.click(google());
+    fireEvent.click(await findGoogle());
     expect((await screen.findByRole('alert')).textContent).toBe('network down');
   });
 
   it('closes by dropping signin and next from the URL', async () => {
     const { router } = renderSite('/privacy?signin=1&next=%2Fapp%2F&x=1');
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(router.state.location.pathname).toBe('/privacy');
     expect(router.state.location.search).toBe('?x=1');
@@ -78,7 +88,7 @@ describe('sign-in modal', () => {
   it('explains instead of offering buttons when auth is unconfigured', async () => {
     const auth = fakeAuth({ configured: false, connections: [] });
     renderSite('/?signin=1', auth);
-    expect(screen.getByRole('status').textContent).toContain('isn’t set up');
+    expect((await screen.findByRole('status')).textContent).toContain('isn’t set up');
     expect(screen.queryByRole('button', { name: /Continue with/ })).toBeNull();
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeTruthy();
     expect(auth.isAuthenticated).not.toHaveBeenCalled();

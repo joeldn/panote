@@ -25,6 +25,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "gen:icons": "node scripts/gen-icons.mjs",
     "dev": "tsc -b --watch",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
@@ -35,7 +36,6 @@
   "dependencies": {
     "@fontsource/schibsted-grotesk": "catalog:",
     "@fontsource/spline-sans-mono": "catalog:",
-    "@fortawesome/fontawesome-free": "catalog:",
     "@internal/contracts": "workspace:*",
     "@panote/viewer": "workspace:*"
   },
@@ -44,6 +44,7 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@fortawesome/fontawesome-free": "catalog:",
     "@internal/eslint-config": "workspace:*",
     "@internal/typescript-config": "workspace:*",
     "@internal/vitest-config": "workspace:*",
@@ -57,6 +58,7 @@
     "jsdom": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "subset-font": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

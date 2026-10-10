@@ -84,8 +84,8 @@ and `assets.run_worker_first: ["/s/*"]` ([Static Assets binding →
 `run_worker_first`](https://developers.cloudflare.com/workers/static-assets/binding/#run_worker_first):
 an array of route patterns, `*` deep-matches, `!` negates). Every other path is served by the
 assets router and never invokes the script. For `/s/<slug>` and `/s/<slug>/embed[/]` the script
-reads `slugs/<slug>.json` through the `BUCKET` binding (it only ever reads that prefix; R2
-bindings can't be scoped, so read-only is by convention). An unexpired `redirect` alias whose
+reads `slugs/<slug>.json` through the `BUCKET` binding (it only reads `slugs/`, `pub/tours/` and
+tile manifests; R2 bindings can't be scoped, so read-only is by convention). An unexpired `redirect` alias whose
 target slug is still a live pointer to the **same** tourId gets a `308` to `/s/<new>` (or
 `/s/<new>/embed`) with the query string kept and `Cache-Control: no-store`. Anything else (live
 pointer, miss, expired alias, a target another tour holds, an invalid slug, an R2 error) falls
@@ -94,12 +94,33 @@ available" placeholder. `_headers` still applies to responses served through `en
 (checked under `wrangler dev`: CSP, `frame-ancestors` per path, nosniff). `wrangler types --env
 dev` omits the inherited `ASSETS` binding, so `worker/assets.d.ts` declares it.
 The `Location` is relative (`/s/<new-slug>`, query kept).
+
+**Tour page priming (`/s/*`, GET only).** For a live pointer the script also reads
+`pub/tours/<tourId>.json` and then the start scene's `tiles/<panoId>/manifest.json`, alongside
+the `index.html` fetch, and rewrites the page with `HTMLRewriter`: the real `<title>`
+(`<tour> · panote`), `<meta name="robots" content="noindex">` for an unlisted tour, a
+`<script type="application/json" id="pn-boot">` holding `{slug, record, tour}` (with `<`
+escaped), and `<link rel="preload" as="fetch" crossorigin>` for the manifest and the six level-0
+tiles. The start scene follows `TourView` (a valid `?pano=` wins; an embed pinned to an unknown
+scene gets no preloads). The tile URLs come from core's `tilePath` and the CDN root from the
+`data-cdn-base` attribute the Vite build puts on its CDN preconnect link (`VITE_CDN_BASE`), so the
+script has no CDN var. `crossorigin` matters: it matches the viewer's CORS `fetch()`, so the
+browser reuses the preload. The SPA's `TourPage` passes `#pn-boot` to `loadPublishedTour` on its
+first attempt, which uses it only if it is for the same slug and passes the same schemas.
+The R2 reads get 300 ms (`BOOT_BUDGET_MS`); past that the script logs a warning and serves
+the plain page, so a slow R2 adds at most that much TTFB. A primed response has no `ETag` and is
+never a `304`. HEAD, a missing or invalid bundle, a
+non-HTML asset response and any R2 error serve the plain page, so the SPA fetches as before.
+That is two extra R2 reads per tour page view; the browser makes three fewer CDN reads.
 Post-deploy checks (dev; production the same on `panote.io`):
 - `curl -sI https://panote.dev/s/<old-slug>` on a renamed tour: `308`,
   `Location: /s/<new-slug>`, `Cache-Control: no-store`.
 - `curl -sI https://panote.dev/s/<live-slug>`: `200` with `frame-ancestors 'none'` in the CSP.
 - `curl -sI https://panote.dev/s/<live-slug>/embed` (and `/embed/`): `200` with `frame-ancestors *`.
   These two confirm `_headers` still applies to responses that pass through the script.
+- `curl -s https://panote.dev/s/<live-slug> | grep -c 'rel="preload"'`: `7`, plus the tour's
+  title in `<title>` and a `pn-boot` script. (panote.dev is behind Access, so pass the Access
+  cookie or check from a signed-in browser's view-source.)
 
 **Admin's assets layout.** Assets build into `dist/app/` so `/app/assets/…` maps onto files, but
 the Worker's assets root is `dist/`. Workers' SPA fallback always serves the *root*
@@ -132,6 +153,12 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
 the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
 Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CSP would block.
+`/assets/*` (content-hashed) also gets `Cache-Control: public, max-age=31536000, immutable`, so a
+returning visitor doesn't revalidate the JS, CSS and fonts; HTML keeps the Workers default
+(`max-age=0, must-revalidate`). Admin's assets live under `/app/assets/`, so its Vite config
+passes `assetsBase: '/app/'` and its block is `/app/assets/*`. The website build also adds
+`<link rel="preconnect" href="<cdn origin>" crossorigin data-cdn-base="<cdn root>">` to
+`index.html` (the `cdnPreconnect` plugin in `apps/website/vite.config.ts`).
 The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Off production every path
 also gets `X-Robots-Tag: noindex, nofollow` (see Search engines below).
 
@@ -463,6 +490,52 @@ returned `204`, and 20s later both came back `404` (`cf-cache-status: BYPASS`), 
 `404`. admin-api logged no `cdn purge failed`/`skipped` line, and it logs nothing on success. The
 first `DELETE`, right after upload, got `409` from the recent-upload guard, so wait an hour.
 Production has no token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
+
+### CDN cache rules
+
+Cache Rules on the CDN zone live in `infra/cloudflare/cache-rules.<env>.json` and go live with
+`infra/cloudflare/apply-cache-rules.sh <env>`. Cloudflare keeps all of a zone's cache rules in
+one `http_request_cache_settings` entrypoint ruleset, and a PUT replaces all of it, so the script:
+
+1. GETs the live entrypoint (a zone with no cache rules yet has none, which counts as empty),
+2. keeps every rule the file doesn't manage exactly as it is (today `tiles-404-short-ttl`, which
+   was made in the dashboard), and replaces or appends each managed rule by its `ref`,
+3. prints a unified diff of live vs after, and
+4. PUTs only with `--yes`. Without it, or with `--dry-run`, nothing is written (both flags
+   together is an error). If nothing changed it says so and exits. Right before the PUT it reads
+   the live rules again and stops without writing if they changed since the diff.
+
+```bash
+# Token: My Profile → API Tokens → Custom token, Zone → Cache Rules: Edit, scoped to panote.dev
+# (Read is enough for --dry-run). Not the wrangler OAuth login.
+export CF_API_TOKEN=...
+infra/cloudflare/apply-cache-rules.sh dev --dry-run   # show the diff
+infra/cloudflare/apply-cache-rules.sh dev --yes       # apply it
+# Offline: diff against a saved GET response instead of the API
+infra/cloudflare/apply-cache-rules.sh dev --dry-run --live-file saved.json
+```
+
+The managed rule today is `panote-json-edge-cache`: on `cdn.panote.dev`, `/slugs/*` and `/pub/*`
+are eligible for cache with the edge TTL taken from the origin (`max-age=30` from the R2 binding
+writes) and a `404` never stored. The staleness bound is the same 30s the browser cache already
+has, and unpublish purges both URLs (CDN purge on delete, above). `manifest.json` is left out on
+purpose: after an image replace, admin's `refreshManifestCache` only refreshes the browser's copy,
+so an edge copy would keep the old manifest for up to 30s. The tour page primes the start
+manifest anyway (Tour page priming, above).
+
+**Status: written, not applied.** The dry run against the live dev ruleset (read 2026-10-10)
+shows `tiles-404-short-ttl` kept and the one new rule appended. After applying, check:
+- `curl -sI https://cdn.panote.dev/slugs/<live-slug>.json` twice: the second is
+  `cf-cache-status: HIT`.
+- `curl -sI https://cdn.panote.dev/slugs/no-such-slug.json`: `404`, never `HIT`.
+- The same slug URL with `-H 'Origin: http://localhost:5174'` and then `-H 'Origin:
+  https://panote.dev'` each gets its own origin back in `access-control-allow-origin` (a cached
+  CORS header must not leak across origins; tiles already work this way).
+- A tile 404 is still `BYPASS` and a manifest is still `DYNAMIC`.
+
+Rollback: taking the rule out of the JSON doesn't remove it live, because the script only
+upserts. Remove it in the dashboard (Rules → Cache Rules) instead. Production gets
+its own `cache-rules.production.json` once `panote.io` is a zone.
 
 ---
 
@@ -1134,13 +1207,15 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
   `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge
   TTL instead (plan: `docs/wave6-plan.md` section 3.5, unit O1), added via the dashboard (Rules →
-  Cache Rules; not scriptable with wrangler). Verified live: a tile 404 returns
+  Cache Rules; not scriptable with wrangler). `apply-cache-rules.sh` carries it over unchanged
+  (CDN cache rules). Verified live: a tile 404 returns
   `cf-cache-status: BYPASS`, an existing tile still `HIT`, and `manifest.json` is unaffected —
   still `DYNAMIC`, as it already was.
 - **`manifest.json` isn't edge-cached.** It comes back `cf-cache-status: DYNAMIC` — Cloudflare
   doesn't cache `.json` by default — so its `cache-control: max-age=30` has no effect at the edge;
   every manifest fetch hits R2 directly. Correct behavior, just not what the `max-age` might
-  suggest.
+  suggest. It stays that way on purpose; `/slugs/` and `/pub/` get an edge cache rule once
+  `apply-cache-rules.sh` runs (CDN cache rules).
 - **`wrangler r2 bucket info`'s `object_count` lags badly** — it reported `0` while the bucket
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120

@@ -1,4 +1,5 @@
-import { resolveSlugRedirect } from './redirect.js';
+import { preloadLinks, preloadUrls, readTourBoot, scriptJson, type TourBoot } from './boot.js';
+import { resolveSlug, type SlugResolution } from './redirect.js';
 
 // Same value as NOINDEX in @internal/web-kit, kept local so the script bundles nothing else.
 const NOINDEX = 'noindex, nofollow';
@@ -11,23 +12,122 @@ function withRobots(response: Response, env: Env): Response {
   return tagged;
 }
 
+/** A CDN root as the Vite build writes it into index.html: an http(s) URL ending in `/`. */
+const CDN_BASE = /^https?:\/\/[^\s"<>]+\/$/;
+
+/**
+ * Primes the SPA's HTML for one tour: the real title, the data the SPA would fetch
+ * (`#pn-boot`, which TourPage hands to loadPublishedTour on its first attempt, used only
+ * for the same slug and after the same schema checks; a retry always fetches), and
+ * preloads for the start scene's manifest and level-0 tiles so they download alongside
+ * the JS. The CDN root comes from the
+ * preconnect link the Vite build adds (`data-cdn-base`), so the Worker needs no var.
+ */
+function primeHtml(response: Response, boot: TourBoot): Response {
+  const title = `${boot.tour.title} · panote`;
+  const data = scriptJson({ slug: boot.slug, record: boot.record, tour: boot.tour });
+  const unlisted = boot.tour.visibility === 'unlisted';
+  const rewritten = new HTMLRewriter()
+    .on('title', {
+      element(el) {
+        el.setInnerContent(title);
+      },
+    })
+    .on('link[data-cdn-base]', {
+      element(el) {
+        const cdnBase = el.getAttribute('data-cdn-base') ?? '';
+        if (!boot.manifest || !CDN_BASE.test(cdnBase)) return;
+        el.after(preloadLinks(preloadUrls(`${cdnBase}tiles/`, boot.manifest)), { html: true });
+      },
+    })
+    .on('head', {
+      element(el) {
+        if (unlisted) el.append('<meta name="robots" content="noindex">', { html: true });
+        el.append(`<script type="application/json" id="pn-boot">${data}</script>`, {
+          html: true,
+        });
+      },
+    })
+    .transform(response);
+  const primed = new Response(rewritten.body, rewritten);
+  // The body is now per-tour and per-request; the asset's ETag no longer describes it.
+  primed.headers.delete('ETag');
+  return primed;
+}
+
+/**
+ * How long the R2 reads may hold the HTML back. Past this the page goes out plain and the
+ * SPA fetches the tour itself, so a slow R2 costs at most this much TTFB.
+ */
+export const BOOT_BUDGET_MS = 300;
+
+function withinBudget<T>(read: Promise<T | null>): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`tour boot read took over ${BOOT_BUDGET_MS}ms; serving the plain page`);
+      resolve(null);
+    }, BOOT_BUDGET_MS);
+  });
+  return Promise.race([read, timeout]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
+const isHtml = (response: Response): boolean =>
+  response.status === 200 && (response.headers.get('Content-Type') ?? '').includes('text/html');
+
+/** The live tour page: index.html primed with R2 data, or plain on any failure. */
+async function tourPage(
+  request: Request,
+  env: Env,
+  live: Extract<SlugResolution, { kind: 'tour' }>,
+): Promise<Response> {
+  const url = new URL(request.url);
+  // Never a 304: a primed page has no validator, and a cached plain one must not win.
+  const headers = new Headers(request.headers);
+  headers.delete('If-None-Match');
+  headers.delete('If-Modified-Since');
+  const [html, boot] = await Promise.all([
+    env.ASSETS.fetch(new Request(request, { headers })),
+    withinBudget(
+      readTourBoot(env.BUCKET, live.path, live.record, url).catch((err: unknown) => {
+        console.error('tour boot read failed', err);
+        return null;
+      }),
+    ),
+  ]);
+  if (!boot || !isHtml(html)) return html;
+  // Covers the synchronous rewriter setup only: the rewrite itself streams after this
+  // returns, and its handlers just insert strings built above, so they have nothing to throw.
+  try {
+    return primeHtml(html, boot);
+  } catch (err) {
+    console.error('tour page priming failed', err);
+    return html;
+  }
+}
+
 // Runs only for /s/* (assets.run_worker_first); every other path never reaches it.
 export default {
   async fetch(request, env): Promise<Response> {
     if (request.method === 'GET' || request.method === 'HEAD') {
-      let location: string | null = null;
+      let resolved: SlugResolution | null = null;
       try {
-        location = await resolveSlugRedirect(new URL(request.url), env.BUCKET);
+        resolved = await resolveSlug(new URL(request.url), env.BUCKET);
       } catch (err) {
         // An R2 hiccup must not take the viewer down: the SPA resolves the slug itself.
-        console.error('slug redirect lookup failed', err);
+        console.error('slug lookup failed', err);
       }
-      if (location) {
+      if (resolved?.kind === 'redirect') {
         const redirect = new Response(null, {
           status: 308,
-          headers: { Location: location, 'Cache-Control': 'no-store' },
+          headers: { Location: resolved.location, 'Cache-Control': 'no-store' },
         });
         return withRobots(redirect, env);
+      }
+      if (resolved?.kind === 'tour' && request.method === 'GET') {
+        return withRobots(await tourPage(request, env, resolved), env);
       }
     }
     return withRobots(await env.ASSETS.fetch(request), env);

@@ -3,7 +3,6 @@ import { FACES } from '@panote/core';
 import { PanoViewer } from './PanoViewer.js';
 import type { View } from './types.js';
 import { TileLayer } from './tile-layer.js';
-import { TileFailureMonitor, setSharedTileFailureMonitor } from './tile-retry.js';
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -179,14 +178,10 @@ describe('PanoViewer', () => {
     vi.stubGlobal('cancelAnimationFrame', raf.cancel);
     FakeResizeObserver.instances = [];
     FakeIntersectionObserver.instances = [];
-    // load() builds a TileLayer on the module-scoped failure monitor; drop it
-    // so no backoff state survives from one test to the next.
-    setSharedTileFailureMonitor();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    setSharedTileFailureMonitor();
   });
 
   describe('device-pixel-ratio-aware level selection', () => {
@@ -278,9 +273,9 @@ describe('PanoViewer', () => {
 
     /**
      * The budget as the tile layer actually received it, in tiles. This
-     * manifest's tileSize is 512, so one tile is 512 * 512 * 4 = 1 MiB and the
-     * tile count equals the budget in MB — the layer having the right number of
-     * them is the only thing the budget is for.
+     * manifest's tileSize is 512, so one tile with its mips is 4/3 MiB and the
+     * tile count is three quarters of the budget in MB — the layer having the
+     * right number of them is the only thing the budget is for.
      */
     async function loadedMaxTiles(viewer: PanoViewer): Promise<number> {
       await viewer.load('pano-a');
@@ -290,21 +285,21 @@ describe('PanoViewer', () => {
     it('doubles the default budget on a devicePixelRatio-2 display', async () => {
       stubDisplay(2);
       const viewer = new PanoViewer(makeContainer(1422, 800));
-      expect(await loadedMaxTiles(viewer)).toBe(256);
+      expect(await loadedMaxTiles(viewer)).toBe(192);
       viewer.dispose();
     });
 
     it('leaves the default budget alone when the host reports no pixel ratio', async () => {
       stubDisplay(undefined);
       const viewer = new PanoViewer(makeContainer(1422, 800));
-      expect(await loadedMaxTiles(viewer)).toBe(128);
+      expect(await loadedMaxTiles(viewer)).toBe(96);
       viewer.dispose();
     });
 
     it('does not scale past the cap on a devicePixelRatio-3 display', async () => {
       stubDisplay(3);
       const viewer = new PanoViewer(makeContainer(1422, 800));
-      expect(await loadedMaxTiles(viewer)).toBe(256);
+      expect(await loadedMaxTiles(viewer)).toBe(192);
       viewer.dispose();
     });
 
@@ -314,11 +309,11 @@ describe('PanoViewer', () => {
       // default is subject to.
       stubDisplay(2);
       const small = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 64 });
-      expect(await loadedMaxTiles(small)).toBe(64);
+      expect(await loadedMaxTiles(small)).toBe(48);
       small.dispose();
 
       const large = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 512 });
-      expect(await loadedMaxTiles(large)).toBe(512);
+      expect(await loadedMaxTiles(large)).toBe(384);
       large.dispose();
     });
   });
@@ -1215,7 +1210,8 @@ describe('PanoViewer', () => {
     it('keeps the preview on top of an older version of the same pano, past its tiles-settled', async () => {
       // A replace keeps the panoId: the manifest can still be the old image's.
       // Detail tiles wait, so the frames before they land can be checked.
-      const tiles = stubTiles(detailTile);
+      let holding = true;
+      const tiles = stubTiles((url) => holding && detailTile(url));
       manifestVersion = 'v1';
       const viewer = new PanoViewer(makeContainer(400, 800));
       const settled = vi.fn();
@@ -1229,6 +1225,7 @@ describe('PanoViewer', () => {
         { handle: 1, level: 3 },
         { handle: 2, level: 3 },
       ]);
+      holding = false; // parents queued after the release must not wait either
       tiles.release();
       await settle(viewer, settled);
       expect(settled).toHaveBeenCalledTimes(1);
@@ -1237,9 +1234,11 @@ describe('PanoViewer', () => {
 
       // The new version lands: now the tiles are the preview's own.
       manifestVersion = 'v2';
+      holding = true;
       await viewer.load('pano-a');
       tick(viewer);
       expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
+      holding = false;
       tiles.release();
       await settle(viewer, settled, 2);
       expect(settled).toHaveBeenCalledTimes(2);
@@ -1250,7 +1249,8 @@ describe('PanoViewer', () => {
     });
 
     it('takes any manifest as its own without replacesVersion (a new pano)', async () => {
-      const tiles = stubTiles(detailTile);
+      let holding = true;
+      const tiles = stubTiles((url) => holding && detailTile(url));
       manifestVersion = 'v7';
       const viewer = new PanoViewer(makeContainer(400, 800));
       const settled = vi.fn();
@@ -1259,6 +1259,7 @@ describe('PanoViewer', () => {
       await viewer.load('pano-a');
       tick(viewer);
       expect(previewItems(viewer).map((d) => d.level)).toEqual([0.5, 0.5]);
+      holding = false;
       tiles.release();
       await settle(viewer, settled);
       expect(rendererOf(viewer).removeTile).toHaveBeenCalledWith(1);
@@ -1305,48 +1306,6 @@ describe('PanoViewer', () => {
         .filter((d) => d.handle <= 4)
         .map((d) => d.level);
       expect(levels).toEqual([2.5, 2.5, 2.5, 2.5]);
-      viewer.dispose();
-    });
-
-    it('keeps the preview while the backoff holds its tiles in the queue', async () => {
-      let holding = true;
-      stubTiles((url) => holding && !url.includes('/0/'));
-      let clock = 0;
-      const monitor = new TileFailureMonitor({ now: () => clock });
-      setSharedTileFailureMonitor(monitor);
-      const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
-      const settled = vi.fn();
-      viewer.on('tiles-settled', settled);
-      viewer.showPreview('pano-a', source());
-      await viewer.load('pano-a');
-
-      // Two other panoramas fail: the backoff trips.
-      monitor.fail(monitor.acquire()!, 'other-1', 'transient');
-      monitor.fail(monitor.acquire()!, 'other-2', 'transient');
-      expect(monitor.canStart()).toBe(false);
-      const detailFetches = () =>
-        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/2/')).length;
-      const started = detailFetches();
-      // Turning away aborts the tiles the load primed, so only the queue, held
-      // by the backoff, is left pending.
-      viewer.setView({ yaw: Math.PI });
-      holding = false;
-      for (let i = 0; i < 3; i++) {
-        await flush();
-        tick(viewer);
-      }
-      expect(detailFetches()).toBe(started);
-      expect(settled).not.toHaveBeenCalled();
-      expect(previewItems(viewer)).toHaveLength(2);
-
-      // The window passes: the held tiles start, land, and only then settle.
-      clock += 60_000;
-      tick(viewer);
-      expect(detailFetches()).toBeGreaterThan(started);
-      expect(settled).not.toHaveBeenCalled();
-      await settle(viewer, settled);
-      expect(settled).toHaveBeenCalledTimes(1);
-      expect(previewItems(viewer)).toEqual([]);
       viewer.dispose();
     });
 

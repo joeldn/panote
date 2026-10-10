@@ -725,7 +725,7 @@ export class PanoViewer {
     viewProjection(view, this.aspect, this.opts.maxHorizontalFov, this.viewProj);
     this.renderer.setCamera(this.viewProj);
     dirInto(this.fwd, view.yaw, view.pitch);
-    // selectLevel()'s math (see packages/core/src/lod.ts) compares texel
+    // selectLevel()'s math (see lod.ts) compares texel
     // density against what is actually rasterised, so it needs the
     // framebuffer's device-pixel height, not the container's CSS-pixel
     // height — the renderer sizes the canvas by devicePixelRatio (see
