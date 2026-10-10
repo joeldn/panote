@@ -1,5 +1,6 @@
 import type { RouteObject } from 'react-router';
 
+import { RouteError } from './RouteError.js';
 import { TourError, TourPage } from './tour/TourPage.js';
 
 // Everything under the Shell is its own chunk, so a tour visitor never downloads the
@@ -17,6 +18,8 @@ export const routes: RouteObject[] = [
     lazy: async () => ({ Component: (await import('./Shell.js')).Shell }),
     // The chunks are small; render nothing for the moment they take.
     HydrateFallback: () => null,
+    // A chunk missing after a deploy (e.g. the tour bar's home link) reloads once.
+    errorElement: <RouteError />,
     children: [
       { index: true, lazy: page('Landing') },
       { path: 'privacy', lazy: page('Privacy') },
