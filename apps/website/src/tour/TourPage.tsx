@@ -1,6 +1,6 @@
 import { loadPublishedTour, type PublishedTourResult } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams, useRouteError } from 'react-router';
 
 import { useConfig } from '../config-context.js';
 import { TourView } from './TourView.js';
@@ -71,4 +71,14 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
       <meta name="robots" content="noindex" />
     </div>
   );
+}
+
+/**
+ * The `/s/*` routes' errorElement: a render error anywhere in the tour chrome shows the
+ * retry placeholder instead of react-router's stack page. Retry reloads the page.
+ */
+export function TourError({ embed = false }: { embed?: boolean }) {
+  const error = useRouteError();
+  useEffect(() => console.error('tour render failed', error), [error]);
+  return <Unavailable embed={embed} retry={() => window.location.reload()} />;
 }

@@ -88,7 +88,9 @@ class FakeViewer {
 
 let viewers: FakeViewer[];
 let failLoads: boolean;
+let throwOnCreate: boolean;
 const createViewer: ViewerFactory = (_el, options) => {
+  if (throwOnCreate) throw new Error('viewer blew up');
   const v = new FakeViewer(options);
   v.failLoad = failLoads;
   viewers.push(v);
@@ -174,6 +176,7 @@ const viewRecorded = () => waitFor(() => expect(calls('/api/tours/tour-a/view'))
 beforeEach(() => {
   viewers = [];
   failLoads = false;
+  throwOnCreate = false;
   objects = { 'slugs/old-town.json': live, 'pub/tours/tour-a.json': bundle() };
   viewGate = null;
   adminTour = 200;
@@ -255,6 +258,39 @@ describe('/s/:slug', () => {
     expect(screen.getByRole('link', { name: 'Open video ↗' }).getAttribute('href')).toBe(
       'https://other.test/clip.mp4',
     );
+  });
+
+  it('checks media URLs without URL.canParse (Safari 16)', async () => {
+    objects['pub/tours/tour-a.json'] = bundle({
+      scenes: [
+        scene('square', 'Square', [
+          {
+            id: 'm1',
+            type: 'info',
+            yaw: 0,
+            pitch: 0,
+            title: 'Plan',
+            media: { kind: 'image', url: `${CDN}media/plan.jpg` },
+          },
+        ]),
+      ],
+    });
+    // jsdom's URL inherits canParse from Node's, so delete it where it is defined.
+    let owner: object | null = URL;
+    while (owner && !Object.hasOwn(owner, 'canParse')) owner = Object.getPrototypeOf(owner);
+    const canParse = owner && Object.getOwnPropertyDescriptor(owner, 'canParse');
+    if (owner) Reflect.deleteProperty(owner, 'canParse');
+    expect('canParse' in URL).toBe(false);
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
+      expect(screen.getByRole('complementary').querySelector('img')?.getAttribute('src')).toBe(
+        `${CDN}media/plan.jpg`,
+      );
+    } finally {
+      if (owner && canParse) Object.defineProperty(owner, 'canParse', canParse);
+    }
   });
 
   it('honours the tour settings', async () => {
@@ -416,6 +452,21 @@ describe('unavailable placeholder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByText('Old town')).toBeTruthy();
   });
+});
+
+describe('route error boundary', () => {
+  it.each(['/s/old-town', '/s/old-town/embed'])(
+    'shows the retry placeholder when %s throws while rendering',
+    async (path) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      throwOnCreate = true;
+      renderAt(path);
+      expect(
+        await screen.findByRole('heading', { name: "This tour couldn't be loaded" }),
+      ).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    },
+  );
 });
 
 describe('slug aliases fetched by the SPA (no Worker)', () => {
