@@ -17,8 +17,10 @@ const CDN_BASE = /^https?:\/\/[^\s"<>]+\/$/;
 
 /**
  * Primes the SPA's HTML for one tour: the real title, the data the SPA would fetch
- * (`#pn-boot`, read once by TourPage), and preloads for the start scene's manifest and
- * level-0 tiles so they download alongside the JS. The CDN root comes from the
+ * (`#pn-boot`, which TourPage hands to loadPublishedTour on its first attempt, used only
+ * for the same slug and after the same schema checks; a retry always fetches), and
+ * preloads for the start scene's manifest and level-0 tiles so they download alongside
+ * the JS. The CDN root comes from the
  * preconnect link the Vite build adds (`data-cdn-base`), so the Worker needs no var.
  */
 function primeHtml(response: Response, boot: TourBoot): Response {
@@ -53,6 +55,25 @@ function primeHtml(response: Response, boot: TourBoot): Response {
   return primed;
 }
 
+/**
+ * How long the R2 reads may hold the HTML back. Past this the page goes out plain and the
+ * SPA fetches the tour itself, so a slow R2 costs at most this much TTFB.
+ */
+export const BOOT_BUDGET_MS = 300;
+
+function withinBudget<T>(read: Promise<T | null>): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`tour boot read took over ${BOOT_BUDGET_MS}ms; serving the plain page`);
+      resolve(null);
+    }, BOOT_BUDGET_MS);
+  });
+  return Promise.race([read, timeout]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
+}
+
 const isHtml = (response: Response): boolean =>
   response.status === 200 && (response.headers.get('Content-Type') ?? '').includes('text/html');
 
@@ -69,12 +90,16 @@ async function tourPage(
   headers.delete('If-Modified-Since');
   const [html, boot] = await Promise.all([
     env.ASSETS.fetch(new Request(request, { headers })),
-    readTourBoot(env.BUCKET, live.path, live.record, url).catch((err: unknown) => {
-      console.error('tour boot read failed', err);
-      return null;
-    }),
+    withinBudget(
+      readTourBoot(env.BUCKET, live.path, live.record, url).catch((err: unknown) => {
+        console.error('tour boot read failed', err);
+        return null;
+      }),
+    ),
   ]);
   if (!boot || !isHtml(html)) return html;
+  // Covers the synchronous rewriter setup only: the rewrite itself streams after this
+  // returns, and its handlers just insert strings built above, so they have nothing to throw.
   try {
     return primeHtml(html, boot);
   } catch (err) {

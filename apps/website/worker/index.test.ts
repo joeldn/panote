@@ -1,7 +1,7 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import worker from './index.js';
+import worker, { BOOT_BUDGET_MS } from './index.js';
 import { parseSlugPath } from './redirect.js';
 
 const ORIGIN = 'https://panote.test';
@@ -247,10 +247,18 @@ describe('primes a live tour page', () => {
   });
 
   it('drops the ETag and never answers 304', async () => {
-    const res = await call('/s/new-name', { headers: { 'If-None-Match': '"abc"' } });
+    const res = await call('/s/new-name', {
+      headers: {
+        'If-None-Match': '"abc"',
+        'If-Modified-Since': 'Sat, 10 Oct 2026 00:00:00 GMT',
+        Accept: 'text/html',
+      },
+    });
     expect(res.headers.get('ETag')).toBeNull();
     const forwarded = assets.fetch.mock.calls[0]![0];
     expect(forwarded.headers.get('If-None-Match')).toBeNull();
+    expect(forwarded.headers.get('If-Modified-Since')).toBeNull();
+    expect(forwarded.headers.get('Accept')).toBe('text/html');
   });
 
   it('preloads the ?pano= scene when the tour has it', async () => {
@@ -319,11 +327,39 @@ describe('primes a live tour page', () => {
     expect(await (await call('/s/new-name')).text()).toBe(PAGE);
   });
 
-  it('leaves a non-HTML asset response alone', async () => {
-    assets.fetch.mockResolvedValueOnce(new Response('gone', { status: 404 }));
+  it.each([
+    ['a 404, even with an HTML body', 404, 'text/html; charset=utf-8'],
+    ['a 200 that is not HTML', 200, 'text/plain'],
+  ])('leaves %s alone', async (_name, status, type) => {
+    assets.fetch.mockResolvedValueOnce(
+      new Response(PAGE, { status, headers: { 'Content-Type': type, ETag: '"abc"' } }),
+    );
     const res = await call('/s/new-name');
-    expect(res.status).toBe(404);
-    expect(await res.text()).toBe('gone');
+    expect(res.status).toBe(status);
+    expect(await res.text()).toBe(PAGE);
+    expect(res.headers.get('ETag')).toBe('"abc"');
+  });
+
+  it('serves the plain page when the R2 reads outlast the budget', async () => {
+    const get = env.BUCKET.get.bind(env.BUCKET);
+    vi.spyOn(env.BUCKET, 'get').mockImplementation((key: string) =>
+      key.startsWith('pub/') ? new Promise<never>(() => {}) : get(key),
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const started = Date.now();
+    const res = await call('/s/new-name');
+    expect(await res.text()).toBe(PAGE);
+    expect(Date.now() - started).toBeLessThan(BOOT_BUDGET_MS + 1500);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('serves the plain page when the rewriter cannot be set up', async () => {
+    vi.spyOn(HTMLRewriter.prototype, 'transform').mockImplementation(() => {
+      throw new Error('no rewriter');
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call('/s/new-name');
+    expect(await res.text()).toBe(PAGE);
   });
 });
 
