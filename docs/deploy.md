@@ -153,8 +153,8 @@ the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the 
 Vite's `assetsInlineLimit` is 0 so no asset turns into a `data:` URI that the CSP would block.
 `/assets/*` (content-hashed) also gets `Cache-Control: public, max-age=31536000, immutable`, so a
 returning visitor doesn't revalidate the JS, CSS and fonts; HTML keeps the Workers default
-(`max-age=0, must-revalidate`). Admin's assets live under `/app/assets/`, so admin only gets this
-once its Vite config passes `assetsBase: '/app/'` (not done yet). The website build also adds
+(`max-age=0, must-revalidate`). Admin's assets live under `/app/assets/`, so its Vite config
+passes `assetsBase: '/app/'` and its block is `/app/assets/*`. The website build also adds
 `<link rel="preconnect" href="<cdn origin>" crossorigin data-cdn-base="<cdn root>">` to
 `index.html` (the `cdnPreconnect` plugin in `apps/website/vite.config.ts`).
 The embed rule is repeated for `/s/:slug/embed/` (trailing slash). Off production every path
