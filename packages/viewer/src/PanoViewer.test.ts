@@ -739,6 +739,15 @@ describe('PanoViewer', () => {
       expect(centre.y).toBeCloseTo(400, 3);
     });
 
+    it('projects from the initial view before the first frame', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: Math.PI } });
+      const ahead = viewer.project(Math.PI, 0);
+      expect(ahead.behind).toBe(false);
+      expect(ahead.x).toBeCloseTo(200, 3);
+      expect(viewer.project(0, 0).behind).toBe(true);
+      viewer.dispose();
+    });
+
     it('takes the size from ResizeObserver entries', () => {
       vi.stubGlobal('ResizeObserver', FakeResizeObserver);
       const viewer = new PanoViewer(makeContainer(400, 800));

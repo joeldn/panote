@@ -186,7 +186,10 @@ export class PanoViewer {
     // The one layout read outside a resize: the size until the first
     // ResizeObserver callback reports it.
     this.resizeTo(container.clientWidth, container.clientHeight);
+    // project() works before the first frame too (chrome places itself as
+    // soon as the viewer exists), so the camera it reads starts out current.
     viewProjection(this.view, this.aspect, this.opts.maxHorizontalFov, this.viewProj);
+    dirInto(this.fwd, this.view.yaw, this.view.pitch);
     // Built once: the canvas and this host never change, and rebuilding it on
     // each load would drop a drag that is in progress when a scene swaps in.
     // The host is a private object, so the input methods stay off the
