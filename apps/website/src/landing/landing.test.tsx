@@ -19,6 +19,8 @@ import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 import { StageFactoryContext } from '../tour/stage-factory.js';
 
+type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
+
 const stash = vi.hoisted(() => vi.fn<(file: File) => Promise<boolean>>(async () => true));
 vi.mock('@internal/web-kit', async (importOriginal) => ({
   ...(await importOriginal<typeof webKit>()),
@@ -184,7 +186,10 @@ describe('landing showcase', () => {
     const createViewer: ViewerFactory = (_el, opts) => {
       options.push(opts);
       const viewer = {
-        load: vi.fn(async (id: string) => void loads.push(id)),
+        load: vi.fn(async (id: string, _opts?: LoadOptions): Promise<boolean> => {
+          loads.push(id);
+          return true;
+        }),
         transitionTo: vi.fn(async () => {}),
         setView: vi.fn(),
         setNorth: vi.fn(),

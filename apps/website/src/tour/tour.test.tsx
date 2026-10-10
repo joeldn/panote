@@ -13,6 +13,7 @@ import { createSiteAuth } from '../site-auth.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 type ViewerOptions = Parameters<ViewerFactory>[1];
+type LoadOptions = Parameters<PanoViewer['load']>[1];
 type PanoViewer = ReturnType<ViewerFactory>;
 
 const CDN = 'https://cdn.test/';
@@ -62,9 +63,10 @@ class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
   failLoad = false;
   constructor(readonly options: ViewerOptions) {}
-  load = vi.fn(async (pano: string) => {
+  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
     if (this.failLoad) throw new Error('manifest 404');
     this.emit('scene-change', pano);
+    return true;
   });
   transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
   setView = vi.fn();
