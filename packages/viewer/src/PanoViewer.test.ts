@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from '@panote/core';
 import { PanoViewer } from './PanoViewer.js';
-import { TileFailureMonitor, setSharedTileFailureMonitor } from './tile-retry.js';
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -85,14 +84,10 @@ describe('PanoViewer', () => {
     );
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     FakeResizeObserver.instances = [];
-    // load() builds a TileLayer on the module-scoped failure monitor; drop it
-    // so no backoff state survives from one test to the next.
-    setSharedTileFailureMonitor();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    setSharedTileFailureMonitor();
   });
 
   describe('device-pixel-ratio-aware level selection', () => {
@@ -960,41 +955,6 @@ describe('PanoViewer', () => {
         .filter((d) => d.handle <= 4)
         .map((d) => d.level);
       expect(levels).toEqual([2.5, 2.5, 2.5, 2.5]);
-      viewer.dispose();
-    });
-
-    it('keeps the preview while the backoff holds its tiles in the queue', async () => {
-      const tiles = stubTiles((url) => !url.includes('/0/'));
-      let clock = 0;
-      const monitor = new TileFailureMonitor({ now: () => clock });
-      setSharedTileFailureMonitor(monitor);
-      const viewer = new PanoViewer(makeContainer(400, 800));
-      const settled = vi.fn();
-      viewer.on('tiles-settled', settled);
-      viewer.showPreview('pano-a', source());
-      await viewer.load('pano-a');
-
-      // Two other panoramas fail: the backoff trips with nothing in flight.
-      monitor.fail(monitor.acquire()!, 'other-1', 'transient');
-      monitor.fail(monitor.acquire()!, 'other-2', 'transient');
-      expect(monitor.canStart()).toBe(false);
-      for (let i = 0; i < 3; i++) {
-        await flush();
-        tick(viewer);
-      }
-      expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/2/'), expect.anything());
-      expect(settled).not.toHaveBeenCalled();
-      expect(previewItems(viewer)).toHaveLength(2);
-
-      // The window passes: the held tiles start, land, and only then settle.
-      clock += 60_000;
-      tick(viewer);
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/2/'), expect.anything());
-      expect(settled).not.toHaveBeenCalled();
-      tiles.release();
-      await settle(viewer, settled);
-      expect(settled).toHaveBeenCalledTimes(1);
-      expect(previewItems(viewer)).toEqual([]);
       viewer.dispose();
     });
 

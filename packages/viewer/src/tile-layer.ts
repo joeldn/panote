@@ -15,9 +15,7 @@ import {
   TileRetryBudget,
   classifyFailure,
   isAbortError,
-  sharedTileFailureMonitor,
   type FailureKind,
-  type TileFailureMonitor,
 } from './tile-retry.js';
 
 /**
@@ -27,7 +25,7 @@ import {
  */
 type TileLoadOutcome =
   | { kind: 'loaded' } // in the cache now — this call, or already there
-  | { kind: 'skipped' } // another call owns it, or the backoff suppressed it
+  | { kind: 'skipped' } // another call owns it
   | { kind: 'aborted' } // cancelled: panned away, or the layer was disposed
   | { kind: 'failed'; failure: FailureKind; error: unknown };
 
@@ -64,9 +62,9 @@ export class BaseTileLoadError extends Error {
 }
 
 /**
- * Wait between base-tile attempts. Injectable through the constructor for the
- * same reason the failure monitor owns the clock: the tests advance time by
- * hand rather than sleeping, so no test waits on a real timer.
+ * Wait between base-tile attempts. Injectable through the constructor, like
+ * the clock: the tests advance time by hand rather than sleeping, so no test
+ * waits on a real timer.
  *
  * The signal cuts the wait short — it is the layer's lifetime (see
  * `TileLayer.lifetime`), so a disposal is noticed within a microtask instead of
@@ -128,10 +126,10 @@ export class TileLayer {
   // Aborted by dispose(). Only the base loader's retry wait listens to it: the
   // in-flight fetches are cancelled through their own controllers in `inflight`.
   private lifetime = new AbortController();
-  // The one wake timer: fires onInvalidate when something held back may start
-  // again (the backoff lifting, or a failed tile's cooldown ending), so an
-  // idle viewer moves without waiting for an interaction. `wakeAt` is when it
-  // fires, on the retry clock, so an earlier need can replace a later one.
+  // The one wake timer: fires onInvalidate when a failed tile's cooldown ends,
+  // so an idle viewer retries it without waiting for an interaction. `wakeAt`
+  // is when it fires, on the retry clock, so an earlier need can replace a
+  // later one.
   private wakeTimer: ReturnType<typeof setTimeout> | undefined;
   private wakeAt = Infinity;
 
@@ -140,7 +138,6 @@ export class TileLayer {
   // pan away and back refills the hole) until it exhausts its attempt budget,
   // while a 404/410 is still skipped for good. See tile-retry.ts.
   private retry: TileRetryBudget;
-  private monitor: TileFailureMonitor;
 
   // Reusable scratch buffers — no per-frame allocation.
   private frustum: Frustum | null = null;
@@ -160,16 +157,14 @@ export class TileLayer {
     textureBudgetMB: number,
     private onInvalidate: () => void,
     maxConcurrent = 8,
-    monitor: TileFailureMonitor = sharedTileFailureMonitor(),
+    private now: () => number = () => performance.now(),
     private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
   ) {
     const tileMB = (manifest.tileSize * manifest.tileSize * 4) / (1024 * 1024);
     this.maxTiles = Math.max(24, Math.floor(textureBudgetMB / tileMB));
     this.maxConcurrent = maxConcurrent;
-    // The monitor owns the clock so per-tile cooldowns and the global backoff
-    // measure time the same way (and are faked together in tests).
-    this.monitor = monitor;
-    this.retry = new TileRetryBudget(() => this.monitor.now());
+    // Cooldowns and the wake timer share one clock (faked together in tests).
+    this.retry = new TileRetryBudget(this.now);
   }
 
   /**
@@ -185,10 +180,6 @@ export class TileLayer {
    * actually there, so a panorama that cannot load it is not a panorama that
    * loaded: this rejects rather than leaving the viewer to discover the hole
    * one hole at a time.
-   *
-   * Every failure still flows through the shared failure monitor (see
-   * `acquireExempt()`), so cross-panorama outage detection keeps working — the
-   * load just fails regardless of what the backoff would have preferred.
    */
   async loadBase(): Promise<void> {
     // allSettled, not all: a rejection from one face must not leave the other
@@ -209,7 +200,7 @@ export class TileLayer {
     const key = tileKey(0, face, 0, 0);
     let cause: unknown;
     for (;;) {
-      const result = await this.ensureTile(0, face, 0, 0, true);
+      const result = await this.ensureTile(0, face, 0, 0);
       if (result.kind === 'loaded') return;
       // Disposal (or a newer load superseding this one) tears the layer down
       // mid-flight. That is not the base layer failing — the caller already
@@ -347,13 +338,6 @@ export class TileLayer {
     // discarded.
     if (this.disposed) return;
     while (this.inflight.size < this.maxConcurrent && this.queueHead < this.queue.length) {
-      // Global backoff: hold the queue intact rather than draining it into
-      // no-op ensureTile calls. update() rebuilds it next frame anyway, and
-      // the one probe the monitor allows is started from here too.
-      if (!this.monitor.canStart()) {
-        this.armWake(this.monitor.msUntilStart());
-        return;
-      }
       const next = this.queue[this.queueHead++]!;
       if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
       void this.ensureTile(next.level, next.face, next.x, next.y);
@@ -362,16 +346,15 @@ export class TileLayer {
 
   /**
    * A frame is what refills and pumps the queue, and an idle viewer draws no
-   * frames. Without a wake, tiles held by the backoff or by a per-tile retry
-   * cooldown (and so tiles-settled, and a preview waiting on it) would wait
-   * for the next pan or zoom. One timer serves both: a later request keeps
-   * the earlier timer, an earlier one replaces it.
+   * frames. Without a wake, a tile held by a per-tile retry cooldown would
+   * wait for the next pan or zoom. One timer serves every tile: a later
+   * request keeps the earlier timer, an earlier one replaces it.
    */
   private armWake(ms: number): void {
     if (this.disposed || !Number.isFinite(ms)) return;
     // At least 1 ms, so a clock that disagrees with the timer cannot spin.
     const delay = Math.max(1, ms);
-    const at = this.monitor.now() + delay;
+    const at = this.now() + delay;
     if (this.wakeTimer !== undefined && this.wakeAt <= at) return;
     clearTimeout(this.wakeTimer);
     this.wakeAt = at;
@@ -431,18 +414,11 @@ export class TileLayer {
     face: Face,
     x: number,
     y: number,
-    exempt = false,
   ): Promise<TileLoadOutcome> {
     if (this.disposed) return { kind: 'aborted' };
     const key = tileKey(level, face, x, y);
     if (this.cache.has(key)) return { kind: 'loaded' };
     if (this.inflight.has(key)) return { kind: 'skipped' };
-    // Suppressed by the cross-panorama backoff — not a failure, and no attempt
-    // is spent, so the tile is re-queued unchanged once the window clears.
-    // Base tiles are exempt from suppression but not from reporting; see
-    // TileFailureMonitor.acquireExempt().
-    const permit = exempt ? this.monitor.acquireExempt() : this.monitor.acquire();
-    if (!permit) return { kind: 'skipped' };
     const url = tilePath(
       this.baseUrl,
       this.manifest.pano,
@@ -495,27 +471,22 @@ export class TileLayer {
         item: { handle, level },
       });
       this.retry.recordSuccess(key);
-      this.monitor.succeed(permit);
       this.onInvalidate();
       return { kind: 'loaded' };
     } catch (err) {
-      // Abort (from AbortController) is expected churn — leave re-queueable,
-      // spend no attempt and tell the monitor nothing. Everything else is
-      // classified: a permanent status (404/410/401/403) retires the tile for
-      // this load, a transient one costs an attempt and feeds the global
-      // failure monitor. Either way the coarser parent tile stays as fallback.
+      // Abort (from AbortController) is expected churn — leave re-queueable
+      // and spend no attempt. Everything else is classified: a permanent
+      // status (404/410/401/403) retires the tile for this load, a transient
+      // one costs an attempt. Either way the coarser parent tile stays as
+      // fallback.
       if (isAbortError(err)) return { kind: 'aborted' };
       const failure = classifyFailure(err);
       this.retry.recordFailure(key, failure);
-      this.monitor.fail(permit, this.manifest.pano, failure);
       // Still on screen: come back for it when its cooldown ends, even if
       // nothing else asks for a frame before then.
       if (this.desired.has(key)) this.armWake(this.retry.waitMs(key));
       return { kind: 'failed', failure, error: err };
     } finally {
-      // No-op when succeed()/fail() already settled it; this covers the
-      // abort and disposed-mid-load paths, which must still free the probe.
-      this.monitor.release(permit);
       // Only clear the slot this call owns. After an abort the key may already
       // belong to a reload, which must stay tracked: it still counts against
       // maxConcurrent and update() must still be able to abort it.
@@ -549,9 +520,8 @@ export class TileLayer {
 
   /**
    * Is any tile for the current view still to come? In flight, or queued: the
-   * queue is non-empty after pump() only when every slot is busy or the
-   * cross-panorama backoff is holding it, and a held queue is work that has
-   * not happened yet, not work that is done. A tile that failed is in neither
+   * queue is non-empty after pump() only when every slot is busy, and a held
+   * queue is work that has not happened yet, not work that is done. A tile that failed is in neither
    * (it is out of the queue while it waits out a per-tile cooldown, and for
    * good once it is permanent or out of attempts), so failures do not keep
    * this true.

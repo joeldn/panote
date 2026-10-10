@@ -3,7 +3,6 @@ import type { Manifest } from '@panote/core';
 import { FACES } from './cube.js';
 import { selectLevel } from './lod.js';
 import { TileLayer } from './tile-layer.js';
-import { TileFailureMonitor } from './tile-retry.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
@@ -132,9 +131,7 @@ describe('texture budget while panning', () => {
       budgetMB,
       () => {},
       8,
-      // A private monitor: this file's fetches all succeed, so no backoff can
-      // trip, but sharing module state between sweeps would be a hidden input.
-      new TileFailureMonitor(),
+      () => 0,
       () => Promise.resolve(),
     );
     await layer.loadBase();
@@ -194,7 +191,7 @@ describe('texture budget while panning', () => {
       1,
       () => {},
       8,
-      new TileFailureMonitor(),
+      () => 0,
       () => Promise.resolve(),
     );
     await layer.loadBase();

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Manifest } from '@panote/core';
 import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
 import { BaseTileLoadError, TileLayer } from './tile-layer.js';
-import { TileFailureMonitor } from './tile-retry.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import { sortDrawList, type GLRenderer } from './render/gl-renderer.js';
@@ -15,13 +14,12 @@ import { sortDrawList, type GLRenderer } from './render/gl-renderer.js';
 // PanoViewer.test.ts and render/gl-renderer.test.ts: a hand-built fake
 // renderer plus a scripted fetch, with no DOM anywhere.
 //
-// Time is injected: the failure monitor owns the clock TileLayer measures
-// retry cooldowns against (see tile-retry.ts), so every delay in these tests
-// is advanced by hand rather than waited on, and no test sleeps. The wake
-// timer tests fake setTimeout as well and advance both together.
+// Time is injected: TileLayer takes the clock it measures retry cooldowns
+// against, so every delay in these tests is advanced by hand rather than
+// waited on, and no test sleeps. The wake timer tests fake setTimeout as well
+// and advance both together.
 
 const TILE_COOLDOWN_MS = 1_000; // first per-tile retry delay (tile-retry.ts)
-const BACKOFF_MS = 10_000; // overridden below so it dwarfs the tile cooldown
 
 function makeManifest(pano: string): Manifest {
   return {
@@ -49,7 +47,6 @@ interface Scripted {
 
 describe('TileLayer failure handling', () => {
   let clock: number;
-  let monitor: TileFailureMonitor;
   let renderer: FakeRenderer;
   let requests: string[];
   let script: Scripted;
@@ -80,7 +77,7 @@ describe('TileLayer failure handling', () => {
       textureBudgetMB,
       onInvalidate,
       8,
-      monitor,
+      () => clock,
       // The injected sleep advances the same clock the retry budget measures
       // its cooldowns against, so a base-layer retry is exercised for real
       // without any test waiting on a real timer.
@@ -110,7 +107,6 @@ describe('TileLayer failure handling', () => {
 
   beforeEach(() => {
     clock = 1_000_000;
-    monitor = new TileFailureMonitor({ now: () => clock, baseDelayMs: BACKOFF_MS });
     renderer = new FakeRenderer();
     requests = [];
     sleeps = [];
@@ -236,146 +232,6 @@ describe('TileLayer failure handling', () => {
     await render(layer, 0);
     expect(new Set(requests)).toEqual(facing);
     expect(layer.drawList()).toHaveLength(facing.size);
-  });
-
-  it('does NOT trip the global backoff when failures stay in one panorama', async () => {
-    const layer = makeLayer();
-    script = { status: 500 };
-
-    for (let i = 0; i < 4; i++) {
-      await render(layer, 0);
-      advance(5_000);
-    }
-
-    expect(monitor.backingOff()).toBe(false);
-    expect(monitor.escalationLevel).toBe(0);
-  });
-
-  it('trips the global backoff when failures span two panoramas', async () => {
-    // Panorama A's layer is disposed before B's is built, exactly as
-    // PanoViewer.load() does it — only the shared monitor spans the two.
-    const layerA = makeLayer('pano-a');
-    script = { status: 500 };
-    await render(layerA, 0);
-    expect(monitor.backingOff()).toBe(false);
-    layerA.dispose();
-
-    const layerB = makeLayer('pano-b');
-    await render(layerB, 0);
-    expect(monitor.backingOff()).toBe(true);
-    expect(monitor.escalationLevel).toBe(1);
-
-    // New fetches are suppressed while the window is open.
-    const before = requests.length;
-    advance(TILE_COOLDOWN_MS);
-    await render(layerB, 0);
-    expect(requests).toHaveLength(before);
-  });
-
-  it('suppresses a pan-triggered retry while the backoff is active, then probes once', async () => {
-    const layerA = makeLayer('pano-a');
-    script = { status: 500 };
-    await render(layerA, 0);
-    const facing = new Set(requests);
-
-    const layerB = makeLayer('pano-b');
-    await render(layerB, 0);
-    expect(monitor.backingOff()).toBe(true);
-
-    // Pan away and back on A. Its tiles are past their cooldown and would be
-    // retried on their own — the global backoff is the only thing stopping
-    // them, and the owner was explicit that it must.
-    advance(TILE_COOLDOWN_MS + 1);
-    await render(layerA, Math.PI);
-    requests = [];
-    await render(layerA, 0);
-    expect(requests).toHaveLength(0);
-
-    // Halfway through the window exactly one probe is allowed through, so a
-    // recovered network is noticed without waiting the whole delay out. This
-    // one still fails, which is proof the outage continues: the ladder goes up
-    // a rung and a fresh, longer window opens.
-    advance(BACKOFF_MS / 2);
-    await render(layerA, 0);
-    expect(requests).toHaveLength(1);
-    expect(facing.has(requests[0]!)).toBe(true);
-    expect(monitor.escalationLevel).toBe(2);
-    expect(monitor.backoffRemainingMs()).toBe(BACKOFF_MS * 2);
-
-    // Next window, next probe — this time the origin is back, so the probe
-    // succeeds, the backoff clears and normal loading resumes in the same
-    // frame instead of waiting the remaining delay out.
-    advance(BACKOFF_MS);
-    script = { status: 200 };
-    requests = [];
-    await render(layerA, 0);
-    expect(monitor.backingOff()).toBe(false);
-    expect(requests.length).toBeGreaterThan(1);
-  });
-
-  it('does not spend an attempt on a tile whose fetch was suppressed', async () => {
-    const layerA = makeLayer('pano-a');
-    script = { status: 500 };
-    await render(layerA, 0);
-    const layerB = makeLayer('pano-b');
-    await render(layerB, 0);
-    expect(monitor.backingOff()).toBe(true);
-
-    // Frames keep coming while the window is open; none of them may consume
-    // the tiles' remaining attempts.
-    for (let i = 0; i < 5; i++) await render(layerB, 0);
-
-    advance(BACKOFF_MS);
-    script = { status: 200 };
-    requests = [];
-    await render(layerB, 0);
-    expect(requests.length).toBeGreaterThan(0);
-    expect(renderer.uploadTile).toHaveBeenCalledTimes(requests.length);
-  });
-
-  it('wakes the viewer once when the backoff lets held tiles start again', async () => {
-    const layerA = makeLayer('pano-a');
-    script = { status: 500 };
-    await render(layerA, 0);
-    const layerB = makeLayer('pano-b');
-    await render(layerB, 0);
-    expect(monitor.backingOff()).toBe(true);
-    layerA.dispose();
-    layerB.dispose();
-
-    // A healthy panorama whose tiles the backoff is holding in the queue.
-    script = { status: 200 };
-    const invalidate = vi.fn();
-    const layerC = new TileLayer(
-      renderer as unknown as GLRenderer,
-      makeManifest('pano-c'),
-      '/tiles/',
-      128,
-      invalidate,
-      8,
-      monitor,
-    );
-    const timeouts = vi.spyOn(globalThis, 'setTimeout');
-    const wakes = () => timeouts.mock.calls.filter(([, ms]) => (ms ?? 0) > 0);
-    requests = [];
-    await render(layerC, 0);
-    await render(layerC, 0);
-    expect(requests).toHaveLength(0);
-    expect(layerC.hasPending()).toBe(true);
-    // One timer, however many frames hit the held queue, set for the probe.
-    expect(wakes()).toHaveLength(1);
-    expect(wakes()[0]![1]).toBe(BACKOFF_MS / 2);
-
-    advance(BACKOFF_MS / 2);
-    (wakes()[0]![0] as () => void)();
-    expect(invalidate).toHaveBeenCalledTimes(1);
-    // The frame that wake asks for starts the probe; it succeeds, which
-    // clears the backoff and lets the rest of the queue go.
-    await render(layerC, 0);
-    expect(requests.length).toBeGreaterThan(1);
-    expect(monitor.backingOff()).toBe(false);
-    timeouts.mockRestore();
-    layerC.dispose();
   });
 
   describe('idle retry wake', () => {
@@ -514,7 +370,6 @@ describe('TileLayer failure handling', () => {
     await flush();
     expect(new Set(requests)).toEqual(new Set(abortedTiles));
     expect(requests).toHaveLength(abortedTiles.length);
-    expect(monitor.escalationLevel).toBe(0);
     layer.dispose();
   });
 
@@ -805,42 +660,6 @@ describe('TileLayer failure handling', () => {
       expect(requests).toHaveLength(FACES.length * 3);
     });
 
-    it('still feeds base failures to the shared monitor for cross-panorama detection', async () => {
-      script = { status: 500 };
-
-      const layerA = makeLayer('pano-a');
-      await expect(layerA.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
-      // One panorama failing is bad tiles, not a bad origin.
-      expect(monitor.escalationLevel).toBe(0);
-      layerA.dispose();
-
-      const layerB = makeLayer('pano-b');
-      await expect(layerB.loadBase()).rejects.toBeInstanceOf(BaseTileLoadError);
-      expect(monitor.escalationLevel).toBeGreaterThan(0);
-      layerB.dispose();
-    });
-
-    it('is not suppressed by an active global backoff', async () => {
-      // Trip the backoff the ordinary way, from two panoramas' per-frame loads.
-      script = { status: 500 };
-      const layerA = makeLayer('pano-a');
-      await render(layerA, 0);
-      layerA.dispose();
-      const layerB = makeLayer('pano-b');
-      await render(layerB, 0);
-      expect(monitor.backingOff()).toBe(true);
-      layerB.dispose();
-
-      // A new load's base layer is six bounded, user-initiated requests, and it
-      // is the difference between a viewer that shows something and one that
-      // errors — so the backoff must not be allowed to decide it fails.
-      script = { status: 200 };
-      requests = [];
-      const layerC = makeLayer('pano-c');
-      await expect(layerC.loadBase()).resolves.toBeUndefined();
-      expect(requests).toHaveLength(FACES.length);
-    });
-
     it('is not aborted by a frame rendered while the base is still loading', async () => {
       // Level-0 keys are never in a deeper level's desired set, so a frame that
       // runs before the base has landed must leave those fetches alone.
@@ -953,7 +772,7 @@ describe('TileLayer failure handling', () => {
         128,
         () => {},
         8,
-        monitor,
+        () => clock,
         (ms: number, signal: AbortSignal) => {
           sleeps.push(ms);
           waitSignal = signal;
@@ -1044,14 +863,12 @@ describe('TileLayer failure handling', () => {
 
 describe('manifest version', () => {
   let clock: number;
-  let monitor: TileFailureMonitor;
   let renderer: FakeRenderer;
   let requests: string[];
   let sleeps: number[];
 
   beforeEach(() => {
     clock = 1_000_000;
-    monitor = new TileFailureMonitor({ now: () => clock, baseDelayMs: BACKOFF_MS });
     renderer = new FakeRenderer();
     requests = [];
     sleeps = [];
@@ -1080,7 +897,7 @@ describe('manifest version', () => {
       textureBudgetMB,
       () => {},
       8,
-      monitor,
+      () => clock,
       (ms: number) => {
         sleeps.push(ms);
         clock += ms;
