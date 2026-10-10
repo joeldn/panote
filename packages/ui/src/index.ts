@@ -27,6 +27,16 @@ export {
   type StageViewerOptions,
   type ViewerFactory,
 } from './PanoStage.js';
+export {
+  manifestOf,
+  PANOTE_REQUEST_INIT,
+  panoteSource,
+  panoteSourceResolver,
+  panoteViewerPreset,
+  prefetchPano,
+  type PanoteViewerPresetOptions,
+  type PrefetchPanoOptions,
+} from './panote-viewer.js';
 export { SignInModal, type SignInModalProps, type SignInOption } from './SignInModal.js';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented.js';
 export {

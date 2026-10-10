@@ -99,7 +99,20 @@ function asyncPreviewOf(panoId: string, key = 'job-1') {
   return { preview, source, pending };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+/** Run the viewer's resolver for `id`, and check which manifest URL it fetched. */
+async function resolvedUrl(options: ViewerOptions, id: string, url: string) {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 404 }));
+  vi.stubGlobal('fetch', fetchMock);
+  await expect(options.resolveSource!(id, new AbortController().signal)).rejects.toThrow(
+    'manifest 404',
+  );
+  expect(fetchMock).toHaveBeenCalledWith(url, expect.anything());
+}
 
 describe('PanoStage', () => {
   it('creates one viewer in its host with the initial view, north and auto-rotate, then loads', () => {
@@ -120,7 +133,8 @@ describe('PanoStage', () => {
     expect(v.container.className).toBe('pn-stage__viewer');
     expect(v.options).toEqual({
       maxFov: 90,
-      baseUrl: 'https://cdn.test/tiles/',
+      resolveSource: expect.any(Function),
+      requestInit: { mode: 'cors', credentials: 'same-origin' },
       autoRotate: true,
       initialView: { yaw: 1, fov: 60 },
       north: 0.5,
@@ -250,7 +264,7 @@ describe('PanoStage', () => {
     expect(onViewer).toHaveBeenLastCalledWith(null);
   });
 
-  it('recreates the viewer when baseUrl changes', () => {
+  it('recreates the viewer when baseUrl changes', async () => {
     const f = factory();
     const { rerender } = render(
       <PanoStage baseUrl="a/" panoId="hall" createViewer={f.createViewer} />,
@@ -259,7 +273,8 @@ describe('PanoStage', () => {
     rerender(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(f.made).toHaveLength(2);
-    expect(f.last().options.baseUrl).toBe('b/');
+    // The new viewer resolves against the new base.
+    await resolvedUrl(f.last().options, 'hall', 'b/hall/manifest.json');
     expect(f.last().load).toHaveBeenCalledWith('hall');
   });
 

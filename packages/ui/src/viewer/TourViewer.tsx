@@ -1,8 +1,9 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import { prefetchPano, type PanoViewer } from '@panote/viewer';
+import type { PanoViewer } from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
+import { prefetchPano } from '../panote-viewer.js';
 import { PanoStage, type ViewerFactory } from '../PanoStage.js';
 import { usePanoViewer } from '../viewer-context.js';
 import { Compass } from './Compass.js';
@@ -141,7 +142,6 @@ function PointsLayer({
 const PREFETCH_LIMIT = 3;
 
 interface LinkPrefetchProps {
-  baseUrl: string;
   /** Scenes to warm, in order; empty while a change is in flight. */
   targets: readonly string[];
   prefetch: typeof prefetchPano;
@@ -149,7 +149,7 @@ interface LinkPrefetchProps {
 
 // Once the scene on screen has its tiles, warm the next scenes' bases so a
 // floor-link hop starts from the cache. Rendered inside PanoStage for the viewer.
-function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
+function LinkPrefetch({ targets, prefetch }: LinkPrefetchProps) {
   const viewer = usePanoViewer();
   const key = targets.join('\n');
   const latest = useRef({ targets, prefetch });
@@ -163,7 +163,7 @@ function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
       // Once per scene: later settles follow pans, not a new scene.
       viewer.off('tiles-settled', settled);
       const { targets: ids, prefetch: warm } = latest.current;
-      for (const id of ids) void warm(baseUrl, id, { signal: controller.signal });
+      for (const id of ids) void warm(viewer, id, { signal: controller.signal });
     };
     viewer.on('tiles-settled', settled);
     // This effect runs after the scene swapped in, and a scene that needs no
@@ -176,7 +176,7 @@ function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
       // scene's own prefetch should not queue behind this one's.
       controller.abort();
     };
-  }, [viewer, baseUrl, key]);
+  }, [viewer, key]);
   return null;
 }
 
@@ -310,7 +310,7 @@ export function TourViewer({
         })}
         onLoadError={loadFailed}
       >
-        <LinkPrefetch baseUrl={baseUrl} targets={prefetchTargets} prefetch={prefetch} />
+        <LinkPrefetch targets={prefetchTargets} prefetch={prefetch} />
         <PointsLayer
           isAllowedMediaUrl={isAllowedMediaUrl}
           panoId={panoId}

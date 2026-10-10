@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { Manifest } from '@panote/core';
 import { FACES } from './cube.js';
 import { selectLevel } from './lod.js';
 import { TileLayer } from './tile-layer.js';
+import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
@@ -31,16 +31,13 @@ const FOV_DEG = effectiveVFovDeg(REQUESTED_FOV_DEG, MAX_HORIZONTAL_FOV_DEG, ASPE
 const TILE_SIZE = 512;
 
 /** A maxLevel-3 pyramid: 4096 px faces, i.e. a typical 16k equirect source. */
-function deepManifest(): Manifest {
-  return {
-    pano: 'pano-a',
-    faceSize: TILE_SIZE * 2 ** 3,
+function deepSource(): CubeTileSource {
+  return urlTemplateSource({
+    id: 'pano-a',
+    template: '/tiles/pano-a/{level}/{face}/{x}-{y}.jpg',
     tileSize: TILE_SIZE,
     maxLevel: 3,
-    faces: FACES,
-    quality: 82,
-    format: 'jpg',
-  };
+  });
 }
 
 class FakeRenderer {
@@ -141,8 +138,7 @@ describe('texture budget while panning', () => {
   async function sweep(budgetMB: number, viewportHeight: number): Promise<SweepResult> {
     const layer = new TileLayer(
       renderer as unknown as GLRenderer,
-      deepManifest(),
-      '/tiles/',
+      deepSource(),
       budgetMB,
       () => {},
       8,
@@ -206,8 +202,7 @@ describe('texture budget while panning', () => {
     // drop them again, forever, with the camera standing still.
     const layer = new TileLayer(
       renderer as unknown as GLRenderer,
-      deepManifest(),
-      '/tiles/',
+      deepSource(),
       1,
       () => {},
       8,

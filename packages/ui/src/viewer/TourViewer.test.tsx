@@ -55,6 +55,7 @@ class FakeViewer {
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   reportHotspotOpen = vi.fn((id: string) => this.emit('hotspot-open', id));
+  prefetch = vi.fn(async () => {});
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
@@ -483,14 +484,39 @@ describe('TourViewer', () => {
 
       settle(viewer());
 
+      const v = viewer();
       expect(prefetch.mock.calls.map((c: unknown[]) => c.slice(0, 2))).toEqual([
-        ['https://cdn.test/tiles/', 'church'],
-        ['https://cdn.test/tiles/', 'tower'],
-        ['https://cdn.test/tiles/', 'bridge'],
+        [v, 'church'],
+        [v, 'tower'],
+        [v, 'bridge'],
       ]);
       // Later settles (after each pan) don't fetch again.
       settle(viewer());
       expect(prefetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("warms through the viewer's prefetch by default, and not under save-data", async () => {
+      const { viewer } = renderViewer({ data: many() });
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
+      settle(viewer());
+      await waitFor(() => expect(viewer().prefetch).toHaveBeenCalledTimes(3));
+      expect(viewer().prefetch.mock.calls).toEqual([
+        ['church', { signal: expect.any(AbortSignal) }],
+        ['tower', { signal: expect.any(AbortSignal) }],
+        ['bridge', { signal: expect.any(AbortSignal) }],
+      ]);
+      cleanup();
+
+      vi.stubGlobal('navigator', { ...navigator, connection: { saveData: true } });
+      try {
+        const saving = renderViewer({ data: many() });
+        await waitFor(() => expect(saving.viewer().load.mock.calls[0]?.[0]).toBe('square'));
+        settle(saving.viewer());
+        await act(async () => {});
+        expect(saving.viewer().prefetch).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
 
     it('fetches at once for a scene that settled before the prefetch subscribed', async () => {
@@ -568,13 +594,13 @@ describe('TourViewer', () => {
       expect(prefetch).toHaveBeenCalledTimes(3);
 
       act(() => made[2]!.emit('scene-change', 'square'));
-      expect(prefetch).toHaveBeenLastCalledWith('https://a.test/', 'bridge', expect.anything());
+      expect(prefetch).toHaveBeenLastCalledWith(made[2], 'bridge', expect.anything());
       expect(prefetch).toHaveBeenCalledTimes(6);
     });
 
     it('cancels them when the visitor moves on', async () => {
       const signals: AbortSignal[] = [];
-      const prefetch = vi.fn(async (_b: string, _p: string, o?: { signal?: AbortSignal }) => {
+      const prefetch = vi.fn(async (_v: unknown, _p: string, o?: { signal?: AbortSignal }) => {
         if (o?.signal) signals.push(o.signal);
       });
       const { viewer } = renderViewer({ data: many(), prefetch });

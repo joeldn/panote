@@ -231,7 +231,14 @@ describe('landing showcase', () => {
       '/s/old-town',
     );
     await waitFor(() => expect(loads).toContain('church'));
-    expect(options[0]?.baseUrl).toBe(`${CDN}tiles/`);
+    // The stage resolves scenes against the CDN's tiles.
+    await expect(
+      options[0]!.resolveSource!('church', new AbortController().signal),
+    ).rejects.toThrow('manifest 404');
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      `${CDN}tiles/church/manifest.json`,
+      expect.anything(),
+    );
   });
 
   it('falls back to the plain hero when the showcase is unavailable', async () => {

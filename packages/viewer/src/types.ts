@@ -1,4 +1,4 @@
-import type { Manifest } from '@panote/core';
+import type { CubeTileSource, SourceResolver } from './source.js';
 
 export interface View {
   yaw: number; // radians, around +y
@@ -18,7 +18,14 @@ export type WheelMode = 'always' | 'engaged';
 // Every default lives in defaults.ts (VIEWER_DEFAULTS); the notes here only
 // say what each option means.
 export interface ViewerOptions {
-  baseUrl?: string;
+  // Turns the ids given to load(), transitionTo() and prefetch() into tile
+  // sources. Needed only by a host that passes ids rather than sources.
+  resolveSource?: SourceResolver;
+  // The fetch tile requests go out through; the global fetch when unset.
+  fetch?: typeof fetch;
+  // Spread into every tile request (mode, credentials, headers, cache). The
+  // viewer sets signal and priority itself.
+  requestInit?: Omit<RequestInit, 'signal' | 'priority'>;
   minFov?: number; // vertical, degrees
   maxFov?: number; // vertical, degrees
   maxHorizontalFov?: number; // degrees; caps horizontal fov so wide screens don't over-stretch
@@ -39,7 +46,7 @@ export interface ViewerOptions {
   antialias?: boolean;
   maxConcurrent?: number; // max simultaneous tile requests
   transitionMs?: number; // crossfade duration in ms
-  north?: number; // radians offset defining compass north for the loaded pano
+  north?: number; // radians offset defining compass north for the loaded scene
   autoRotate?: boolean; // slowly pan when idle
   autoRotateSpeed?: number; // radians of yaw per second while rotating
   autoRotateIdleMs?: number; // interaction-free time before auto-rotate (re)starts
@@ -47,10 +54,11 @@ export interface ViewerOptions {
 }
 
 export type PanoViewerEvents = {
-  ready: Manifest;
+  // The source a load() put on screen; a host reads its own data from `meta`.
+  ready: CubeTileSource;
   'tiles-settled': undefined;
-  loading: string;
-  'scene-change': string; // panoId, emitted whenever a load() or showPreview() completes
+  loading: string; // source id
+  'scene-change': string; // source id, emitted whenever a load() or showPreview() completes
   'hotspot-open': string; // hotspotId, reported by a hotspot UI layer
   // The WebGL context was lost (GPU reset, memory pressure, a backgrounded
   // mobile tab). Nothing draws until it is restored.
@@ -66,7 +74,12 @@ export type PanoViewerEvents = {
 };
 
 export interface LoadOptions {
-  // Camera for the incoming pano, applied when it swaps in rather than eased
-  // to from the outgoing pano's camera. Unset axes keep their current value.
+  // Camera for the incoming scene, applied when it swaps in rather than eased
+  // to from the outgoing scene's camera. Unset axes keep their current value.
   view?: Partial<View>;
+}
+
+export interface PrefetchOptions {
+  // Aborting cancels the resolve and every request still in flight.
+  signal?: AbortSignal;
 }

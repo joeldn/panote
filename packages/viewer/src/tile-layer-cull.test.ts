@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { Manifest } from '@panote/core';
 import * as cube from './cube.js';
 import * as projection from './render/projection.js';
 import * as tileCache from './tile-cache.js';
 import { TileLayer } from './tile-layer.js';
+import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { RADIUS } from './tile-geometry.js';
 import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
@@ -31,16 +31,13 @@ vi.mock('./render/projection.js', async (importOriginal) => {
 const TILE_SIZE = 512;
 const MAX_LEVEL = 5;
 
-function manifest(): Manifest {
-  return {
-    pano: 'pano-a',
-    faceSize: TILE_SIZE * 2 ** MAX_LEVEL,
+function source(): CubeTileSource {
+  return urlTemplateSource({
+    id: 'pano-a',
+    template: '/tiles/pano-a/{level}/{face}/{x}-{y}.jpg',
     tileSize: TILE_SIZE,
     maxLevel: MAX_LEVEL,
-    faces: cube.FACES,
-    quality: 82,
-    format: 'jpg',
-  };
+  });
 }
 
 /** Viewport height at which selectLevel lands exactly on `level` for `fov`. */
@@ -101,8 +98,7 @@ describe('TileLayer cull', () => {
     );
     layer = new TileLayer(
       { uploadTile: vi.fn(() => 1), removeTile: vi.fn() } as unknown as GLRenderer,
-      manifest(),
-      '/tiles/',
+      source(),
       512,
       () => {},
       8,

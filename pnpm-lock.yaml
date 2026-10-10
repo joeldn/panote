@@ -470,6 +470,9 @@ importers:
       '@internal/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@panote/core':
+        specifier: workspace:*
+        version: link:../core
       '@panote/viewer':
         specifier: workspace:*
         version: link:../viewer
@@ -945,6 +948,7 @@ packages:
 
   '@cloudflare/vitest-pool-workers@0.20.3':
     resolution: {integrity: sha512-aCMvM5zQ3MTz8SorSZB6ZxjVK2Gof6UhIc2Z1z9zbX/obucSYwDUkx8A0MUOod4I7clfB0QLarKBjRdIczK3vg==}
+    deprecated: '@cloudflare/vitest-pool-workers has been renamed to @cloudflare/vitest-plugin. This package will not receive future updates.'
     peerDependencies:
       '@vitest/runner': ^4.1.0
       '@vitest/snapshot': ^4.1.0

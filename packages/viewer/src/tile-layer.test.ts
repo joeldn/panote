@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { Manifest } from '@panote/core';
 import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
 import { BaseTileLoadError, TileLayer } from './tile-layer.js';
+import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import { ContextLostError, sortDrawList, type GLRenderer } from './render/gl-renderer.js';
+import { TileHttpError } from './tile-retry.js';
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -24,16 +25,13 @@ const ABORT_GRACE_MS = 160; // time out of view before a load is aborted (tile-l
 const FRAME_MS = 1000 / 60;
 const ABORT_AFTER_FRAMES = 10; // 60 Hz frames the grace lasts
 
-function makeManifest(pano: string): Manifest {
-  return {
-    pano,
-    faceSize: 2048,
+function makeSource(id: string): CubeTileSource {
+  return urlTemplateSource({
+    id,
+    template: `/tiles/${id}/{level}/{face}/{x}-{y}.jpg`,
     tileSize: 512,
     maxLevel: 2,
-    faces: FACES,
-    quality: 82,
-    format: 'jpg',
-  };
+  });
 }
 
 class FakeRenderer {
@@ -75,8 +73,7 @@ describe('TileLayer failure handling', () => {
   ): TileLayer {
     return new TileLayer(
       renderer as unknown as GLRenderer,
-      makeManifest(pano),
-      '/tiles/',
+      makeSource(pano),
       textureBudgetMB,
       onInvalidate,
       8,
@@ -829,8 +826,7 @@ describe('TileLayer failure handling', () => {
       const layer = await withLevel1(
         new TileLayer(
           renderer as unknown as GLRenderer,
-          makeManifest('pano-a'),
-          '/tiles/',
+          makeSource('pano-a'),
           128,
           () => {},
           64,
@@ -1359,8 +1355,7 @@ describe('TileLayer failure handling', () => {
       let waitSignal: AbortSignal | undefined;
       const layer = new TileLayer(
         renderer as unknown as GLRenderer,
-        makeManifest('pano-a'),
-        '/tiles/',
+        makeSource('pano-a'),
         128,
         () => {},
         8,
@@ -1622,24 +1617,13 @@ describe('TileLayer failure handling', () => {
   });
 });
 
-describe('manifest version', () => {
-  let clock: number;
+describe('tile sources', () => {
   let renderer: FakeRenderer;
-  let requests: string[];
-  let sleeps: number[];
+  let clock: number;
 
   beforeEach(() => {
     clock = 1_000_000;
     renderer = new FakeRenderer();
-    requests = [];
-    sleeps = [];
-    vi.stubGlobal(
-      'fetch',
-      vi.fn((url: string) => {
-        requests.push(url);
-        return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) });
-      }),
-    );
     vi.stubGlobal(
       'createImageBitmap',
       vi.fn(() => Promise.resolve({ close: vi.fn() })),
@@ -1650,58 +1634,122 @@ describe('manifest version', () => {
     vi.unstubAllGlobals();
   });
 
-  function makeLayerWithManifest(manifest: Manifest, textureBudgetMB = 128): TileLayer {
-    return new TileLayer(
+  const layerFor = (source: CubeTileSource, network = {}): TileLayer =>
+    new TileLayer(
       renderer as unknown as GLRenderer,
-      manifest,
-      '/tiles/',
-      textureBudgetMB,
+      source,
+      128,
       () => {},
       8,
       () => clock,
       (ms: number) => {
-        sleeps.push(ms);
         clock += ms;
         return Promise.resolve();
       },
+      network,
     );
-  }
 
-  it('requests unversioned tile URLs when the manifest has no version', async () => {
-    const manifest: Manifest = {
-      pano: 'pano-a',
-      faceSize: 2048,
+  it("requests exactly the URLs the source's tileUrl gives, with the request init", async () => {
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+    const seen: Array<[string, RequestInit | undefined]> = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      seen.push([url, init]);
+      return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) });
+    });
+    const source: CubeTileSource = {
+      id: 'scene-1',
       tileSize: 512,
       maxLevel: 2,
-      faces: FACES,
-      quality: 82,
-      format: 'jpg',
+      tileUrl: (t) => `https://cdn.test/s1/v9/${t.level}/${t.face}/${t.x}-${t.y}.webp`,
     };
-    const layer = makeLayerWithManifest(manifest);
+    const layer = layerFor(source, {
+      fetch: fetch as unknown as typeof globalThis.fetch,
+      requestInit: { mode: 'cors', credentials: 'same-origin' },
+    });
     await layer.loadBase();
 
-    for (const face of FACES) {
-      expect(requests).toContain(`/tiles/pano-a/0/${face}/0-0.jpg`);
+    expect(seen.map(([url]) => url)).toEqual(
+      FACES.map((f) => `https://cdn.test/s1/v9/0/${f}/0-0.webp`),
+    );
+    for (const [, init] of seen) {
+      expect(init).toEqual({
+        mode: 'cors',
+        credentials: 'same-origin',
+        signal: expect.any(AbortSignal),
+        priority: 'high',
+      });
     }
+    expect(globalFetch).not.toHaveBeenCalled();
+    layer.dispose();
   });
 
-  it('requests tile URLs under the manifest version when present', async () => {
-    const manifest: Manifest = {
-      pano: 'pano-a',
-      faceSize: 2048,
-      tileSize: 512,
-      maxLevel: 2,
-      faces: FACES,
-      quality: 82,
-      format: 'jpg',
-      version: 't1-abc123',
-    };
-    const layer = makeLayerWithManifest(manifest);
+  it('sends a plain { signal, priority } through the global fetch without a request init', async () => {
+    const fetch = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}) }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const layer = layerFor(makeSource('pano-a'));
+    await layer.loadBase();
+    expect(fetch).toHaveBeenCalledTimes(FACES.length);
+    for (const [, init] of fetch.mock.calls) {
+      expect(Object.keys(init!).sort()).toEqual(['priority', 'signal']);
+    }
+    layer.dispose();
+  });
+
+  it('loads through loadTile, with no fetch at all', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const decode = vi.mocked(createImageBitmap);
+    const loadTile = vi.fn((_t: unknown, _signal: AbortSignal) =>
+      Promise.resolve({ close: vi.fn() } as unknown as ImageBitmap),
+    );
+    const layer = layerFor({ id: 'gen', tileSize: 256, maxLevel: 1, loadTile });
     await layer.loadBase();
 
-    for (const face of FACES) {
-      expect(requests).toContain(`/tiles/pano-a/t1-abc123/0/${face}/0-0.jpg`);
-      expect(requests).not.toContain(`/tiles/pano-a/0/${face}/0-0.jpg`);
-    }
+    expect(loadTile.mock.calls.map(([t]) => t)).toEqual(
+      FACES.map((face) => ({ face, level: 0, x: 0, y: 0 })),
+    );
+    for (const [, signal] of loadTile.mock.calls) expect(signal).toBeInstanceOf(AbortSignal);
+    expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+    layer.dispose();
+  });
+
+  it('classifies a TileHttpError from loadTile like a fetched status', async () => {
+    const loadTile = vi.fn((t: { face: Face }) =>
+      t.face === 'ny'
+        ? Promise.reject(new TileHttpError(404))
+        : Promise.resolve({ close: vi.fn() } as unknown as ImageBitmap),
+    );
+    const layer = layerFor({ id: 'gen', tileSize: 256, maxLevel: 0, loadTile });
+    const err = await layer.loadBase().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BaseTileLoadError);
+    expect((err as BaseTileLoadError).sourceId).toBe('gen');
+    expect((err as BaseTileLoadError).face).toBe('ny');
+    expect((err as BaseTileLoadError).permanent).toBe(true);
+    // Permanent: asked once, not retried.
+    expect(loadTile.mock.calls.filter(([t]) => t.face === 'ny')).toHaveLength(1);
+    layer.dispose();
+  });
+
+  it('releases an image loadTile hands back after the layer is gone', async () => {
+    let finish: (img: ImageBitmap) => void = () => {};
+    const loadTile = vi.fn(
+      () =>
+        new Promise<ImageBitmap>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const layer = layerFor({ id: 'gen', tileSize: 256, maxLevel: 0, loadTile });
+    void layer.loadBase();
+    layer.dispose();
+    const close = vi.fn();
+    finish({ close } as unknown as ImageBitmap);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(close).toHaveBeenCalled();
+    expect(renderer.uploadTile).not.toHaveBeenCalled();
   });
 });

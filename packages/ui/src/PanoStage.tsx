@@ -2,15 +2,19 @@ import { PanoViewer, type PreviewSource, type View, type ViewerOptions } from '@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { cx } from './cx.js';
+import { panoteViewerPreset } from './panote-viewer.js';
 import { PanoViewerContext } from './viewer-context.js';
 
 export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewer;
 
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
+// The stage sets these itself: the source resolver and request init from
+// panote's preset (the Worker's preloads depend on them), and the camera and
+// auto-rotate from its props.
 export type StageViewerOptions = Omit<
   ViewerOptions,
-  'baseUrl' | 'initialView' | 'north' | 'autoRotate'
+  'resolveSource' | 'fetch' | 'requestInit' | 'initialView' | 'north' | 'autoRotate'
 >;
 
 /**
@@ -164,7 +168,11 @@ export function PanoStage({
     const host = hostRef.current;
     if (!host) return;
     const l = latest.current;
-    const opts: ViewerOptions = { ...l.options, baseUrl, autoRotate: l.autoRotate };
+    const opts: ViewerOptions = {
+      ...l.options,
+      ...panoteViewerPreset({ baseUrl }),
+      autoRotate: l.autoRotate,
+    };
     if (l.view) opts.initialView = l.view;
     if (l.north !== undefined) opts.north = l.north;
     const v = l.createViewer(host, opts);

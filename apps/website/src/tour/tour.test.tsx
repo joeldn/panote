@@ -80,6 +80,7 @@ class FakeViewer {
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   reportHotspotOpen = vi.fn((id: string) => this.emit('hotspot-open', id));
+  prefetch = vi.fn(async () => {});
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
@@ -205,7 +206,11 @@ describe('/s/:slug', () => {
       `${CDN}pub/tours/tour-a.json`,
     ]);
     await shown('square');
-    expect(lastViewer().options.baseUrl).toBe(`${CDN}tiles/`);
+    // The stage resolves scenes against the CDN's tiles.
+    await expect(
+      lastViewer().options.resolveSource!('square', new AbortController().signal),
+    ).rejects.toThrow('manifest 404');
+    expect(fetchMock).toHaveBeenCalledWith(`${CDN}tiles/square/manifest.json`, expect.anything());
     expect(document.title).toBe('Old town · panote');
     expect(robots()).toBeUndefined();
   });

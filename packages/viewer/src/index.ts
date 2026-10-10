@@ -1,6 +1,16 @@
 export * from './types.js';
 export { PanoViewer } from './PanoViewer.js';
-export { prefetchPano, type PrefetchOptions } from './prefetch.js';
+export {
+  MAX_SOURCE_LEVEL,
+  urlTemplateSource,
+  type CubeTileSource,
+  type ResolveHints,
+  type SourceResolver,
+  type TileAddress,
+  type UrlTemplateInit,
+} from './source.js';
+export { FACES, type Face } from './cube.js';
+export type { TileImage } from './render/gl-renderer.js';
 export {
   PREVIEW_GUTTER_PX,
   PREVIEW_MAX_PATCH_PX,
@@ -15,4 +25,3 @@ export { BaseTileLoadError } from './tile-layer.js';
 // need to tell a 401 (sign in) from a 404 (no such panorama), which the boolean
 // collapses together.
 export { TileHttpError } from './tile-retry.js';
-export type { Manifest } from '@panote/core';
