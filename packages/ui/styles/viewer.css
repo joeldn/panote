@@ -231,6 +231,21 @@
   color: var(--accent);
   font-weight: 600;
 }
+/* The scene a change is heading to, until it is on screen. */
+.pn-scenemap__item--pending {
+  color: var(--ink-55);
+}
+.pn-scenemap__spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 8px;
+  vertical-align: -1px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  animation: pn-spin var(--dur-spin) linear infinite;
+}
 
 /* --- Info-point panel (side panel; bottom sheet on mobile) --- */
 .pn-hspanel {

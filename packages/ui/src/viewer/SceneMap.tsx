@@ -70,11 +70,21 @@ export function SceneMap({ scenes, current, pending, onSelect }: SceneMapProps) 
               <li key={s.id}>
                 <button
                   type="button"
-                  className="pn-scenemap__item"
+                  className={cx(
+                    'pn-scenemap__item',
+                    s.id === pending && s.id !== current && 'pn-scenemap__item--pending',
+                  )}
                   aria-current={s.id === current ? 'location' : undefined}
+                  aria-busy={s.id === pending && s.id !== current ? true : undefined}
                   onClick={() => select(s.id)}
                 >
                   {s.title}
+                  {s.id === pending && s.id !== current && (
+                    <>
+                      <span className="pn-scenemap__spinner" aria-hidden="true" />
+                      <span className="pn-sr-only">, loading</span>
+                    </>
+                  )}
                 </button>
               </li>
             ))}

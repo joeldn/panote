@@ -387,7 +387,7 @@ describe('TourViewer', () => {
         fireEvent.click(screen.getByRole('button', { name }));
       };
       // Already heading there.
-      pick('Church');
+      pick('Church, loading');
       expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
 
       pick('Square');
