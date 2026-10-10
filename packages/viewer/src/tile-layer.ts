@@ -715,7 +715,12 @@ export class TileLayer {
     this.retry.recordFailure(key, failure);
     // Still on screen: come back for it when its cooldown ends, even if
     // nothing else asks for a frame before then.
-    if (this.desired.has(key)) this.armWake(this.retry.waitMs(key));
+    const wait = this.retry.waitMs(key);
+    if (this.desired.has(key)) this.armWake(wait);
+    // Never coming back (permanent, or out of attempts): the tile has stopped
+    // being pending, which may be what settles the view. Ask for a frame so
+    // hasPending() is read again, or tiles-settled waits for the next input.
+    if (!Number.isFinite(wait)) this.onInvalidate();
     return failure;
   }
 

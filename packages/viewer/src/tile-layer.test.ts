@@ -428,6 +428,45 @@ describe('TileLayer failure handling', () => {
       layer.dispose();
     });
 
+    it('asks for a frame when the last pending tile fails for good', async () => {
+      // One level-2 tile answers 404, and only after everything else is in.
+      let missing: string | undefined;
+      let fail: (() => void) | undefined;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          requests.push(url);
+          const reply = (status: number) => ({
+            ok: status === 200,
+            status,
+            blob: () => Promise.resolve({}),
+          });
+          if (missing === undefined && url.includes('/2/')) {
+            missing = url;
+            return new Promise((resolve) => (fail = () => resolve(reply(404))));
+          }
+          return Promise.resolve(reply(200));
+        }),
+      );
+      const invalidate = vi.fn();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      await drain();
+      for (let i = 0; i < 100 && readyCount(layer) > 0; i++) {
+        frame(layer, 0);
+        await drain();
+      }
+      expect(fail).toBeDefined();
+      expect(layer.hasPending()).toBe(true); // only the held tile is left
+      const calls = invalidate.mock.calls.length;
+
+      fail!();
+      await drain();
+      expect(layer.hasPending()).toBe(false);
+      expect(invalidate).toHaveBeenCalledTimes(calls + 1);
+      layer.dispose();
+    });
+
     it('cancels a pending wake on dispose', async () => {
       const invalidate = vi.fn();
       failOneTileOnce();
