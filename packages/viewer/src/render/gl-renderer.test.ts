@@ -358,6 +358,13 @@ describe('GLRenderer', () => {
       expect(gl.disable).not.toHaveBeenCalledWith(gl.DEPTH_TEST);
     });
 
+    it('sets a constant per-draw NDC depth from uZ in the vertex shader', () => {
+      const { gl } = setup();
+      const sources = gl.shaderSource.mock.calls.map((c) => c[1] as string);
+      const vert = sources.find((src) => src.includes('gl_Position'));
+      expect(vert).toMatch(/gl_Position\.z\s*=\s*uZ\s*\*\s*gl_Position\.w\s*;/);
+    });
+
     it('clears colour and depth every frame', () => {
       const { gl, renderer } = setup();
       renderer.setCamera(camera());

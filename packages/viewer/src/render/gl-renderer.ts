@@ -90,6 +90,9 @@ out vec2 vUv;
 void main() {
   vUv = aUv;
   gl_Position = uViewProj * vec4(aPos, 1.0);
+  // Constant NDC z per draw (z/w = uZ), whatever the vertex depth. Clipping
+  // in z then reduces to w > 0, so the effective near plane is w = 0, as
+  // with the skybox xyww trick.
   gl_Position.z = uZ * gl_Position.w;
 }`;
 
