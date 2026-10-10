@@ -682,6 +682,41 @@ describe('TileLayer failure handling', () => {
       expect(requests).toHaveLength(FACES.length);
     });
 
+    it('is not aborted by a frame rendered while the base is still loading', async () => {
+      // Level-0 keys are never in a deeper level's desired set, so a frame that
+      // runs before the base has landed must leave those fetches alone.
+      const signals = new Map<string, AbortSignal>();
+      const pending: (() => void)[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init: { signal: AbortSignal }) => {
+          requests.push(url);
+          const body = { ok: true, status: 200, blob: () => Promise.resolve({}) };
+          if (!url.includes('/0/')) return Promise.resolve(body);
+          signals.set(url, init.signal);
+          return new Promise((resolve, reject) => {
+            pending.push(() => resolve(body));
+            init.signal.addEventListener('abort', () => {
+              reject(new DOMException('aborted', 'AbortError'));
+            });
+          });
+        }),
+      );
+      const layer = makeLayer();
+      const load = layer.loadBase();
+      await flush();
+      expect(signals.size).toBe(FACES.length);
+
+      await render(layer, 0); // level 2 at this fov and height
+      expect(requests.some((u) => u.includes('/2/'))).toBe(true);
+      for (const signal of signals.values()) expect(signal.aborted).toBe(false);
+
+      for (const release of pending) release();
+      await expect(load).resolves.toBeUndefined();
+      expect(requests.filter((u) => u.includes('/0/'))).toHaveLength(FACES.length);
+      layer.dispose();
+    });
+
     it('does not reject when the layer is disposed mid-load', async () => {
       const layer = makeLayer();
       vi.stubGlobal(

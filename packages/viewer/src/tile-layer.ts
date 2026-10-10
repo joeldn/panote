@@ -286,9 +286,12 @@ export class TileLayer {
       }
     }
 
-    // Abort inflight loads that are no longer in the desired set.
+    // Abort inflight loads that are no longer in the desired set. Level-0
+    // tiles are exempt: they are the base loadBase() is waiting on (and is
+    // never in a deeper level's desired set), and once resident they are
+    // pinned and drawn at every level, so one is never wasted work.
     for (const [key, controller] of this.inflight) {
-      if (!this.desired.has(key)) {
+      if (!this.desired.has(key) && !key.startsWith('0/')) {
         controller.abort();
         this.inflight.delete(key);
       }
