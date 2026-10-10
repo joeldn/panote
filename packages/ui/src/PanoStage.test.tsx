@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PanoStage, type StagePreview } from './PanoStage.js';
 import { usePanoViewer } from './viewer-context.js';
 
-type Handler = (payload: string) => void;
+type Handler = (payload: unknown) => void;
 
 class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
@@ -39,7 +39,7 @@ class FakeViewer {
     this.handlers.get(type)?.add(fn);
   };
   off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
+  emit(type: string, payload?: unknown) {
     this.handlers.get(type)?.forEach((fn) => fn(payload));
   }
 }
@@ -771,5 +771,53 @@ describe('PanoStage', () => {
     rerender(<PanoStage baseUrl="b/" panoId={null} createViewer={f.createViewer} />);
     rerender(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
     expect(v.load).toHaveBeenCalledTimes(2);
+  });
+
+  describe('after a WebGL context restore', () => {
+    it('shows the preview again, with replacesVersion, then loads', () => {
+      const f = factory();
+      const { preview, source, sources } = previewOf('hall', { replacesVersion: 'v1' });
+      render(
+        <PanoStage baseUrl="b/" panoId="hall" preview={preview} createViewer={f.createViewer} />,
+      );
+      const v = f.last();
+      expect(v.calls).toEqual(['show:hall', 'load:hall']);
+
+      act(() => {
+        v.emit('context-lost');
+        v.emit('context-restored');
+      });
+
+      expect(source).toHaveBeenCalledTimes(2);
+      expect(v.calls).toEqual(['show:hall', 'load:hall', 'show:hall', 'load:hall']);
+      expect(v.showPreview).toHaveBeenLastCalledWith('hall', sources[1], { replacesVersion: 'v1' });
+      // A preview is not a pano change: the camera stays where it is.
+      expect(v.setView).not.toHaveBeenCalled();
+      expect(v.load).toHaveBeenLastCalledWith('hall');
+    });
+
+    it('leaves the reload to the viewer without a preview', () => {
+      const f = factory();
+      render(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
+      const v = f.last();
+      act(() => v.emit('context-restored'));
+      expect(v.calls).toEqual(['load:hall']);
+    });
+
+    it("reports the viewer's own failed reload to onLoadError", () => {
+      const f = factory();
+      const onLoadError = vi.fn();
+      render(
+        <PanoStage
+          baseUrl="b/"
+          panoId="hall"
+          onLoadError={onLoadError}
+          createViewer={f.createViewer}
+        />,
+      );
+      const lost = new Error('manifest 503');
+      act(() => f.last().emit('load-error', { error: lost, id: 'hall' }));
+      expect(onLoadError).toHaveBeenCalledWith(lost, 'hall');
+    });
   });
 });
