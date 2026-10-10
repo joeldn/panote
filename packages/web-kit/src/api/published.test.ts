@@ -146,6 +146,7 @@ describe('loadPublishedTour with worker boot data', () => {
 
   it.each([
     ['a malformed bundle', boot({ tour: { v: 1 } })],
+    ['a bundle of this tour with a bad shape', boot({ tour: { ...bundle(), scenes: 'none' } })],
     ['a bundle of another tour', boot({ tour: bundle('tour-b') })],
     ['an alias record', boot({ record: alias('new-name') })],
     ['an unsafe tourId', boot({ record: { ...pointer, tourId: '../x' } })],

@@ -405,6 +405,21 @@ describe('tour data inlined by the Worker', () => {
     );
   });
 
+  it('never uses inlined data on a retry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    objects['slugs/old-town.json'] = { v: 9 };
+    renderAt('/s/old-town');
+    await screen.findByRole('heading', { name: "This tour couldn't be loaded" });
+    // Valid data for this slug is on the page now, but a retry must go to the network.
+    inline({ slug: 'old-town', record: live, tour: bundle({ title: 'Inlined town' }) });
+    objects['slugs/old-town.json'] = live;
+    fetchMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Old town')).toBeTruthy();
+    expect(screen.queryByText('Inlined town')).toBeNull();
+    expect(cdnReads()).toContain(`${CDN}slugs/old-town.json`);
+  });
+
   it('ignores unparseable inlined data', async () => {
     inline('x');
     document.getElementById('pn-boot')!.textContent = '{not json';
