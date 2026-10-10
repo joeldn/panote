@@ -97,4 +97,31 @@ describe('renderMarkdown', () => {
   it('escapes html inside inline markup', () => {
     expect(renderMarkdown('**<b>**')).toBe('<p><strong>&lt;b&gt;</strong></p>');
   });
+  describe('link URLs survive the emphasis and code passes', () => {
+    const a = (href: string, label: string) =>
+      `<p><a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a></p>`;
+
+    it('keeps `*` in a URL and in the label', () => {
+      expect(renderMarkdown('[a *b](https://x.com/c*d)')).toBe(a('https://x.com/c*d', 'a *b'));
+    });
+
+    it('keeps backticks in a URL', () => {
+      expect(renderMarkdown('[x](https://e.com/`a`)')).toBe(a('https://e.com/`a`', 'x'));
+    });
+
+    it('allows one level of balanced parentheses in a URL', () => {
+      expect(renderMarkdown('[x](https://ok.com/(a))')).toBe(a('https://ok.com/(a)', 'x'));
+    });
+
+    it('still styles the label and the text around the link', () => {
+      expect(renderMarkdown('*see* [**bold**](https://x.com/a*b*c) `c`')).toBe(
+        '<p><em>see</em> <a href="https://x.com/a*b*c" target="_blank" rel="noopener noreferrer">' +
+          '<strong>bold</strong></a> <code>c</code></p>',
+      );
+    });
+
+    it('does not let a placeholder lookalike in the text pull in a link', () => {
+      expect(renderMarkdown('\uE0000\uE000 [x](javascript:alert)')).toBe('<p>0 x</p>');
+    });
+  });
 });
