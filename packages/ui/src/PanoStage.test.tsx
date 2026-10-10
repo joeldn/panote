@@ -10,7 +10,7 @@ type Handler = (payload: string) => void;
 
 class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
-  load = vi.fn(async (_pano: string) => {});
+  load = vi.fn(async (_pano: string, _opts?: unknown) => true);
   transitionTo = vi.fn(async (_pano: string, _view?: unknown) => {});
   showPreview = vi.fn((_pano: string, _source: PreviewSource, _opts?: unknown) => {});
   /** Viewer calls in order, to check that the preview goes up before the load. */
@@ -25,6 +25,7 @@ class FakeViewer {
   ) {
     this.load.mockImplementation(async (pano) => {
       this.calls.push(`load:${pano}`);
+      return true;
     });
     this.showPreview.mockImplementation((pano) => {
       this.calls.push(`show:${pano}`);
@@ -124,7 +125,7 @@ describe('PanoStage', () => {
       initialView: { yaw: 1, fov: 60 },
       north: 0.5,
     });
-    expect(v.load).toHaveBeenCalledWith('hall');
+    expect(v.load).toHaveBeenCalledWith('hall', { view: { yaw: 1, fov: 60 } });
     expect(v.setNorth).toHaveBeenLastCalledWith(0.5);
     expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
   });
@@ -138,8 +139,8 @@ describe('PanoStage', () => {
     rerender(
       <PanoStage baseUrl="b/" panoId="nave" view={{ yaw: 2 }} createViewer={f.createViewer} />,
     );
-    expect(v.setView).toHaveBeenLastCalledWith({ yaw: 2 });
-    expect(v.load).toHaveBeenLastCalledWith('nave');
+    expect(v.load).toHaveBeenLastCalledWith('nave', { view: { yaw: 2 } });
+    expect(v.setView).not.toHaveBeenCalled();
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -189,7 +190,7 @@ describe('PanoStage', () => {
     let failNave!: (e: Error) => void;
     v.load.mockImplementationOnce(
       () =>
-        new Promise<void>((_r, rej) => {
+        new Promise<boolean>((_r, rej) => {
           failNave = rej;
         }),
     );
@@ -305,7 +306,9 @@ describe('PanoStage', () => {
       />,
     );
     const v = f.last();
-    expect(v.calls).toEqual(['setView', 'load:hall']);
+    // The view rides on the load, so the outgoing scene never swings to it.
+    expect(v.calls).toEqual(['load:hall']);
+    expect(v.load).toHaveBeenLastCalledWith('hall', { view: { yaw: 1 } });
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -315,7 +318,8 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.calls).toEqual(['setView', 'load:hall', 'load:hall']);
+    expect(v.calls).toEqual(['load:hall', 'load:hall']);
+    expect(v.load).toHaveBeenLastCalledWith('hall');
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -325,8 +329,8 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.setView).toHaveBeenLastCalledWith({ yaw: 2 });
-    expect(v.calls.slice(-2)).toEqual(['setView', 'load:nave']);
+    expect(v.load).toHaveBeenLastCalledWith('nave', { view: { yaw: 2 } });
+    expect(v.setView).not.toHaveBeenCalled();
   });
 
   it('reloads with a plain load, not a crossfade, when transition is on', () => {

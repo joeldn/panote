@@ -188,27 +188,33 @@ export function PanoStage({
     // clears it: a callback that finds another entry there was superseded and
     // drops its result.
     const live = () => loaded.current === entry;
-    const load = () => {
-      viewer.load(panoId).catch((err: unknown) => {
+    const load = (view?: Partial<View>) => {
+      (view ? viewer.load(panoId, { view }) : viewer.load(panoId)).catch((err: unknown) => {
         if (live()) callbacks.current.onLoadError?.(err, panoId);
       });
     };
 
     // Only the first load on a viewer and a pano change move the camera; a
     // reload or a new preview of the pano on stage keeps it where it is.
+    const sceneView = !samePano ? v : undefined;
     const crossfade = fade && !samePano && prev?.viewer === viewer && !newPreview;
-    if (!samePano && v && !crossfade) viewer.setView(v);
 
     if (!newPreview) {
       if (crossfade) {
-        viewer.transitionTo(panoId, v).catch((err: unknown) => {
+        viewer.transitionTo(panoId, sceneView).catch((err: unknown) => {
           if (live()) callbacks.current.onLoadError?.(err, panoId);
         });
       } else {
-        load();
+        // The viewer applies the view as the pano swaps in, so neither scene
+        // swings round to it.
+        load(sceneView);
       }
       return;
     }
+
+    // A preview goes on screen at once with the camera as it is, so aim the
+    // camera before it goes up.
+    if (sceneView) viewer.setView(sceneView);
 
     // Whether or not the preview made it up, it's done with for this entry:
     // report a failure, then load the tiles.

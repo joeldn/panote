@@ -86,8 +86,10 @@ afterEach(cleanup);
 describe('TourViewer', () => {
   it('opens on the start scene with its initial view and north', async () => {
     const { viewer } = renderViewer();
-    await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
-    expect(viewer().setView).toHaveBeenCalledWith({ yaw: 0.5 });
+    await waitFor(() =>
+      expect(viewer().load).toHaveBeenCalledWith('square', { view: { yaw: 0.5 } }),
+    );
+    expect(viewer().setView).not.toHaveBeenCalled();
     expect(viewer().setNorth).toHaveBeenCalledWith(0.3);
     expect(screen.getByLabelText('Old town: Square')).toBeTruthy();
   });

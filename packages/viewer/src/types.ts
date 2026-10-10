@@ -37,3 +37,9 @@ export type PanoViewerEvents = {
   'scene-change': string; // panoId, emitted whenever a load() or showPreview() completes
   'hotspot-open': string; // hotspotId, reported by a hotspot UI layer
 };
+
+export interface LoadOptions {
+  // Camera for the incoming pano, applied when it swaps in rather than eased
+  // to from the outgoing pano's camera. Unset axes keep their current value.
+  view?: Partial<View>;
+}

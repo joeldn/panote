@@ -26,8 +26,9 @@ import {
   anglePerPixel,
   zoomAnchorDelta,
   compassHeading,
+  normalizeAngle,
 } from './camera-math.js';
-import type { View, ViewerOptions, PanoViewerEvents } from './types.js';
+import type { View, ViewerOptions, PanoViewerEvents, LoadOptions } from './types.js';
 import { HotspotLayer, type HotspotHandle } from './hotspots.js';
 import { dirFromYawPitch } from './project.js';
 
@@ -39,10 +40,21 @@ function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
 
+/** `yaw` less its whole turns: the same rendered angle, kept within ±2π. */
+function unwound(yaw: number): number {
+  return yaw - Math.trunc(yaw / TWO_PI) * TWO_PI;
+}
+
+/** Hand a listener's exception to the host's error reporting without unwinding the frame. */
+function report(err: unknown): void {
+  if (typeof reportError === 'function') reportError(err);
+  else console.error(err);
+}
+
 export class PanoViewer implements ControlHost {
   private renderer: GLRenderer;
   private emitter = new Emitter<PanoViewerEvents>();
-  private controls?: Controls;
+  private controls: Controls;
   private layer: TileLayer | undefined;
   // Layers still loading their base. Until a layer's base is resident it is not
   // assigned to `this.layer`, so without this set dispose() cannot reach it:
@@ -52,6 +64,9 @@ export class PanoViewer implements ControlHost {
   // legitimately be in flight more than once — a superseded load is still
   // holding a layer that has to be torn down.
   private pendingLayers = new Set<TileLayer>();
+  // The manifest fetch of the load in flight, aborted when a newer load,
+  // a preview or dispose() supersedes it.
+  private manifestAbort: AbortController | undefined;
   private preview: EquirectLayer | undefined;
   private previewPano: string | undefined;
   // The version of the tiles the preview replaces ('' for unversioned ones);
@@ -79,7 +94,6 @@ export class PanoViewer implements ControlHost {
   private momentum = { yaw: 0, pitch: 0 };
   private hotspots = new HotspotLayer();
   private renderCbs = new Set<(view: View) => void>();
-  private home: View;
   private transitionOverlay: HTMLDivElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
   // The view-projection matrix for the frame currently being drawn.
@@ -126,18 +140,26 @@ export class PanoViewer implements ControlHost {
     this.autoRotateEnabled = options.autoRotate ?? false;
     // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
     this.autoRotateActive = this.autoRotateEnabled;
+    // Clamped like setView: an embed config can say anything, and an
+    // unclamped pitch past ±π/2 reaches viewMatrix as a mirrored view.
     const initialYaw = options.initialView?.yaw ?? 0;
-    const initialPitch = options.initialView?.pitch ?? 0;
-    const initialFov = options.initialView?.fov ?? Math.min(70, this.opts.maxFov);
+    const initialPitch = clampPitch(options.initialView?.pitch ?? 0);
+    const initialFov = clampFov(
+      options.initialView?.fov ?? Math.min(70, this.opts.maxFov),
+      this.opts.minFov,
+      this.opts.maxFov,
+    );
     this.view = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
     this.target = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
-    this.home = { ...this.view };
     this.renderer = new GLRenderer(container, {
       antialias: this.opts.antialias,
       maxPixelRatio: this.opts.maxPixelRatio,
     });
     this.renderer.resize(container.clientWidth || 1, container.clientHeight || 1);
     this.viewProj = viewProjection(this.view, this.aspect(), this.opts.maxHorizontalFov);
+    // Built once: the canvas and this host never change, and rebuilding it on
+    // each load would drop a drag that is in progress when a scene swaps in.
+    this.controls = new Controls(this.renderer.canvas, this);
     window.addEventListener('resize', this.onResize);
     // window's resize event only fires on the browser viewport changing size,
     // not on the container itself being resized by layout — flex/grid
@@ -151,11 +173,8 @@ export class PanoViewer implements ControlHost {
     this.loop();
   }
 
-  on = this.boundOn();
-  private boundOn() {
-    return <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
-      this.emitter.on(type, fn);
-  }
+  on = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
+    this.emitter.on(type, fn);
 
   off = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
     this.emitter.off(type, fn);
@@ -180,16 +199,35 @@ export class PanoViewer implements ControlHost {
     return () => this.renderCbs.delete(cb);
   }
 
-  async load(pano: string): Promise<void> {
-    const token = ++this.loadToken;
+  /**
+   * Load `pano`, swapping it in once its low-resolution base is resident.
+   * Resolves true when it took effect and false when a newer load, a preview
+   * or dispose() superseded it; rejects only for a load that is still current.
+   * `options.view` is applied at the swap, with no easing from the old camera.
+   */
+  async load(pano: string, options: LoadOptions = {}): Promise<boolean> {
+    const token = this.supersede();
+    const stale = () => this.disposed || token !== this.loadToken;
+    const abort = new AbortController();
+    this.manifestAbort = abort;
     this.emitter.emit('loading', pano);
+    if (stale()) return false;
 
-    const res = await fetch(manifestUrl(this.opts.baseUrl, pano));
-    if (this.disposed || token !== this.loadToken) return;
-    if (!res.ok) throw new Error(`manifest ${res.status}`);
-
-    const manifest = parseManifest(await res.json());
-    if (this.disposed || token !== this.loadToken) return;
+    let manifest;
+    try {
+      const res = await fetch(manifestUrl(this.opts.baseUrl, pano), { signal: abort.signal });
+      if (stale()) return false;
+      if (!res.ok) throw new Error(`manifest ${res.status}`);
+      const json: unknown = await res.json();
+      if (stale()) return false;
+      manifest = parseManifest(json);
+    } catch (err) {
+      // An aborted or failed fetch for a load nobody is waiting on any more.
+      if (stale()) return false;
+      throw err;
+    } finally {
+      if (this.manifestAbort === abort) this.manifestAbort = undefined;
+    }
 
     const layer = new TileLayer(
       this.renderer,
@@ -216,7 +254,7 @@ export class PanoViewer implements ControlHost {
       layer.dispose();
       // A superseded or disposed load is not this caller's failure to hear
       // about — the load that replaced it owns the outcome.
-      if (this.disposed || token !== this.loadToken) return;
+      if (stale()) return false;
       throw err;
     }
     this.pendingLayers.delete(layer);
@@ -225,9 +263,9 @@ export class PanoViewer implements ControlHost {
     // this resolves quietly. Rejecting would be defensible too, but every other
     // disposed/superseded exit above returns, and a caller that disposed the
     // viewer is not waiting to be told the load it abandoned did not finish.
-    if (this.disposed || token !== this.loadToken) {
+    if (stale()) {
       layer.dispose();
-      return;
+      return false;
     }
 
     // The outgoing panorama is only torn down now that the incoming one can
@@ -237,6 +275,12 @@ export class PanoViewer implements ControlHost {
     // screen before it was called.
     this.layer?.dispose();
     this.layer = layer;
+    // A scene's own view is cut to, not eased to from the old scene's camera.
+    if (options.view) {
+      this.setView(options.view);
+      this.view = { ...this.target };
+    }
+    this.stopMomentumOnly();
     if (this.preview && this.previewPano === pano) {
       // Replacing an image keeps the panoId, so the manifest can still be the
       // old image's until the new tiles are written. Those tiles are not the
@@ -252,17 +296,28 @@ export class PanoViewer implements ControlHost {
     } else {
       this.disposePreview();
     }
-    this.home = {
-      yaw: this.target.yaw,
-      pitch: this.target.pitch,
-      fov: this.target.fov,
-    };
     this.wasPending = true;
-    this.controls?.dispose();
-    this.controls = new Controls(this.renderer.canvas, this);
     this.dirty = true;
     this.emitter.emit('ready', manifest);
-    this.emitter.emit('scene-change', manifest.pano);
+    if (!this.disposed) this.emitter.emit('scene-change', manifest.pano);
+    return true;
+  }
+
+  /**
+   * Cancel whatever load is in flight: bump the token so it resolves false,
+   * stop its fetches so they don't compete with the new scene, and drop a
+   * transition snapshot that would otherwise sit over the new scene until the
+   * superseded load gave up. Returns the new token.
+   */
+  private supersede(): number {
+    const token = ++this.loadToken;
+    this.manifestAbort?.abort();
+    this.manifestAbort = undefined;
+    for (const pending of this.pendingLayers) pending.dispose();
+    this.pendingLayers.clear();
+    this.transitionOverlay?.remove();
+    this.transitionOverlay = undefined;
+    return token;
   }
 
   /**
@@ -301,7 +356,7 @@ export class PanoViewer implements ControlHost {
     }
     // Built first: a source that throws leaves the viewer exactly as it was.
     const preview = new EquirectLayer(this.renderer, source);
-    this.loadToken++;
+    this.supersede();
     this.disposePreview();
     this.preview = preview;
     this.previewPano = panoId;
@@ -309,9 +364,7 @@ export class PanoViewer implements ControlHost {
     this.layer?.dispose();
     this.layer = undefined;
     this.wasPending = false;
-    this.home = { ...this.target };
-    this.controls?.dispose();
-    this.controls = new Controls(this.renderer.canvas, this);
+    this.stopMomentumOnly();
     this.dirty = true;
     this.emitter.emit('scene-change', panoId);
   }
@@ -339,10 +392,6 @@ export class PanoViewer implements ControlHost {
   setNorth(radians: number): void {
     this.north = radians;
     this.dirty = true;
-  }
-
-  getNorth(): number {
-    return this.north;
   }
 
   /** Current compass heading (radians): north relative to the rendered yaw. */
@@ -386,7 +435,7 @@ export class PanoViewer implements ControlHost {
     const H = this.container.clientHeight || 1;
     const vfov = (this.effectiveVFovDeg(this.view.fov) * Math.PI) / 180;
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.aspect());
-    const yaw = this.view.yaw - dx * anglePerPixel(hfov, W); // drag right → look left
+    const yaw = unwound(this.view.yaw - dx * anglePerPixel(hfov, W)); // drag right → look left
     const pitch = clampPitch(this.view.pitch + dy * anglePerPixel(vfov, H));
     this.view.yaw = yaw;
     this.target.yaw = yaw;
@@ -408,6 +457,12 @@ export class PanoViewer implements ControlHost {
 
   stopMomentum(): void {
     this.pauseAutoRotate();
+    this.stopMomentumOnly();
+  }
+
+  // stopMomentum without counting as an interaction: programmatic moves
+  // clear a glide but leave auto-rotate alone.
+  private stopMomentumOnly(): void {
     this.momentum.yaw = 0;
     this.momentum.pitch = 0;
   }
@@ -425,7 +480,7 @@ export class PanoViewer implements ControlHost {
     const newReqDeg = clampFov(this.target.fov * scaleFactor, this.opts.minFov, this.opts.maxFov);
     const vfov1 = (this.effectiveVFovDeg(newReqDeg) * Math.PI) / 180;
     const hfov1 = 2 * Math.atan(Math.tan(vfov1 / 2) * aspect);
-    const yaw = this.view.yaw + zoomAnchorDelta(nx, hfov0, hfov1);
+    const yaw = unwound(this.view.yaw + zoomAnchorDelta(nx, hfov0, hfov1));
     const pitch = clampPitch(this.view.pitch + zoomAnchorDelta(ny, vfov0, vfov1));
     this.view.yaw = yaw;
     this.target.yaw = yaw;
@@ -437,15 +492,21 @@ export class PanoViewer implements ControlHost {
   }
 
   setView(view: Partial<View>): void {
-    if (view.yaw !== undefined) this.target.yaw = view.yaw;
+    // The rendered yaw is unbounded (drags and auto-rotate wind it up), so
+    // aim at the equivalent angle nearest to it rather than the literal one,
+    // which could be several turns away.
+    if (view.yaw !== undefined)
+      this.target.yaw = this.view.yaw + normalizeAngle(view.yaw - this.view.yaw);
     if (view.pitch !== undefined) this.target.pitch = clampPitch(view.pitch);
     if (view.fov !== undefined)
       this.target.fov = clampFov(view.fov, this.opts.minFov, this.opts.maxFov);
+    this.stopMomentumOnly();
     this.dirty = true;
   }
 
+  /** The camera being moved to, with yaw in (−π, π]. */
   getView(): View {
-    return { ...this.target };
+    return { ...this.target, yaw: normalizeAngle(this.target.yaw) };
   }
 
   private onResize = () => {
@@ -502,6 +563,8 @@ export class PanoViewer implements ControlHost {
     this.view.fov = damp(this.view.fov, this.target.fov, k);
 
     const settled =
+      this.momentum.yaw === 0 &&
+      this.momentum.pitch === 0 &&
       Math.abs(this.target.yaw - this.view.yaw) < 1e-4 &&
       Math.abs(this.target.pitch - this.view.pitch) < 1e-4 &&
       Math.abs(this.target.fov - this.view.fov) < 1e-3;
@@ -533,12 +596,12 @@ export class PanoViewer implements ControlHost {
     // fails (for good, or until its cooldown ends) does not count, so failed
     // tiles can still end the preview, leaving coarser tiles in their place.
     const pending = this.layer?.hasPending() ?? false;
-    if (this.wasPending && !pending) {
-      if (this.previewUnderlay) this.disposePreview();
-      this.emitter.emit('tiles-settled', undefined);
-    }
+    const tilesSettled = this.wasPending && !pending;
+    if (tilesSettled && this.previewUnderlay) this.disposePreview();
     this.wasPending = pending;
 
+    // Draw before anything outside the viewer runs: a listener that throws
+    // or disposes the viewer must not cost this frame its render.
     this.renderer.render(this.drawList());
     this.hotspots.update(
       this.viewProj,
@@ -546,7 +609,18 @@ export class PanoViewer implements ControlHost {
       this.container.clientWidth || 1,
       this.container.clientHeight || 1,
     );
-    for (const cb of this.renderCbs) cb(this.view);
+    if (tilesSettled) {
+      this.emitter.emit('tiles-settled', undefined);
+      if (this.disposed) return;
+    }
+    for (const cb of this.renderCbs) {
+      try {
+        cb(this.view);
+      } catch (err) {
+        report(err);
+      }
+      if (this.disposed) return;
+    }
   };
 
   project(yaw: number, pitch: number): { x: number; y: number; behind: boolean } {
@@ -574,22 +648,18 @@ export class PanoViewer implements ControlHost {
     return this.hotspots.add(el, pos.yaw, pos.pitch);
   }
 
-  resetView(): void {
-    this.setView({ ...this.home });
-  }
-
   async transitionTo(pano: string, view?: Partial<View>): Promise<void> {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const ms = reduce ? 0 : this.opts.transitionMs;
 
-    // A previous transition's overlay may still be fading — remove it now so it
-    // can't outlive this call (and never crossfade two stale snapshots).
-    this.transitionOverlay?.remove();
-    this.transitionOverlay = undefined;
-
     // Only snapshot when there is something to draw; snapshotting an empty draw
     // list would crossfade from a black frame.
     const drawList = this.drawList();
+    // Started before the snapshot goes up: superseding the load in flight
+    // removes an older transition's overlay (one that may still be fading),
+    // and must not remove this one. Up to its first await, load() leaves the
+    // scene on screen alone, so drawList is still what is drawn.
+    const loading = this.load(pano, view ? { view } : {});
     let snap: HTMLDivElement | undefined;
     if (drawList.length > 0) {
       snap = document.createElement('div');
@@ -609,9 +679,10 @@ export class PanoViewer implements ControlHost {
     }
 
     try {
-      await this.load(pano);
-      if (view) this.setView(view);
-      if (snap) {
+      // Superseded: the newer call owns the camera and has already removed
+      // this snapshot, so there is nothing to fade.
+      const tookEffect = await loading;
+      if (snap && tookEffect) {
         await new Promise((r) => requestAnimationFrame(() => r(null)));
         snap.style.opacity = '0';
         await new Promise((r) => setTimeout(r, ms));
@@ -632,11 +703,10 @@ export class PanoViewer implements ControlHost {
     clearTimeout(this.autoRotateResumeTimer);
     window.removeEventListener('resize', this.onResize);
     this.resizeObserver?.disconnect();
-    this.controls?.dispose();
+    this.controls.dispose();
     // Pending layers first: they are the ones with fetches still in flight, and
     // they must stop before the renderer's GL context is destroyed below.
-    for (const pending of this.pendingLayers) pending.dispose();
-    this.pendingLayers.clear();
+    this.supersede();
     this.layer?.dispose();
     this.disposePreview();
     this.hotspots.clear();
