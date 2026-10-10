@@ -107,7 +107,9 @@ scene gets no preloads). The tile URLs come from core's `tilePath` and the CDN r
 script has no CDN var. `crossorigin` matters: it matches the viewer's CORS `fetch()`, so the
 browser reuses the preload. The SPA's `TourPage` passes `#pn-boot` to `loadPublishedTour` on its
 first attempt, which uses it only if it is for the same slug and passes the same schemas.
-A primed response has no `ETag` and is never a `304`. HEAD, a missing or invalid bundle, a
+The R2 reads get 300 ms (`BOOT_BUDGET_MS`); past that the script logs a warning and serves
+the plain page, so a slow R2 adds at most that much TTFB. A primed response has no `ETag` and is
+never a `304`. HEAD, a missing or invalid bundle, a
 non-HTML asset response and any R2 error serve the plain page, so the SPA fetches as before.
 That is two extra R2 reads per tour page view; the browser makes three fewer CDN reads.
 Post-deploy checks (dev; production the same on `panote.io`):
