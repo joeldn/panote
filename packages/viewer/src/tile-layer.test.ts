@@ -501,6 +501,43 @@ describe('TileLayer failure handling', () => {
     });
   });
 
+  describe('bitmap lifetime', () => {
+    function trackBitmaps(): { close: ReturnType<typeof vi.fn> }[] {
+      const bitmaps: { close: ReturnType<typeof vi.fn> }[] = [];
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => {
+          const bitmap = { close: vi.fn() };
+          bitmaps.push(bitmap);
+          return Promise.resolve(bitmap);
+        }),
+      );
+      return bitmaps;
+    }
+
+    it('closes every decoded bitmap once it is uploaded', async () => {
+      const bitmaps = trackBitmaps();
+      const layer = makeLayer();
+      await render(layer, 0);
+      expect(bitmaps.length).toBeGreaterThan(0);
+      expect(bitmaps).toHaveLength(renderer.uploadTile.mock.calls.length);
+      for (const bitmap of bitmaps) expect(bitmap.close).toHaveBeenCalledTimes(1);
+      layer.dispose();
+    });
+
+    it('still closes the bitmap when the upload throws', async () => {
+      const bitmaps = trackBitmaps();
+      renderer.uploadTile.mockImplementation(() => {
+        throw new Error('context lost');
+      });
+      const layer = makeLayer();
+      await render(layer, 0);
+      expect(bitmaps.length).toBeGreaterThan(0);
+      for (const bitmap of bitmaps) expect(bitmap.close).toHaveBeenCalledTimes(1);
+      layer.dispose();
+    });
+  });
+
   describe('low-resolution base layer', () => {
     it('loads exactly one level-0 tile per cube face — the whole panorama, coarsely', async () => {
       const layer = makeLayer();

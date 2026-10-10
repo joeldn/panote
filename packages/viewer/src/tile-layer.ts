@@ -459,8 +459,14 @@ export class TileLayer {
         return { kind: 'loaded' };
       }
       const geom = buildTileGeometry(face, level, x, y);
-      const handle = this.renderer.uploadTile(geom, bitmap);
-      bitmap.close(); // GPU texture owns the pixels now; free the CPU copy.
+      let handle: TileHandle;
+      try {
+        handle = this.renderer.uploadTile(geom, bitmap);
+      } finally {
+        // The GPU texture owns the pixels now (or the upload failed, e.g. on a
+        // lost context): free the CPU copy either way.
+        bitmap.close();
+      }
       this.cache.set(key, {
         key,
         handle,
