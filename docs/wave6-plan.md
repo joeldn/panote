@@ -3,6 +3,10 @@
 Status: draft for review. Nothing here is implemented. Baseline: `main` at `8d3ab26`.
 All `file:line` citations are against that commit.
 
+> Note (2026-10): the viewer's vanilla `ui/*` mounts cited below (`packages/viewer/src/ui/`)
+> have since been deleted. The viewer `Tour` types now live in `@internal/web-kit`
+> (`src/tour-types.ts`), and all viewer chrome is React in `@internal/ui`.
+
 ---
 
 ## 1. Summary and key decisions
