@@ -482,6 +482,20 @@ describe('editor: points, connections, views and settings', () => {
     expect(project).not.toHaveBeenCalled();
   });
 
+  it('draws no chevron for a connection back to the scene itself', async () => {
+    server.setConfig('square', {
+      title: 'Square',
+      hotspots: [
+        { id: 'l1', type: 'link', yaw: 1, pitch: -0.4, title: 'Church', targetPanoId: 'church' },
+        { id: 'l2', type: 'link', yaw: 2, pitch: -0.4, title: 'Loop', targetPanoId: 'square' },
+      ],
+    });
+    const { ui } = openTab();
+    await loaded(ui);
+    await ui.findByRole('button', { name: 'Go to Church' });
+    expect(ui.queryByRole('button', { name: 'Go to Square' })).toBeNull();
+  });
+
   it('deletes a point through the confirm modal', async () => {
     const { ui } = openTab();
     await loaded(ui);
