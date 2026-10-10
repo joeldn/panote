@@ -19,6 +19,10 @@ vi.mock('./render/gl-renderer.js', () => {
       height: 0,
       style: {} as Record<string, string>,
       tabIndex: 0,
+      attributes: {} as Record<string, string>,
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = value;
+      },
       focus: vi.fn(),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),

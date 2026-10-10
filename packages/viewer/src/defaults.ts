@@ -28,6 +28,8 @@ export const VIEWER_DEFAULTS = deepFreeze({
   },
   interaction: {
     enabled: true,
+    label: 'Panorama viewer',
+    a11y: true,
     cursor: true,
     wheel: 'always',
     // Chrome and Firefox report a trackpad pinch as a ctrl-wheel with small

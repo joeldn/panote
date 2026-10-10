@@ -61,16 +61,21 @@ export function panoteSourceResolver(baseUrl: string): SourceResolver {
 export interface PanoteViewerPresetOptions {
   /** Tiles base, e.g. `tilesBaseUrl(config)`. */
   baseUrl: string;
+  /** The canvas's accessible name, e.g. the tour and scene titles. */
+  label?: string;
 }
 
 /**
  * Every viewer option panote runs with, each one pinned. The viewer's
  * generic defaults are mostly the same values today, but pinning them here
  * means a change to a viewer default can't move panote; a test holds these to
- * a literal copy. On top of the defaults panote sets the manifest resolver
- * and the request init the Worker's preloads match.
+ * a literal copy. On top of the defaults panote sets the manifest resolver,
+ * the request init the Worker's preloads match and the label.
  */
-export function panoteViewerPreset({ baseUrl }: PanoteViewerPresetOptions): ViewerOptions {
+export function panoteViewerPreset({
+  baseUrl,
+  label = 'Panorama viewer',
+}: PanoteViewerPresetOptions): ViewerOptions {
   const pitchLimit = Math.PI / 2 - 0.001;
   return {
     resolveSource: panoteSourceResolver(baseUrl),
@@ -87,6 +92,8 @@ export function panoteViewerPreset({ baseUrl }: PanoteViewerPresetOptions): View
     },
     interaction: {
       enabled: true,
+      label,
+      a11y: true,
       cursor: true,
       wheel: 'always',
       wheelGain: 0.001,

@@ -60,6 +60,10 @@ export interface CameraOptions {
 export interface InteractionOptions {
   /** False builds no input handling at all: the camera moves only through the API. */
   enabled?: boolean;
+  /** The canvas's accessible name (aria-label). Change it at runtime with `setLabel()`. */
+  label?: string;
+  /** Give the canvas `role="application"` and the label. */
+  a11y?: boolean;
   /** Show the grab / grabbing cursor over the canvas. */
   cursor?: boolean;
   wheel?: WheelMode;

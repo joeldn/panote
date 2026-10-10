@@ -20,6 +20,7 @@ class FakeViewer {
   setView = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
+  setLabel = vi.fn();
   dispose = vi.fn();
   constructor(
     readonly container: HTMLElement,
@@ -127,6 +128,7 @@ describe('PanoStage', () => {
         north={0.5}
         autoRotate
         options={{ camera: { maxFov: 90 }, autoRotate: { speed: 0.1 } }}
+        aria-label="Town hall"
         createViewer={f.createViewer}
       />,
     );
@@ -139,6 +141,7 @@ describe('PanoStage', () => {
       ...preset,
       resolveSource: expect.any(Function),
       camera: { ...preset.camera, maxFov: 90, north: 0.5 },
+      interaction: { ...preset.interaction, label: 'Town hall' },
       autoRotate: { enabled: true, speed: 0.1, idleMs: 3000 },
       initialView: { yaw: 1, fov: 60 },
     });
@@ -146,6 +149,39 @@ describe('PanoStage', () => {
     expect(v.load).toHaveBeenCalledWith('hall', { view: { yaw: 1, fov: 60 } });
     expect(v.setNorth).toHaveBeenLastCalledWith(0.5);
     expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+  });
+
+  it('names the viewer canvas, not its own host, and renames it in place', () => {
+    const f = factory();
+    const { rerender } = render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        aria-label="Tour: Hall"
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    expect(v.options.interaction?.label).toBe('Tour: Hall');
+    // One application landmark: the canvas. The stage's own elements have no role.
+    expect(document.querySelector('[role]')).toBeNull();
+    expect(document.querySelector('[aria-label]')).toBeNull();
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        aria-label="Tour: Nave"
+        createViewer={f.createViewer}
+      />,
+    );
+    expect(f.createViewer).toHaveBeenCalledTimes(1);
+    expect(v.setLabel).toHaveBeenLastCalledWith('Tour: Nave');
+  });
+
+  it('labels the canvas "Panorama viewer" without an aria-label', () => {
+    const f = factory();
+    render(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
+    expect(f.last().options.interaction?.label).toBe('Panorama viewer');
   });
 
   it('applies the scene view and loads on pano change; crossfades when transition is on', () => {
@@ -724,7 +760,7 @@ describe('PanoStage', () => {
         createViewer={createViewer}
       />,
     );
-    expect(screen.getByRole('application')).toBeTruthy();
+    expect(document.querySelector('.pn-stage__viewer')).toBeTruthy();
     expect(onPreviewError).toHaveBeenCalledWith(refused, 'hall');
     expect(onLoadError).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();

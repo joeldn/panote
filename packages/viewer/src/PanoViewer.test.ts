@@ -34,6 +34,10 @@ vi.mock('./render/gl-renderer.js', () => {
       height: 0,
       style: {} as Record<string, string>,
       tabIndex: 0,
+      attributes: {} as Record<string, string>,
+      setAttribute(name: string, value: string) {
+        this.attributes[name] = value;
+      },
       focus: vi.fn(),
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -2471,19 +2475,47 @@ describe('PanoViewer', () => {
     });
 
     describe('options', () => {
-      type Canvas = { addEventListener: ReturnType<typeof vi.fn> };
+      type Canvas = {
+        attributes: Record<string, string>;
+        addEventListener: ReturnType<typeof vi.fn>;
+      };
       const canvasOf = (viewer: PanoViewer) =>
         internals(viewer).renderer.canvas as unknown as Canvas;
       const rendererOpts = (viewer: PanoViewer) =>
         (internals(viewer).renderer as unknown as { opts: Record<string, unknown> }).opts;
 
-      it('takes no input with interaction.enabled off', () => {
+      it('names the canvas as an application through attributes, and renames it', () => {
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        expect(canvasOf(viewer).attributes).toEqual({
+          role: 'application',
+          'aria-label': 'Panorama viewer',
+        });
+        viewer.setLabel('Town hall');
+        expect(canvasOf(viewer).attributes['aria-label']).toBe('Town hall');
+        viewer.dispose();
+
+        const named = new PanoViewer(makeContainer(400, 800), {
+          interaction: { label: 'Old town: Square' },
+        });
+        expect(canvasOf(named).attributes['aria-label']).toBe('Old town: Square');
+        named.dispose();
+      });
+
+      it('leaves the canvas unnamed with interaction.a11y off', () => {
+        const viewer = new PanoViewer(makeContainer(400, 800), { interaction: { a11y: false } });
+        viewer.setLabel('Town hall');
+        expect(canvasOf(viewer).attributes).toEqual({});
+        viewer.dispose();
+      });
+
+      it('takes no input with interaction.enabled off, and is an image to assistive tech', () => {
         const viewer = new PanoViewer(makeContainer(400, 800), { interaction: { enabled: false } });
         expect(internals(viewer).controls).toBeUndefined();
         expect(canvasOf(viewer).addEventListener).not.toHaveBeenCalledWith(
           'pointerdown',
           expect.any(Function),
         );
+        expect(canvasOf(viewer).attributes['role']).toBe('img');
         viewer.dispose();
       });
 

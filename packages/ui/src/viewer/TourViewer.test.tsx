@@ -1,4 +1,4 @@
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewer, ViewerOptions } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -14,12 +14,18 @@ interface PendingTransition {
 }
 
 class FakeViewer {
-  /** Like the real viewer's: in the host, focusable for its keys. */
+  /** Like the real viewer's: in the host, focusable for its keys, and the named application. */
   canvas = document.createElement('canvas');
-  constructor(host?: HTMLElement) {
+  constructor(
+    host?: HTMLElement,
+    readonly options?: ViewerOptions,
+  ) {
     this.canvas.tabIndex = 0;
+    this.canvas.setAttribute('role', 'application');
+    this.canvas.setAttribute('aria-label', options?.interaction?.label ?? '');
     host?.appendChild(this.canvas);
   }
+  setLabel = vi.fn((label: string) => this.canvas.setAttribute('aria-label', label));
   focus = vi.fn(() => this.canvas.focus({ preventScroll: true }));
   handlers = new Map<string, Set<Handler>>();
   fail = false;
@@ -94,8 +100,8 @@ const data = (over: Partial<TourViewerData> = {}): TourViewerData => ({
 
 function renderViewer(props: Partial<TourViewerProps> = {}) {
   const viewers: FakeViewer[] = [];
-  const createViewer = () => {
-    const v = new FakeViewer();
+  const createViewer = (el: HTMLElement, options: ViewerOptions) => {
+    const v = new FakeViewer(el, options);
     viewers.push(v);
     return v as unknown as PanoViewer;
   };
@@ -351,8 +357,8 @@ describe('TourViewer', () => {
 
     it('hands focus to the stage when the focused chevron hides for the move', async () => {
       renderViewer({
-        createViewer: (el) => {
-          const v = new FakeViewer(el);
+        createViewer: (el, options) => {
+          const v = new FakeViewer(el, options);
           v.defer = true;
           return v as unknown as PanoViewer;
         },
@@ -361,13 +367,13 @@ describe('TourViewer', () => {
       chevron.focus();
       fireEvent.click(chevron);
       expect(screen.queryByRole('button', { name: 'Go to To the church' })).toBeNull();
-      expect(document.activeElement).toBe(screen.getByRole('application').querySelector('canvas'));
+      expect(document.activeElement).toBe(screen.getByRole('application'));
     });
 
     it('leaves focus alone when the move starts from outside the markers', async () => {
       renderViewer({
-        createViewer: (el) => {
-          const v = new FakeViewer(el);
+        createViewer: (el, options) => {
+          const v = new FakeViewer(el, options);
           v.defer = true;
           return v as unknown as PanoViewer;
         },

@@ -81,17 +81,17 @@ describe('mergeViewerOptions', () => {
     const fetchB = (() => {}) as unknown as typeof fetch;
     const merged = mergeViewerOptions(
       {
-        interaction: { keyboard: { panStepPx: 10 }, wheel: 'off' },
+        interaction: { keyboard: { panStepPx: 10 }, label: 'a' },
         network: { fetch: fetchA },
         rendering: { background: [1, 1, 1] },
       },
       {
-        interaction: { keyboard: false, wheel: undefined as unknown as 'off' },
+        interaction: { keyboard: false, label: undefined as unknown as string },
         network: { fetch: fetchB },
         rendering: { background: [0, 0, 0] },
       },
     );
-    expect(merged.interaction).toEqual({ keyboard: false, wheel: 'off' });
+    expect(merged.interaction).toEqual({ keyboard: false, label: 'a' });
     expect(merged.network?.fetch).toBe(fetchB);
     expect(merged.rendering?.background).toEqual([0, 0, 0]);
   });

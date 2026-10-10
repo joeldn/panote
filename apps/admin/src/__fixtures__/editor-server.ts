@@ -184,6 +184,14 @@ type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 /** jsdom has no WebGL: a PanoViewer stand-in with a scriptable view. */
 export class FakeViewer {
+  /** Like the real viewer's canvas: in the host, and the named application landmark. */
+  canvas = document.createElement('canvas');
+  constructor(host?: HTMLElement, options?: Parameters<ViewerFactory>[1]) {
+    this.canvas.setAttribute('role', 'application');
+    this.canvas.setAttribute('aria-label', options?.interaction?.label ?? '');
+    host?.appendChild(this.canvas);
+  }
+  setLabel = vi.fn((label: string) => this.canvas.setAttribute('aria-label', label));
   view = { yaw: 0, pitch: 0, fov: 70 };
   /** What directionAtPixel returns (where a placed point lands). */
   pointAt = { yaw: 0.5, pitch: 0.1 };
@@ -220,8 +228,8 @@ export class FakeViewer {
 
 export function viewerFactory(): { create: ViewerFactory; viewers: FakeViewer[] } {
   const viewers: FakeViewer[] = [];
-  const create: ViewerFactory = () => {
-    const v = new FakeViewer();
+  const create: ViewerFactory = (host, options) => {
+    const v = new FakeViewer(host, options);
     viewers.push(v);
     return v as unknown as ReturnType<ViewerFactory>;
   };

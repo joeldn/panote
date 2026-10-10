@@ -20,7 +20,7 @@ const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(con
  * Viewer options for one stage, deep-merged over `panoteViewerPreset`: set
  * only what differs, e.g. `{ camera: { maxFov: 90 } }`. The resolver is the
  * stage's own (from `baseUrl`), and the stage's props win over these:
- * `view`, `north` and `autoRotate`. Leave
+ * `view`, `north`, `autoRotate` and `aria-label`. Leave
  * `network.requestInit` alone: the Worker's preloads are only reused by
  * requests that match them.
  */
@@ -108,6 +108,7 @@ export interface PanoStageProps {
   children?: ReactNode;
   className?: string;
   style?: CSSProperties;
+  /** The viewer canvas's accessible name; it is `role="application"`. */
   'aria-label'?: string;
   /** Test seam: builds the viewer (defaults to `new PanoViewer`). */
   createViewer?: ViewerFactory;
@@ -163,6 +164,7 @@ export function PanoStage({
     createViewer,
     transition,
     preview,
+    ariaLabel,
   });
   const callbacks = useRef({
     onViewer,
@@ -180,6 +182,7 @@ export function PanoStage({
       createViewer,
       transition,
       preview,
+      ariaLabel,
     };
     callbacks.current = { onViewer, onSceneChange, onHotspotOpen, onLoadError, onPreviewError };
   });
@@ -200,10 +203,14 @@ export function PanoStage({
     const host = hostRef.current;
     if (!host) return;
     const l = latest.current;
-    const opts = mergeViewerOptions(panoteViewerPreset({ baseUrl }), l.options ?? {}, {
-      autoRotate: { enabled: l.autoRotate },
-      ...(l.north !== undefined && { camera: { north: l.north } }),
-    });
+    const opts = mergeViewerOptions(
+      panoteViewerPreset({ baseUrl, label: l.ariaLabel }),
+      l.options ?? {},
+      {
+        autoRotate: { enabled: l.autoRotate },
+        ...(l.north !== undefined && { camera: { north: l.north } }),
+      },
+    );
     if (l.view) opts.initialView = l.view;
     const v = l.createViewer(host, opts);
     const onScene = (id: string) => {
@@ -372,9 +379,14 @@ export function PanoStage({
     viewer?.setAutoRotate(autoRotate);
   }, [viewer, autoRotate]);
 
+  useEffect(() => {
+    viewer?.setLabel(ariaLabel);
+  }, [viewer, ariaLabel]);
+
   return (
     <div className={cx('pn-stage', className)} style={style}>
-      <div ref={hostRef} className="pn-stage__viewer" role="application" aria-label={ariaLabel} />
+      {/* The viewer's canvas is the application landmark, named by aria-label. */}
+      <div ref={hostRef} className="pn-stage__viewer" />
       <PanoViewerContext.Provider value={viewer}>
         <StageEventsContext.Provider value={stageEvents}>
           <div className="pn-stage__overlay">{children}</div>

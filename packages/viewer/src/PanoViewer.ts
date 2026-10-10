@@ -247,6 +247,13 @@ export class PanoViewer {
       stopMomentum: () => this.stopMomentum(),
     };
     if (interaction.enabled) this.controls = new Controls(this.renderer.canvas, host, interaction);
+    if (interaction.a11y) {
+      // Attributes, not the role and ariaLabel properties: Firefox ESR does
+      // not reflect those, and would leave the canvas unnamed. A viewer that
+      // takes no input is a picture to assistive tech, not an application.
+      this.renderer.canvas.setAttribute('role', interaction.enabled ? 'application' : 'img');
+      this.setLabel(interaction.label);
+    }
     // ResizeObserver sees the container itself resized by layout (flex/grid
     // reflow, a sidebar toggling, display:none → visible, splitter panes),
     // not just the browser window, so the canvas never keeps a stale size.
@@ -771,6 +778,14 @@ export class PanoViewer {
    */
   focus(): void {
     this.renderer.canvas.focus({ preventScroll: true });
+  }
+
+  /**
+   * Set the canvas's accessible name (`interaction.label`), e.g. to the scene
+   * on screen. Does nothing with `interaction.a11y` off.
+   */
+  setLabel(label: string): void {
+    if (this.opts.interaction.a11y) this.renderer.canvas.setAttribute('aria-label', label);
   }
 
   /** The camera being moved to, with yaw in (−π, π]. */

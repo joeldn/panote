@@ -75,6 +75,7 @@ class FakeViewer {
   focus = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
+  setLabel = vi.fn();
   dispose = vi.fn();
   onRender = () => () => {};
   project = () => ({ x: 0, y: 0, behind: false });

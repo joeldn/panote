@@ -191,6 +191,8 @@ describe('editor: an upload in this tab', () => {
     );
     // Nothing to wait for: the scene stays editable while the user decides.
     expect((addPoint() as HTMLButtonElement).disabled).toBe(false);
+    // On stage, named for it, until it is removed.
+    expect(screen.getByRole('application', { name: /Town hall/ })).toBeTruthy();
 
     // Remove is the editor's own: confirm, then it's an unsaved change to the tour.
     fireEvent.click(within(card).getByRole('button', { name: 'Remove from tour' }));
