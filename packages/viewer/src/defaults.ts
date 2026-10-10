@@ -7,10 +7,10 @@ import type { View, WheelMode } from './types.js';
  *
  * Not here: `textureBudgetMB`, whose default depends on the display (see
  * `defaultTextureBudgetMB` in texture-budget.ts), and `initialView.yaw` and
- * `.pitch`, which start at 0.
+ * `.pitch`, which start at 0; `fetch`, which is the global fetch looked up
+ * per request; and `resolveSource`, which has none (ids then reject).
  */
 export interface ViewerDefaults {
-  readonly baseUrl: string;
   /** Vertical fov limits, degrees. */
   readonly minFov: number;
   readonly maxFov: number;
@@ -40,10 +40,11 @@ export interface ViewerDefaults {
   readonly autoRotateSpeed: number;
   readonly autoRotateIdleMs: number;
   readonly wheel: WheelMode;
+  /** Nothing added: a plain fetch, so mode 'cors' and credentials 'same-origin'. */
+  readonly requestInit: Readonly<RequestInit>;
 }
 
 export const VIEWER_DEFAULTS: ViewerDefaults = Object.freeze({
-  baseUrl: '/tiles/',
   minFov: 15,
   maxFov: 80,
   maxHorizontalFov: 100,
@@ -60,4 +61,5 @@ export const VIEWER_DEFAULTS: ViewerDefaults = Object.freeze({
   autoRotateSpeed: 0.036,
   autoRotateIdleMs: 3000,
   wheel: 'always',
+  requestInit: Object.freeze({}),
 });

@@ -1,3 +1,7 @@
 {
-  "extends": ["./tsconfig.json", "@internal/typescript-config/tests.json"]
+  "_comment": "Node types for the tests only (no-workspace-deps.test.ts reads files from disk); src stays DOM-only.",
+  "extends": ["./tsconfig.json", "@internal/typescript-config/tests.json"],
+  "compilerOptions": {
+    "types": ["node"]
+  }
 }

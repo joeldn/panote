@@ -1,9 +1,10 @@
 import type { PanoViewer, PreviewSource, ViewerOptions } from '@panote/viewer';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PanoStage, type StagePreview } from './PanoStage.js';
+import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
 
 type Handler = (payload: unknown) => void;
@@ -99,7 +100,20 @@ function asyncPreviewOf(panoId: string, key = 'job-1') {
   return { preview, source, pending };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+/** Run the viewer's resolver for `id`, and check which manifest URL it fetched. */
+async function resolvedUrl(options: ViewerOptions, id: string, url: string) {
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 404 }));
+  vi.stubGlobal('fetch', fetchMock);
+  await expect(options.resolveSource!(id, new AbortController().signal)).rejects.toThrow(
+    'manifest 404',
+  );
+  expect(fetchMock).toHaveBeenCalledWith(url, expect.anything());
+}
 
 describe('PanoStage', () => {
   it('creates one viewer in its host with the initial view, north and auto-rotate, then loads', () => {
@@ -120,7 +134,8 @@ describe('PanoStage', () => {
     expect(v.container.className).toBe('pn-stage__viewer');
     expect(v.options).toEqual({
       maxFov: 90,
-      baseUrl: 'https://cdn.test/tiles/',
+      resolveSource: expect.any(Function),
+      requestInit: { mode: 'cors', credentials: 'same-origin' },
       autoRotate: true,
       initialView: { yaw: 1, fov: 60 },
       north: 0.5,
@@ -216,14 +231,19 @@ describe('PanoStage', () => {
     expect(onLoadError).toHaveBeenCalledWith(new Error('manifest 404'), 'gone');
   });
 
-  it('forwards scene-change / hotspot-open events and exposes the viewer to children', () => {
+  it('forwards scene-change and chrome hotspot opens, and exposes the viewer to children', () => {
     const f = factory();
     const onSceneChange = vi.fn();
     const onHotspotOpen = vi.fn();
     const onViewer = vi.fn();
     function Chrome() {
       const viewer = usePanoViewer();
-      return <span>{viewer ? 'chrome:ready' : 'chrome:none'}</span>;
+      const events = useStageEvents();
+      return (
+        <button type="button" onClick={() => events.hotspotOpen('h1')}>
+          {viewer ? 'chrome:ready' : 'chrome:none'}
+        </button>
+      );
     }
     const { unmount } = render(
       <PanoStage
@@ -241,16 +261,18 @@ describe('PanoStage', () => {
     expect(screen.getByText('chrome:ready')).toBeTruthy();
     expect(onViewer).toHaveBeenLastCalledWith(v);
     v.emit('scene-change', 'hall');
-    v.emit('hotspot-open', 'h1');
+    fireEvent.click(screen.getByText('chrome:ready'));
     expect(onSceneChange).toHaveBeenCalledWith('hall');
-    expect(onHotspotOpen).toHaveBeenCalledWith('h1');
+    expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('h1');
+    // Analytics no longer pass through the viewer.
+    expect(v.handlers.has('hotspot-open')).toBe(false);
     unmount();
     expect(v.dispose).toHaveBeenCalledTimes(1);
     expect(v.handlers.get('scene-change')?.size).toBe(0);
     expect(onViewer).toHaveBeenLastCalledWith(null);
   });
 
-  it('recreates the viewer when baseUrl changes', () => {
+  it('recreates the viewer when baseUrl changes', async () => {
     const f = factory();
     const { rerender } = render(
       <PanoStage baseUrl="a/" panoId="hall" createViewer={f.createViewer} />,
@@ -259,7 +281,8 @@ describe('PanoStage', () => {
     rerender(<PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />);
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(f.made).toHaveLength(2);
-    expect(f.last().options.baseUrl).toBe('b/');
+    // The new viewer resolves against the new base.
+    await resolvedUrl(f.last().options, 'hall', 'b/hall/manifest.json');
     expect(f.last().load).toHaveBeenCalledWith('hall');
   });
 

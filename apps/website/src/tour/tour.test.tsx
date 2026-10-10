@@ -79,7 +79,7 @@ class FakeViewer {
   onRender = () => () => {};
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
-  reportHotspotOpen = vi.fn((id: string) => this.emit('hotspot-open', id));
+  prefetch = vi.fn(async () => {});
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
@@ -205,7 +205,11 @@ describe('/s/:slug', () => {
       `${CDN}pub/tours/tour-a.json`,
     ]);
     await shown('square');
-    expect(lastViewer().options.baseUrl).toBe(`${CDN}tiles/`);
+    // The stage resolves scenes against the CDN's tiles.
+    await expect(
+      lastViewer().options.resolveSource!('square', new AbortController().signal),
+    ).rejects.toThrow('manifest 404');
+    expect(fetchMock).toHaveBeenCalledWith(`${CDN}tiles/square/manifest.json`, expect.anything());
     expect(document.title).toBe('Old town · panote');
     expect(robots()).toBeUndefined();
   });
@@ -216,10 +220,9 @@ describe('/s/:slug', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
     const panel = screen.getByRole('complementary', { name: 'Fountain' });
     expect(panel.querySelector('strong')?.textContent).toBe('Old');
-    expect(lastViewer().reportHotspotOpen).toHaveBeenCalledWith('i1');
-    // Clicking the open point's marker again is not a second open (Insights counted it twice).
+    // Clicking the open point's marker again closes it (see 'analytics beacon' for the count).
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
-    expect(lastViewer().reportHotspotOpen).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('complementary', { name: 'Fountain' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
     await waitFor(() =>
       expect(lastViewer().transitionTo).toHaveBeenCalledWith('church', { yaw: 1 }),
@@ -761,6 +764,20 @@ describe('analytics beacon', () => {
       surface: 'embed',
     });
     expect(calls('/events')).toHaveLength(0);
+  });
+
+  it('counts a point opened and closed again once (Insights counted it twice)', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    await viewRecorded();
+    const marker = screen.getByRole('button', { name: 'Fountain' });
+    fireEvent.click(marker);
+    fireEvent.click(marker);
+    window.dispatchEvent(new Event('pagehide'));
+    const opens = beacons().filter((e) => (e as { type: string }).type === 'hotspot');
+    expect(opens).toEqual([
+      { type: 'hotspot', panoId: 'square', hotspotId: 'i1', surface: 'page' },
+    ]);
   });
 
   it('tags a point opened after a link with the scene it is on', async () => {

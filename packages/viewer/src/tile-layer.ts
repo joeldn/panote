@@ -1,4 +1,3 @@
-import { tilePath, type Manifest } from '@panote/core';
 import { FACES, faceUVToDir, tileCornersUV, tilesPerEdge, type Face } from './cube.js';
 import { selectLevel } from './lod.js';
 import { selectEvictions } from './tile-cache.js';
@@ -15,14 +14,11 @@ import {
   type GLRenderer,
   type DrawItem,
   type TileHandle,
+  type TileImage,
 } from './render/gl-renderer.js';
-import {
-  TileHttpError,
-  TileRetryBudget,
-  classifyFailure,
-  isAbortError,
-  type FailureKind,
-} from './tile-retry.js';
+import type { CubeTileSource } from './source.js';
+import { loadTileImage, releaseImage, type TileNetwork } from './tile-fetch.js';
+import { TileRetryBudget, classifyFailure, isAbortError, type FailureKind } from './tile-retry.js';
 
 /**
  * Why a single `ensureTile()` call ended. The per-frame path ignores this
@@ -39,11 +35,12 @@ type TileLoadOutcome =
 
 /**
  * A level-0 tile could not be loaded, so the panorama has no low-resolution
- * base and the load fails. `cause` carries the underlying rejection (a
- * `TileHttpError` — exported from the package entry point alongside this class,
- * so the check is an `instanceof` and not a string match — a fetch `TypeError`,
- * or a decode error) for callers that want to distinguish "the origin is down"
- * from "this panorama is not published".
+ * base and the load fails. `sourceId` is the id of the source that failed.
+ * `cause` carries the underlying rejection (a `TileHttpError` — exported from
+ * the package entry point alongside this class, so the check is an
+ * `instanceof` and not a string match — a fetch `TypeError`, a decode error,
+ * or whatever a source's `loadTile` rejected with) for callers that want to
+ * distinguish "the origin is down" from "this panorama is not published".
  *
  * `permanent` is that distinction pre-classified: `true` for a 404/410/401/403
  * (retrying cannot help — the panorama is not published, or not accessible to
@@ -56,14 +53,17 @@ export class BaseTileLoadError extends Error {
   readonly permanent: boolean;
 
   constructor(
-    readonly pano: string,
+    readonly sourceId: string,
     readonly face: Face,
     cause: unknown,
   ) {
     const reason = cause instanceof Error ? cause.message : String(cause ?? 'no attempt succeeded');
-    super(`panorama "${pano}": low-resolution base tile for face "${face}" failed (${reason})`, {
-      cause,
-    });
+    super(
+      `panorama "${sourceId}": low-resolution base tile for face "${face}" failed (${reason})`,
+      {
+        cause,
+      },
+    );
     this.name = 'BaseTileLoadError';
     this.permanent = classifyFailure(cause) === 'permanent';
   }
@@ -121,7 +121,7 @@ interface ReadyTile {
   face: Face;
   x: number;
   y: number;
-  bitmap: ImageBitmap;
+  bitmap: TileImage;
 }
 
 /**
@@ -287,20 +287,21 @@ export class TileLayer {
 
   constructor(
     private renderer: GLRenderer,
-    private manifest: Manifest,
-    private baseUrl: string,
+    /** Read by the viewer too: the source this layer draws. */
+    readonly source: CubeTileSource,
     textureBudgetMB: number,
     private onInvalidate: () => void,
     maxConcurrent = 8,
     private now: () => number = () => performance.now(),
     private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
+    private network: TileNetwork = {},
   ) {
-    this.maxTiles = maxTilesForBudget(textureBudgetMB, manifest.tileSize);
+    this.maxTiles = maxTilesForBudget(textureBudgetMB, source.tileSize);
     this.maxConcurrent = maxConcurrent;
     // Cooldowns and the wake timer share one clock (faked together in tests).
     this.retry = new TileRetryBudget(this.now);
-    this.visible = new Int32Array(FACES.length * tilesPerEdge(manifest.maxLevel) ** 2);
-    this.levelPrefix = Array.from({ length: manifest.maxLevel + 1 }, (_, l) => `${l}/`);
+    this.visible = new Int32Array(FACES.length * tilesPerEdge(source.maxLevel) ** 2);
+    this.levelPrefix = Array.from({ length: source.maxLevel + 1 }, (_, l) => `${l}/`);
   }
 
   /**
@@ -367,7 +368,7 @@ export class TileLayer {
       if (wait > 0) await this.sleep(wait, this.lifetime.signal);
       if (this.disposed) return;
     }
-    throw new BaseTileLoadError(this.manifest.pano, face, cause);
+    throw new BaseTileLoadError(this.source.id, face, cause);
   }
 
   /** Per-frame: pick the target level, cull, ensure visible tiles, evict. */
@@ -379,12 +380,7 @@ export class TileLayer {
   ): void {
     if (this.disposed) return;
     this.clock++;
-    const level = selectLevel(
-      fovDeg,
-      viewportHeight,
-      this.manifest.tileSize,
-      this.manifest.maxLevel,
-    );
+    const level = selectLevel(fovDeg, viewportHeight, this.source.tileSize, this.source.maxLevel);
     if (level !== this.visibleLevel || !sameMatrix(viewProj, this.lastViewProj)) {
       this.lastViewProj.set(viewProj);
       frustumFromViewProj(viewProj, this.frustum);
@@ -676,31 +672,23 @@ export class TileLayer {
     const key = tileKey(level, face, x, y);
     if (this.cache.has(key)) return { kind: 'loaded' };
     if (this.inflight.has(key) || this.ready.has(key)) return { kind: 'skipped' };
-    const url = tilePath(
-      this.baseUrl,
-      this.manifest.pano,
-      level,
-      face,
-      x,
-      y,
-      this.manifest.format,
-      this.manifest.version,
-    );
     const controller = new AbortController();
     this.inflight.set(key, controller);
     try {
       // `priority` is a hint; browsers without it ignore the field.
-      const res = await fetch(url, { signal: controller.signal, priority });
-      if (!res.ok) throw new TileHttpError(res.status);
-      const blob = await res.blob();
-      // Decoded upright (row 0 = top). The renderer uploads it unflipped and
-      // the tile UVs address row 0 as v = 0 (see tile-geometry.ts).
-      const bitmap = await createImageBitmap(blob);
-      // createImageBitmap ignores the signal, so an abort during the decode
-      // shows up only here. The slot and the key have moved on (a reload may
-      // own the key now), so this bitmap must not join the queue.
+      const bitmap = await loadTileImage(
+        this.source,
+        { face, level, x, y },
+        controller.signal,
+        priority,
+        this.network,
+      );
+      // createImageBitmap ignores the signal (and a source's loadTile may
+      // too), so an abort during the decode shows up only here. The slot and
+      // the key have moved on (a reload may own the key now), so this bitmap
+      // must not join the queue.
       if (this.disposed || controller.signal.aborted) {
-        bitmap.close();
+        releaseImage(bitmap);
         return { kind: 'aborted' };
       }
       // An earlier load of this key can finish first: update() aborts a tile
@@ -709,7 +697,7 @@ export class TileLayer {
       // second one to land must not upload over the first, or the first
       // texture is never freed.
       if (this.cache.has(key) || this.ready.has(key)) {
-        bitmap.close();
+        releaseImage(bitmap);
         return { kind: 'loaded' };
       }
       // The base goes up at once: loadBase() is waiting on it, and no frame
@@ -750,7 +738,7 @@ export class TileLayer {
     face: Face,
     x: number,
     y: number,
-    bitmap: ImageBitmap,
+    bitmap: TileImage,
   ): void {
     const geom = buildTileGeometry(face, level, x, y);
     let handle: TileHandle;
@@ -759,7 +747,7 @@ export class TileLayer {
     } finally {
       // The GPU texture owns the pixels now (or the upload failed, e.g. on a
       // lost context): free the CPU copy either way.
-      bitmap.close();
+      releaseImage(bitmap);
     }
     this.cache.set(key, {
       key,
@@ -828,7 +816,7 @@ export class TileLayer {
         this.stale.delete(key);
       } else {
         if (this.unwantedFor(key, start) >= ABORT_GRACE_MS) {
-          tile.bitmap.close();
+          releaseImage(tile.bitmap);
           this.ready.delete(key);
           this.stale.delete(key);
         }
@@ -910,7 +898,7 @@ export class TileLayer {
     this.visibleLevel = -1;
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
-    for (const tile of this.ready.values()) tile.bitmap.close();
+    for (const tile of this.ready.values()) releaseImage(tile.bitmap);
     this.ready.clear();
     this.stale.clear();
     this.parentsQueued.clear();

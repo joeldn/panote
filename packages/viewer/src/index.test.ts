@@ -42,7 +42,7 @@ describe('public entry point', () => {
     expect(networkDown.permanent).toBe(false); // dropped connection: also transient
 
     // The other half of the distinction: which panorama, which face.
-    expect(notPublished.pano).toBe('pano-a');
+    expect(notPublished.sourceId).toBe('pano-a');
     expect(notPublished.face).toBe('px');
     expect(notPublished.cause).toBeInstanceOf(InternalTileHttpError);
   });

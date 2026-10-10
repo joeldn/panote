@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FACES } from '@panote/core';
-import { PanoViewer } from './PanoViewer.js';
-import type { View } from './types.js';
+import { FACES } from './cube.js';
+import { PanoViewer as BasePanoViewer } from './PanoViewer.js';
+import type { CubeTileSource } from './source.js';
+import type { View, ViewerOptions } from './types.js';
 import { TileLayer } from './tile-layer.js';
 
 // This package's vitest config runs under Node, not jsdom (see
@@ -145,6 +146,41 @@ class FakeRaf {
 }
 
 let raf: FakeRaf;
+
+/**
+ * Most tests here load by id, against a host laid out like panote's: an id
+ * resolves through a manifest at /tiles/<id>/manifest.json, fetched with the
+ * load's signal, to a source whose tiles live under the same prefix (and
+ * under the version, when the manifest has one). The tests stub fetch for
+ * that layout.
+ */
+async function manifestResolver(id: string, signal: AbortSignal): Promise<CubeTileSource> {
+  const res = await fetch(`/tiles/${id}/manifest.json`, { signal });
+  if (!res.ok) throw new Error(`manifest ${res.status}`);
+  const m = (await res.json()) as {
+    pano: string;
+    tileSize: number;
+    maxLevel: number;
+    format?: string;
+    version?: string;
+  };
+  const prefix = `/tiles/${m.pano}/${m.version === undefined ? '' : `${m.version}/`}`;
+  return {
+    id: m.pano,
+    tileSize: m.tileSize,
+    maxLevel: m.maxLevel,
+    version: m.version,
+    meta: m,
+    tileUrl: (t) => `${prefix}${t.level}/${t.face}/${t.x}-${t.y}.${m.format ?? 'jpg'}`,
+  };
+}
+
+/** The viewer under test, with that resolver unless a test passes its own. */
+class PanoViewer extends BasePanoViewer {
+  constructor(container: HTMLElement, options: ViewerOptions = {}) {
+    super(container, { resolveSource: manifestResolver, ...options });
+  }
+}
 
 type Internals = {
   view: { yaw: number; pitch: number; fov: number };
@@ -1027,19 +1063,6 @@ describe('PanoViewer', () => {
       // angle exactly what an unshifted (start + 0.5) would be, just wrapped.
       expect(yawOf(viewer)).toBeCloseTo(start + 0.5 - Math.PI * 2, 10);
       expect(Math.abs(yawOf(viewer))).toBeLessThan(Math.PI * 2);
-    });
-  });
-
-  describe('hotspot-open reporting', () => {
-    it('emits hotspot-open with the reported id', () => {
-      const viewer = new PanoViewer(makeContainer(400, 800));
-      const hotspotOpen = vi.fn();
-      viewer.on('hotspot-open', hotspotOpen);
-
-      viewer.reportHotspotOpen('spot-1');
-
-      expect(hotspotOpen).toHaveBeenCalledTimes(1);
-      expect(hotspotOpen).toHaveBeenCalledWith('spot-1');
     });
   });
 
@@ -2005,7 +2028,7 @@ describe('PanoViewer', () => {
       viewer.on('scene-change', sceneChange);
       let b: Promise<boolean> | undefined;
       viewer.on('ready', (m) => {
-        if (m.pano === 'pano-a') b = viewer.load('pano-b');
+        if (m.id === 'pano-a') b = viewer.load('pano-b');
       });
       await expect(viewer.load('pano-a')).resolves.toBe(true);
       expect(b).toBeDefined();
@@ -2095,8 +2118,8 @@ describe('PanoViewer', () => {
       expect(viewer.getView().yaw).toBe(-1);
       expect(sceneChange.mock.calls).toEqual([['pano-c']]);
       expect(overlays[2]!.remove).toHaveBeenCalled();
-      const layer = internals(viewer).layer as { manifest: { pano: string } };
-      expect(layer.manifest.pano).toBe('pano-c');
+      const layer = internals(viewer).layer as { source: CubeTileSource };
+      expect(layer.source.id).toBe('pano-c');
       viewer.dispose();
     });
 
@@ -2116,7 +2139,7 @@ describe('PanoViewer', () => {
       const manifestFetches = () =>
         vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('manifest.json')).length;
       const layerPano = (viewer: PanoViewer) =>
-        (internals(viewer).layer as { manifest: { pano: string } } | undefined)?.manifest.pano;
+        (internals(viewer).layer as { source: CubeTileSource } | undefined)?.source.id;
 
       describe('context loss', () => {
         it('stops drawing while lost, then loads the scene again from its held manifest', async () => {

@@ -1,4 +1,3 @@
-import { manifestUrl, parseManifest, type Manifest } from '@panote/core';
 import { GLRenderer } from './render/gl-renderer.js';
 import {
   viewProjection,
@@ -8,6 +7,9 @@ import {
   type Mat4,
 } from './render/projection.js';
 import { TileLayer } from './tile-layer.js';
+import { FACES } from './cube.js';
+import { assertSource, type CubeTileSource, type ResolveHints } from './source.js';
+import { warmTile, type TileNetwork } from './tile-fetch.js';
 import {
   EquirectLayer,
   closePreviewSource,
@@ -29,7 +31,13 @@ import {
   compassHeading,
   normalizeAngle,
 } from './camera-math.js';
-import type { View, ViewerOptions, PanoViewerEvents, LoadOptions } from './types.js';
+import type {
+  View,
+  ViewerOptions,
+  PanoViewerEvents,
+  LoadOptions,
+  PrefetchOptions,
+} from './types.js';
 import { dirInto, isBehind, ndcToPixel, type Vec3 } from './project.js';
 
 const TWO_PI = Math.PI * 2;
@@ -65,10 +73,10 @@ function dropOverlay(el: HTMLCanvasElement): void {
 
 /** A load to finish after a context restore. */
 interface Reload {
-  pano: string;
+  id: string;
   view: Partial<View> | undefined;
-  /** Held from the first time round, so the reload costs no manifest fetch. */
-  manifest?: Manifest;
+  /** Held from the first time round, so the reload costs no resolve. */
+  source?: CubeTileSource;
   /** Emit ready and scene-change: false for the scene that was already on screen. */
   announce: boolean;
 }
@@ -86,23 +94,24 @@ export class PanoViewer {
   // legitimately be in flight more than once — a superseded load is still
   // holding a layer that has to be torn down.
   private pendingLayers = new Set<TileLayer>();
-  // The manifest fetch of the load in flight, aborted when a newer load,
+  // The source resolve of the load in flight, aborted when a newer load,
   // a preview or dispose() supersedes it.
-  private manifestAbort: AbortController | undefined;
-  // The load in flight, with its manifest once fetched. A context loss cancels
+  private resolveAbort: AbortController | undefined;
+  // Every prefetch in flight, aborted by dispose().
+  private prefetches = new Set<AbortController>();
+  // The load in flight, with its source once resolved. A context loss cancels
   // it, and the restore loads it again.
   private request: Reload | undefined;
   // What a context loss cancelled, for the restore to load.
   private lostRequest: Reload | undefined;
-  // The pano whose tiles are on screen, and its manifest: what a context
-  // restore loads again.
-  private scene: { pano: string; manifest: Manifest } | undefined;
+  // The source whose tiles are on screen: what a context restore loads again.
+  private scene: CubeTileSource | undefined;
   // Between webglcontextlost and webglcontextrestored: no frames are drawn.
   private contextLost = false;
   private preview: EquirectLayer | undefined;
-  private previewPano: string | undefined;
+  private previewId: string | undefined;
   // The version of the tiles the preview replaces ('' for unversioned ones);
-  // undefined for a new pano, where any manifest is the preview's own.
+  // undefined for a new scene, where any source is the preview's own.
   private previewReplaces: string | undefined;
   // True once the preview's own tiles are on screen: it then sits among the
   // tile levels by resolution (see previewDrawLevel) and is disposed at the
@@ -128,9 +137,19 @@ export class PanoViewer {
   private opts: Required<
     Omit<
       ViewerOptions,
-      'initialView' | 'north' | 'autoRotate' | 'autoRotateSpeed' | 'autoRotateIdleMs' | 'wheel'
+      | 'initialView'
+      | 'north'
+      | 'autoRotate'
+      | 'autoRotateSpeed'
+      | 'autoRotateIdleMs'
+      | 'wheel'
+      | 'resolveSource'
+      | 'fetch'
+      | 'requestInit'
     >
   >;
+  private resolveSource: ViewerOptions['resolveSource'];
+  private network: TileNetwork;
   private loadToken = 0;
   private disposed = false;
   // Release inertia, in rad/ms.
@@ -177,7 +196,6 @@ export class PanoViewer {
     const d = VIEWER_DEFAULTS;
     const maxPixelRatio = options.maxPixelRatio ?? d.maxPixelRatio;
     this.opts = {
-      baseUrl: options.baseUrl ?? d.baseUrl,
       minFov: options.minFov ?? d.minFov,
       maxFov: options.maxFov ?? d.maxFov,
       maxHorizontalFov: options.maxHorizontalFov ?? d.maxHorizontalFov,
@@ -196,6 +214,8 @@ export class PanoViewer {
       maxConcurrent: options.maxConcurrent ?? d.maxConcurrent,
       transitionMs: options.transitionMs ?? d.transitionMs,
     };
+    this.resolveSource = options.resolveSource;
+    this.network = { fetch: options.fetch, requestInit: options.requestInit ?? d.requestInit };
     this.north = options.north ?? d.north;
     this.autoRotateSpeed = options.autoRotateSpeed ?? d.autoRotateSpeed;
     this.autoRotateIdleMs = options.autoRotateIdleMs ?? d.autoRotateIdleMs;
@@ -296,65 +316,82 @@ export class PanoViewer {
   }
 
   /**
-   * Load `pano`, swapping it in once its low-resolution base is resident.
-   * Resolves true when it took effect and false when a newer load, a preview
-   * or dispose() superseded it; rejects only for a load that is still current.
-   * `options.view` is applied at the swap, with no easing from the old camera.
+   * Load a source, or the id of one (resolved through `resolveSource`),
+   * swapping it in once its low-resolution base is resident. Resolves true
+   * when it took effect and false when a newer load, a preview or dispose()
+   * superseded it; rejects only for a load that is still current, including
+   * a source that fails to resolve or is malformed. `options.view` is applied
+   * at the swap, with no easing from the old camera.
    *
    * WebGL context loss: a load in flight when the context is lost resolves
    * false, and so does one started while it is lost, which waits (its base
    * tiles cannot be uploaded) until the context is restored or the viewer is
-   * disposed. Either way the viewer loads that pano itself once the context
+   * disposed. Either way the viewer loads that source itself once the context
    * is back, with the same view, and emits `ready` and `scene-change` for it;
    * if that reload fails it emits `load-error` instead.
    */
-  async load(pano: string, options: LoadOptions = {}): Promise<boolean> {
+  async load(source: CubeTileSource | string, options: LoadOptions = {}): Promise<boolean> {
     const token = this.supersede();
     const stale = () => this.disposed || token !== this.loadToken;
-    const request: Reload = { pano, view: options.view, announce: true };
+    const id = typeof source === 'string' ? source : source.id;
+    const request: Reload = { id, view: options.view, announce: true };
+    if (typeof source !== 'string') request.source = source;
     this.request = request;
     try {
-      const abort = new AbortController();
-      this.manifestAbort = abort;
-      this.emitter.emit('loading', pano);
+      this.emitter.emit('loading', id);
       if (stale()) return false;
 
-      let manifest;
-      try {
-        const res = await fetch(manifestUrl(this.opts.baseUrl, pano), { signal: abort.signal });
-        if (stale()) return false;
-        if (!res.ok) throw new Error(`manifest ${res.status}`);
-        const json: unknown = await res.json();
-        if (stale()) return false;
-        manifest = parseManifest(json);
-      } catch (err) {
-        // An aborted or failed fetch for a load nobody is waiting on any more.
-        if (stale()) return false;
-        throw err;
-      } finally {
-        if (this.manifestAbort === abort) this.manifestAbort = undefined;
+      let resolved: CubeTileSource;
+      if (typeof source === 'string') {
+        const abort = new AbortController();
+        this.resolveAbort = abort;
+        try {
+          resolved = await this.resolve(source, abort.signal);
+          if (stale()) return false;
+        } catch (err) {
+          // An aborted or failed resolve for a load nobody is waiting on any more.
+          if (stale()) return false;
+          throw err;
+        } finally {
+          if (this.resolveAbort === abort) this.resolveAbort = undefined;
+        }
+      } else {
+        resolved = source;
       }
-      request.manifest = manifest;
-      return await this.swapIn(token, { ...request, manifest });
+      assertSource(resolved);
+      request.source = resolved;
+      return await this.swapIn(token, { ...request, source: resolved });
     } finally {
       if (this.request === request) this.request = undefined;
     }
   }
 
+  private resolve(id: string, signal: AbortSignal, hints?: ResolveHints): Promise<CubeTileSource> {
+    const resolver = this.resolveSource;
+    if (!resolver) {
+      return Promise.reject(
+        new Error(`PanoViewer: "${id}" is an id, and no resolveSource option was given`),
+      );
+    }
+    return resolver(id, signal, hints);
+  }
+
   /**
-   * Build a layer for `req`'s manifest, wait for its base, then put it on
+   * Build a layer for `req`'s source, wait for its base, then put it on
    * screen in place of whatever is there. False when superseded.
    */
-  private async swapIn(token: number, req: Reload & { manifest: Manifest }): Promise<boolean> {
+  private async swapIn(token: number, req: Reload & { source: CubeTileSource }): Promise<boolean> {
     const stale = () => this.disposed || token !== this.loadToken;
-    const { pano, manifest } = req;
+    const { source } = req;
     const layer = new TileLayer(
       this.renderer,
-      manifest,
-      this.opts.baseUrl,
+      source,
       this.opts.textureBudgetMB,
       this.invalidate,
       this.opts.maxConcurrent,
+      undefined,
+      undefined,
+      this.network,
     );
     layer.setPaused(!this.onScreen);
 
@@ -398,7 +435,7 @@ export class PanoViewer {
     // screen before it was called.
     this.layer?.dispose();
     this.layer = layer;
-    this.scene = { pano, manifest };
+    this.scene = source;
     // A scene's own view is cut to, not eased to from the old scene's camera.
     // Only the axes it sets are cut; any other axis keeps easing as it was.
     const arrival = req.view;
@@ -409,17 +446,17 @@ export class PanoViewer {
       if (arrival.fov !== undefined) this.view.fov = this.target.fov;
     }
     this.stopMomentumOnly();
-    if (this.preview && this.previewPano === pano) {
-      // Replacing an image keeps the panoId, so the manifest can still be the
-      // old image's until the new tiles are written. Those tiles are not the
+    if (this.preview && this.previewId === source.id) {
+      // Replacing an image keeps the id, so the source can still be the old
+      // image's until the new tiles are written. Those tiles are not the
       // preview's: it stays on top of them and outlives their tiles-settled.
       const own =
-        this.previewReplaces === undefined || (manifest.version ?? '') !== this.previewReplaces;
+        this.previewReplaces === undefined || (source.version ?? '') !== this.previewReplaces;
       this.previewUnderlay = own;
       this.preview.setLevel(
         own
-          ? previewDrawLevel(this.preview.width, manifest.tileSize, manifest.maxLevel)
-          : manifest.maxLevel + 1,
+          ? previewDrawLevel(this.preview.width, source.tileSize, source.maxLevel)
+          : source.maxLevel + 1,
       );
     } else {
       this.disposePreview();
@@ -427,10 +464,10 @@ export class PanoViewer {
     this.wasPending = true;
     this.invalidate();
     if (!req.announce) return true;
-    this.emitter.emit('ready', manifest);
+    this.emitter.emit('ready', source);
     // A ready listener may have started another load or disposed the viewer;
     // the scene is then not changing to this one.
-    if (!stale()) this.emitter.emit('scene-change', manifest.pano);
+    if (!stale()) this.emitter.emit('scene-change', source.id);
     return true;
   }
 
@@ -465,7 +502,7 @@ export class PanoViewer {
     const next: Reload | undefined =
       this.request ??
       this.lostRequest ??
-      (scene && { pano: scene.pano, view: undefined, manifest: scene.manifest, announce: false });
+      (scene && { id: scene.id, view: undefined, source: scene, announce: false });
     this.lostRequest = undefined;
     this.disposePreview();
     this.invalidate();
@@ -474,7 +511,7 @@ export class PanoViewer {
         // Nobody awaits this load, so the host hears about it as an event. A
         // listener that throws here would be an unhandled rejection instead.
         try {
-          this.emitter.emit('load-error', { error, id: next.pano });
+          this.emitter.emit('load-error', { error, id: next.id });
         } catch (err) {
           report(err);
         }
@@ -484,13 +521,13 @@ export class PanoViewer {
   };
 
   private async reload(req: Reload): Promise<boolean> {
-    const { manifest } = req;
-    if (!manifest) return this.load(req.pano, req.view ? { view: req.view } : {});
+    const { source } = req;
+    if (!source) return this.load(req.id, req.view ? { view: req.view } : {});
     const token = this.supersede();
-    const request: Reload = { ...req, manifest };
+    const request: Reload = { ...req, source };
     this.request = request;
     try {
-      return await this.swapIn(token, { ...request, manifest });
+      return await this.swapIn(token, { ...request, source });
     } finally {
       if (this.request === request) this.request = undefined;
     }
@@ -524,8 +561,8 @@ export class PanoViewer {
   private supersede(): number {
     const token = ++this.loadToken;
     this.request = undefined;
-    this.manifestAbort?.abort();
-    this.manifestAbort = undefined;
+    this.resolveAbort?.abort();
+    this.resolveAbort = undefined;
     for (const pending of this.pendingLayers) pending.dispose();
     this.pendingLayers.clear();
     if (this.transitionOverlay) dropOverlay(this.transitionOverlay);
@@ -534,35 +571,30 @@ export class PanoViewer {
   }
 
   /**
-   * Show a local decode of `panoId` now, in place of whatever is on screen,
-   * keeping the camera.
+   * Show a local decode of the scene `id` now, in place of whatever is on
+   * screen, keeping the camera.
    *
-   * A later `load(panoId)` swaps the tiles in under it: once they are on screen
-   * the preview paints over the tile levels no sharper than itself and under
-   * the sharper ones (see `previewDrawLevel`), and is disposed at the next
-   * `tiles-settled`. On a replace, `panoId` already has tiles from the old
-   * image and the new version is not known until the server has tiled the
-   * upload, so pass `options.replacesVersion`, the old manifest's version
-   * (`''` for an unversioned one, as the upload machine's baseline has it). A
-   * `load()` that gets a manifest with that version leaves the preview on top
-   * of the old tiles and keeps it past their `tiles-settled`; any other
-   * version is the preview's own. Without `replacesVersion` (a new pano), any
-   * manifest for `panoId` is its own.
+   * A later `load()` of a source with that id swaps the tiles in under it:
+   * once they are on screen the preview paints over the tile levels no
+   * sharper than itself and under the sharper ones (see `previewDrawLevel`),
+   * and is disposed at the next `tiles-settled`. On a replace, `id` already
+   * has tiles from the old image and the new version is not known until the
+   * new tiles exist, so pass `options.replacesVersion`, the old source's
+   * `version` (`''` for one without). A `load()` that gets a source with that
+   * version leaves the preview on top of the old tiles and keeps it past
+   * their `tiles-settled`; any other version is the preview's own. Without
+   * `replacesVersion` (a new scene), any source for `id` is its own.
    *
    * Ownership: the patches' ImageBitmaps are closed as soon as they are on the
    * GPU (or straight away if the viewer is disposed or the source is
    * rejected), so a `PreviewSource` can be shown once. To show it again,
    * decode it again, e.g. from the stored WebP.
    *
-   * Any `load()` in flight is cancelled, including one for `panoId`: it
-   * resolves without swapping anything in. Call `load(panoId)` again after
+   * Any `load()` in flight is cancelled, including one for `id`: it
+   * resolves without swapping anything in. Call `load(id)` again after
    * this to get the tiles.
    */
-  showPreview(
-    panoId: string,
-    source: PreviewSource,
-    options: { replacesVersion?: string } = {},
-  ): void {
+  showPreview(id: string, source: PreviewSource, options: { replacesVersion?: string } = {}): void {
     if (this.disposed) {
       closePreviewSource(source);
       return;
@@ -572,7 +604,7 @@ export class PanoViewer {
     this.supersede();
     this.disposePreview();
     this.preview = preview;
-    this.previewPano = panoId;
+    this.previewId = id;
     this.previewReplaces = options.replacesVersion;
     this.layer?.dispose();
     this.layer = undefined;
@@ -580,13 +612,13 @@ export class PanoViewer {
     this.wasPending = false;
     this.stopMomentumOnly();
     this.invalidate();
-    this.emitter.emit('scene-change', panoId);
+    this.emitter.emit('scene-change', id);
   }
 
   private disposePreview(): void {
     this.preview?.dispose();
     this.preview = undefined;
-    this.previewPano = undefined;
+    this.previewId = undefined;
     this.previewReplaces = undefined;
     this.previewUnderlay = false;
   }
@@ -601,7 +633,7 @@ export class PanoViewer {
     return list;
   }
 
-  /** Set the compass north offset (radians) for the currently loaded pano. */
+  /** Set the compass north offset (radians) for the currently loaded scene. */
   setNorth(radians: number): void {
     this.north = radians;
     this.invalidate();
@@ -619,11 +651,6 @@ export class PanoViewer {
     this.autoRotateResumeTimer = undefined;
     this.autoRotateActive = enabled;
     this.invalidate();
-  }
-
-  /** Report that a hotspot UI layer opened a hotspot, for analytics listeners. */
-  reportHotspotOpen(hotspotId: string): void {
-    this.emitter.emit('hotspot-open', hotspotId);
   }
 
   // Pause auto-rotate immediately and arm a timer to resume it once the
@@ -994,7 +1021,43 @@ export class PanoViewer {
     return { yaw: Math.atan2(v.x, -v.z), pitch: Math.asin(y) };
   }
 
-  async transitionTo(pano: string, view?: Partial<View>): Promise<void> {
+  /**
+   * Warm the HTTP cache for a scene the visitor may open next: its source
+   * (resolved at low priority when given an id) and the six level-0 tiles
+   * that `load` blocks on, fetched at low priority through the same request
+   * path as a load, with the bodies read and dropped. Best effort: it never
+   * rejects, whether the source is missing, the network fails, `signal`
+   * aborts or the viewer is disposed. Whether to prefetch at all (save-data,
+   * a slow connection) is the host's call.
+   */
+  async prefetch(source: CubeTileSource | string, options: PrefetchOptions = {}): Promise<void> {
+    const { signal } = options;
+    if (this.disposed || signal?.aborted) return;
+    const abort = new AbortController();
+    const cancel = () => abort.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    this.prefetches.add(abort);
+    try {
+      const src =
+        typeof source === 'string'
+          ? await this.resolve(source, abort.signal, { priority: 'low' })
+          : source;
+      if (abort.signal.aborted) return;
+      assertSource(src);
+      await Promise.allSettled(
+        FACES.map((face) =>
+          warmTile(src, { face, level: 0, x: 0, y: 0 }, abort.signal, this.network),
+        ),
+      );
+    } catch {
+      // Best effort: the real load reports its own errors.
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+      this.prefetches.delete(abort);
+    }
+  }
+
+  async transitionTo(source: CubeTileSource | string, view?: Partial<View>): Promise<void> {
     if (this.disposed) return;
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const ms = reduce ? 0 : this.opts.transitionMs;
@@ -1006,7 +1069,7 @@ export class PanoViewer {
     // removes an older transition's overlay (one that may still be fading),
     // and must not remove this one. Up to its first await, load() leaves the
     // scene on screen alone, so drawList is still what is drawn.
-    const loading = this.load(pano, view ? { view } : {});
+    const loading = this.load(source, view ? { view } : {});
     let snap: HTMLCanvasElement | undefined;
     if (drawList.length > 0) {
       try {
@@ -1060,6 +1123,8 @@ export class PanoViewer {
     // Pending layers first: they are the ones with fetches still in flight, and
     // they must stop before the renderer's GL context is destroyed below.
     this.supersede();
+    for (const prefetch of this.prefetches) prefetch.abort();
+    this.prefetches.clear();
     this.layer?.dispose();
     this.disposePreview();
     this.renderCbs.clear();

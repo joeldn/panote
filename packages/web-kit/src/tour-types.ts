@@ -22,6 +22,6 @@ export interface InfoHotspotData {
   body?: string;
   /** Optional short caption shown under the title. */
   subtitle?: string;
-  /** Stable id reported via the viewer's `hotspot-open` event when set. */
+  /** Stable id reported to the stage's `onHotspotOpen` when set. */
   id?: string;
 }

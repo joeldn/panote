@@ -207,8 +207,7 @@ export class FakeViewer {
   onRender = () => () => {};
   project = vi.fn((_yaw: number, _pitch: number) => ({ x: 0, y: 0, behind: false }));
   heading = () => 0;
-  // Like PanoViewer: reporting an open emits it, so onHotspotOpen handlers run.
-  reportHotspotOpen = vi.fn((id: string) => this.emit('hotspot-open', id));
+  prefetch = vi.fn(async () => {});
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);

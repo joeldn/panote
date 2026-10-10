@@ -27,6 +27,16 @@ export {
   type StageViewerOptions,
   type ViewerFactory,
 } from './PanoStage.js';
+export {
+  manifestOf,
+  PANOTE_REQUEST_INIT,
+  panoteSource,
+  panoteSourceResolver,
+  panoteViewerPreset,
+  prefetchPano,
+  type PanoteViewerPresetOptions,
+  type PrefetchPanoOptions,
+} from './panote-viewer.js';
 export { SignInModal, type SignInModalProps, type SignInOption } from './SignInModal.js';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented.js';
 export {
@@ -44,6 +54,7 @@ export {
 } from './share/links.js';
 export { ShareModal, type ShareModalProps, type SharePano } from './share/ShareModal.js';
 export { SlugField, type SlugFieldProps } from './share/SlugField.js';
+export { StageEventsContext, useStageEvents, type StageEvents } from './stage-events.js';
 export { useModalTitleId } from './use-modal-title-id.js';
 export { usePanoViewer } from './viewer-context.js';
 export { VISIBILITY_META, type Visibility } from './visibility.js';
