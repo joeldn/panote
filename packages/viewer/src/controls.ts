@@ -254,19 +254,30 @@ export class Controls {
     if (dx && !e.ctrlKey) this.host.panByPixels(-dx, 0);
   };
 
-  // Best effort: these events exist only in Safari, which reports a trackpad
-  // pinch as a gesture with a cumulative scale instead of a ctrl-wheel.
+  // Best effort: these events exist only in Safari. macOS reports a trackpad
+  // pinch as a gesture with a cumulative scale instead of a ctrl-wheel. iOS
+  // and iPadOS also fire them for a two-finger touch pinch, alongside the
+  // pointer events, so while a pointer is tracked the pointer pinch is the
+  // source of truth and the gesture is only claimed (no page zoom).
   private onGestureStart = (e: Event) => {
     e.preventDefault();
+    if (this.p0 || this.p1) return;
     this.gestureScale = (e as SafariGestureEvent).scale || 1;
   };
 
   private onGestureChange = (e: Event) => {
     e.preventDefault();
+    if (this.p0 || this.p1) return;
     const g = e as SafariGestureEvent;
     if (this.gestureScale === null || !g.scale) return;
-    this.host.zoomAt(pinchFactor(this.gestureScale, g.scale), g.clientX, g.clientY);
+    const scale = pinchFactor(this.gestureScale, g.scale);
     this.gestureScale = g.scale;
+    // GestureEvent may come without coordinates; zoom about the centre then.
+    if (Number.isFinite(g.clientX) && Number.isFinite(g.clientY)) {
+      this.host.zoomAt(scale, g.clientX, g.clientY);
+    } else {
+      this.zoomCenter(scale);
+    }
   };
 
   private onGestureEnd = (e: Event) => {

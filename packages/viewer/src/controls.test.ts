@@ -324,3 +324,30 @@ describe('Controls: wheel capture mode', () => {
     }
   });
 });
+
+describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
+  const touch = { pointerType: 'touch' };
+
+  it('lets the pointer pinch drive the zoom and only claims the gesture events', () => {
+    setup();
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    const start = el.dispatch('gesturestart', { scale: 1, clientX: 150, clientY: 100 });
+    const change = el.dispatch('gesturechange', { scale: 2, clientX: 200, clientY: 100 });
+    pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
+    expect(start.defaultPrevented).toBe(true);
+    expect(change.defaultPrevented).toBe(true);
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 200, 100);
+  });
+
+  it('falls back to the element centre when a gesture has no coordinates', () => {
+    setup();
+    el.dispatch('gesturestart', { scale: 1 });
+    el.dispatch('gesturechange', { scale: 2 });
+    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 400, 300);
+    for (const args of host.zoomAt.mock.calls) {
+      expect(args.every((n) => Number.isFinite(n))).toBe(true);
+    }
+  });
+});
