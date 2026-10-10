@@ -3,8 +3,11 @@
 // failure isn't a stale build (offline, or a chunk that is really missing).
 
 const KEY = 'panote:chunk-reload';
-/** A second chunk failure within this window shows the error instead of reloading again. */
-export const RELOAD_WINDOW_MS = 10_000;
+/**
+ * A second chunk failure within this window shows the error instead of reloading again.
+ * Long enough that a page which takes a while to load on a slow link can't loop.
+ */
+export const RELOAD_WINDOW_MS = 60_000;
 
 /** Indirection so tests can observe the reload; jsdom's location.reload can't be spied. */
 export const page = { reload: (): void => window.location.reload() };
@@ -17,11 +20,20 @@ export function isChunkLoadError(error: unknown): boolean {
   return error instanceof Error && CHUNK_ERROR.test(error.message);
 }
 
-/** Reloads the page unless it already did so very recently; true if it reloaded. */
-export function reloadOnce(now: number = Date.now()): boolean {
+/** Whether reloadOnce would reload now. Reads only, so it is safe while rendering. */
+export function canReload(now: number = Date.now()): boolean {
   try {
     const last = Number(sessionStorage.getItem(KEY));
-    if (last && now - last < RELOAD_WINDOW_MS) return false;
+    return !(last && now - last < RELOAD_WINDOW_MS);
+  } catch {
+    return false;
+  }
+}
+
+/** Reloads the page unless it already did so very recently; true if it reloaded. */
+export function reloadOnce(now: number = Date.now()): boolean {
+  if (!canReload(now)) return false;
+  try {
     sessionStorage.setItem(KEY, String(now));
   } catch {
     // No storage, no loop guard: don't risk reloading forever.

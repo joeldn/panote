@@ -65,26 +65,31 @@ export interface HotspotPanelProps {
 
 const NONE = () => false;
 
+/** The point's HotspotMarkers button, rendered alongside the panel (as TourViewer does). */
+function markerFor(panel: HTMLElement | null, id: string): HTMLElement | null {
+  const markers = panel?.parentElement?.querySelectorAll<HTMLElement>('[data-hotspot-id]') ?? [];
+  for (const el of markers) if (el.dataset.hotspotId === id) return el;
+  return null;
+}
+
 /** Info-point panel: a side panel on desktop, a bottom sheet at <=600px (CSS). */
 export function HotspotPanel({ hotspot, onClose, isAllowedMediaUrl = NONE }: HotspotPanelProps) {
   // renderMarkdown escapes all HTML first and only allows http(s)/mailto/relative links.
   const html = useMemo(() => (hotspot.body ? renderMarkdown(hotspot.body) : ''), [hotspot.body]);
 
   // Keyboard and screen-reader users land in the panel when a point opens, and
-  // go back to whatever opened it (the marker) when it closes. Switching points
-  // while open re-focuses the panel and remembers the newer opener.
+  // go back to its marker when it closes. Switching points while open re-focuses
+  // the panel and hands focus to the newer point's marker. The marker is looked up,
+  // not taken from document.activeElement: Safari doesn't focus a tapped button.
   const panel = useRef<HTMLElement>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  const marker = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    const el = document.activeElement;
-    if (el instanceof HTMLElement && el !== document.body && !panel.current?.contains(el)) {
-      opener.current = el;
-    }
+    marker.current = markerFor(panel.current, hotspot.id);
     panel.current?.focus({ preventScroll: true });
   }, [hotspot.id]);
   useEffect(
     () => () => {
-      if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+      if (marker.current?.isConnected) marker.current.focus({ preventScroll: true });
     },
     [],
   );

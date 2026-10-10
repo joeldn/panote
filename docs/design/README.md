@@ -104,7 +104,7 @@ Implementation note learned the hard way: do **not** drive these transitions fro
 
 ### 6. Editor (`screen: 'editor'`)
 
-Full-bleed pano with floating glass chrome (`--cbg` + `--cbf`).
+Full-bleed pano with floating glass chrome (`--cbg` + `--cbf` in the prototype; the app ships the solid `--cbg-solid`, see the note under the colour table).
 
 - **Top-left**: editable tour title and pano name (click to edit inline, Enter commits).
 - **Top-right**: language switcher, tour-settings gear, **Save** button, account.
@@ -184,8 +184,10 @@ Save flow to implement: load JSON + capture ETag → user edits accumulate local
 | code text | `#9fd0e0` | mono on dark |
 | success | `#5fae6e` | ready check |
 | scrim | `rgba(20,18,14,.5)` + `blur(6px)` | modal backdrop |
-| `--cbg` / `--cbf` | `rgba(255,255,255,.9)` / `blur(12px)` | glass chrome |
+| `--cbg` / `--cbf` | `rgba(255,255,255,.9)` / `blur(12px)` | glass chrome (prototype only, see note) |
 | `--mbg` | `rgba(250,248,244,.62)` | muted glass |
+
+> Note (2026-10): the app ships no `backdrop-filter` at all (a test in `packages/ui` guards it), because blurring over a canvas that repaints every frame costs a GPU pass per control. `--cbg`/`--cbf` were replaced by the solid `--cbg-solid` (`rgba(255,255,255,.94)`), and the blurred scrims and dark overlays above use a more opaque background instead.
 
 Ink opacities in steady use: `.82` body, `.7` secondary, `.62`, `.55`, `.5`, `.45` meta, `.4` faint, `.13`/`.1`/`.09`/`.08`/`.06` borders and tracks.
 
