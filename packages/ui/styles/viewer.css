@@ -235,6 +235,8 @@
   font-family: var(--fbody);
   color: var(--ink);
   animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+  /* Above the controls pill and the map, which come later in the DOM and would cover the sheet. */
+  z-index: 2;
 }
 /* Focus moves here when a point opens; the panel itself needs no ring. */
 .pn-hspanel:focus {
