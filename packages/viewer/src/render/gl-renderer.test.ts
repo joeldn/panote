@@ -5,6 +5,7 @@ import {
   sortDrawList,
   mipLevels,
   GLRenderer,
+  ContextLostError,
   type DrawItem,
 } from './gl-renderer.js';
 import { viewProjection } from './projection.js';
@@ -134,6 +135,7 @@ const GL_METHODS = [
   'texParameterf',
   'deleteTexture',
   'drawElements',
+  'isContextLost',
 ] as const;
 
 type FakeGl = typeof GL_CONSTANTS & Record<(typeof GL_METHODS)[number], Mock> & { __log: string[] };
@@ -157,6 +159,7 @@ function makeFakeGl() {
     createBuffer: object,
     createVertexArray: object,
     createTexture: object,
+    isContextLost: () => false,
   };
   const gl: Record<string, unknown> = { ...GL_CONSTANTS };
   for (const name of GL_METHODS) {
@@ -170,24 +173,85 @@ function makeFakeGl() {
   return { gl: gl as FakeGl, log, loseContext, extensions };
 }
 
+type Listener = (e: { preventDefault: () => void }) => void;
+
 function makeFakeDocumentAndContainer(gl: unknown) {
+  const listeners = new Map<string, Set<Listener>>();
+  // Every write to width and height, which reallocates the drawing buffer.
+  const sizeWrites: string[] = [];
+  let width = 0;
+  let height = 0;
   const canvas = {
     style: {} as Record<string, string>,
-    width: 0,
-    height: 0,
+    get width() {
+      return width;
+    },
+    set width(v: number) {
+      sizeWrites.push('width');
+      width = v;
+    },
+    get height() {
+      return height;
+    },
+    set height(v: number) {
+      sizeWrites.push('height');
+      height = v;
+    },
     getContext: vi.fn((type: string, _attrs?: unknown) => (type === 'webgl2' ? gl : null)),
     remove: vi.fn(),
+    toDataURL: vi.fn(() => 'data:image/png;base64,'),
+    addEventListener: vi.fn((type: string, fn: Listener) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(fn);
+    }),
+    removeEventListener: vi.fn((type: string, fn: Listener) => {
+      listeners.get(type)?.delete(fn);
+    }),
   };
+  /** Dispatch `type` at the canvas; true when a listener called preventDefault. */
+  const fire = (type: string): boolean => {
+    let prevented = false;
+    const e = { preventDefault: () => (prevented = true) };
+    for (const fn of listeners.get(type) ?? []) fn(e);
+    return prevented;
+  };
+  // 2D canvases snapshot() creates, each with its drawImage calls.
+  const copies: {
+    width: number;
+    height: number;
+    drawImage: Mock;
+    toDataURL: Mock;
+  }[] = [];
   const container = { appendChild: vi.fn() };
-  vi.stubGlobal('document', { createElement: vi.fn(() => canvas) });
-  return { canvas, container };
+  let created = false;
+  vi.stubGlobal('document', {
+    createElement: vi.fn(() => {
+      if (copies.length === 0 && !created) {
+        created = true;
+        return canvas;
+      }
+      const drawImage = vi.fn();
+      const copy = {
+        width: 0,
+        height: 0,
+        drawImage,
+        toDataURL: vi.fn(),
+        getContext: vi.fn((type: string) => (type === '2d' ? { drawImage } : null)),
+      };
+      copies.push(copy);
+      return copy;
+    }),
+  });
+  return { canvas, container, fire, sizeWrites, copies };
 }
 
-function setup() {
+function setup(opts: ConstructorParameters<typeof GLRenderer>[1] = {}) {
   const fake = makeFakeGl();
-  const { canvas, container } = makeFakeDocumentAndContainer(fake.gl);
-  const renderer = new GLRenderer(container as unknown as HTMLElement);
-  return { ...fake, canvas, renderer };
+  const dom = makeFakeDocumentAndContainer(fake.gl);
+  // The real WEBGL_lose_context dispatches the loss at the canvas.
+  fake.loseContext.mockImplementation(() => dom.fire('webglcontextlost'));
+  const renderer = new GLRenderer(dom.container as unknown as HTMLElement, opts);
+  return { ...fake, ...dom, renderer };
 }
 
 const image = (w = 4, h = 4) => ({ width: w, height: h }) as unknown as HTMLCanvasElement;
@@ -248,9 +312,168 @@ describe('GLRenderer', () => {
     const { gl, renderer } = setup();
     renderer.resize(100, 50);
     expect(gl.viewport).toHaveBeenLastCalledWith(0, 0, 100, 50);
+    const calls = gl.viewport.mock.calls.length;
     renderer.setCamera(new Float32Array(16));
     renderer.render([]);
-    expect(gl.viewport).toHaveBeenCalledTimes(1);
+    expect(gl.viewport).toHaveBeenCalledTimes(calls);
+  });
+
+  describe('resize', () => {
+    const dpr = (ratio: number) => vi.stubGlobal('window', { devicePixelRatio: ratio });
+
+    it('keeps a 5K screen at DPR 2 within maxPixels', () => {
+      dpr(2);
+      const { canvas, renderer } = setup();
+      renderer.resize(2560, 1440);
+      expect(canvas.width * canvas.height).toBeLessThanOrEqual(8_300_000);
+      expect(canvas.width * canvas.height).toBeGreaterThan(8_000_000);
+      // Lowered evenly, not clipped: same aspect, still sharper than DPR 1.
+      expect(canvas.width / canvas.height).toBeCloseTo(2560 / 1440, 2);
+      expect(canvas.width).toBeGreaterThan(2560);
+      expect(canvas.style['width']).toBe('2560px');
+    });
+
+    it("leaves a 14-inch MacBook's default scaling at DPR 2 at the full ratio", () => {
+      dpr(2);
+      const { canvas, renderer } = setup();
+      renderer.resize(1512, 982);
+      expect([canvas.width, canvas.height]).toEqual([3024, 1964]);
+    });
+
+    it('leaves a phone at DPR 2 at the full ratio', () => {
+      dpr(2);
+      const { canvas, renderer } = setup();
+      renderer.resize(390, 844);
+      expect([canvas.width, canvas.height]).toEqual([780, 1688]);
+    });
+
+    it('takes maxPixels as an option', () => {
+      dpr(1);
+      const { canvas, renderer } = setup({ maxPixels: 10_000 });
+      renderer.resize(200, 200);
+      expect([canvas.width, canvas.height]).toEqual([100, 100]);
+    });
+
+    it('writes nothing when neither the size nor the pixel ratio changed', () => {
+      dpr(2);
+      const { renderer, sizeWrites, gl } = setup();
+      expect(renderer.resize(100, 50)).toBe(true);
+      const writes = sizeWrites.length;
+      const viewports = gl.viewport.mock.calls.length;
+      expect(renderer.resize(100, 50)).toBe(false);
+      expect(sizeWrites).toHaveLength(writes);
+      expect(gl.viewport).toHaveBeenCalledTimes(viewports);
+    });
+
+    it('resizes the backbuffer when only the pixel ratio changed', () => {
+      dpr(2);
+      const { canvas, renderer } = setup();
+      renderer.resize(100, 50);
+      dpr(1);
+      expect(renderer.resize(100, 50)).toBe(true);
+      expect([canvas.width, canvas.height]).toEqual([100, 50]);
+    });
+  });
+
+  describe('snapshot', () => {
+    it('copies the frame into a 2D canvas without encoding it', () => {
+      const { canvas, renderer, copies, gl } = setup();
+      renderer.resize(100, 50);
+      renderer.setCamera(new Float32Array(16));
+      gl.clear.mockClear();
+      const snap = renderer.snapshot([]);
+      expect(copies).toHaveLength(1);
+      expect(snap).toBe(copies[0]);
+      expect([copies[0]!.width, copies[0]!.height]).toEqual([100, 50]);
+      // Rendered first, then copied in the same call.
+      expect(gl.clear).toHaveBeenCalledTimes(1);
+      expect(copies[0]!.drawImage).toHaveBeenCalledExactlyOnceWith(canvas, 0, 0);
+      expect(canvas.toDataURL).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('context loss', () => {
+    it('prevents the default on webglcontextlost, so the browser restores the context', () => {
+      const onContextLost = vi.fn();
+      const { renderer, fire } = setup({ onContextLost });
+      expect(fire('webglcontextlost')).toBe(true);
+      expect(renderer.isContextLost()).toBe(true);
+      expect(onContextLost).toHaveBeenCalledTimes(1);
+    });
+
+    it('issues no GL calls while lost, and uploads throw ContextLostError', () => {
+      const { renderer, fire, log, gl } = setup();
+      const before = renderer.uploadTile(grid(), image());
+      renderer.setCamera(viewProjection({ yaw: 0, pitch: 0, fov: 90 }, 1, 179));
+      fire('webglcontextlost');
+      const start = log.length;
+      renderer.render([{ handle: before, level: 0 }]);
+      expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
+      expect(renderer.snapshot([])).toBeNull();
+      renderer.removeTile(before);
+      renderer.resize(300, 200);
+      expect(log.slice(start)).toEqual([]);
+      expect(gl.drawElements).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed create on a lost context as ContextLostError', () => {
+      const { renderer, gl } = setup();
+      // Lost, with the event not dispatched yet.
+      gl.isContextLost.mockReturnValue(true);
+      gl.createVertexArray.mockReturnValue(null);
+      expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
+    });
+
+    it('rebuilds the program and forgets every tile on restore', () => {
+      const onContextRestored = vi.fn();
+      const { renderer, fire, gl } = setup({ onContextRestored });
+      renderer.resize(100, 50);
+      const old = renderer.uploadTile(grid(), image());
+      fire('webglcontextlost');
+      expect(gl.createProgram).toHaveBeenCalledTimes(1);
+      fire('webglcontextrestored');
+      expect(renderer.isContextLost()).toBe(false);
+      expect(onContextRestored).toHaveBeenCalledTimes(1);
+      expect(gl.createProgram).toHaveBeenCalledTimes(2);
+      expect(gl.useProgram).toHaveBeenCalledTimes(2);
+      expect(gl.viewport).toHaveBeenLastCalledWith(0, 0, 100, 50);
+      // The shared quad IBO is made again for the new context.
+      expect(gl.bufferData.mock.calls.at(-1)![0]).toBe(gl.ELEMENT_ARRAY_BUFFER);
+      // A handle from before the loss names nothing, and is never reused.
+      renderer.setCamera(viewProjection({ yaw: 0, pitch: 0, fov: 90 }, 1, 179));
+      renderer.render([{ handle: old, level: 0 }]);
+      expect(gl.drawElements).not.toHaveBeenCalled();
+      expect(renderer.uploadTile(grid(), image())).not.toBe(old);
+    });
+
+    it('stays lost and reports, without throwing, when the rebuild on restore fails', () => {
+      const report = vi.fn();
+      vi.stubGlobal('reportError', report);
+      const onContextRestored = vi.fn();
+      const { renderer, fire, gl } = setup({ onContextRestored });
+      fire('webglcontextlost');
+      gl.createProgram.mockReturnValue(null);
+      expect(() => fire('webglcontextrestored')).not.toThrow();
+      expect(report).toHaveBeenCalledTimes(1);
+      expect(renderer.isContextLost()).toBe(true);
+      expect(onContextRestored).not.toHaveBeenCalled();
+      expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
+    });
+
+    it('does not prevent the loss dispose() causes, so no restore is armed', () => {
+      const onContextLost = vi.fn();
+      const { renderer, loseContext, canvas } = setup({ onContextLost });
+      const listener = canvas.addEventListener.mock.calls.find(
+        (c) => c[0] === 'webglcontextlost',
+      )![1] as Listener;
+      let prevented = false;
+      loseContext.mockImplementation(() => listener({ preventDefault: () => (prevented = true) }));
+      renderer.dispose();
+      expect(loseContext).toHaveBeenCalledTimes(1);
+      expect(prevented).toBe(false);
+      expect(onContextLost).not.toHaveBeenCalled();
+      expect(canvas.removeEventListener).toHaveBeenCalledWith('webglcontextlost', listener);
+    });
   });
 
   describe('uploadTile', () => {

@@ -1,5 +1,6 @@
 import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from './projection.js';
 import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
+import { VIEWER_DEFAULTS } from '../defaults.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
@@ -37,6 +38,32 @@ function rankDepth(rank: number, count: number): number {
   return -1 + (2 * (rank + 1)) / (count + 1);
 }
 
+/**
+ * Thrown by uploadTile() while the WebGL context is lost. Not a tile failure:
+ * the tile is fine and loads again once the context is back, so callers treat
+ * it like an abort.
+ */
+export class ContextLostError extends Error {
+  constructor() {
+    super('WebGL context lost');
+    this.name = 'ContextLostError';
+  }
+}
+
+export interface GLRendererOptions {
+  antialias?: boolean;
+  maxPixelRatio?: number;
+  /** Cap on backbuffer pixels; the pixel ratio drops to stay under it. */
+  maxPixels?: number;
+  /** The context was lost. Drawing and uploads are no-ops until it is restored. */
+  onContextLost?: () => void;
+  /**
+   * The context is back, with the program rebuilt and every tile forgotten.
+   * Handles from before the loss draw nothing; upload the tiles again.
+   */
+  onContextRestored?: () => void;
+}
+
 interface TileResources {
   vao: WebGLVertexArrayObject;
   vbo: WebGLBuffer;
@@ -70,6 +97,12 @@ export function boundingSphere(pos: Float32Array): Sphere {
     r2 = Math.max(r2, dx * dx + dy * dy + dz * dz);
   }
   return { cx, cy, cz, r: Math.sqrt(r2) };
+}
+
+/** Hand an error to the host's error reporting without throwing. */
+function report(err: unknown): void {
+  if (typeof reportError === 'function') reportError(err);
+  else console.error(err);
 }
 
 function isQuadIndex(index: Uint16Array): boolean {
@@ -110,27 +143,40 @@ void main() {
 
 export class GLRenderer {
   readonly canvas: HTMLCanvasElement;
-  readonly maxAnisotropy: number;
-  readonly maxTextureSize: number;
+  maxAnisotropy = 1;
+  maxTextureSize = 0;
 
   private gl: WebGL2RenderingContext;
-  private program: WebGLProgram;
-  private uViewProj: WebGLUniformLocation;
-  private uZ: WebGLUniformLocation;
-  private anisoExt: EXT_texture_filter_anisotropic | null;
-  private pixelRatio: number;
+  // Everything below is per context: initGL() sets it again after a restore.
+  private program!: WebGLProgram;
+  private uViewProj!: WebGLUniformLocation;
+  private uZ!: WebGLUniformLocation;
+  private anisoExt: EXT_texture_filter_anisotropic | null = null;
+  /** One static IBO shared by every 4-vertex quad. */
+  private quadIbo!: WebGLBuffer;
   private maxPixelRatio: number;
+  private maxPixels: number;
+  // The CSS size the backbuffer was last sized for.
+  private cssW = 0;
+  private cssH = 0;
   private viewProj: Mat4 | null = null;
   private tiles = new Map<TileHandle, TileResources>();
+  // Never reset, not even on a restore, so a handle from before a context loss
+  // can never name a tile uploaded after it.
   private nextHandle = 1;
-  /** One static IBO shared by every 4-vertex quad. */
-  private quadIbo: WebGLBuffer;
   /** Reused every frame: the frustum and the culled, sorted draw order. */
   private frustum = new Float32Array(24);
   private order: DrawItem[] = [];
+  private lost = false;
+  private disposed = false;
+  private onContextLost: (() => void) | undefined;
+  private onContextRestored: (() => void) | undefined;
 
-  constructor(container: HTMLElement, opts: { antialias?: boolean; maxPixelRatio?: number } = {}) {
-    this.maxPixelRatio = opts.maxPixelRatio ?? 2;
+  constructor(container: HTMLElement, opts: GLRendererOptions = {}) {
+    this.maxPixelRatio = opts.maxPixelRatio ?? VIEWER_DEFAULTS.maxPixelRatio;
+    this.maxPixels = opts.maxPixels ?? VIEWER_DEFAULTS.maxPixels;
+    this.onContextLost = opts.onContextLost;
+    this.onContextRestored = opts.onContextRestored;
     this.canvas = document.createElement('canvas');
     // Block, not inline: an inline canvas sits on a text baseline and makes
     // its line box a few px taller than itself. The cursor belongs to Controls.
@@ -142,14 +188,51 @@ export class GLRenderer {
       alpha: false,
       depth: true,
       stencil: false,
-      // no preserveDrawingBuffer — snapshot() reads back synchronously instead.
+      // no preserveDrawingBuffer — snapshot() copies the frame in the same task instead.
     });
     if (!gl) {
       throw new Error('WebGL2 is not available in this browser; the pano viewer requires WebGL2.');
     }
     this.gl = gl;
     container.appendChild(this.canvas);
+    this.canvas.addEventListener('webglcontextlost', this.onLost);
+    this.canvas.addEventListener('webglcontextrestored', this.onRestored);
+    this.initGL();
+  }
 
+  /** True between a context loss and its restore. */
+  isContextLost(): boolean {
+    return this.lost;
+  }
+
+  // Without preventDefault the browser never restores the context. A loss
+  // that dispose() caused on purpose is left alone, so no restore is armed.
+  private onLost = (e: Event): void => {
+    if (this.disposed) return;
+    e.preventDefault();
+    this.lost = true;
+    this.onContextLost?.();
+  };
+
+  private onRestored = (): void => {
+    if (this.disposed) return;
+    // Every GL object died with the old context.
+    this.tiles.clear();
+    try {
+      this.initGL();
+    } catch (err) {
+      // The context went again, or the rebuild failed: stay lost, so nothing
+      // draws or uploads, and never throw out of an event listener.
+      report(err);
+      return;
+    }
+    this.lost = false;
+    this.onContextRestored?.();
+  };
+
+  /** Program, uniforms, extensions, the shared IBO and the static GL state. */
+  private initGL(): void {
+    const gl = this.gl;
     this.anisoExt = gl.getExtension('EXT_texture_filter_anisotropic');
     this.maxAnisotropy = this.anisoExt
       ? gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
@@ -160,7 +243,7 @@ export class GLRenderer {
     this.program = this.buildProgram(VERT_SRC, FRAG_SRC);
     this.uViewProj = this.getUniform('uViewProj');
     this.uZ = this.getUniform('uZ');
-    // One program and one texture unit for the renderer's whole life, so
+    // One program and one texture unit for the context's whole life, so
     // bind them once here rather than every frame.
     gl.useProgram(this.program);
     gl.uniform1i(this.getUniform('uTex'), 0);
@@ -171,8 +254,6 @@ export class GLRenderer {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, QUAD_INDEX, gl.STATIC_DRAW);
 
-    this.pixelRatio = Math.min(window.devicePixelRatio, this.maxPixelRatio);
-
     // Static GL state: opaque tiles, layered by depth (see render()), and
     // interior faces.
     gl.enable(gl.DEPTH_TEST);
@@ -180,6 +261,7 @@ export class GLRenderer {
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE); // quads visible from the origin looking outward
     gl.clearColor(0, 0, 0, 1);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
   private buildProgram(vsSrc: string, fsSrc: string): WebGLProgram {
@@ -215,8 +297,15 @@ export class GLRenderer {
 
   private createBuffer(): WebGLBuffer {
     const buf = this.gl.createBuffer();
-    if (!buf) throw new Error('createBuffer failed: context lost or resource exhaustion');
+    if (!buf) throw this.createFailed('createBuffer');
     return buf;
+  }
+
+  // A null from a create call is what a lost context returns, and the loss
+  // event may not have been dispatched yet.
+  private createFailed(what: string): Error {
+    if (this.gl.isContextLost()) return new ContextLostError();
+    return new Error(`${what} failed: resource exhaustion`);
   }
 
   private getUniform(name: string): WebGLUniformLocation {
@@ -225,13 +314,36 @@ export class GLRenderer {
     return loc;
   }
 
-  resize(w: number, h: number): void {
-    this.pixelRatio = Math.min(window.devicePixelRatio, this.maxPixelRatio);
-    this.canvas.style.width = `${w}px`;
-    this.canvas.style.height = `${h}px`;
-    this.canvas.width = Math.max(1, Math.round(w * this.pixelRatio));
-    this.canvas.height = Math.max(1, Math.round(h * this.pixelRatio));
-    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  /**
+   * Size the canvas to `w` × `h` CSS pixels. The backbuffer gets the device
+   * pixel ratio, capped at `maxPixelRatio` and lowered further so it stays
+   * within `maxPixels`. Returns whether anything changed: a resize clears the
+   * drawing buffer, so a caller that gets true has to draw again, and one that
+   * gets false has nothing to do.
+   */
+  resize(w: number, h: number): boolean {
+    const wanted = Math.min(window.devicePixelRatio || 1, this.maxPixelRatio);
+    const budget = Math.sqrt(this.maxPixels / (w * h));
+    // Rounded down under the pixel cap, so rounding cannot take it over.
+    const fit = budget < wanted ? Math.floor : Math.round;
+    const ratio = Math.min(wanted, budget);
+    const bw = Math.max(1, fit(w * ratio));
+    const bh = Math.max(1, fit(h * ratio));
+    const canvas = this.canvas;
+    if (w === this.cssW && h === this.cssH && bw === canvas.width && bh === canvas.height) {
+      return false;
+    }
+    if (w !== this.cssW || h !== this.cssH) {
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      this.cssW = w;
+      this.cssH = h;
+    }
+    // Each write reallocates (and clears) the drawing buffer, even an unchanged one.
+    if (canvas.width !== bw) canvas.width = bw;
+    if (canvas.height !== bh) canvas.height = bh;
+    if (!this.lost) this.gl.viewport(0, 0, bw, bh);
+    return true;
   }
 
   setCamera(viewProj: Mat4): void {
@@ -241,6 +353,7 @@ export class GLRenderer {
   /** Upload N-vertex geometry and its texture. The image goes up unflipped, so
    *  `geom.uv` must address its first row as v = 0. */
   uploadTile(geom: TileGeometry, bitmap: TileImage): TileHandle {
+    if (this.lost) throw new ContextLostError();
     const gl = this.gl;
     const count = geom.pos.length / 3;
     if (!Number.isInteger(count) || geom.uv.length !== count * 2) {
@@ -259,7 +372,7 @@ export class GLRenderer {
     // Record the vertex layout and index buffer in a VAO once, so a draw is
     // just bindVertexArray + bindTexture + drawElements.
     const vao = gl.createVertexArray();
-    if (!vao) throw new Error('createVertexArray failed: context lost or resource exhaustion');
+    if (!vao) throw this.createFailed('createVertexArray');
     gl.bindVertexArray(vao);
     const vbo = this.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -280,7 +393,7 @@ export class GLRenderer {
     gl.bindVertexArray(null);
 
     const tex = gl.createTexture();
-    if (!tex) throw new Error('createTexture failed: context lost or resource exhaustion');
+    if (!tex) throw this.createFailed('createTexture');
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texStorage2D(
       gl.TEXTURE_2D,
@@ -289,9 +402,9 @@ export class GLRenderer {
       bitmap.width,
       bitmap.height,
     );
-    // UNPACK_FLIP_Y_WEBGL stays at its default (false). Tile bitmaps are
-    // decoded with imageOrientation:'flipY' and their UVs flip v to match;
-    // other images upload unflipped and address row 0 as v = 0.
+    // UNPACK_FLIP_Y_WEBGL stays at its default (false). Tiles and preview
+    // patches are both decoded upright (row 0 = top) and their UVs address
+    // row 0 as v = 0, so nothing is flipped anywhere.
     gl.texSubImage2D(
       gl.TEXTURE_2D,
       0,
@@ -327,6 +440,11 @@ export class GLRenderer {
   removeTile(handle: TileHandle): void {
     const t = this.tiles.get(handle);
     if (!t) return;
+    if (this.lost) {
+      // Its GL objects went with the context.
+      this.tiles.delete(handle);
+      return;
+    }
     this.gl.deleteVertexArray(t.vao);
     this.gl.deleteBuffer(t.vbo);
     if (t.ibo) this.gl.deleteBuffer(t.ibo);
@@ -335,6 +453,7 @@ export class GLRenderer {
   }
 
   render(drawList: DrawItem[]): void {
+    if (this.lost) return;
     const gl = this.gl;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.viewProj) return;
@@ -377,21 +496,31 @@ export class GLRenderer {
   }
 
   /**
-   * Render then read the framebuffer back to a PNG data URL synchronously in
-   * the same task. Replaces preserveDrawingBuffer + domElement.toDataURL().
+   * Render, then copy the frame into a new 2D canvas of the same size. The
+   * copy is made in the same task as the render, so it needs no
+   * preserveDrawingBuffer, and drawImage stays on the GPU where a toDataURL
+   * would encode a PNG on the main thread. Null while the context is lost.
    */
-  snapshot(drawList: DrawItem[]): string {
+  snapshot(drawList: DrawItem[]): HTMLCanvasElement | null {
+    if (this.lost) return null;
     this.render(drawList);
-    // toDataURL reads the canvas top-down; this matches the old three.js path's
-    // orientation (both share the same implicit flip), verified upright against
-    // the pre-migration build.
-    return this.canvas.toDataURL();
+    const copy = document.createElement('canvas');
+    copy.width = this.canvas.width;
+    copy.height = this.canvas.height;
+    const ctx = copy.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(this.canvas, 0, 0);
+    return copy;
   }
 
   dispose(): void {
+    // First, so the loss loseContext() causes below arms no restore.
+    this.disposed = true;
     for (const handle of [...this.tiles.keys()]) this.removeTile(handle);
-    this.gl.deleteBuffer(this.quadIbo);
-    this.gl.deleteProgram(this.program);
+    if (!this.lost) {
+      this.gl.deleteBuffer(this.quadIbo);
+      this.gl.deleteProgram(this.program);
+    }
     // Deleting individual resources frees GPU memory but does not release the
     // context slot itself — browsers cap live WebGL contexts per page
     // (commonly 8-16), and that slot is only reclaimed on GC. Explicitly
@@ -399,6 +528,8 @@ export class GLRenderer {
     // destroys many PanoViewer instances (a gallery, route changes) doesn't
     // exhaust the pool.
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    this.canvas.removeEventListener('webglcontextlost', this.onLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.onRestored);
     this.canvas.remove();
   }
 }

@@ -12,23 +12,23 @@
  *
  * The tile count the viewer *needs* is set by the pyramid level, and the level
  * is chosen from the framebuffer's device-pixel height (see `selectLevel` in
- * packages/core/src/lod.ts, and PanoViewer's `update()` call). On a DPR-2
- * display that is one level finer than on DPR 1, and one level finer is four
- * times as many tiles on screen: the measured visible set for a 70° FOV on an
- * 800 CSS-px-tall viewport goes from 24 tiles at level 2 to 88 at level 3. A
- * flat 128 MB budget (96 tiles) is 4× the visible set in the first case and
- * 1.1× in the second — too tight to pan without evicting tiles that are about to be
- * wanted again, which costs a re-decode and a re-upload every frame.
+ * lod.ts, and PanoViewer's `update()` call). On a DPR-2 display that is one
+ * level finer than on DPR 1, and one level finer is about four times as many
+ * tiles per degree: the measured visible set for a 70° FOV on an 800 CSS-px
+ * tall 16:9 viewport is 12 tiles at level 1 on DPR 1 and 24 at level 2 on
+ * DPR 2 (selectLevel's tolerance keeps both from rounding up a level). A flat
+ * 128 MB budget (96 tiles) is 8× the visible set in the first case but only
+ * 4× in the second, so a DPR-2 pan evicts tiles it is about to want again
+ * twice as soon, and each one costs a refetch, a re-decode and a re-upload.
  *
  * Why the scale is the pixel ratio and not its square. Matching the 4× growth
  * in tile count would mean 512 MB of textures on a phone, and GPU memory is the
  * one budget a viewer cannot borrow against — exceeding it does not slow the
  * page down, it loses the WebGL context. Linear in the pixel ratio, capped at
- * `MAX_BUDGET_PIXEL_RATIO`, gives DPR-2 displays 256 MB / 192 tiles ≈ 2.2× the
- * visible set: enough headroom that ordinary panning reuses tiles instead of
- * refetching them, while the worst case stays bounded at twice what a DPR-1
- * display already spends. Full sharpness is kept either way — this changes only
- * how much of it is retained.
+ * `MAX_BUDGET_PIXEL_RATIO`, gives DPR-2 displays 256 MB / 192 tiles ≈ 8× the
+ * visible set, the same headroom a DPR-1 display has, while the worst case
+ * stays bounded at twice what a DPR-1 display already spends. Full sharpness
+ * is kept either way — this changes only how much of it is retained.
  *
  * The cap is a constant here rather than `maxPixelRatio` alone, because
  * `maxPixelRatio` is the caller's *rendering* choice: raising it to 3 asks for a

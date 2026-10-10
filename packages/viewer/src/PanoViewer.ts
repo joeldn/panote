@@ -1,4 +1,4 @@
-import { manifestUrl, parseManifest } from '@panote/core';
+import { manifestUrl, parseManifest, type Manifest } from '@panote/core';
 import { GLRenderer } from './render/gl-renderer.js';
 import {
   viewProjection,
@@ -53,6 +53,26 @@ function report(err: unknown): void {
   else console.error(err);
 }
 
+/**
+ * Take a transition snapshot off the page, and free its backing store now
+ * rather than at GC: Safari caps the memory all canvases may hold.
+ */
+function dropOverlay(el: HTMLCanvasElement): void {
+  el.remove();
+  el.width = 0;
+  el.height = 0;
+}
+
+/** A load to finish after a context restore. */
+interface Reload {
+  pano: string;
+  view: Partial<View> | undefined;
+  /** Held from the first time round, so the reload costs no manifest fetch. */
+  manifest?: Manifest;
+  /** Emit ready and scene-change: false for the scene that was already on screen. */
+  announce: boolean;
+}
+
 export class PanoViewer {
   private renderer: GLRenderer;
   private emitter = new Emitter<PanoViewerEvents>();
@@ -69,6 +89,16 @@ export class PanoViewer {
   // The manifest fetch of the load in flight, aborted when a newer load,
   // a preview or dispose() supersedes it.
   private manifestAbort: AbortController | undefined;
+  // The load in flight, with its manifest once fetched. A context loss cancels
+  // it, and the restore loads it again.
+  private request: Reload | undefined;
+  // What a context loss cancelled, for the restore to load.
+  private lostRequest: Reload | undefined;
+  // The pano whose tiles are on screen, and its manifest: what a context
+  // restore loads again.
+  private scene: { pano: string; manifest: Manifest } | undefined;
+  // Between webglcontextlost and webglcontextrestored: no frames are drawn.
+  private contextLost = false;
   private preview: EquirectLayer | undefined;
   private previewPano: string | undefined;
   // The version of the tiles the preview replaces ('' for unversioned ones);
@@ -109,8 +139,11 @@ export class PanoViewer {
   // What render callbacks are handed: a copy, so they cannot move the camera
   // by writing to it, reused so a frame allocates nothing.
   private frameView: View = { yaw: 0, pitch: 0, fov: 0 };
-  private transitionOverlay: HTMLDivElement | undefined;
+  private transitionOverlay: HTMLCanvasElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
+  // Matches only at the current device pixel ratio, so it fires when the
+  // window moves to a display with another one. Re-armed each time.
+  private pixelRatioQuery: MediaQueryList | undefined;
   private intersectionObserver: IntersectionObserver | undefined;
   // The container's CSS size, kept by resize events so that no frame, input
   // event or project() call has to read layout.
@@ -158,6 +191,7 @@ export class PanoViewer {
       damping: options.damping ?? d.damping,
       momentumFriction: options.momentumFriction ?? d.momentumFriction,
       maxPixelRatio,
+      maxPixels: options.maxPixels ?? d.maxPixels,
       antialias: options.antialias ?? d.antialias,
       maxConcurrent: options.maxConcurrent ?? d.maxConcurrent,
       transitionMs: options.transitionMs ?? d.transitionMs,
@@ -182,10 +216,14 @@ export class PanoViewer {
     this.renderer = new GLRenderer(container, {
       antialias: this.opts.antialias,
       maxPixelRatio: this.opts.maxPixelRatio,
+      maxPixels: this.opts.maxPixels,
+      onContextLost: this.onContextLost,
+      onContextRestored: this.onContextRestored,
     });
     // The one layout read outside a resize: the size until the first
-    // ResizeObserver callback reports it.
-    this.resizeTo(container.clientWidth, container.clientHeight);
+    // ResizeObserver callback reports it. Nothing is on screen yet, so the
+    // first frame can wait for an animation frame.
+    this.resizeTo(container.clientWidth, container.clientHeight, false);
     // project() works before the first frame too (chrome places itself as
     // soon as the viewer exists), so the camera it reads starts out current.
     viewProjection(this.view, this.aspect, this.opts.maxHorizontalFov, this.viewProj);
@@ -220,6 +258,9 @@ export class PanoViewer {
       this.intersectionObserver = new IntersectionObserver(this.onIntersect);
       this.intersectionObserver.observe(container);
     }
+    // A pixel ratio change without a size change (the window dragged to
+    // another display, some zooms) resizes nothing ResizeObserver sees.
+    this.watchPixelRatio();
     // resizeTo() above has already asked for the first frame.
   }
 
@@ -235,7 +276,7 @@ export class PanoViewer {
    */
   private invalidate = (): void => {
     this.dirty = true;
-    if (this.raf === 0 && this.onScreen && !this.disposed) {
+    if (this.raf === 0 && this.onScreen && !this.disposed && !this.contextLost) {
       this.raf = requestAnimationFrame(this.frame);
     }
   };
@@ -259,31 +300,54 @@ export class PanoViewer {
    * Resolves true when it took effect and false when a newer load, a preview
    * or dispose() superseded it; rejects only for a load that is still current.
    * `options.view` is applied at the swap, with no easing from the old camera.
+   *
+   * WebGL context loss: a load in flight when the context is lost resolves
+   * false, and so does one started while it is lost, which waits (its base
+   * tiles cannot be uploaded) until the context is restored or the viewer is
+   * disposed. Either way the viewer loads that pano itself once the context
+   * is back, with the same view, and emits `ready` and `scene-change` for it;
+   * if that reload fails it emits `load-error` instead.
    */
   async load(pano: string, options: LoadOptions = {}): Promise<boolean> {
     const token = this.supersede();
     const stale = () => this.disposed || token !== this.loadToken;
-    const abort = new AbortController();
-    this.manifestAbort = abort;
-    this.emitter.emit('loading', pano);
-    if (stale()) return false;
-
-    let manifest;
+    const request: Reload = { pano, view: options.view, announce: true };
+    this.request = request;
     try {
-      const res = await fetch(manifestUrl(this.opts.baseUrl, pano), { signal: abort.signal });
+      const abort = new AbortController();
+      this.manifestAbort = abort;
+      this.emitter.emit('loading', pano);
       if (stale()) return false;
-      if (!res.ok) throw new Error(`manifest ${res.status}`);
-      const json: unknown = await res.json();
-      if (stale()) return false;
-      manifest = parseManifest(json);
-    } catch (err) {
-      // An aborted or failed fetch for a load nobody is waiting on any more.
-      if (stale()) return false;
-      throw err;
-    } finally {
-      if (this.manifestAbort === abort) this.manifestAbort = undefined;
-    }
 
+      let manifest;
+      try {
+        const res = await fetch(manifestUrl(this.opts.baseUrl, pano), { signal: abort.signal });
+        if (stale()) return false;
+        if (!res.ok) throw new Error(`manifest ${res.status}`);
+        const json: unknown = await res.json();
+        if (stale()) return false;
+        manifest = parseManifest(json);
+      } catch (err) {
+        // An aborted or failed fetch for a load nobody is waiting on any more.
+        if (stale()) return false;
+        throw err;
+      } finally {
+        if (this.manifestAbort === abort) this.manifestAbort = undefined;
+      }
+      request.manifest = manifest;
+      return await this.swapIn(token, { ...request, manifest });
+    } finally {
+      if (this.request === request) this.request = undefined;
+    }
+  }
+
+  /**
+   * Build a layer for `req`'s manifest, wait for its base, then put it on
+   * screen in place of whatever is there. False when superseded.
+   */
+  private async swapIn(token: number, req: Reload & { manifest: Manifest }): Promise<boolean> {
+    const stale = () => this.disposed || token !== this.loadToken;
+    const { pano, manifest } = req;
     const layer = new TileLayer(
       this.renderer,
       manifest,
@@ -292,6 +356,7 @@ export class PanoViewer {
       this.invalidate,
       this.opts.maxConcurrent,
     );
+    layer.setPaused(!this.onScreen);
 
     // Blocking: the panorama is not loaded until its low-resolution base is.
     // The six level-0 tiles are one per cube face, so together they are the
@@ -305,7 +370,7 @@ export class PanoViewer {
       // so the detail starts loading alongside the base instead of after it.
       // The layer is not drawn until it swaps in, so nothing shows early.
       const base = layer.loadBase();
-      this.prime(layer, options.view);
+      this.prime(layer, req.view);
       await base;
     } catch (err) {
       this.pendingLayers.delete(layer);
@@ -333,9 +398,10 @@ export class PanoViewer {
     // screen before it was called.
     this.layer?.dispose();
     this.layer = layer;
+    this.scene = { pano, manifest };
     // A scene's own view is cut to, not eased to from the old scene's camera.
     // Only the axes it sets are cut; any other axis keeps easing as it was.
-    const arrival = options.view;
+    const arrival = req.view;
     if (arrival) {
       this.setView(arrival);
       if (arrival.yaw !== undefined) this.view.yaw = this.target.yaw;
@@ -360,11 +426,69 @@ export class PanoViewer {
     }
     this.wasPending = true;
     this.invalidate();
+    if (!req.announce) return true;
     this.emitter.emit('ready', manifest);
     // A ready listener may have started another load or disposed the viewer;
     // the scene is then not changing to this one.
     if (!stale()) this.emitter.emit('scene-change', manifest.pano);
     return true;
+  }
+
+  // Every GL object is gone: the tiles, the preview's patches, the frame on
+  // the canvas. A load in flight cannot finish either, since its uploads
+  // would fail, so it is cancelled (resolving false) and loaded again once the
+  // context is back, as is the scene on screen.
+  private onContextLost = (): void => {
+    if (this.disposed) return;
+    this.contextLost = true;
+    if (this.request) this.lostRequest = this.request;
+    this.supersede();
+    // Its fetches would only decode tiles nothing can upload.
+    this.layer?.dispose();
+    this.layer = undefined;
+    // Its bitmaps were closed once uploaded, so it cannot be shown again.
+    this.disposePreview();
+    this.wasPending = false;
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.lastFrameT = undefined;
+    this.emitter.emit('context-lost', undefined);
+  };
+
+  private onContextRestored = (): void => {
+    if (this.disposed) return;
+    this.contextLost = false;
+    // The newest of: a load started while the context was lost, the load the
+    // loss cancelled, the scene that was on screen. The camera stays where it
+    // is, so the scene comes back as it was left.
+    const scene = this.scene;
+    const next: Reload | undefined =
+      this.request ??
+      this.lostRequest ??
+      (scene && { pano: scene.pano, view: undefined, manifest: scene.manifest, announce: false });
+    this.lostRequest = undefined;
+    this.disposePreview();
+    this.invalidate();
+    if (next) {
+      this.reload(next).catch((error: unknown) => {
+        // Nobody awaits this load, so the host hears about it as an event.
+        this.emitter.emit('load-error', { error, id: next.pano });
+      });
+    }
+    this.emitter.emit('context-restored', undefined);
+  };
+
+  private async reload(req: Reload): Promise<boolean> {
+    const { manifest } = req;
+    if (!manifest) return this.load(req.pano, req.view ? { view: req.view } : {});
+    const token = this.supersede();
+    const request: Reload = { ...req, manifest };
+    this.request = request;
+    try {
+      return await this.swapIn(token, { ...request, manifest });
+    } finally {
+      if (this.request === request) this.request = undefined;
+    }
   }
 
   /**
@@ -394,11 +518,12 @@ export class PanoViewer {
    */
   private supersede(): number {
     const token = ++this.loadToken;
+    this.request = undefined;
     this.manifestAbort?.abort();
     this.manifestAbort = undefined;
     for (const pending of this.pendingLayers) pending.dispose();
     this.pendingLayers.clear();
-    this.transitionOverlay?.remove();
+    if (this.transitionOverlay) dropOverlay(this.transitionOverlay);
     this.transitionOverlay = undefined;
     return token;
   }
@@ -446,6 +571,7 @@ export class PanoViewer {
     this.previewReplaces = options.replacesVersion;
     this.layer?.dispose();
     this.layer = undefined;
+    this.scene = undefined;
     this.wasPending = false;
     this.stopMomentumOnly();
     this.invalidate();
@@ -625,6 +751,23 @@ export class PanoViewer {
     this.resizeTo(this.container.clientWidth, this.container.clientHeight);
   };
 
+  private watchPixelRatio(): void {
+    this.pixelRatioQuery?.removeEventListener('change', this.onPixelRatioChange);
+    this.pixelRatioQuery = undefined;
+    if (this.disposed || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    if (typeof query?.addEventListener !== 'function') return;
+    query.addEventListener('change', this.onPixelRatioChange);
+    this.pixelRatioQuery = query;
+  }
+
+  // The query named the old ratio and has stopped matching: watch the new
+  // one, and size the backbuffer for it.
+  private onPixelRatioChange = (): void => {
+    this.watchPixelRatio();
+    this.resizeTo(this.cssW, this.cssH);
+  };
+
   // The observer reports the new size, so this costs no layout read.
   private onObservedResize = (entries: ResizeObserverEntry[]) => {
     const rect = entries[entries.length - 1]?.contentRect;
@@ -632,12 +775,27 @@ export class PanoViewer {
     else this.onWindowResize();
   };
 
-  private resizeTo(width: number, height: number): void {
+  /**
+   * Size the canvas for a `width` × `height` container. Nothing happens when
+   * neither that nor the backbuffer changed. Otherwise the resize has cleared
+   * the drawing buffer, and with `drawNow` the frame is drawn again here, in
+   * the same task: a ResizeObserver callback runs after the frame's animation
+   * callbacks, so waiting for the next one would show the cleared canvas.
+   */
+  private resizeTo(width: number, height: number, drawNow = true): void {
     this.cssW = width || 1;
     this.cssH = height || 1;
     this.aspect = this.cssW / this.cssH;
-    this.renderer.resize(this.cssW, this.cssH);
-    this.invalidate();
+    if (!this.renderer.resize(this.cssW, this.cssH)) return;
+    if (drawNow && this.onScreen && !this.disposed && !this.contextLost) {
+      cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      // The last frame's time when the loop is running, so this draws the
+      // camera where it is rather than stepping it; the loop goes on from it.
+      this.frame(this.lastFrameT ?? performance.now());
+    } else {
+      this.invalidate();
+    }
   }
 
   // Off screen, no frames are drawn and auto-rotate holds still; coming back
@@ -647,6 +805,9 @@ export class PanoViewer {
     if (!entry || entry.isIntersecting === this.onScreen) return;
     this.onScreen = entry.isIntersecting;
     this.autoRotateLastFrame = undefined;
+    // No new tile requests while nobody can see them; the ones in flight finish.
+    this.layer?.setPaused(!this.onScreen);
+    for (const pending of this.pendingLayers) pending.setPaused(!this.onScreen);
     if (this.onScreen) {
       this.invalidate();
     } else {
@@ -706,14 +867,7 @@ export class PanoViewer {
     view.pitch = damp(view.pitch, target.pitch, k);
     view.fov = damp(view.fov, target.fov, k);
 
-    const settled =
-      this.momentum.yaw === 0 &&
-      this.momentum.pitch === 0 &&
-      Math.abs(target.yaw - view.yaw) < 1e-4 &&
-      Math.abs(target.pitch - view.pitch) < 1e-4 &&
-      Math.abs(target.fov - view.fov) < 1e-3;
-
-    if (!settled) {
+    if (!this.cameraSettled()) {
       this.dirty = true;
     } else {
       view.yaw = target.yaw;
@@ -736,10 +890,11 @@ export class PanoViewer {
     // of re-deriving devicePixelRatio.
     this.layer?.update(this.viewProj, vfovDeg, this.fwd, this.renderer.canvas.height || 1);
 
-    // Queued tiles count as pending, so a backoff holding the queue does not
-    // settle early and drop the preview before its tiles exist. A tile that
-    // fails (for good, or until its cooldown ends) does not count, so failed
-    // tiles can still end the preview, leaving coarser tiles in their place.
+    // Queued tiles count as pending: the queue outlasts a frame only while
+    // every request slot is busy, and settling then would drop the preview
+    // before its tiles exist. A tile that fails (for good, or until its
+    // cooldown ends) does not count, so failed tiles can still end the
+    // preview, leaving coarser tiles in their place.
     const pending = this.layer?.hasPending() ?? false;
     const tilesSettled = this.wasPending && !pending;
     if (tilesSettled && this.previewUnderlay) this.disposePreview();
@@ -780,6 +935,31 @@ export class PanoViewer {
     }
   };
 
+  /** No momentum left, and the camera has eased all the way to its target. */
+  private cameraSettled(): boolean {
+    const view = this.view;
+    const target = this.target;
+    return (
+      this.momentum.yaw === 0 &&
+      this.momentum.pitch === 0 &&
+      Math.abs(target.yaw - view.yaw) < 1e-4 &&
+      Math.abs(target.pitch - view.pitch) < 1e-4 &&
+      Math.abs(target.fov - view.fov) < 1e-3
+    );
+  }
+
+  /**
+   * Whether `tiles-settled` holds right now: the frame that settles has run
+   * and the scene on screen has no tiles pending. A host that subscribes to
+   * `tiles-settled` late can check this instead of waiting for the next one.
+   * Like the event, it says nothing about the camera: a moving or
+   * auto-rotating view is settled whenever its tiles are in. A load still in
+   * flight does not count until it swaps in.
+   */
+  isSettled(): boolean {
+    return !this.contextLost && !this.wasPending && !(this.layer?.hasPending() ?? false);
+  }
+
   /**
    * Where the direction (yaw, pitch) is on screen in the frame last drawn, in
    * CSS pixels from the container's top left. Reads no layout, so a render
@@ -813,18 +993,20 @@ export class PanoViewer {
     // and must not remove this one. Up to its first await, load() leaves the
     // scene on screen alone, so drawList is still what is drawn.
     const loading = this.load(pano, view ? { view } : {});
-    let snap: HTMLDivElement | undefined;
+    let snap: HTMLCanvasElement | undefined;
     if (drawList.length > 0) {
-      snap = document.createElement('div');
-      snap.style.cssText =
-        'position:absolute;inset:0;background-size:cover;background-position:center;' +
-        'pointer-events:none;transition:opacity ' +
-        ms +
-        'ms ease;opacity:1;z-index:5;';
       try {
-        snap.style.backgroundImage = `url(${this.renderer.snapshot(drawList)})`;
-        this.container.appendChild(snap);
-        this.transitionOverlay = snap;
+        // A copy of the frame, made on the GPU; null while the context is lost.
+        snap = this.renderer.snapshot(drawList) ?? undefined;
+        if (snap) {
+          snap.style.cssText =
+            'position:absolute;inset:0;width:100%;height:100%;' +
+            'pointer-events:none;transition:opacity ' +
+            ms +
+            'ms ease;opacity:1;z-index:5;';
+          this.container.appendChild(snap);
+          this.transitionOverlay = snap;
+        }
       } catch {
         // snapshot unavailable — fall back to a plain fade
         snap = undefined;
@@ -844,7 +1026,7 @@ export class PanoViewer {
       // Always tear the overlay down — even if load() rejected — but don't
       // clobber an overlay a newer transitionTo may have installed.
       if (snap) {
-        snap.remove();
+        dropOverlay(snap);
         if (this.transitionOverlay === snap) this.transitionOverlay = undefined;
       }
     }
@@ -856,6 +1038,8 @@ export class PanoViewer {
     this.raf = 0;
     clearTimeout(this.autoRotateResumeTimer);
     window.removeEventListener('resize', this.onWindowResize);
+    this.pixelRatioQuery?.removeEventListener('change', this.onPixelRatioChange);
+    this.pixelRatioQuery = undefined;
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     this.controls.dispose();
