@@ -35,6 +35,8 @@ export function HotspotMarkers({ hotspots, activeId, onOpen }: HotspotMarkersPro
             style={{ '--pn-hs-scale': h.size ?? 1 } as CSSProperties}
             aria-label={h.title}
             aria-pressed={activeId === h.id}
+            // HotspotPanel finds its marker by this to hand focus back on close.
+            data-hotspot-id={h.id}
             title={h.title}
             onClick={() => onOpen(h)}
           >

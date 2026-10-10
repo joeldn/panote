@@ -174,6 +174,17 @@ describe('TourViewer', () => {
     expect(onHotspotOpen).toHaveBeenCalledOnce();
   });
 
+  it('hands focus back to a tapped marker when its point closes', () => {
+    renderViewer();
+    // A tap on Safari or iOS leaves the marker unfocused.
+    const marker = screen.getByRole('button', { name: 'Fountain' });
+    fireEvent.click(marker);
+    const panel = screen.getByRole('complementary', { name: 'Fountain' });
+    expect(panel.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    expect(document.activeElement).toBe(marker);
+  });
+
   it('starts with auto-rotate off when the visitor prefers reduced motion', async () => {
     vi.stubGlobal(
       'matchMedia',
