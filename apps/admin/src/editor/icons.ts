@@ -1,88 +1,9 @@
-// Font Awesome solid icons offered by the point icon picker; search also accepts any
-// other valid FA name typed in full (contracts ICON_PATTERN).
-export const POINT_ICONS = [
-  'info',
-  'circle-info',
-  'star',
-  'heart',
-  'camera',
-  'image',
-  'video',
-  'music',
-  'microphone',
-  'book',
-  'book-open',
-  'landmark',
-  'building',
-  'church',
-  'mosque',
-  'synagogue',
-  'monument',
-  'archway',
-  'house',
-  'door-open',
-  'stairs',
-  'elevator',
-  'bed',
-  'bath',
-  'couch',
-  'chair',
-  'utensils',
-  'mug-hot',
-  'wine-glass',
-  'beer-mug-empty',
-  'store',
-  'cart-shopping',
-  'tree',
-  'leaf',
-  'seedling',
-  'mountain',
-  'water',
-  'sun',
-  'moon',
-  'cloud',
-  'snowflake',
-  'fire',
-  'car',
-  'bus',
-  'train',
-  'bicycle',
-  'person-walking',
-  'wheelchair',
-  'square-parking',
-  'restroom',
-  'phone',
-  'envelope',
-  'location-dot',
-  'map',
-  'compass',
-  'flag',
-  'clock',
-  'calendar',
-  'ticket',
-  'palette',
-  'paintbrush',
-  'masks-theater',
-  'futbol',
-  'person-swimming',
-  'dumbbell',
-  'graduation-cap',
-  'lightbulb',
-  'gear',
-  'wrench',
-  'triangle-exclamation',
-  'question',
-  'link',
-  'arrow-up',
-  'eye',
-] as const;
+import { POINT_ICONS } from '@internal/ui';
 
-const ICON_PATTERN = /^[a-z0-9-]{1,40}$/;
-
+// The picker offers only POINT_ICONS: they are in the subset font (@internal/ui
+// icons.css), so a typed-in name outside it would render as the fallback icon.
 export function searchIcons(query: string): string[] {
   const q = query.trim().toLowerCase();
   if (!q) return [...POINT_ICONS];
-  const hits: string[] = POINT_ICONS.filter((name) => name.includes(q));
-  if (ICON_PATTERN.test(q) && !hits.includes(q)) hits.push(q);
-  return hits;
+  return POINT_ICONS.filter((name) => name.includes(q));
 }

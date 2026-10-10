@@ -1,6 +1,7 @@
 import { useRef, type CSSProperties } from 'react';
 
 import { cx } from '../cx.js';
+import { pointIcon } from '../icons/names.js';
 import type { ViewerHotspot } from './types.js';
 import { placeAt, useViewerFrame } from './use-render.js';
 
@@ -37,7 +38,7 @@ export function HotspotMarkers({ hotspots, activeId, onOpen }: HotspotMarkersPro
             title={h.title}
             onClick={() => onOpen(h)}
           >
-            <i className={`fa-solid fa-${h.icon ?? 'info'}`} aria-hidden="true" />
+            <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
           </button>
         </div>
       ))}

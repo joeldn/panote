@@ -8,6 +8,7 @@ import {
   HotspotMarkers,
   LogoMark,
   PanoStage,
+  pointIcon,
   ViewerControls,
   type ViewerHotspot,
   type ViewerLinkArrow,
@@ -638,7 +639,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                       disabled={lookOnly}
                       onClick={() => setActivePoint(h.id)}
                     >
-                      <i className={`fa-solid fa-${h.icon ?? 'info'}`} aria-hidden="true" />
+                      <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
                       {h.title}
                     </button>
                   </li>
