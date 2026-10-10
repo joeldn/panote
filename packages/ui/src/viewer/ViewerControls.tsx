@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 
 import { cx } from '../cx.js';
 import { usePanoViewer } from '../viewer-context.js';
@@ -29,16 +29,12 @@ export function ViewerControls({
   const [fullscreen, setFullscreen] = useState(false);
   // Trust the browser's answer when it gives one (false in an embed without
   // allow="fullscreen"). Without one, offer it only if the target can go
-  // fullscreen at all, which iPhone Safari's elements can't. The target ref
-  // is only set after mount, hence a layout effect rather than render.
-  const [canFullscreen, setCanFullscreen] = useState(false);
-  useLayoutEffect(() => {
-    const el = fullscreenTarget?.current;
-    setCanFullscreen(
-      (document.fullscreenEnabled as boolean | undefined) ??
-        typeof el?.requestFullscreen === 'function',
-    );
-  }, [fullscreenTarget]);
+  // fullscreen at all, which iPhone Safari's elements can't. Before mount the
+  // ref is empty, and the root element answers for it.
+  const fullscreenEl = fullscreenTarget?.current ?? document.documentElement;
+  const canFullscreen =
+    (document.fullscreenEnabled as boolean | undefined) ??
+    typeof fullscreenEl.requestFullscreen === 'function';
   useEffect(() => {
     const sync = () => setFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', sync);
