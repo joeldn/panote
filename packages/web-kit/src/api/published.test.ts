@@ -127,8 +127,7 @@ describe('loadPublishedTour with worker boot data', () => {
     tour: bundle(),
     ...over,
   });
-  const network = () =>
-    cdn({ 'slugs/old-town.json': pointer, 'pub/tours/tour-a.json': bundle() });
+  const network = () => cdn({ 'slugs/old-town.json': pointer, 'pub/tours/tour-a.json': bundle() });
   const loadWith = (slug: string, fetch: ReturnType<typeof cdn>, data: unknown) =>
     loadPublishedTour(CDN, slug, { fetch, now: () => NOW, boot: data });
 
