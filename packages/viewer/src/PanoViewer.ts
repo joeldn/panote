@@ -204,21 +204,23 @@ export class PanoViewer {
     this.controls = new Controls(this.renderer.canvas, host, {
       wheel: options.wheel ?? d.wheel,
     });
-    window.addEventListener('resize', this.onWindowResize);
-    // window's resize event only fires on the browser viewport changing size,
-    // not on the container itself being resized by layout — flex/grid
-    // reflow, a sidebar toggling, display:none → visible, splitter panes.
-    // ResizeObserver catches those too so the canvas doesn't get left at a
-    // stale size/pixel ratio.
+    // ResizeObserver sees the container itself resized by layout (flex/grid
+    // reflow, a sidebar toggling, display:none → visible, splitter panes),
+    // not just the browser window, so the canvas never keeps a stale size.
+    // The window's resize event is only the fallback without it: listening
+    // to both resized twice per window resize, once from the padding box
+    // (clientWidth) and once from the content box (contentRect).
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(this.onObservedResize);
       this.resizeObserver.observe(container);
+    } else {
+      window.addEventListener('resize', this.onWindowResize);
     }
     if (typeof IntersectionObserver !== 'undefined') {
       this.intersectionObserver = new IntersectionObserver(this.onIntersect);
       this.intersectionObserver.observe(container);
     }
-    this.invalidate();
+    // resizeTo() above has already asked for the first frame.
   }
 
   on = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
@@ -506,7 +508,8 @@ export class PanoViewer {
   }
 
   private autoRotating(): boolean {
-    return this.autoRotateEnabled && this.autoRotateActive;
+    // A zero speed turns nothing, so it must not keep the loop running.
+    return this.autoRotateEnabled && this.autoRotateActive && this.autoRotateSpeed !== 0;
   }
 
   private effectiveVFovDeg(requestedDeg: number): number {
@@ -578,11 +581,12 @@ export class PanoViewer {
 
   private zoomAt(scaleFactor: number, clientX: number, clientY: number): void {
     this.pauseAutoRotate();
-    // Only the offset comes from layout: page scroll moves the canvas without
-    // a resize, so left and top cannot be cached. The size can.
+    // The pointer is in client coordinates, so it is mapped through the
+    // canvas's on-screen rect: page scroll moves it without a resize, and a
+    // CSS transform scales it without changing the cached layout size.
     const rect = this.renderer.canvas.getBoundingClientRect();
-    const nx = ((clientX - rect.left) / this.cssW) * 2 - 1;
-    const ny = -(((clientY - rect.top) / this.cssH) * 2 - 1);
+    const nx = ((clientX - rect.left) / (rect.width || 1)) * 2 - 1;
+    const ny = -(((clientY - rect.top) / (rect.height || 1)) * 2 - 1);
     const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const hfov0 = this.hfovOf(vfov0);
     const newReqDeg = clampFov(this.target.fov * scaleFactor, this.opts.minFov, this.opts.maxFov);

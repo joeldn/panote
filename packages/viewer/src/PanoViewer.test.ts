@@ -1720,6 +1720,52 @@ describe('PanoViewer', () => {
       expect(after).toHaveBeenCalledTimes(1);
     });
 
+    it('listens to window resize only without a ResizeObserver', () => {
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      expect(window.addEventListener).not.toHaveBeenCalledWith('resize', expect.anything());
+      viewer.dispose();
+    });
+
+    it('lets the loop stop when auto-rotate is on at zero speed', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        autoRotate: true,
+        autoRotateSpeed: 0,
+      });
+      expect(runUntilIdle()).toBeLessThan(10);
+      expect(raf.pending).toBe(0);
+      viewer.dispose();
+    });
+
+    it('zooms about the pointer through the canvas rect, CSS transforms included', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      runUntilIdle();
+      // Scaled 2x by a CSS transform: the layout size is 400x800, the rect 800x1600.
+      const canvas = internals(viewer).renderer.canvas as unknown as {
+        getBoundingClientRect: () => DOMRect;
+      };
+      canvas.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, width: 800, height: 1600 }) as DOMRect;
+      canvasListener(
+        viewer,
+        'wheel',
+      )({
+        deltaY: -100,
+        deltaX: 0,
+        deltaMode: 0,
+        ctrlKey: false,
+        metaKey: false,
+        clientX: 400, // the centre of the rect
+        clientY: 800,
+        preventDefault: vi.fn(),
+      });
+      const { target } = internals(viewer);
+      expect(target.fov).toBeLessThan(70);
+      expect(target.yaw).toBeCloseTo(0, 10);
+      expect(target.pitch).toBeCloseTo(0, 10);
+      viewer.dispose();
+    });
+
     /** Let `p` finish, stepping frames for its fade. */
     async function finish(p: Promise<unknown>): Promise<void> {
       let done = false;
