@@ -25,8 +25,7 @@
   max-width: 340px;
   padding: 26px;
   border-radius: var(--r-xl);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   text-align: center;
   font-size: 14px;
   line-height: 1.55;
@@ -101,8 +100,7 @@
   min-width: 0;
   padding: 6px 14px;
   border-radius: var(--r-row);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
 }
 
@@ -154,8 +152,7 @@
   padding: 0 16px;
   border: 0;
   border-radius: var(--r-row);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   font: 500 14px var(--fbody);
   color: var(--ink);
@@ -180,8 +177,7 @@
   height: 38px;
   padding: 0 16px;
   border-radius: var(--r-row);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   font-size: 14px;
   color: var(--ink-62);
@@ -200,8 +196,7 @@
   width: 300px;
   padding: 18px;
   border-radius: var(--r-lg);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-popover);
   animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
 }
@@ -259,8 +254,7 @@
   flex-direction: column;
   min-height: 0;
   border-radius: var(--r-lg);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   overflow: hidden;
 }
@@ -670,8 +664,7 @@
   box-sizing: border-box;
   padding: 12px 14px;
   border-radius: var(--r-card);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-popover);
   font-size: 13.5px;
   line-height: 1.5;
