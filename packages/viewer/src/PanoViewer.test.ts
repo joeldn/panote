@@ -1875,6 +1875,84 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    describe("with the tile layer's upload queue", () => {
+      type Queue = { ready: Map<string, unknown> };
+      const readyOf = (viewer: PanoViewer) => (internals(viewer).layer as Queue).ready;
+      const uploads = (viewer: PanoViewer) =>
+        (internals(viewer).renderer as unknown as { uploadTile: ReturnType<typeof vi.fn> })
+          .uploadTile.mock.calls.length;
+
+      it('never aborts the base fetches of a slow load, however many frames run', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/0/') });
+        const viewer = new PanoViewer(makeContainer(400, 800), {
+          autoRotate: true,
+          autoRotateSpeed: 1,
+        });
+        const loading = viewer.load('pano-a', { view: { yaw: 2 } });
+        await flush();
+        // The prime has run update() with the base in flight; now well past
+        // the 10-frame grace, turning all the while.
+        for (let i = 0; i < 15; i++) raf.step();
+        const baseSignals = FACES.map((f) => net.signalOf(`/tiles/pano-a/0/${f}/0-0.jpg`));
+        for (const signal of baseSignals) {
+          expect(signal).toBeDefined();
+          expect(signal!.aborted).toBe(false);
+        }
+        net.release();
+        await expect(loading).resolves.toBe(true);
+        viewer.dispose();
+      });
+
+      it('asks for another frame while decoded tiles are still queued', async () => {
+        let holding = true;
+        const net = stubNet({ holdTile: (url) => holding && !url.includes('/0/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        runUntilIdle();
+        const base = uploads(viewer);
+        holding = false;
+        net.release();
+        await flush();
+        const decoded = readyOf(viewer).size;
+        expect(decoded).toBeGreaterThan(3); // more than one frame uploads
+        expect(raf.pending).toBe(1);
+
+        raf.step();
+        // Some went up; the rest wait, and the frame asked for the next one.
+        expect(uploads(viewer)).toBeGreaterThan(base);
+        expect(readyOf(viewer).size).toBeGreaterThan(0);
+        expect(raf.pending).toBe(1);
+
+        runUntilIdle();
+        expect(readyOf(viewer).size).toBe(0);
+        expect(uploads(viewer)).toBeGreaterThanOrEqual(base + decoded);
+        expect(raf.pending).toBe(0);
+        viewer.dispose();
+      });
+
+      it('keeps drawing frames until a queue of unwanted tiles is dropped', async () => {
+        // Level 2 only: level-1 tiles are the parents, wanted from any angle.
+        const net = stubNet({ holdTile: (url) => url.includes('/2/') });
+        const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
+        await viewer.load('pano-a');
+        runUntilIdle();
+        const base = uploads(viewer);
+        net.release(); // decode into the queue, without a frame yet
+        await flush();
+        expect(readyOf(viewer).size).toBeGreaterThan(0);
+
+        // Turn away before any of them goes up: none is wanted any more.
+        viewer.setView({ yaw: Math.PI });
+        const frames = runUntilIdle();
+        expect(frames).toBeGreaterThan(1);
+        expect(frames).toBeLessThan(100);
+        expect(readyOf(viewer).size).toBe(0);
+        expect(uploads(viewer)).toBe(base);
+        expect(raf.pending).toBe(0);
+        viewer.dispose();
+      });
+    });
+
     /** Let `p` finish, stepping frames for its fade. */
     async function finish(p: Promise<unknown>): Promise<void> {
       let done = false;
