@@ -1,8 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  NEAR,
-  FAR,
   effectiveVFovDeg,
+  viewMatrix,
   viewProjection,
   projectDir,
   unprojectNDC,
@@ -23,6 +22,20 @@ describe('effectiveVFovDeg', () => {
     near(effectiveVFovDeg(80, 100, 1), 80); // 80 < cap 100 → uncapped
     near(effectiveVFovDeg(120, 100, 1), 100);
     near(effectiveVFovDeg(90, 100, 4 / 3), 83.5816570306);
+  });
+
+  // vfov = 2·atan(tan(hfov/2) / aspect), so the cap loosens on a tall phone
+  // screen and tightens on an ultra-wide one.
+  it('loosens the cap at a portrait aspect (0.46)', () => {
+    const cap = 137.7882365976;
+    near(effectiveVFovDeg(90, 100, 0.46), 90); // under the cap
+    near(effectiveVFovDeg(170, 100, 0.46), cap);
+  });
+
+  it('tightens the cap at an ultra-wide aspect (4)', () => {
+    const cap = 33.1816297422;
+    near(effectiveVFovDeg(60, 100, 4), cap);
+    near(effectiveVFovDeg(20, 100, 4), 20);
   });
 });
 
@@ -103,13 +116,6 @@ describe('frustumFromViewProj + intersectsSphere', () => {
   });
 });
 
-describe('constants', () => {
-  it('keeps three near/far', () => {
-    expect(NEAR).toBe(0.1);
-    expect(FAR).toBe(100);
-  });
-});
-
 // Property-based checks (three.js is removed — no golden values).
 const allFinite = (m: Float32Array): boolean => Array.from(m).every((v) => Number.isFinite(v));
 
@@ -162,7 +168,7 @@ describe('fov cap consistency', () => {
 });
 
 describe('unprojectNDC at corners', () => {
-  it('returns finite values at all four NDC corners', () => {
+  it('round-trips all four NDC corners', () => {
     const vp = viewProjection({ yaw: 0.3, pitch: 0.1, fov: 60 }, 16 / 9, MAXH);
     for (const [nx, ny] of [
       [-1, -1],
@@ -171,9 +177,81 @@ describe('unprojectNDC at corners', () => {
       [1, 1],
     ] as const) {
       const d = unprojectNDC(nx, ny, vp);
-      expect(Number.isFinite(d.x)).toBe(true);
-      expect(Number.isFinite(d.y)).toBe(true);
-      expect(Number.isFinite(d.z)).toBe(true);
+      expect(Math.hypot(d.x, d.y, d.z)).toBeCloseTo(1, 6);
+      const p = projectDir(d, vp);
+      near(p.x, nx);
+      near(p.y, ny);
     }
   });
+});
+
+describe('viewMatrix at the poles', () => {
+  // clampPitch keeps drag input inside ±(π/2 − 0.001), but an unclamped
+  // initialView can reach viewMatrix, so exactly ±π/2 must still give a
+  // usable (finite, orthonormal, non-singular) basis.
+  for (const pitch of [Math.PI / 2, -Math.PI / 2]) {
+    for (const yaw of [0, 0.7, -2.5]) {
+      it(`is finite and orthonormal at yaw=${yaw}, pitch=${pitch.toFixed(4)}`, () => {
+        const m = viewMatrix(yaw, pitch);
+        expect(allFinite(m)).toBe(true);
+        // Rows 0..2 of the rotation part are the camera axes.
+        const row = (r: number): [number, number, number] => [m[r]!, m[4 + r]!, m[8 + r]!];
+        const dot = (p: number[], q: number[]) => p[0]! * q[0]! + p[1]! * q[1]! + p[2]! * q[2]!;
+        const [a, b, c] = [row(0), row(1), row(2)];
+        for (const v of [a, b, c]) expect(Math.hypot(...v)).toBeCloseTo(1, 6);
+        expect(dot(a, b)).toBeCloseTo(0, 6);
+        expect(dot(a, c)).toBeCloseTo(0, 6);
+        expect(dot(b, c)).toBeCloseTo(0, 6);
+        // Determinant of the 3×3 rotation is +1 (no mirror, not singular).
+        const det = dot(a, [
+          b[1] * c[2] - b[2] * c[1],
+          b[2] * c[0] - b[0] * c[2],
+          b[0] * c[1] - b[1] * c[0],
+        ]);
+        expect(det).toBeCloseTo(1, 6);
+      });
+    }
+  }
+});
+
+describe('viewMatrix right vector', () => {
+  // The right vector depends on yaw alone, so it cannot flip (and roll the
+  // view upside down) when pitch crosses a pole.
+  it('stays continuous across the pole', () => {
+    for (const yaw of [0, 0.7, -2.5]) {
+      const below = viewMatrix(yaw, Math.PI / 2 - 0.01);
+      const above = viewMatrix(yaw, Math.PI / 2 + 0.01);
+      const dot = below[0]! * above[0]! + below[4]! * above[4]! + below[8]! * above[8]!;
+      expect(dot).toBeCloseTo(1, 6);
+    }
+  });
+});
+
+describe('out-params', () => {
+  const views = [VIEW_A, { yaw: -1.1, pitch: -0.4, fov: 90 }, { yaw: 2.0, pitch: 0.6, fov: 200 }];
+  for (const v of views) {
+    it(`viewProjection writes the same values into out (yaw=${v.yaw})`, () => {
+      const alloc = viewProjection(v, ASPECT_A, MAXH);
+      const out = new Float32Array(16).fill(Number.NaN);
+      const ret = viewProjection(v, ASPECT_A, MAXH, out);
+      expect(ret).toBe(out);
+      expect([...out]).toEqual([...alloc]);
+    });
+
+    it(`frustumFromViewProj writes the same values into out (yaw=${v.yaw})`, () => {
+      const vp = viewProjection(v, ASPECT_A, MAXH);
+      const alloc = frustumFromViewProj(vp);
+      const out = new Float32Array(24).fill(Number.NaN);
+      const ret = frustumFromViewProj(vp, out);
+      expect(ret).toBe(out);
+      expect([...out]).toEqual([...alloc]);
+    });
+
+    it(`viewMatrix writes the same values into out (yaw=${v.yaw})`, () => {
+      const alloc = viewMatrix(v.yaw, v.pitch);
+      const out = new Float32Array(16).fill(Number.NaN);
+      expect(viewMatrix(v.yaw, v.pitch, out)).toBe(out);
+      expect([...out]).toEqual([...alloc]);
+    });
+  }
 });

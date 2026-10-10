@@ -9,6 +9,7 @@ import {
   normalizeAngle,
   compassHeading,
 } from './camera-math.js';
+import { viewProjection, projectDir, unprojectNDC } from './render/projection.js';
 
 describe('clampPitch', () => {
   it('clamps to just under ±90°', () => {
@@ -27,45 +28,20 @@ describe('clampFov', () => {
 });
 
 describe('damp', () => {
-  it('moves halfway with factor 0.5', () => {
-    expect(damp(0, 10, 0.5)).toBe(5);
-  });
-
-  it('returns same value when current equals target', () => {
-    expect(damp(5, 5, 0.3)).toBe(5);
-  });
-
-  it('reaches target in one step with factor 1', () => {
-    expect(damp(3, 10, 1)).toBe(10);
-  });
-
-  it('converges toward target after repeated application', () => {
-    let v = 0;
-    for (let i = 0; i < 50; i++) {
-      v = damp(v, 10, 0.3);
-    }
-    expect(v).toBeCloseTo(10, 3);
-  });
-
-  it('never moves with factor 0', () => {
-    expect(damp(3, 10, 0)).toBe(3);
+  it.each([
+    { current: 0, target: 10, factor: 0.5, want: 5 },
+    { current: 5, target: 5, factor: 0.3, want: 5 },
+    { current: 3, target: 10, factor: 1, want: 10 },
+    { current: 3, target: 10, factor: 0, want: 3 },
+  ])('damp($current, $target, $factor) = $want', ({ current, target, factor, want }) => {
+    expect(damp(current, target, factor)).toBe(want);
   });
 });
 
 describe('anglePerPixel', () => {
-  it('returns a positive value', () => {
-    expect(anglePerPixel(Math.PI / 2, 800)).toBeGreaterThan(0);
-  });
-
-  it('doubling dimensionPx halves the result', () => {
-    const fov = Math.PI / 3;
-    expect(anglePerPixel(fov, 400)).toBeCloseTo(anglePerPixel(fov, 800) * 2, 10);
-  });
-
-  it('larger fov yields a larger value (90° vs 45°)', () => {
-    expect(anglePerPixel((90 * Math.PI) / 180, 800)).toBeGreaterThan(
-      anglePerPixel((45 * Math.PI) / 180, 800),
-    );
+  it('is 2·tan(fov/2) / dimension', () => {
+    // tan(π/4) = 1, so a 90° fov across 800 px is exactly 2/800.
+    expect(anglePerPixel(Math.PI / 2, 800)).toBeCloseTo(2 / 800, 15);
   });
 });
 
@@ -74,39 +50,32 @@ describe('zoomAnchorDelta', () => {
     expect(zoomAnchorDelta(0, Math.PI / 3, Math.PI / 6)).toBe(0);
   });
 
-  it('returns > 0 for ndc>0 and fov1<fov0 (zoom in)', () => {
-    const fov0 = (60 * Math.PI) / 180;
-    const fov1 = (30 * Math.PI) / 180;
-    expect(zoomAnchorDelta(0.5, fov0, fov1)).toBeGreaterThan(0);
-  });
-
-  it('has odd symmetry: zoomAnchorDelta(-n,a,b) === -zoomAnchorDelta(n,a,b)', () => {
-    const fov0 = (60 * Math.PI) / 180;
-    const fov1 = (30 * Math.PI) / 180;
-    expect(zoomAnchorDelta(-0.5, fov0, fov1)).toBeCloseTo(-zoomAnchorDelta(0.5, fov0, fov1), 10);
-  });
-
-  it('returns 0 when fov0 === fov1', () => {
-    const fov = (45 * Math.PI) / 180;
-    expect(zoomAnchorDelta(0.7, fov, fov)).toBeCloseTo(0, 10);
+  // The point of the function: the world direction under the cursor keeps
+  // its screen position through the zoom. Square aspect, so the horizontal
+  // fov equals the vertical one, and pitch 0 keeps the axes independent.
+  it.each([
+    { ndc: 0.5, fov0: 60, fov1: 30 },
+    { ndc: -0.8, fov0: 90, fov1: 40 },
+    { ndc: 0.9, fov0: 30, fov1: 75 },
+  ])('keeps the cursor at ndc x=$ndc when zooming $fov0°→$fov1°', ({ ndc, fov0, fov1 }) => {
+    const yaw0 = 0.4;
+    const vp0 = viewProjection({ yaw: yaw0, pitch: 0, fov: fov0 }, 1, 179);
+    const world = unprojectNDC(ndc, 0, vp0);
+    const yaw1 = yaw0 + zoomAnchorDelta(ndc, (fov0 * Math.PI) / 180, (fov1 * Math.PI) / 180);
+    const vp1 = viewProjection({ yaw: yaw1, pitch: 0, fov: fov1 }, 1, 179);
+    const p = projectDir(world, vp1);
+    expect(p.x).toBeCloseTo(ndc, 6);
+    expect(p.y).toBeCloseTo(0, 6);
   });
 });
 
 describe('pinchFactor', () => {
-  it('returns > 1 when pinching in (dist < prevDist, zooms out)', () => {
-    expect(pinchFactor(200, 100)).toBeGreaterThan(1);
-  });
-
-  it('returns < 1 when pinching out (dist > prevDist, zooms in)', () => {
-    expect(pinchFactor(100, 200)).toBeLessThan(1);
-  });
-
-  it('returns 1 when distance is unchanged', () => {
-    expect(pinchFactor(150, 150)).toBe(1);
-  });
-
-  it('equals prevDist / dist', () => {
-    expect(pinchFactor(300, 150)).toBeCloseTo(2, 10);
+  it.each([
+    { prev: 200, dist: 100, want: 2 }, // pinch in, zooms out
+    { prev: 100, dist: 200, want: 0.5 }, // pinch out, zooms in
+    { prev: 150, dist: 150, want: 1 },
+  ])('pinchFactor($prev, $dist) = $want', ({ prev, dist, want }) => {
+    expect(pinchFactor(prev, dist)).toBe(want);
   });
 });
 

@@ -1,5 +1,5 @@
-import type { Mat4 } from './projection.js';
-import type { TileGeometry } from '../tile-geometry.js';
+import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from './projection.js';
+import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
@@ -14,47 +14,98 @@ export interface DrawItem {
 }
 
 /**
- * Sort the draw list so coarse tiles (low level) paint first and finer levels
- * paint over them — replaces three's mesh.renderOrder = level. Stable, pure.
+ * The draw list in stacking order, back to front: coarse tiles (low level)
+ * at the back, finer levels over them. Stable, pure. render() gets the same
+ * result with the depth test while drawing in the reverse order.
  */
 export function sortDrawList(list: DrawItem[]): DrawItem[] {
-  // Array.prototype.sort is stable in modern engines; key on level only.
   return [...list].sort((a, b) => a.level - b.level);
 }
 
+// Finest level first. Array.prototype.sort is stable, so equal levels keep
+// their list order.
+function finestFirst(a: DrawItem, b: DrawItem): number {
+  return b.level - a.level;
+}
+
+/**
+ * Clip-space depth for the `rank`-th distinct level (0 = finest) out of
+ * `count`. Strictly increasing with rank and strictly inside (-1, 1), so
+ * every rank passes LESS against the cleared depth of 1.
+ */
+function rankDepth(rank: number, count: number): number {
+  return -1 + (2 * (rank + 1)) / (count + 1);
+}
+
 interface TileResources {
+  vao: WebGLVertexArrayObject;
   vbo: WebGLBuffer;
-  ibo: WebGLBuffer;
+  /** Null when the tile draws from the shared quad IBO. */
+  ibo: WebGLBuffer | null;
   tex: WebGLTexture;
   indexCount: number;
+  /** Bounds of the vertices, for frustum culling. */
+  bounds: Sphere;
+}
+
+/** Bounding sphere of xyz positions: their centroid and the farthest vertex. */
+export function boundingSphere(pos: Float32Array): Sphere {
+  const n = pos.length / 3;
+  let cx = 0,
+    cy = 0,
+    cz = 0;
+  for (let i = 0; i < n; i++) {
+    cx += pos[i * 3]!;
+    cy += pos[i * 3 + 1]!;
+    cz += pos[i * 3 + 2]!;
+  }
+  cx /= n;
+  cy /= n;
+  cz /= n;
+  let r2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = pos[i * 3]! - cx,
+      dy = pos[i * 3 + 1]! - cy,
+      dz = pos[i * 3 + 2]! - cz;
+    r2 = Math.max(r2, dx * dx + dy * dy + dz * dz);
+  }
+  return { cx, cy, cz, r: Math.sqrt(r2) };
+}
+
+function isQuadIndex(index: Uint16Array): boolean {
+  if (index === QUAD_INDEX) return true;
+  if (index.length !== QUAD_INDEX.length) return false;
+  for (let i = 0; i < index.length; i++) if (index[i] !== QUAD_INDEX[i]) return false;
+  return true;
 }
 
 const VERT_SRC = `#version 300 es
 precision highp float;
 uniform mat4 uViewProj;
+// Per-level depth (see rankDepth): finer levels sit in front.
+uniform float uZ;
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUv;
 out vec2 vUv;
 void main() {
   vUv = aUv;
   gl_Position = uViewProj * vec4(aPos, 1.0);
+  // Constant NDC z per draw (z/w = uZ), whatever the vertex depth. Clipping
+  // in z then reduces to w > 0, so the effective near plane is w = 0, as
+  // with the skybox xyww trick.
+  gl_Position.z = uZ * gl_Position.w;
 }`;
 
-// Sampling happens in linear space (texture is SRGB8_ALPHA8, decoded on read),
-// so convert linear→sRGB on output to match three's default renderer.
+// Textures are plain RGBA8 holding sRGB-encoded bytes, and the canvas shows
+// the bytes it is given as sRGB, so texels pass straight through. Filtering
+// and mips work in gamma space, as browsers' own image scaling does.
 const FRAG_SRC = `#version 300 es
 precision highp float;
 uniform sampler2D uTex;
 in vec2 vUv;
 out vec4 fragColor;
-vec3 linearToSRGB(vec3 c) {
-  vec3 lo = c * 12.92;
-  vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-  return mix(hi, lo, step(c, vec3(0.0031308)));
-}
 void main() {
-  vec4 texel = texture(uTex, vUv);
-  fragColor = vec4(linearToSRGB(texel.rgb), texel.a);
+  fragColor = texture(uTex, vUv);
 }`;
 
 export class GLRenderer {
@@ -65,24 +116,31 @@ export class GLRenderer {
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
   private uViewProj: WebGLUniformLocation;
-  private uTex: WebGLUniformLocation;
+  private uZ: WebGLUniformLocation;
   private anisoExt: EXT_texture_filter_anisotropic | null;
   private pixelRatio: number;
   private maxPixelRatio: number;
   private viewProj: Mat4 | null = null;
   private tiles = new Map<TileHandle, TileResources>();
   private nextHandle = 1;
+  /** One static IBO shared by every 4-vertex quad. */
+  private quadIbo: WebGLBuffer;
+  /** Reused every frame: the frustum and the culled, sorted draw order. */
+  private frustum = new Float32Array(24);
+  private order: DrawItem[] = [];
 
   constructor(container: HTMLElement, opts: { antialias?: boolean; maxPixelRatio?: number } = {}) {
     this.maxPixelRatio = opts.maxPixelRatio ?? 2;
     this.canvas = document.createElement('canvas');
-    this.canvas.style.cursor = 'grab';
+    // Block, not inline: an inline canvas sits on a text baseline and makes
+    // its line box a few px taller than itself. The cursor belongs to Controls.
+    this.canvas.style.display = 'block';
     const gl = this.canvas.getContext('webgl2', {
       antialias: opts.antialias ?? false,
-      // three's WebGLRenderer defaulted to an opaque backbuffer (alpha:false);
-      // this restores exact compositing parity, and depth/stencil are unused.
+      // Opaque backbuffer. Depth lets finer levels reject the coarser
+      // fragments behind them (see render()). Stencil is unused.
       alpha: false,
-      depth: false,
+      depth: true,
       stencil: false,
       // no preserveDrawingBuffer — snapshot() reads back synchronously instead.
     });
@@ -92,10 +150,7 @@ export class GLRenderer {
     this.gl = gl;
     container.appendChild(this.canvas);
 
-    this.anisoExt =
-      gl.getExtension('EXT_texture_filter_anisotropic') ??
-      gl.getExtension('MOZ_EXT_texture_filter_anisotropic') ??
-      gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+    this.anisoExt = gl.getExtension('EXT_texture_filter_anisotropic');
     this.maxAnisotropy = this.anisoExt
       ? gl.getParameter(this.anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT)
       : 1;
@@ -104,12 +159,24 @@ export class GLRenderer {
 
     this.program = this.buildProgram(VERT_SRC, FRAG_SRC);
     this.uViewProj = this.getUniform('uViewProj');
-    this.uTex = this.getUniform('uTex');
+    this.uZ = this.getUniform('uZ');
+    // One program and one texture unit for the renderer's whole life, so
+    // bind them once here rather than every frame.
+    gl.useProgram(this.program);
+    gl.uniform1i(this.getUniform('uTex'), 0);
+    gl.activeTexture(gl.TEXTURE0);
+
+    // No VAO is bound here, so this binding is not captured by one.
+    this.quadIbo = this.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, QUAD_INDEX, gl.STATIC_DRAW);
 
     this.pixelRatio = Math.min(window.devicePixelRatio, this.maxPixelRatio);
 
-    // Static GL state — opaque tiles, painter's-order layering, interior faces.
-    gl.disable(gl.DEPTH_TEST);
+    // Static GL state: opaque tiles, layered by depth (see render()), and
+    // interior faces.
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE); // quads visible from the origin looking outward
     gl.clearColor(0, 0, 0, 1);
@@ -146,6 +213,12 @@ export class GLRenderer {
     return prog;
   }
 
+  private createBuffer(): WebGLBuffer {
+    const buf = this.gl.createBuffer();
+    if (!buf) throw new Error('createBuffer failed: context lost or resource exhaustion');
+    return buf;
+  }
+
   private getUniform(name: string): WebGLUniformLocation {
     const loc = this.gl.getUniformLocation(this.program, name);
     if (!loc) throw new Error(`uniform ${name} not found`);
@@ -158,6 +231,7 @@ export class GLRenderer {
     this.canvas.style.height = `${h}px`;
     this.canvas.width = Math.max(1, Math.round(w * this.pixelRatio));
     this.canvas.height = Math.max(1, Math.round(h * this.pixelRatio));
+    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
   setCamera(viewProj: Mat4): void {
@@ -182,33 +256,42 @@ export class GLRenderer {
       interleaved[i * 5 + 3] = geom.uv[i * 2]!;
       interleaved[i * 5 + 4] = geom.uv[i * 2 + 1]!;
     }
-    const vbo = gl.createBuffer();
-    if (!vbo) throw new Error('createBuffer failed: context lost or resource exhaustion');
+    // Record the vertex layout and index buffer in a VAO once, so a draw is
+    // just bindVertexArray + bindTexture + drawElements.
+    const vao = gl.createVertexArray();
+    if (!vao) throw new Error('createVertexArray failed: context lost or resource exhaustion');
+    gl.bindVertexArray(vao);
+    const vbo = this.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, interleaved, gl.STATIC_DRAW);
-
-    const ibo = gl.createBuffer();
-    if (!ibo) throw new Error('createBuffer failed: context lost or resource exhaustion');
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.index, gl.STATIC_DRAW);
+    const stride = 5 * 4; // 5 floats × 4 bytes
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
+    let ibo: WebGLBuffer | null = null;
+    if (count === 4 && isQuadIndex(geom.index)) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
+    } else {
+      ibo = this.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.index, gl.STATIC_DRAW);
+    }
+    gl.bindVertexArray(null);
 
     const tex = gl.createTexture();
     if (!tex) throw new Error('createTexture failed: context lost or resource exhaustion');
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    // SRGB8_ALPHA8: the sampler-side decode on read is what's guaranteed to be
-    // linear. Mip generation via generateMipmap for an sRGB texture is
-    // implementation-defined (drivers may filter in encoded space); this matches
-    // three's exposure exactly regardless — parity holds either way.
     gl.texStorage2D(
       gl.TEXTURE_2D,
       mipLevels(bitmap.width, bitmap.height),
-      gl.SRGB8_ALPHA8,
+      gl.RGBA8,
       bitmap.width,
       bitmap.height,
     );
-    // Tile bitmaps are decoded with imageOrientation:'flipY' and their UVs flip v
-    // to match; other images upload unflipped and address row 0 as v = 0.
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    // UNPACK_FLIP_Y_WEBGL stays at its default (false). Tile bitmaps are
+    // decoded with imageOrientation:'flipY' and their UVs flip v to match;
+    // other images upload unflipped and address row 0 as v = 0.
     gl.texSubImage2D(
       gl.TEXTURE_2D,
       0,
@@ -230,43 +313,67 @@ export class GLRenderer {
     }
 
     const handle = this.nextHandle++;
-    this.tiles.set(handle, { vbo, ibo, tex, indexCount: geom.index.length });
+    this.tiles.set(handle, {
+      vao,
+      vbo,
+      ibo,
+      tex,
+      indexCount: geom.index.length,
+      bounds: boundingSphere(geom.pos),
+    });
     return handle;
   }
 
   removeTile(handle: TileHandle): void {
     const t = this.tiles.get(handle);
     if (!t) return;
+    this.gl.deleteVertexArray(t.vao);
     this.gl.deleteBuffer(t.vbo);
-    this.gl.deleteBuffer(t.ibo);
+    if (t.ibo) this.gl.deleteBuffer(t.ibo);
     this.gl.deleteTexture(t.tex);
     this.tiles.delete(handle);
   }
 
   render(drawList: DrawItem[]): void {
     const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.viewProj) return;
-    gl.useProgram(this.program);
     gl.uniformMatrix4fv(this.uViewProj, false, this.viewProj);
-    gl.uniform1i(this.uTex, 0);
-    gl.activeTexture(gl.TEXTURE0);
 
-    const sorted = sortDrawList(drawList);
-    const stride = 5 * 4; // 5 floats × 4 bytes
-    for (const item of sorted) {
+    // Cull here rather than in the layers, so tiles and preview patches
+    // outside the view cost no draw call.
+    const frustum = frustumFromViewProj(this.viewProj, this.frustum);
+    const order = this.order;
+    order.length = 0;
+    for (const item of drawList) {
       const t = this.tiles.get(item.handle);
-      if (!t) continue;
-      gl.bindBuffer(gl.ARRAY_BUFFER, t.vbo);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, t.ibo);
+      if (t && intersectsSphere(frustum, t.bounds)) order.push(item);
+    }
+    // Every resident level covers the screen, so painting coarse-first would
+    // shade each pixel once per level. Instead draw finest-first, with each
+    // distinct level (rank) at its own depth, finer in front: coarser
+    // fragments behind a finer tile then fail the depth test early and are
+    // never shaded. Ranks, not raw levels, so fractional preview levels such
+    // as -0.5 or 2.5 slot in between. Tiles of one level never overlap, so
+    // sharing a depth within a level is fine.
+    order.sort(finestFirst);
+    let ranks = 0;
+    for (let i = 0; i < order.length; i++) {
+      if (i === 0 || order[i]!.level !== order[i - 1]!.level) ranks++;
+    }
+
+    let rank = -1;
+    for (let i = 0; i < order.length; i++) {
+      const item = order[i]!;
+      if (i === 0 || item.level !== order[i - 1]!.level) {
+        gl.uniform1f(this.uZ, rankDepth(++rank, ranks));
+      }
+      const t = this.tiles.get(item.handle)!;
+      gl.bindVertexArray(t.vao);
       gl.bindTexture(gl.TEXTURE_2D, t.tex);
       gl.drawElements(gl.TRIANGLES, t.indexCount, gl.UNSIGNED_SHORT, 0);
     }
+    order.length = 0;
   }
 
   /**
@@ -283,6 +390,7 @@ export class GLRenderer {
 
   dispose(): void {
     for (const handle of [...this.tiles.keys()]) this.removeTile(handle);
+    this.gl.deleteBuffer(this.quadIbo);
     this.gl.deleteProgram(this.program);
     // Deleting individual resources frees GPU memory but does not release the
     // context slot itself — browsers cap live WebGL contexts per page
