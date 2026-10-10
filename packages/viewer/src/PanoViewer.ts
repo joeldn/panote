@@ -94,7 +94,6 @@ export class PanoViewer implements ControlHost {
   private momentum = { yaw: 0, pitch: 0 };
   private hotspots = new HotspotLayer();
   private renderCbs = new Set<(view: View) => void>();
-  private home: View;
   private transitionOverlay: HTMLDivElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
   // The view-projection matrix for the frame currently being drawn.
@@ -152,7 +151,6 @@ export class PanoViewer implements ControlHost {
     );
     this.view = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
     this.target = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
-    this.home = { ...this.view };
     this.renderer = new GLRenderer(container, {
       antialias: this.opts.antialias,
       maxPixelRatio: this.opts.maxPixelRatio,
@@ -175,11 +173,8 @@ export class PanoViewer implements ControlHost {
     this.loop();
   }
 
-  on = this.boundOn();
-  private boundOn() {
-    return <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
-      this.emitter.on(type, fn);
-  }
+  on = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
+    this.emitter.on(type, fn);
 
   off = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
     this.emitter.off(type, fn);
@@ -301,11 +296,6 @@ export class PanoViewer implements ControlHost {
     } else {
       this.disposePreview();
     }
-    this.home = {
-      yaw: this.target.yaw,
-      pitch: this.target.pitch,
-      fov: this.target.fov,
-    };
     this.wasPending = true;
     this.dirty = true;
     this.emitter.emit('ready', manifest);
@@ -375,7 +365,6 @@ export class PanoViewer implements ControlHost {
     this.layer = undefined;
     this.wasPending = false;
     this.stopMomentumOnly();
-    this.home = { ...this.target };
     this.dirty = true;
     this.emitter.emit('scene-change', panoId);
   }
@@ -403,10 +392,6 @@ export class PanoViewer implements ControlHost {
   setNorth(radians: number): void {
     this.north = radians;
     this.dirty = true;
-  }
-
-  getNorth(): number {
-    return this.north;
   }
 
   /** Current compass heading (radians): north relative to the rendered yaw. */
@@ -661,10 +646,6 @@ export class PanoViewer implements ControlHost {
   addHotspot(el: HTMLElement, pos: { yaw: number; pitch: number }): HotspotHandle {
     this.container.appendChild(el);
     return this.hotspots.add(el, pos.yaw, pos.pitch);
-  }
-
-  resetView(): void {
-    this.setView({ ...this.home });
   }
 
   async transitionTo(pano: string, view?: Partial<View>): Promise<void> {

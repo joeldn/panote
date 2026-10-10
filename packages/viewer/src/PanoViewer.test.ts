@@ -502,16 +502,14 @@ describe('PanoViewer', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
         initialView: { yaw: 0.4 },
       });
-      expect(viewer.getNorth()).toBe(0);
       expect(viewer.heading()).toBeCloseTo(-0.4, 10);
     });
 
-    it('setNorth updates getNorth and heading immediately', () => {
+    it('setNorth updates the heading immediately', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
         initialView: { yaw: 0.4 },
       });
       viewer.setNorth(1.2);
-      expect(viewer.getNorth()).toBe(1.2);
       expect(viewer.heading()).toBeCloseTo(0.8, 10);
     });
   });
