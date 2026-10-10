@@ -26,6 +26,7 @@ import {
   anglePerPixel,
   zoomAnchorDelta,
   compassHeading,
+  normalizeAngle,
 } from './camera-math.js';
 import type { View, ViewerOptions, PanoViewerEvents } from './types.js';
 import { HotspotLayer, type HotspotHandle } from './hotspots.js';
@@ -37,6 +38,11 @@ const AUTO_ROTATE_MAX_DT_MS = 100;
 
 function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+/** `yaw` less its whole turns: the same rendered angle, kept within ±2π. */
+function unwound(yaw: number): number {
+  return yaw - Math.trunc(yaw / TWO_PI) * TWO_PI;
 }
 
 export class PanoViewer implements ControlHost {
@@ -386,7 +392,7 @@ export class PanoViewer implements ControlHost {
     const H = this.container.clientHeight || 1;
     const vfov = (this.effectiveVFovDeg(this.view.fov) * Math.PI) / 180;
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.aspect());
-    const yaw = this.view.yaw - dx * anglePerPixel(hfov, W); // drag right → look left
+    const yaw = unwound(this.view.yaw - dx * anglePerPixel(hfov, W)); // drag right → look left
     const pitch = clampPitch(this.view.pitch + dy * anglePerPixel(vfov, H));
     this.view.yaw = yaw;
     this.target.yaw = yaw;
@@ -425,7 +431,7 @@ export class PanoViewer implements ControlHost {
     const newReqDeg = clampFov(this.target.fov * scaleFactor, this.opts.minFov, this.opts.maxFov);
     const vfov1 = (this.effectiveVFovDeg(newReqDeg) * Math.PI) / 180;
     const hfov1 = 2 * Math.atan(Math.tan(vfov1 / 2) * aspect);
-    const yaw = this.view.yaw + zoomAnchorDelta(nx, hfov0, hfov1);
+    const yaw = unwound(this.view.yaw + zoomAnchorDelta(nx, hfov0, hfov1));
     const pitch = clampPitch(this.view.pitch + zoomAnchorDelta(ny, vfov0, vfov1));
     this.view.yaw = yaw;
     this.target.yaw = yaw;
@@ -437,15 +443,20 @@ export class PanoViewer implements ControlHost {
   }
 
   setView(view: Partial<View>): void {
-    if (view.yaw !== undefined) this.target.yaw = view.yaw;
+    // The rendered yaw is unbounded (drags and auto-rotate wind it up), so
+    // aim at the equivalent angle nearest to it rather than the literal one,
+    // which could be several turns away.
+    if (view.yaw !== undefined)
+      this.target.yaw = this.view.yaw + normalizeAngle(view.yaw - this.view.yaw);
     if (view.pitch !== undefined) this.target.pitch = clampPitch(view.pitch);
     if (view.fov !== undefined)
       this.target.fov = clampFov(view.fov, this.opts.minFov, this.opts.maxFov);
     this.dirty = true;
   }
 
+  /** The camera being moved to, with yaw in (−π, π]. */
   getView(): View {
-    return { ...this.target };
+    return { ...this.target, yaw: normalizeAngle(this.target.yaw) };
   }
 
   private onResize = () => {

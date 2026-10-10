@@ -1060,4 +1060,55 @@ describe('PanoViewer', () => {
       expect(rendererOf(viewer).uploadTile).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('loads and camera moves', () => {
+    type Internals = {
+      view: { yaw: number; pitch: number; fov: number };
+      target: { yaw: number; pitch: number; fov: number };
+      momentum: { yaw: number; pitch: number };
+      dirty: boolean;
+      loop: () => void;
+      controls: unknown;
+      pendingLayers: Set<{ dispose: () => void }>;
+      layer: unknown;
+      wasPending: boolean;
+      renderer: { render: ReturnType<typeof vi.fn> };
+    };
+    const internals = (viewer: PanoViewer) => viewer as unknown as Internals;
+
+    function tick(viewer: PanoViewer): void {
+      internals(viewer).dirty = true;
+      internals(viewer).loop();
+    }
+
+    it('eases setView the short way round after the yaw has wound up several turns', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: 4 * Math.PI + 0.1 },
+      });
+      const before = internals(viewer).view.yaw;
+      viewer.setView({ yaw: 0.1 });
+      tick(viewer);
+      expect(Math.abs(internals(viewer).view.yaw - before)).toBeLessThan(0.1);
+      expect(viewer.getView().yaw).toBeCloseTo(0.1, 10);
+    });
+
+    it('takes the short way across the seam', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: Math.PI - 0.1 },
+      });
+      viewer.setView({ yaw: -Math.PI + 0.1 });
+      // 0.2 rad forward across ±π, not 2π − 0.2 back.
+      expect(internals(viewer).target.yaw).toBeCloseTo(Math.PI + 0.1, 10);
+      expect(viewer.getView().yaw).toBeCloseTo(-Math.PI + 0.1, 10);
+    });
+
+    it('keeps yaw bounded when dragging round and round', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { yaw: 2 * Math.PI - 0.01 },
+      });
+      viewer.panByPixels(-100, 0); // drag left → look right, past 2π
+      expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(2 * Math.PI);
+      expect(internals(viewer).target.yaw).toBe(internals(viewer).view.yaw);
+    });
+  });
 });
