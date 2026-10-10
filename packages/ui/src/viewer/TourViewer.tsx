@@ -1,5 +1,4 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import type { Tour } from '@panote/viewer/ui';
 import { prefetchPano } from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
@@ -11,7 +10,7 @@ import { FloorLinks } from './FloorLinks.js';
 import { HotspotMarkers } from './HotspotMarkers.js';
 import { HotspotPanel } from './HotspotPanel.js';
 import { SceneMap } from './SceneMap.js';
-import type { ViewerHotspot, ViewerLinkArrow } from './types.js';
+import type { ViewerHotspot, ViewerLinkArrow, ViewerTourGraph } from './types.js';
 import { ViewerControls } from './ViewerControls.js';
 
 /**
@@ -19,7 +18,7 @@ import { ViewerControls } from './ViewerControls.js';
  * the chrome reads, so `toViewerTour(...)` output can be passed as is.
  */
 export interface TourViewerData {
-  tour: Tour | null;
+  tour: ViewerTourGraph | null;
   hotspots: Record<string, Array<{ source: Hotspot }>>;
   links: Record<string, Array<{ to: string; yaw: number; label?: string }>>;
   north: Record<string, number>;
