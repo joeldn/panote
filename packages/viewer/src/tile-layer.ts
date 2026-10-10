@@ -1,5 +1,6 @@
 import { FACES, faceUVToDir, tileCornersUV, tilesPerEdge, type Face } from './cube.js';
-import { selectLevel } from './lod.js';
+import { LOD_TOLERANCE, selectLevel } from './lod.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
 import { selectEvictions } from './tile-cache.js';
 import { maxTilesForBudget } from './texture-budget.js';
 import { RADIUS, buildTileGeometry } from './tile-geometry.js';
@@ -18,7 +19,32 @@ import {
 } from './render/gl-renderer.js';
 import type { CubeTileSource } from './source.js';
 import { loadTileImage, releaseImage, type TileNetwork } from './tile-fetch.js';
-import { TileRetryBudget, classifyFailure, isAbortError, type FailureKind } from './tile-retry.js';
+import {
+  TileRetryBudget,
+  classifyFailure,
+  isAbortError,
+  type FailureKind,
+  type TileRetryOptions,
+} from './tile-retry.js';
+
+/** How a layer loads and keeps tiles; the viewer fills these from ViewerOptions. */
+export interface TileLayerOptions {
+  /** Resident tile textures, MB of VRAM. */
+  textureBudgetMB: number;
+  /** Most requests in flight. Default `network.maxConcurrent`. */
+  maxConcurrent?: number;
+  /** Fewest tiles kept resident. Default `memory.minResidentTiles`. */
+  minResidentTiles?: number;
+  /** Added to the LOD tolerance; positive picks coarser levels. Default `rendering.lodBias`. */
+  lodBias?: number;
+  /** Per-tile retry budget. Default `network.retry`. */
+  retry?: TileRetryOptions;
+  network?: TileNetwork;
+  /** Test seam: the clock retry cooldowns and the wake timer run on. */
+  now?: () => number;
+  /** Test seam: the wait between base-tile attempts. */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+}
 
 /**
  * Why a single `ensureTile()` call ended. The per-frame path ignores this
@@ -246,6 +272,11 @@ export class TileLayer {
   private clock = 0;
   private maxTiles: number;
   private maxConcurrent: number;
+  // The tolerance selectLevel gets: the viewer's own plus the host's lodBias.
+  private lodTolerance: number;
+  private now: () => number;
+  private sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+  private network: TileNetwork;
   private disposed = false;
   // Set while the viewer is off screen: no new requests start.
   private paused = false;
@@ -289,17 +320,22 @@ export class TileLayer {
     private renderer: GLRenderer,
     /** Read by the viewer too: the source this layer draws. */
     readonly source: CubeTileSource,
-    textureBudgetMB: number,
     private onInvalidate: () => void,
-    maxConcurrent = 8,
-    private now: () => number = () => performance.now(),
-    private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
-    private network: TileNetwork = {},
+    opts: TileLayerOptions,
   ) {
-    this.maxTiles = maxTilesForBudget(textureBudgetMB, source.tileSize);
-    this.maxConcurrent = maxConcurrent;
+    const d = VIEWER_DEFAULTS;
+    this.maxTiles = maxTilesForBudget(
+      opts.textureBudgetMB,
+      source.tileSize,
+      opts.minResidentTiles ?? d.memory.minResidentTiles,
+    );
+    this.maxConcurrent = opts.maxConcurrent ?? d.network.maxConcurrent;
+    this.lodTolerance = LOD_TOLERANCE + (opts.lodBias ?? d.rendering.lodBias);
+    this.now = opts.now ?? (() => performance.now());
+    this.sleep = opts.sleep ?? defaultSleep;
+    this.network = opts.network ?? {};
     // Cooldowns and the wake timer share one clock (faked together in tests).
-    this.retry = new TileRetryBudget(this.now);
+    this.retry = new TileRetryBudget(this.now, opts.retry ?? d.network.retry);
     this.visible = new Int32Array(FACES.length * tilesPerEdge(source.maxLevel) ** 2);
     this.levelPrefix = Array.from({ length: source.maxLevel + 1 }, (_, l) => `${l}/`);
   }
@@ -380,7 +416,13 @@ export class TileLayer {
   ): void {
     if (this.disposed) return;
     this.clock++;
-    const level = selectLevel(fovDeg, viewportHeight, this.source.tileSize, this.source.maxLevel);
+    const level = selectLevel(
+      fovDeg,
+      viewportHeight,
+      this.source.tileSize,
+      this.source.maxLevel,
+      this.lodTolerance,
+    );
     if (level !== this.visibleLevel || !sameMatrix(viewProj, this.lastViewProj)) {
       this.lastViewProj.set(viewProj);
       frustumFromViewProj(viewProj, this.frustum);

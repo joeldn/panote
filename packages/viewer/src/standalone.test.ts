@@ -282,8 +282,10 @@ describe('prefetch', () => {
     const resolveSource = vi.fn<SourceResolver>(() => Promise.resolve(source));
     const viewer = new PanoViewer(container(), {
       resolveSource,
-      fetch: net as unknown as typeof fetch,
-      requestInit: { mode: 'cors', credentials: 'same-origin' },
+      network: {
+        fetch: net as unknown as typeof fetch,
+        requestInit: { mode: 'cors', credentials: 'same-origin' },
+      },
     });
     return { viewer, net, resolveSource, source };
   }

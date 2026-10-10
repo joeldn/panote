@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { panoteViewerPreset } from './panote-viewer.js';
 import { PanoStage, type StagePreview } from './PanoStage.js';
 import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
@@ -125,21 +126,23 @@ describe('PanoStage', () => {
         view={{ yaw: 1, fov: 60 }}
         north={0.5}
         autoRotate
-        options={{ maxFov: 90 }}
+        options={{ camera: { maxFov: 90 }, autoRotate: { speed: 0.1 } }}
         createViewer={f.createViewer}
       />,
     );
     expect(f.createViewer).toHaveBeenCalledTimes(1);
     const v = f.last();
     expect(v.container.className).toBe('pn-stage__viewer');
+    // panote's preset, with the options merged over it and the props over those.
+    const { resolveSource, ...preset } = panoteViewerPreset({ baseUrl: 'https://cdn.test/tiles/' });
     expect(v.options).toEqual({
-      maxFov: 90,
+      ...preset,
       resolveSource: expect.any(Function),
-      requestInit: { mode: 'cors', credentials: 'same-origin' },
-      autoRotate: true,
+      camera: { ...preset.camera, maxFov: 90, north: 0.5 },
+      autoRotate: { enabled: true, speed: 0.1, idleMs: 3000 },
       initialView: { yaw: 1, fov: 60 },
-      north: 0.5,
     });
+    expect(resolveSource).toEqual(expect.any(Function));
     expect(v.load).toHaveBeenCalledWith('hall', { view: { yaw: 1, fov: 60 } });
     expect(v.setNorth).toHaveBeenLastCalledWith(0.5);
     expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);

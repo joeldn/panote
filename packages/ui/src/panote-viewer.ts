@@ -64,13 +64,53 @@ export interface PanoteViewerPresetOptions {
 }
 
 /**
- * The viewer options panote needs on top of the viewer's defaults: the
- * manifest resolver and the request init the Worker's preloads match.
+ * Every viewer option panote runs with, each one pinned. The viewer's
+ * generic defaults are mostly the same values today, but pinning them here
+ * means a change to a viewer default can't move panote; a test holds these to
+ * a literal copy. On top of the defaults panote sets the manifest resolver
+ * and the request init the Worker's preloads match.
  */
 export function panoteViewerPreset({ baseUrl }: PanoteViewerPresetOptions): ViewerOptions {
+  const pitchLimit = Math.PI / 2 - 0.001;
   return {
     resolveSource: panoteSourceResolver(baseUrl),
-    requestInit: PANOTE_REQUEST_INIT,
+    camera: {
+      minFov: 15,
+      maxFov: 80,
+      defaultFov: 70,
+      maxHorizontalFov: 100,
+      minPitch: -pitchLimit,
+      maxPitch: pitchLimit,
+      damping: 0.25,
+      momentumFriction: 0.9,
+      north: 0,
+    },
+    interaction: {
+      enabled: true,
+      cursor: true,
+      wheel: 'always',
+      wheelGain: 0.001,
+      pinchGain: 0.01,
+      keyboard: { panStepPx: 40, zoomStep: 0.8 },
+      doubleClickZoom: 0.6,
+      inertia: true,
+    },
+    rendering: {
+      maxPixelRatio: 2,
+      maxPixels: 8_300_000,
+      antialias: false,
+      anisotropy: 'max',
+      background: [0, 0, 0],
+      lodBias: 0,
+    },
+    network: {
+      maxConcurrent: 8,
+      requestInit: PANOTE_REQUEST_INIT,
+      retry: { maxAttempts: 3, baseDelayMs: 1000 },
+    },
+    memory: { textureBudgetMB: 'auto', minResidentTiles: 24 },
+    transition: { durationMs: 400, respectReducedMotion: true },
+    autoRotate: { enabled: false, speed: 0.036, idleMs: 3000 },
   };
 }
 

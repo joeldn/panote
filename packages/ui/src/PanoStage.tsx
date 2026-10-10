@@ -1,4 +1,10 @@
-import { PanoViewer, type PreviewSource, type View, type ViewerOptions } from '@panote/viewer';
+import {
+  mergeViewerOptions,
+  PanoViewer,
+  type PreviewSource,
+  type View,
+  type ViewerOptions,
+} from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { cx } from './cx.js';
@@ -10,13 +16,15 @@ export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => 
 
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
-// The stage sets these itself: the source resolver and request init from
-// panote's preset (the Worker's preloads depend on them), and the camera and
-// auto-rotate from its props.
-export type StageViewerOptions = Omit<
-  ViewerOptions,
-  'resolveSource' | 'fetch' | 'requestInit' | 'initialView' | 'north' | 'autoRotate'
->;
+/**
+ * Viewer options for one stage, deep-merged over `panoteViewerPreset`: set
+ * only what differs, e.g. `{ camera: { maxFov: 90 } }`. The resolver is the
+ * stage's own (from `baseUrl`), and the stage's props win over these:
+ * `view`, `north` and `autoRotate`. Leave
+ * `network.requestInit` alone: the Worker's preloads are only reused by
+ * requests that match them.
+ */
+export type StageViewerOptions = Omit<ViewerOptions, 'resolveSource' | 'initialView'>;
 
 /**
  * A local decode to show for a pano before (or instead of) its tiles; see
@@ -147,7 +155,15 @@ export function PanoStage({
   const [restores, setRestores] = useState(0);
 
   // Latest props for use inside long-lived effects without re-running them.
-  const latest = useRef({ view, north, autoRotate, options, createViewer, transition, preview });
+  const latest = useRef({
+    view,
+    north,
+    autoRotate,
+    options,
+    createViewer,
+    transition,
+    preview,
+  });
   const callbacks = useRef({
     onViewer,
     onSceneChange,
@@ -156,7 +172,15 @@ export function PanoStage({
     onPreviewError,
   });
   useEffect(() => {
-    latest.current = { view, north, autoRotate, options, createViewer, transition, preview };
+    latest.current = {
+      view,
+      north,
+      autoRotate,
+      options,
+      createViewer,
+      transition,
+      preview,
+    };
     callbacks.current = { onViewer, onSceneChange, onHotspotOpen, onLoadError, onPreviewError };
   });
 
@@ -176,13 +200,11 @@ export function PanoStage({
     const host = hostRef.current;
     if (!host) return;
     const l = latest.current;
-    const opts: ViewerOptions = {
-      ...l.options,
-      ...panoteViewerPreset({ baseUrl }),
-      autoRotate: l.autoRotate,
-    };
+    const opts = mergeViewerOptions(panoteViewerPreset({ baseUrl }), l.options ?? {}, {
+      autoRotate: { enabled: l.autoRotate },
+      ...(l.north !== undefined && { camera: { north: l.north } }),
+    });
     if (l.view) opts.initialView = l.view;
-    if (l.north !== undefined) opts.north = l.north;
     const v = l.createViewer(host, opts);
     const onScene = (id: string) => {
       const cur = loaded.current;

@@ -1,3 +1,5 @@
+import { VIEWER_DEFAULTS } from './defaults.js';
+
 /**
  * Tile fetch failure policy, free of any DOM or network dependency so it is
  * unit-testable under plain Node.
@@ -70,9 +72,9 @@ export function classifyFailure(err: unknown): FailureKind {
 }
 
 /** Total attempts allowed per tile per panorama load (1 initial + 2 retries). */
-export const DEFAULT_MAX_ATTEMPTS = 3;
+export const DEFAULT_MAX_ATTEMPTS = VIEWER_DEFAULTS.network.retry.maxAttempts;
 /** First per-tile cooldown; doubles per attempt (1s, then 2s). */
-export const DEFAULT_TILE_DELAY_MS = 1_000;
+export const DEFAULT_TILE_DELAY_MS = VIEWER_DEFAULTS.network.retry.baseDelayMs;
 
 export interface TileRetryOptions {
   maxAttempts?: number;

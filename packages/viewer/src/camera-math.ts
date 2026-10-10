@@ -1,9 +1,14 @@
-const HALF_PI = Math.PI / 2;
+import { VIEWER_DEFAULTS } from './defaults.js';
+
 const TWO_PI = Math.PI * 2;
 
-export function clampPitch(pitch: number): number {
-  const limit = HALF_PI - 0.001;
-  return Math.min(limit, Math.max(-limit, pitch));
+/** `pitch` within [min, max]; the defaults stop just short of straight up and down. */
+export function clampPitch(
+  pitch: number,
+  min: number = VIEWER_DEFAULTS.camera.minPitch,
+  max: number = VIEWER_DEFAULTS.camera.maxPitch,
+): number {
+  return Math.min(max, Math.max(min, pitch));
 }
 
 export function clampFov(fov: number, min: number, max: number): number {

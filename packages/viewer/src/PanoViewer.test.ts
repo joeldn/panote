@@ -377,11 +377,11 @@ describe('PanoViewer', () => {
       // multiplied by the pixel ratio, and it is not clamped to the cap the
       // default is subject to.
       stubDisplay(2);
-      const small = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 64 });
+      const small = new PanoViewer(makeContainer(1422, 800), { memory: { textureBudgetMB: 64 } });
       expect(await loadedMaxTiles(small)).toBe(48);
       small.dispose();
 
-      const large = new PanoViewer(makeContainer(1422, 800), { textureBudgetMB: 512 });
+      const large = new PanoViewer(makeContainer(1422, 800), { memory: { textureBudgetMB: 512 } });
       expect(await loadedMaxTiles(large)).toBe(384);
       large.dispose();
     });
@@ -698,9 +698,8 @@ describe('PanoViewer', () => {
       vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
       const container = makeContainer(400, 800);
       const viewer = new PanoViewer(container, {
-        autoRotate: true,
-        autoRotateSpeed: 1,
-        damping: 1,
+        autoRotate: { enabled: true, speed: 1 },
+        camera: { damping: 1 },
       });
       const io = FakeIntersectionObserver.instances[0]!;
       expect(io.observed).toEqual([container]);
@@ -783,7 +782,7 @@ describe('PanoViewer', () => {
           return 800;
         },
       } as unknown as HTMLElement;
-      const viewer = new PanoViewer(container, { damping: 1 });
+      const viewer = new PanoViewer(container, { camera: { damping: 1 } });
       reads = 0;
       let projected = 0;
       viewer.onRender(() => {
@@ -885,7 +884,9 @@ describe('PanoViewer', () => {
         clientY: 0,
         preventDefault: vi.fn(),
       });
-      const embedded = new PanoViewer(makeContainer(400, 800), { wheel: 'engaged' });
+      const embedded = new PanoViewer(makeContainer(400, 800), {
+        interaction: { wheel: 'engaged' },
+      });
       const scrolls = wheel();
       canvasListener(embedded, 'wheel')(scrolls);
       expect(scrolls.preventDefault).not.toHaveBeenCalled();
@@ -902,16 +903,12 @@ describe('PanoViewer', () => {
 
   describe('compass north offset and heading', () => {
     it('defaults to north=0 and heading tracking the initial yaw', () => {
-      const viewer = new PanoViewer(makeContainer(400, 800), {
-        initialView: { yaw: 0.4 },
-      });
+      const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: 0.4 } });
       expect(viewer.heading()).toBeCloseTo(-0.4, 10);
     });
 
     it('setNorth updates the heading immediately', () => {
-      const viewer = new PanoViewer(makeContainer(400, 800), {
-        initialView: { yaw: 0.4 },
-      });
+      const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: 0.4 } });
       viewer.setNorth(1.2);
       expect(viewer.heading()).toBeCloseTo(0.8, 10);
     });
@@ -940,11 +937,13 @@ describe('PanoViewer', () => {
     }
 
     it('does not rotate when disabled, where the same frames turn an enabled viewer', () => {
-      const off = new PanoViewer(makeContainer(400, 800), { autoRotateSpeed: 1, damping: 1 });
+      const off = new PanoViewer(makeContainer(400, 800), {
+        autoRotate: { speed: 1 },
+        camera: { damping: 1 },
+      });
       const on = new PanoViewer(makeContainer(400, 800), {
-        autoRotate: true,
-        autoRotateSpeed: 1,
-        damping: 1,
+        autoRotate: { enabled: true, speed: 1 },
+        camera: { damping: 1 },
       });
       tick(off); // timing baseline for both
       const offBefore = yawOf(off);
@@ -959,9 +958,8 @@ describe('PanoViewer', () => {
       // damping: 1 snaps view straight to target, so a tick's delta is exactly
       // autoRotateSpeed times the elapsed seconds, with no easing to account for.
       const viewer = new PanoViewer(makeContainer(400, 800), {
-        autoRotate: true,
-        autoRotateSpeed: 1,
-        damping: 1,
+        autoRotate: { enabled: true, speed: 1 },
+        camera: { damping: 1 },
       });
       tick(viewer); // the first frame only sets the timing baseline
       const before = yawOf(viewer);
@@ -972,10 +970,8 @@ describe('PanoViewer', () => {
 
     it('pauses on interaction and resumes only after the idle window elapses', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
-        autoRotate: true,
-        autoRotateSpeed: 1,
-        autoRotateIdleMs: 1000,
-        damping: 1,
+        autoRotate: { enabled: true, speed: 1, idleMs: 1000 },
+        camera: { damping: 1 },
       });
       tick(viewer);
       internals(viewer).stopMomentum(); // stands in for a real interaction's gesture start
@@ -996,10 +992,8 @@ describe('PanoViewer', () => {
 
     it('setAutoRotate(false) cancels a pending resume and stops rotation', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
-        autoRotate: true,
-        autoRotateSpeed: 1,
-        autoRotateIdleMs: 1000,
-        damping: 1,
+        autoRotate: { enabled: true, speed: 1, idleMs: 1000 },
+        camera: { damping: 1 },
       });
       internals(viewer).stopMomentum();
       viewer.setAutoRotate(false);
@@ -1012,9 +1006,8 @@ describe('PanoViewer', () => {
 
     it('setAutoRotate(true) enables rotation immediately, with no idle wait', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
-        autoRotateSpeed: 1,
-        autoRotateIdleMs: 5000, // much longer than the delay used below
-        damping: 1,
+        autoRotate: { speed: 1, idleMs: 5000 }, // idle much longer than the delay used below
+        camera: { damping: 1 },
       });
       viewer.setAutoRotate(true);
       tick(viewer); // establishes the timing baseline
@@ -1030,9 +1023,8 @@ describe('PanoViewer', () => {
       // damp() then eased view.yaw the long way around — almost a full turn.
       const viewer = new PanoViewer(makeContainer(400, 800), {
         initialView: { yaw: Math.PI - 0.05 },
-        autoRotate: true,
-        autoRotateSpeed: 1,
-        damping: 1,
+        autoRotate: { enabled: true, speed: 1 },
+        camera: { damping: 1 },
       });
       tick(viewer);
       let prev = yawOf(viewer);
@@ -1052,9 +1044,8 @@ describe('PanoViewer', () => {
       const start = Math.PI * 1.9; // just under the 2π shift threshold
       const viewer = new PanoViewer(makeContainer(400, 800), {
         initialView: { yaw: start },
-        autoRotate: true,
-        autoRotateSpeed: 5, // one clamped 100ms tick crosses the threshold
-        damping: 1,
+        autoRotate: { enabled: true, speed: 5 }, // one clamped 100ms tick crosses the threshold
+        camera: { damping: 1 },
       });
       tick(viewer);
       vi.advanceTimersByTime(200); // clamped to the 100ms stall cap => 0.5 rad
@@ -1156,7 +1147,7 @@ describe('PanoViewer', () => {
     });
 
     it('works with controls, project, directionAtPixel and north as on tiles', () => {
-      const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
+      const viewer = new PanoViewer(makeContainer(400, 800), { camera: { damping: 1 } });
       viewer.showPreview('pano-a', source());
       viewer.setView({ yaw: 0.5, pitch: 0.2 });
       viewer.setNorth(0.5);
@@ -1541,7 +1532,7 @@ describe('PanoViewer', () => {
     it('clamps initialView pitch and fov', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
         initialView: { pitch: 3, fov: 500 },
-        maxFov: 80,
+        camera: { maxFov: 80 },
       });
       const view = viewer.getView();
       expect(view.pitch).toBeLessThan(Math.PI / 2);
@@ -1744,7 +1735,8 @@ describe('PanoViewer', () => {
 
     describe('asks for exactly one frame, from idle, when', () => {
       type Row = [string, () => Promise<{ viewer: PanoViewer | undefined; fire: () => unknown }>];
-      const idleViewer = (options = {}) => new PanoViewer(makeContainer(400, 800), options);
+      const idleViewer = (options: ViewerOptions = {}) =>
+        new PanoViewer(makeContainer(400, 800), options);
       const rows: Row[] = [
         [
           'a held tile lands',
@@ -1792,7 +1784,7 @@ describe('PanoViewer', () => {
             vi.useFakeTimers();
             vi.stubGlobal('requestAnimationFrame', raf.request);
             vi.stubGlobal('cancelAnimationFrame', raf.cancel);
-            const viewer = idleViewer({ autoRotate: true, autoRotateIdleMs: 1000 });
+            const viewer = idleViewer({ autoRotate: { enabled: true, idleMs: 1000 } });
             internals(viewer).stopMomentum(); // an interaction pauses it
             return {
               viewer,
@@ -1883,8 +1875,7 @@ describe('PanoViewer', () => {
 
     it('lets the loop stop when auto-rotate is on at zero speed', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), {
-        autoRotate: true,
-        autoRotateSpeed: 0,
+        autoRotate: { enabled: true, speed: 0 },
       });
       expect(runUntilIdle()).toBeLessThan(10);
       expect(raf.pending).toBe(0);
@@ -1930,8 +1921,7 @@ describe('PanoViewer', () => {
       it('never aborts the base fetches of a slow load, however many frames run', async () => {
         const net = stubNet({ holdTile: (url) => url.includes('/0/') });
         const viewer = new PanoViewer(makeContainer(400, 800), {
-          autoRotate: true,
-          autoRotateSpeed: 1,
+          autoRotate: { enabled: true, speed: 1 },
         });
         const loading = viewer.load('pano-a', { view: { yaw: 2 } });
         await flush();
@@ -1978,7 +1968,7 @@ describe('PanoViewer', () => {
       it('keeps drawing frames until a queue of unwanted tiles is dropped', async () => {
         // Level 2 only: level-1 tiles are the parents, wanted from any angle.
         const net = stubNet({ holdTile: (url) => url.includes('/2/') });
-        const viewer = new PanoViewer(makeContainer(400, 800), { damping: 1 });
+        const viewer = new PanoViewer(makeContainer(400, 800), { camera: { damping: 1 } });
         await viewer.load('pano-a');
         runUntilIdle();
         const base = uploads(viewer);
@@ -2049,7 +2039,7 @@ describe('PanoViewer', () => {
     it('hands over to a newer transitionTo: the older one applies nothing and loses its overlay', async () => {
       const net = stubNet({ holdTile: (url) => /\/pano-[ab]\//.test(url) });
       const { container, overlays } = stubOverlayDom();
-      const viewer = new PanoViewer(container, { transitionMs: 0 });
+      const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
       await viewer.load('pano-0');
       tick(viewer);
 
@@ -2073,7 +2063,7 @@ describe('PanoViewer', () => {
     it('drops the overlay at once when disposed during the fade', async () => {
       stubNet();
       const { container, overlays } = stubOverlayDom();
-      const viewer = new PanoViewer(container, { transitionMs: 30 });
+      const viewer = new PanoViewer(container, { transition: { durationMs: 30 } });
       await viewer.load('pano-0');
       tick(viewer);
 
@@ -2095,7 +2085,7 @@ describe('PanoViewer', () => {
     it('runs an A→B→C chain of transitions to C alone', async () => {
       const net = stubNet({ holdTile: (url) => /\/pano-[abc]\//.test(url) });
       const { container, overlays } = stubOverlayDom();
-      const viewer = new PanoViewer(container, { transitionMs: 0 });
+      const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
       await viewer.load('pano-0');
       tick(viewer);
       const sceneChange = vi.fn();
@@ -2310,8 +2300,7 @@ describe('PanoViewer', () => {
 
         it('follows the tiles alone, settled while auto-rotate turns', () => {
           const viewer = new PanoViewer(makeContainer(400, 800), {
-            autoRotate: true,
-            autoRotateSpeed: 1,
+            autoRotate: { enabled: true, speed: 1 },
           });
           let pending = true;
           internals(viewer).layer = {
@@ -2439,7 +2428,7 @@ describe('PanoViewer', () => {
 
         it('passes maxPixels to the renderer, 8.3 Mpx unless set', () => {
           expect(fakeOf(new PanoViewer(makeContainer(400, 800))).opts.maxPixels).toBe(8_300_000);
-          const viewer = new PanoViewer(makeContainer(400, 800), { maxPixels: 1e6 });
+          const viewer = new PanoViewer(makeContainer(400, 800), { rendering: { maxPixels: 1e6 } });
           expect(fakeOf(viewer).opts.maxPixels).toBe(1e6);
         });
       });
@@ -2460,7 +2449,7 @@ describe('PanoViewer', () => {
       it('fades a GPU copy of the frame, not an encoded image', async () => {
         stubNet();
         const { container, overlays } = stubOverlayDom();
-        const viewer = new PanoViewer(container, { transitionMs: 0 });
+        const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
         await viewer.load('pano-0');
         tick(viewer);
         const fake = fakeOf(viewer);
@@ -2477,6 +2466,78 @@ describe('PanoViewer', () => {
           (overlay as { width?: number }).width,
           (overlay as { height?: number }).height,
         ]).toEqual([0, 0]);
+        viewer.dispose();
+      });
+    });
+
+    describe('options', () => {
+      type Canvas = { addEventListener: ReturnType<typeof vi.fn> };
+      const canvasOf = (viewer: PanoViewer) =>
+        internals(viewer).renderer.canvas as unknown as Canvas;
+      const rendererOpts = (viewer: PanoViewer) =>
+        (internals(viewer).renderer as unknown as { opts: Record<string, unknown> }).opts;
+
+      it('takes no input with interaction.enabled off', () => {
+        const viewer = new PanoViewer(makeContainer(400, 800), { interaction: { enabled: false } });
+        expect(internals(viewer).controls).toBeUndefined();
+        expect(canvasOf(viewer).addEventListener).not.toHaveBeenCalledWith(
+          'pointerdown',
+          expect.any(Function),
+        );
+        viewer.dispose();
+      });
+
+      it('hands the interaction options to its controls', () => {
+        const viewer = new PanoViewer(makeContainer(400, 800), { interaction: { wheel: 'off' } });
+        expect(() => canvasListener(viewer, 'wheel')).toThrow('no wheel listener');
+        viewer.dispose();
+      });
+
+      it('starts at camera.defaultFov, and keeps pitch inside camera.minPitch/maxPitch', () => {
+        const viewer = new PanoViewer(makeContainer(400, 800), {
+          camera: { defaultFov: 50, minPitch: -0.5, maxPitch: 0.25 },
+        });
+        expect(viewer.getView().fov).toBe(50);
+        viewer.setView({ pitch: 1 });
+        expect(viewer.getView().pitch).toBe(0.25);
+        viewer.setView({ pitch: -1 });
+        expect(viewer.getView().pitch).toBe(-0.5);
+        viewer.dispose();
+      });
+
+      it('hands the rendering options to the renderer', () => {
+        const viewer = new PanoViewer(makeContainer(400, 800), {
+          rendering: { anisotropy: 4, background: [0.05, 0.05, 0.04], antialias: true },
+        });
+        expect(rendererOpts(viewer)).toMatchObject({
+          anisotropy: 4,
+          background: [0.05, 0.05, 0.04],
+          antialias: true,
+          maxPixelRatio: 2,
+          maxPixels: 8_300_000,
+        });
+        viewer.dispose();
+      });
+
+      it('builds its layers with rendering.lodBias on top of the tolerance', async () => {
+        stubNet();
+        const viewer = new PanoViewer(makeContainer(400, 800), { rendering: { lodBias: 0.5 } });
+        await viewer.load('pano-a');
+        const layer = internals(viewer).layer as { lodTolerance: number };
+        expect(layer.lodTolerance).toBeCloseTo(0.7, 10);
+        viewer.dispose();
+      });
+
+      it('crossfades for a reduced-motion visitor with transition.respectReducedMotion off', async () => {
+        stubNet();
+        const { container } = stubOverlayDom();
+        const viewer = new PanoViewer(container, {
+          transition: { durationMs: 0, respectReducedMotion: false },
+        });
+        await viewer.load('pano-0');
+        tick(viewer);
+        await finish(viewer.transitionTo('pano-a'));
+        expect(window.matchMedia).not.toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
         viewer.dispose();
       });
     });

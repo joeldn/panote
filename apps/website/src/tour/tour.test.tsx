@@ -310,7 +310,7 @@ describe('/s/:slug', () => {
     expect(screen.getByRole('toolbar').className).toContain('pn-controls--top');
     expect(screen.queryByRole('img', { name: 'Compass' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Map' })).toBeNull();
-    expect(lastViewer().options.autoRotate).toBe(true);
+    expect(lastViewer().options.autoRotate).toMatchObject({ enabled: true });
   });
 
   it('shows the compass and scene map by default', async () => {

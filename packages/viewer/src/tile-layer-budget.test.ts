@@ -136,15 +136,11 @@ describe('texture budget while panning', () => {
    * tiles are on screen, and evicting one is the refetch loop.
    */
   async function sweep(budgetMB: number, viewportHeight: number): Promise<SweepResult> {
-    const layer = new TileLayer(
-      renderer as unknown as GLRenderer,
-      deepSource(),
-      budgetMB,
-      () => {},
-      8,
-      () => 0,
-      () => Promise.resolve(),
-    );
+    const layer = new TileLayer(renderer as unknown as GLRenderer, deepSource(), () => {}, {
+      textureBudgetMB: budgetMB,
+      now: () => 0,
+      sleep: () => Promise.resolve(),
+    });
     await layer.loadBase();
     const baseHandles = new Set(renderer.live);
     expect(baseHandles.size).toBe(FACES.length);
@@ -200,15 +196,11 @@ describe('texture budget while panning', () => {
     // 1 MB is the 24-tile floor, against more on screen at level 3. Evicting by
     // overflow alone would drop visible tiles, refetch them next frame and
     // drop them again, forever, with the camera standing still.
-    const layer = new TileLayer(
-      renderer as unknown as GLRenderer,
-      deepSource(),
-      1,
-      () => {},
-      8,
-      () => 0,
-      () => Promise.resolve(),
-    );
+    const layer = new TileLayer(renderer as unknown as GLRenderer, deepSource(), () => {}, {
+      textureBudgetMB: 1,
+      now: () => 0,
+      sleep: () => Promise.resolve(),
+    });
     await layer.loadBase();
     const view = { yaw: 0, pitch: 0, fov: REQUESTED_FOV_DEG };
     const still = (): void =>
