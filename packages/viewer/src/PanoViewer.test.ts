@@ -1209,6 +1209,18 @@ describe('PanoViewer', () => {
       expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
     });
 
+    it('clears momentum when a pano swaps in and when a preview goes up', async () => {
+      stubNet();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.flick(100, 50);
+      await viewer.load('pano-a');
+      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+      viewer.flick(100, 50);
+      viewer.showPreview('pano-b', source());
+      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+      viewer.dispose();
+    });
+
     it('does not settle while momentum is left, however small', () => {
       const viewer = new PanoViewer(makeContainer(400, 800));
       internals(viewer).momentum.yaw = 2e-5;
@@ -1290,7 +1302,7 @@ describe('PanoViewer', () => {
     });
 
     it('never applies a superseded transition view, and drops its overlay at once', async () => {
-      const net = stubNet({ holdTile: (url) => url.includes('/pano-a/') });
+      const net = stubNet({ holdTile: (url) => /\/pano-[ab]\//.test(url) });
       const { container, overlays } = stubOverlayDom();
       const viewer = new PanoViewer(container);
       await viewer.load('pano-0');
@@ -1301,12 +1313,16 @@ describe('PanoViewer', () => {
       expect(overlays).toHaveLength(1);
       expect(overlays[0]!.remove).not.toHaveBeenCalled();
 
-      await viewer.load('pano-b', { view: { yaw: -1 } });
+      // Gone as soon as B starts, not when A's load finally gives up.
+      const b = viewer.load('pano-b', { view: { yaw: -1 } });
       expect(overlays[0]!.remove).toHaveBeenCalled();
-      expect(viewer.getView().yaw).toBe(-1);
+
+      // A settles first, while B is still loading: the camera stays put.
+      await a;
+      expect(viewer.getView().yaw).toBe(0);
 
       net.release();
-      await a;
+      await expect(b).resolves.toBe(true);
       expect(viewer.getView().yaw).toBe(-1);
       viewer.dispose();
     });
