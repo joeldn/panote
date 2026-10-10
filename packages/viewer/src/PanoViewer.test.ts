@@ -1720,10 +1720,160 @@ describe('PanoViewer', () => {
       expect(after).toHaveBeenCalledTimes(1);
     });
 
+    describe('asks for exactly one frame, from idle, when', () => {
+      type Row = [string, () => Promise<{ viewer?: PanoViewer; fire: () => unknown }>];
+      const idleViewer = (options = {}) => new PanoViewer(makeContainer(400, 800), options);
+      const rows: Row[] = [
+        [
+          'a held tile lands',
+          async () => {
+            const net = stubNet({ holdTile: (url) => !url.includes('/0/') });
+            const viewer = idleViewer();
+            await viewer.load('pano-a');
+            return {
+              viewer,
+              fire: async () => {
+                runUntilIdle();
+                net.release();
+                await flush();
+              },
+            };
+          },
+        ],
+        [
+          'the ResizeObserver reports a new size',
+          async () => {
+            vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+            const viewer = idleViewer();
+            return { viewer, fire: () => FakeResizeObserver.instances[0]!.trigger(500, 500) };
+          },
+        ],
+        [
+          'the window resizes (no ResizeObserver)',
+          async () => {
+            const viewer = idleViewer();
+            const onResize = vi
+              .mocked(window.addEventListener)
+              .mock.calls.find((c) => c[0] === 'resize')![1] as () => void;
+            return { viewer, fire: onResize };
+          },
+        ],
+        [
+          'a load swaps in',
+          async () => {
+            // The base resolves without uploading (whose own invalidations
+            // would hide the swap's), and the primed detail tiles never land.
+            stubNet({ holdTile: () => true });
+            vi.spyOn(TileLayer.prototype, 'loadBase').mockResolvedValue();
+            const viewer = idleViewer();
+            return {
+              viewer,
+              fire: async () => {
+                runUntilIdle();
+                await expect(viewer.load('pano-a')).resolves.toBe(true);
+              },
+            };
+          },
+        ],
+        [
+          'a preview goes up',
+          async () => {
+            const viewer = idleViewer();
+            return { viewer, fire: () => viewer.showPreview('pano-a', source()) };
+          },
+        ],
+        [
+          'auto-rotate resumes after the idle wait',
+          async () => {
+            vi.useFakeTimers();
+            vi.stubGlobal('requestAnimationFrame', raf.request);
+            vi.stubGlobal('cancelAnimationFrame', raf.cancel);
+            const viewer = idleViewer({ autoRotate: true, autoRotateIdleMs: 1000 });
+            internals(viewer).stopMomentum(); // an interaction pauses it
+            return {
+              viewer,
+              fire: () => {
+                runUntilIdle();
+                vi.advanceTimersByTime(1000);
+              },
+            };
+          },
+        ],
+        [
+          'auto-rotate is switched on',
+          async () => {
+            const viewer = idleViewer();
+            return { viewer, fire: () => viewer.setAutoRotate(true) };
+          },
+        ],
+        [
+          'a render callback subscribes',
+          async () => {
+            const viewer = idleViewer();
+            return { viewer, fire: () => viewer.onRender(() => {}) };
+          },
+        ],
+        [
+          'the viewer is constructed',
+          async () => {
+            let viewer: PanoViewer | undefined;
+            return {
+              get viewer() {
+                return viewer;
+              },
+              fire: () => {
+                viewer = idleViewer();
+              },
+            };
+          },
+        ],
+      ];
+
+      afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      });
+
+      it.each(rows)('%s', async (_name, setup) => {
+        const row = await setup();
+        runUntilIdle();
+        expect(raf.pending).toBe(0);
+        await row.fire();
+        expect(raf.pending).toBe(1);
+        const viewer = row.viewer!;
+        const render = internals(viewer).renderer.render;
+        render.mockClear();
+        raf.step();
+        expect(render).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+    });
+
     it('listens to window resize only without a ResizeObserver', () => {
       vi.stubGlobal('ResizeObserver', FakeResizeObserver);
       const viewer = new PanoViewer(makeContainer(400, 800));
       expect(window.addEventListener).not.toHaveBeenCalledWith('resize', expect.anything());
+      viewer.dispose();
+    });
+
+    it('steps one nominal 60 Hz frame for the first frame after an idle spell', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      runUntilIdle();
+      viewer.setView({ yaw: 1 });
+      raf.step(raf.now + 10_000);
+      // damping 0.25 per 16.67 ms: one quarter of the way.
+      expect(internals(viewer).view.yaw).toBeCloseTo(0.25, 10);
+      viewer.dispose();
+    });
+
+    it('caps a stalled frame at 100 ms of motion', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      runUntilIdle();
+      viewer.setView({ yaw: 1 });
+      raf.step(); // running now, at 0.25
+      raf.step(raf.now + 5000);
+      // 100 ms is six 60 Hz frames of damping 0.25.
+      expect(internals(viewer).view.yaw).toBeCloseTo(1 - 0.75 * 0.75 ** 6, 10);
       viewer.dispose();
     });
 
