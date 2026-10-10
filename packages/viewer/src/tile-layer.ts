@@ -113,6 +113,77 @@ function tileKey(level: number, face: string, x: number, y: number): string {
   return `${level}/${face}/${x}-${y}`;
 }
 
+function sameMatrix(a: Mat4, b: Float32Array): boolean {
+  for (let k = 0; k < 16; k++) if (a[k] !== b[k]) return false;
+  return true;
+}
+
+/** Floats per tile in a LevelTable: bounding sphere, then unit centre direction. */
+const STRIDE = 7;
+/** Bounding spheres are padded slightly so a tile at the frustum edge is kept. */
+const CULL_PAD = 1.05;
+
+/**
+ * Everything update() needs about one pyramid level, computed once per layer
+ * the first time that level is wanted, so the per-frame cull is plain
+ * arithmetic. Tile `i = (faceIndex * g + y) * g + x`.
+ */
+interface LevelTable {
+  /** Tiles per face edge. */
+  g: number;
+  /** Per tile: sphere centre xyz, padded radius, then the unit direction
+   *  through the tile's UV centre (the load priority's axis). */
+  data: Float32Array;
+  /** Per tile cache key, so a frame builds no strings. */
+  keys: string[];
+}
+
+function buildLevelTable(level: number): LevelTable {
+  const g = tilesPerEdge(level);
+  const count = FACES.length * g * g;
+  const data = new Float32Array(count * STRIDE);
+  const keys = new Array<string>(count);
+  for (let f = 0; f < FACES.length; f++) {
+    const face = FACES[f]!;
+    for (let y = 0; y < g; y++) {
+      for (let x = 0; x < g; x++) {
+        const i = (f * g + y) * g + x;
+        // Corners on the flat cube face, where the quad is drawn
+        // (tile-geometry.ts), not on the sphere.
+        const corners = tileCornersUV(level, x, y);
+        const p = corners.map((c) => {
+          const d = faceUVToDir(face, c.u, c.v);
+          return { x: d.x * RADIUS, y: d.y * RADIUS, z: d.z * RADIUS };
+        });
+        const cx = (p[0]!.x + p[1]!.x + p[2]!.x + p[3]!.x) / 4;
+        const cy = (p[0]!.y + p[1]!.y + p[2]!.y + p[3]!.y) / 4;
+        const cz = (p[0]!.z + p[1]!.z + p[2]!.z + p[3]!.z) / 4;
+        let r = 0;
+        for (const q of p) r = Math.max(r, Math.hypot(q.x - cx, q.y - cy, q.z - cz));
+        const md = faceUVToDir(
+          face,
+          (corners[0].u + corners[1].u) / 2,
+          (corners[0].v + corners[2].v) / 2,
+        );
+        const mlen = Math.hypot(md.x, md.y, md.z) || 1;
+        const o = i * STRIDE;
+        data[o] = cx;
+        data[o + 1] = cy;
+        data[o + 2] = cz;
+        data[o + 3] = r * CULL_PAD;
+        data[o + 4] = md.x / mlen;
+        data[o + 5] = md.y / mlen;
+        data[o + 6] = md.z / mlen;
+        keys[i] = tileKey(level, face, x, y);
+      }
+    }
+  }
+  return { g, data, keys };
+}
+
+/** Candidate order: nearest the view centre first. */
+const byPriority = (a: Candidate, b: Candidate): number => a.priority - b.priority;
+
 export class TileLayer {
   private cache = new Map<string, TileEntry>();
   private inflight = new Map<string, AbortController>();
@@ -141,15 +212,20 @@ export class TileLayer {
   private retry: TileRetryBudget;
 
   // Reusable scratch buffers — no per-frame allocation.
-  private frustum: Frustum | null = null;
+  private frustum: Frustum = new Float32Array(24);
+  private sphere = { cx: 0, cy: 0, cz: 0, r: 0 };
   private desired = new Set<string>();
   private candidates: Candidate[] = [];
   private _drawList: DrawItem[] = [];
-  // Written by tileVisible: unit direction through the tile's UV centre, reused
-  // by update() for the load-priority dot product (avoids recomputing corners).
-  private midDirX = 0;
-  private midDirY = 0;
-  private midDirZ = 0;
+  // Built lazily per level; see LevelTable.
+  private levels: (LevelTable | undefined)[] = [];
+  // Tile indices at `visibleLevel` that passed the cull, `visibleCount` long.
+  private visible: Int32Array;
+  private visibleCount = 0;
+  private visibleLevel = -1;
+  // The view the cull last ran for. An unchanged view and level reuse the
+  // visible set: a tile landing asks for a frame but moves nothing.
+  private lastViewProj = new Float32Array(16);
 
   constructor(
     private renderer: GLRenderer,
@@ -165,6 +241,7 @@ export class TileLayer {
     this.maxConcurrent = maxConcurrent;
     // Cooldowns and the wake timer share one clock (faked together in tests).
     this.retry = new TileRetryBudget(this.now);
+    this.visible = new Int32Array(FACES.length * tilesPerEdge(manifest.maxLevel) ** 2);
   }
 
   /**
@@ -242,43 +319,45 @@ export class TileLayer {
       this.manifest.tileSize,
       this.manifest.maxLevel,
     );
-    this.frustum = frustumFromViewProj(viewProj);
+    if (level !== this.visibleLevel || !sameMatrix(viewProj, this.lastViewProj)) {
+      this.lastViewProj.set(viewProj);
+      frustumFromViewProj(viewProj, this.frustum);
+      this.cull(level);
+      this.desired.clear();
+      const { keys } = this.table(level);
+      for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
+    }
 
-    this.desired.clear();
+    // The candidates are rebuilt even for a still view: a tile that landed,
+    // failed or finished its cooldown since the last frame changes them.
     this.candidates.length = 0;
     // Soonest a wanted tile that is cooling down after a failure may go again.
     let nextRetryMs = Infinity;
-
-    for (const face of FACES) {
-      const g = tilesPerEdge(level);
-      for (let y = 0; y < g; y++) {
-        for (let x = 0; x < g; x++) {
-          if (this.tileVisible(face as Face, level, x, y)) {
-            const key = tileKey(level, face, x, y);
-            this.desired.add(key);
-            const entry = this.cache.get(key);
-            if (entry) {
-              // Cached and still wanted — refresh LRU stamp so eviction reflects
-              // actual visibility, not upload/insertion order.
-              entry.lastUsed = this.clock;
-            } else if (!this.inflight.has(key) && this.retry.eligible(key)) {
-              // tileVisible wrote the unit centre direction into midDir* — reuse
-              // it for the load priority (smaller = closer to camera centre).
-              const priority =
-                1 - (this.midDirX * fwd.x + this.midDirY * fwd.y + this.midDirZ * fwd.z);
-              this.candidates.push({
-                key,
-                level,
-                face: face as Face,
-                x,
-                y,
-                priority,
-              });
-            } else if (!this.inflight.has(key)) {
-              nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
-            }
-          }
-        }
+    const { g, data, keys } = this.table(level);
+    for (let n = 0; n < this.visibleCount; n++) {
+      const i = this.visible[n]!;
+      const key = keys[i]!;
+      const entry = this.cache.get(key);
+      if (entry) {
+        // Cached and still wanted — refresh LRU stamp so eviction reflects
+        // actual visibility, not upload/insertion order.
+        entry.lastUsed = this.clock;
+      } else if (!this.inflight.has(key) && this.retry.eligible(key)) {
+        const o = i * STRIDE;
+        // Smaller = closer to the view centre.
+        const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
+        const f = Math.floor(i / (g * g));
+        const rest = i - f * g * g;
+        this.candidates.push({
+          key,
+          level,
+          face: FACES[f]!,
+          x: rest % g,
+          y: Math.floor(rest / g),
+          priority,
+        });
+      } else if (!this.inflight.has(key)) {
+        nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
       }
     }
 
@@ -294,7 +373,7 @@ export class TileLayer {
     }
 
     // Sort candidates by priority ascending (nearest-to-centre first).
-    this.candidates.sort((a, b) => a.priority - b.priority);
+    this.candidates.sort(byPriority);
     this.queue = this.candidates;
     this.queueHead = 0;
 
@@ -365,48 +444,47 @@ export class TileLayer {
     }, delay);
   }
 
-  private tileVisible(face: Face, level: number, x: number, y: number): boolean {
-    // Cull against the flat-quad bounds (padded slightly). tileCornersUV returns
-    // [TL, TR, BL, BR]. Also derive the UV-centre unit direction into midDir*
-    // scratch for update()'s load priority. Scalar locals only — no per-call
-    // object/array allocation.
-    const corners = tileCornersUV(level, x, y);
-    // UV-centre direction (matches the former faceUVToDir(uMid, vMid)).
-    const uMid = (corners[0]!.u + corners[1]!.u) / 2;
-    const vMid = (corners[0]!.v + corners[2]!.v) / 2;
-    const md = faceUVToDir(face, uMid, vMid);
-    const mlen = Math.hypot(md.x, md.y, md.z) || 1;
-    this.midDirX = md.x / mlen;
-    this.midDirY = md.y / mlen;
-    this.midDirZ = md.z / mlen;
+  private table(level: number): LevelTable {
+    let t = this.levels[level];
+    if (!t) {
+      t = buildLevelTable(level);
+      this.levels[level] = t;
+    }
+    return t;
+  }
 
-    if (!this.frustum) return true;
+  /**
+   * Fill `visible` with the tiles at `level` whose padded bounding sphere
+   * meets the frustum. Descends from level 0 and skips a subtree whose parent
+   * is outside: a child's quad lies inside its parent's, so its padded sphere
+   * lies inside the parent's and fails the same plane. Same result as testing
+   * every tile, at O(visible × level) instead of O(4^level).
+   */
+  private cull(level: number): void {
+    this.visibleCount = 0;
+    this.visibleLevel = level;
+    for (let f = 0; f < FACES.length; f++) this.descend(f, 0, 0, 0, level);
+  }
 
-    // Corner positions on the flat cube face, accumulated as scalars.
-    const d0 = faceUVToDir(face, corners[0]!.u, corners[0]!.v);
-    const d1 = faceUVToDir(face, corners[1]!.u, corners[1]!.v);
-    const d2 = faceUVToDir(face, corners[2]!.u, corners[2]!.v);
-    const d3 = faceUVToDir(face, corners[3]!.u, corners[3]!.v);
-    const p0x = d0.x * RADIUS,
-      p0y = d0.y * RADIUS,
-      p0z = d0.z * RADIUS;
-    const p1x = d1.x * RADIUS,
-      p1y = d1.y * RADIUS,
-      p1z = d1.z * RADIUS;
-    const p2x = d2.x * RADIUS,
-      p2y = d2.y * RADIUS,
-      p2z = d2.z * RADIUS;
-    const p3x = d3.x * RADIUS,
-      p3y = d3.y * RADIUS,
-      p3z = d3.z * RADIUS;
-    const cx = (p0x + p1x + p2x + p3x) / 4;
-    const cy = (p0y + p1y + p2y + p3y) / 4;
-    const cz = (p0z + p1z + p2z + p3z) / 4;
-    let r = Math.hypot(p0x - cx, p0y - cy, p0z - cz);
-    r = Math.max(r, Math.hypot(p1x - cx, p1y - cy, p1z - cz));
-    r = Math.max(r, Math.hypot(p2x - cx, p2y - cy, p2z - cz));
-    r = Math.max(r, Math.hypot(p3x - cx, p3y - cy, p3z - cz));
-    return intersectsSphere(this.frustum, { cx, cy, cz, r: r * 1.05 });
+  private descend(f: number, level: number, x: number, y: number, target: number): void {
+    const t = this.table(level);
+    const o = ((f * t.g + y) * t.g + x) * STRIDE;
+    const sphere = this.sphere;
+    sphere.cx = t.data[o]!;
+    sphere.cy = t.data[o + 1]!;
+    sphere.cz = t.data[o + 2]!;
+    sphere.r = t.data[o + 3]!;
+    if (!intersectsSphere(this.frustum, sphere)) return;
+    if (level === target) {
+      this.visible[this.visibleCount++] = o / STRIDE;
+      return;
+    }
+    const cx = x * 2;
+    const cy = y * 2;
+    this.descend(f, level + 1, cx, cy, target);
+    this.descend(f, level + 1, cx + 1, cy, target);
+    this.descend(f, level + 1, cx, cy + 1, target);
+    this.descend(f, level + 1, cx + 1, cy + 1, target);
   }
 
   private async ensureTile(
@@ -542,6 +620,8 @@ export class TileLayer {
     this.queueHead = 0;
     this.candidates.length = 0;
     this.desired.clear();
+    this.visibleCount = 0;
+    this.visibleLevel = -1;
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
     for (const e of this.cache.values()) {
