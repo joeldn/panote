@@ -1110,5 +1110,32 @@ describe('PanoViewer', () => {
       expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(2 * Math.PI);
       expect(internals(viewer).target.yaw).toBe(internals(viewer).view.yaw);
     });
+
+    it('clamps initialView pitch and fov', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), {
+        initialView: { pitch: 3, fov: 500 },
+        maxFov: 80,
+      });
+      const view = viewer.getView();
+      expect(view.pitch).toBeLessThan(Math.PI / 2);
+      expect(view.fov).toBe(80);
+      expect(internals(viewer).view.pitch).toBe(view.pitch);
+      expect(internals(viewer).view.fov).toBe(80);
+    });
+
+    it('clears momentum on setView', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      viewer.flick(100, 50);
+      expect(internals(viewer).momentum.yaw).not.toBe(0);
+      viewer.setView({ yaw: 0.5 });
+      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+    });
+
+    it('does not settle while momentum is left, however small', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      internals(viewer).momentum.yaw = 2e-5;
+      tick(viewer);
+      expect(internals(viewer).dirty).toBe(true);
+    });
   });
 });

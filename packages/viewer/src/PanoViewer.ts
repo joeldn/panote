@@ -132,9 +132,15 @@ export class PanoViewer implements ControlHost {
     this.autoRotateEnabled = options.autoRotate ?? false;
     // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
     this.autoRotateActive = this.autoRotateEnabled;
+    // Clamped like setView: an embed config can say anything, and an
+    // unclamped pitch past ±π/2 reaches viewMatrix as a mirrored view.
     const initialYaw = options.initialView?.yaw ?? 0;
-    const initialPitch = options.initialView?.pitch ?? 0;
-    const initialFov = options.initialView?.fov ?? Math.min(70, this.opts.maxFov);
+    const initialPitch = clampPitch(options.initialView?.pitch ?? 0);
+    const initialFov = clampFov(
+      options.initialView?.fov ?? Math.min(70, this.opts.maxFov),
+      this.opts.minFov,
+      this.opts.maxFov,
+    );
     this.view = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
     this.target = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
     this.home = { ...this.view };
@@ -243,6 +249,7 @@ export class PanoViewer implements ControlHost {
     // screen before it was called.
     this.layer?.dispose();
     this.layer = layer;
+    this.stopMomentumOnly();
     if (this.preview && this.previewPano === pano) {
       // Replacing an image keeps the panoId, so the manifest can still be the
       // old image's until the new tiles are written. Those tiles are not the
@@ -315,6 +322,7 @@ export class PanoViewer implements ControlHost {
     this.layer?.dispose();
     this.layer = undefined;
     this.wasPending = false;
+    this.stopMomentumOnly();
     this.home = { ...this.target };
     this.controls?.dispose();
     this.controls = new Controls(this.renderer.canvas, this);
@@ -414,6 +422,12 @@ export class PanoViewer implements ControlHost {
 
   stopMomentum(): void {
     this.pauseAutoRotate();
+    this.stopMomentumOnly();
+  }
+
+  // stopMomentum without counting as an interaction: programmatic moves
+  // clear a glide but leave auto-rotate alone.
+  private stopMomentumOnly(): void {
     this.momentum.yaw = 0;
     this.momentum.pitch = 0;
   }
@@ -451,6 +465,7 @@ export class PanoViewer implements ControlHost {
     if (view.pitch !== undefined) this.target.pitch = clampPitch(view.pitch);
     if (view.fov !== undefined)
       this.target.fov = clampFov(view.fov, this.opts.minFov, this.opts.maxFov);
+    this.stopMomentumOnly();
     this.dirty = true;
   }
 
@@ -513,6 +528,8 @@ export class PanoViewer implements ControlHost {
     this.view.fov = damp(this.view.fov, this.target.fov, k);
 
     const settled =
+      this.momentum.yaw === 0 &&
+      this.momentum.pitch === 0 &&
       Math.abs(this.target.yaw - this.view.yaw) < 1e-4 &&
       Math.abs(this.target.pitch - this.view.pitch) < 1e-4 &&
       Math.abs(this.target.fov - this.view.fov) < 1e-3;
