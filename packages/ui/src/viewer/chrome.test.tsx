@@ -68,6 +68,11 @@ describe('HotspotMarkers', () => {
     expect(onOpen).toHaveBeenCalledWith(spots[0]);
   });
 
+  it('groups the markers under one name', () => {
+    withViewer(fakeViewer(), <HotspotMarkers hotspots={[]} onOpen={() => {}} />);
+    expect(screen.getByRole('group', { name: 'Points of interest' })).toBeTruthy();
+  });
+
   it('asks for a frame when the markers change, so new ones get placed', () => {
     const v = fakeViewer();
     const a = { id: 'a', yaw: 1, pitch: 0, title: 'Kitchen' };
@@ -110,6 +115,11 @@ describe('FloorLinks', () => {
     v.frame();
     const anchor = document.querySelector('[aria-label="Go to Hall"]')!.parentElement!;
     expect(anchor.style.visibility).toBe('hidden');
+  });
+
+  it('groups the chevrons under one name', () => {
+    withViewer(fakeViewer(), <FloorLinks links={[]} onGo={() => {}} />);
+    expect(screen.getByRole('group', { name: 'Go to' })).toBeTruthy();
   });
 
   it('asks for a frame when the links change, so new ones get placed', () => {
@@ -277,5 +287,15 @@ describe('SceneMap', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Kitchen' }));
     expect(onSelect).toHaveBeenCalledWith('b');
     expect(screen.queryByRole('button', { name: 'Kitchen' })).toBeNull();
+  });
+
+  it('points the toggle at a panel that exists while closed too', () => {
+    render(<SceneMap scenes={[{ id: 'a', title: 'Hall' }]} current="a" onSelect={() => {}} />);
+    const toggle = screen.getByRole('button', { name: 'Map' });
+    const panel = document.getElementById(toggle.getAttribute('aria-controls')!);
+    expect(panel).toBeTruthy();
+    expect(panel!.hidden).toBe(true);
+    fireEvent.click(toggle);
+    expect(panel!.hidden).toBe(false);
   });
 });

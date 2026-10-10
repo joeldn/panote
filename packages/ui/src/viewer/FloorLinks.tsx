@@ -42,7 +42,7 @@ export function FloorLinks({ links, onGo }: FloorLinksProps) {
   }, [viewer, links]);
 
   return (
-    <div className="pn-anchors" aria-label="Go to">
+    <div className="pn-anchors" role="group" aria-label="Go to">
       {links.map((link) => (
         <div
           key={link.to}

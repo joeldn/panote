@@ -30,6 +30,12 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
   const placed = scenes.filter(isPlaced);
   const xs = placed.map((s) => s.x);
   const ys = placed.map((s) => s.y);
+  const [minX, maxX, minY, maxY] = [
+    Math.min(...xs),
+    Math.max(...xs),
+    Math.min(...ys),
+    Math.max(...ys),
+  ];
   const select = (id: string) => {
     setOpen(false);
     if (id !== current) onSelect(id);
@@ -37,38 +43,37 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
 
   return (
     <div className="pn-scenemap">
-      {open && (
-        <div id={panelId} className="pn-scenemap__panel">
-          {placed.length > 1 && (
-            <div className="pn-scenemap__plan" aria-hidden="true">
-              {placed.map((s) => (
-                <span
-                  key={s.id}
-                  className={cx('pn-scenemap__dot', s.id === current && 'pn-scenemap__dot--on')}
-                  style={{
-                    left: `${toPercent(s.x, Math.min(...xs), Math.max(...xs))}%`,
-                    top: `${toPercent(s.y, Math.min(...ys), Math.max(...ys))}%`,
-                  }}
-                />
-              ))}
-            </div>
-          )}
-          <ul className="pn-scenemap__list">
-            {scenes.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  className="pn-scenemap__item"
-                  aria-current={s.id === current ? 'location' : undefined}
-                  onClick={() => select(s.id)}
-                >
-                  {s.title}
-                </button>
-              </li>
+      {/* Always rendered, so the toggle's aria-controls names an element that exists. */}
+      <div id={panelId} className="pn-scenemap__panel" hidden={!open}>
+        {placed.length > 1 && (
+          <div className="pn-scenemap__plan" aria-hidden="true">
+            {placed.map((s) => (
+              <span
+                key={s.id}
+                className={cx('pn-scenemap__dot', s.id === current && 'pn-scenemap__dot--on')}
+                style={{
+                  left: `${toPercent(s.x, minX, maxX)}%`,
+                  top: `${toPercent(s.y, minY, maxY)}%`,
+                }}
+              />
             ))}
-          </ul>
-        </div>
-      )}
+          </div>
+        )}
+        <ul className="pn-scenemap__list">
+          {scenes.map((s) => (
+            <li key={s.id}>
+              <button
+                type="button"
+                className="pn-scenemap__item"
+                aria-current={s.id === current ? 'location' : undefined}
+                onClick={() => select(s.id)}
+              >
+                {s.title}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
       <button
         type="button"
         className="pn-scenemap__toggle"

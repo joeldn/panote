@@ -23,7 +23,7 @@ export function HotspotMarkers({ hotspots, activeId, onOpen }: HotspotMarkersPro
   }, [viewer, hotspots]);
 
   return (
-    <div className="pn-anchors" aria-label="Points of interest">
+    <div className="pn-anchors" role="group" aria-label="Points of interest">
       {hotspots.map((h) => (
         <div
           key={h.id}
