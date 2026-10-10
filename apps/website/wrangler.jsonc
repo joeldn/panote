@@ -23,7 +23,8 @@
       // so Cloudflare sends those paths there, not here (docs/deploy.md, Frontends).
       "routes": [{ "pattern": "panote.dev/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
-      // Read-only by convention: the script only ever gets slugs/<slug>.json.
+      // Read-only by convention: the script only gets slugs/<slug>.json, pub/tours/<id>.json
+      // and tiles/<pano>/manifest.json (docs/deploy.md, Tour page priming).
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       // Anything but "true" makes the /s/* script add X-Robots-Tag (docs/deploy.md).
       "vars": { "INDEXABLE": "false" },

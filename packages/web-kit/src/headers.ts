@@ -10,7 +10,13 @@ export interface HeadersFileOptions {
   frameSrc?: readonly string[];
   /** Production only. Otherwise every path gets `X-Robots-Tag: noindex, nofollow` (fail safe). */
   indexable?: boolean;
+  /** The Vite `base` the content-hashed `assets/` dir sits under. Default `/`. */
+  assetsBase?: string;
 }
+
+// Vite content-hashes every file under assets/, so a name never changes meaning. Without
+// this, Workers assets send `max-age=0, must-revalidate` and every visit revalidates.
+const IMMUTABLE = 'Cache-Control: public, max-age=31536000, immutable';
 
 const PLACEHOLDER = /YOUR_/i;
 
@@ -52,13 +58,20 @@ export function contentSecurityPolicy(
 
 /**
  * Render a Workers static-assets `_headers` file. Every path gets
- * `frame-ancestors 'none'`; `framable` paths drop that CSP and get `*`.
+ * `frame-ancestors 'none'`; `framable` paths drop that CSP and get `*`. The hashed
+ * `assets/` dir is cached for a year.
  */
 export function buildHeadersFile(
   config: Pick<AppConfig, 'cdnBase' | 'apiBase' | 'auth0'>,
   options: HeadersFileOptions = {},
 ): string {
-  const { connectSrc = [], framable = [], frameSrc = [], indexable = false } = options;
+  const {
+    connectSrc = [],
+    framable = [],
+    frameSrc = [],
+    indexable = false,
+    assetsBase = '/',
+  } = options;
   const common = [
     'X-Content-Type-Options: nosniff',
     'Referrer-Policy: strict-origin-when-cross-origin',
@@ -78,6 +91,8 @@ export function buildHeadersFile(
         `Content-Security-Policy: ${contentSecurityPolicy(config, '*', connectSrc, frameSrc)}`,
       ]),
     ),
+    // Merges with the `/*` block; HTML stays on the revalidating default.
+    block(`${assetsBase}assets/*`, [IMMUTABLE]),
   ];
   return `${blocks.join('\n\n')}\n`;
 }

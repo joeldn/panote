@@ -1,12 +1,26 @@
 import { loadPublishedTour, type PublishedTourResult } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams, useRouteError } from 'react-router';
 
 import { useConfig } from '../config-context.js';
 import { TourView } from './TourView.js';
 import { Unavailable } from './Unavailable.js';
 
 type Loaded = { status: 'error' } | Exclude<PublishedTourResult, { kind: 'redirect' }>;
+
+/**
+ * The tour data the website Worker inlined for the slug it served (`#pn-boot`), parsed but
+ * unvalidated; loadPublishedTour checks the slug and schemas and otherwise fetches.
+ */
+function workerBoot(): unknown {
+  const text = document.getElementById('pn-boot')?.textContent;
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
 
 /** `/s/:slug` and `/s/:slug/embed`: resolve the share link on the CDN, then show the tour. */
 export function TourPage({ embed = false }: { embed?: boolean }) {
@@ -22,7 +36,9 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
 
   useEffect(() => {
     const ac = new AbortController();
-    loadPublishedTour(cdnBase, slug, { signal: ac.signal }).then(
+    // A retry always goes to the network, in case the inlined data is what failed.
+    const boot = attempt === 0 ? workerBoot() : null;
+    loadPublishedTour(cdnBase, slug, { signal: ac.signal, boot }).then(
       (result) => {
         if (ac.signal.aborted) return;
         // Only reached without the website Worker (local dev); it 308s aliases itself.
@@ -41,7 +57,7 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
     return () => ac.abort();
     // `search` is read only when following an alias; a ?pano= change doesn't reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cdnBase, slug, embed, navigate, request]);
+  }, [cdnBase, slug, embed, navigate, request, attempt]);
 
   if (state && 'kind' in state && state.kind === 'tour') {
     return <TourView key={state.tour.tourId} tour={state.tour} embed={embed} />;
@@ -55,4 +71,14 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
       <meta name="robots" content="noindex" />
     </div>
   );
+}
+
+/**
+ * The `/s/*` routes' errorElement: a render error anywhere in the tour chrome shows the
+ * retry placeholder instead of react-router's stack page. Retry reloads the page.
+ */
+export function TourError({ embed = false }: { embed?: boolean }) {
+  const error = useRouteError();
+  useEffect(() => console.error('tour render failed', error), [error]);
+  return <Unavailable embed={embed} retry={() => window.location.reload()} />;
 }

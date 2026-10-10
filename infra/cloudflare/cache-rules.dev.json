@@ -1,0 +1,20 @@
+{
+  "zone": "panote.dev",
+  "zoneId": "2196d8dead0322ad69307711fc72b5d3",
+  "rules": [
+    {
+      "ref": "panote-json-edge-cache",
+      "description": "panote-json-edge-cache: slug pointers and pub bundles follow the origin max-age; 404 is never stored",
+      "expression": "(http.host eq \"cdn.panote.dev\" and (starts_with(http.request.uri.path, \"/slugs/\") or starts_with(http.request.uri.path, \"/pub/\")))",
+      "action": "set_cache_settings",
+      "action_parameters": {
+        "cache": true,
+        "edge_ttl": {
+          "mode": "respect_origin",
+          "status_code_ttl": [{ "status_code": 404, "value": -1 }]
+        }
+      },
+      "enabled": true
+    }
+  ]
+}
