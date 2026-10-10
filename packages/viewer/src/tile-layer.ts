@@ -1,14 +1,8 @@
-import {
-  FACES,
-  faceUVToDir,
-  selectLevel,
-  tileCornersUV,
-  tilePath,
-  tilesPerEdge,
-  type Face,
-  type Manifest,
-} from '@panote/core';
+import { tilePath, type Manifest } from '@panote/core';
+import { FACES, faceUVToDir, tileCornersUV, tilesPerEdge, type Face } from './cube.js';
+import { selectLevel } from './lod.js';
 import { selectEvictions } from './tile-cache.js';
+import { maxTilesForBudget } from './texture-budget.js';
 import { RADIUS, buildTileGeometry } from './tile-geometry.js';
 import {
   frustumFromViewProj,
@@ -22,9 +16,7 @@ import {
   TileRetryBudget,
   classifyFailure,
   isAbortError,
-  sharedTileFailureMonitor,
   type FailureKind,
-  type TileFailureMonitor,
 } from './tile-retry.js';
 
 /**
@@ -34,7 +26,8 @@ import {
  */
 type TileLoadOutcome =
   | { kind: 'loaded' } // in the cache now — this call, or already there
-  | { kind: 'skipped' } // another call owns it, or the backoff suppressed it
+  | { kind: 'decoded' } // waiting in the ready queue for update() to upload it
+  | { kind: 'skipped' } // another call owns it
   | { kind: 'aborted' } // cancelled: panned away, or the layer was disposed
   | { kind: 'failed'; failure: FailureKind; error: unknown };
 
@@ -71,9 +64,9 @@ export class BaseTileLoadError extends Error {
 }
 
 /**
- * Wait between base-tile attempts. Injectable through the constructor for the
- * same reason the failure monitor owns the clock: the tests advance time by
- * hand rather than sleeping, so no test waits on a real timer.
+ * Wait between base-tile attempts. Injectable through the constructor, like
+ * the clock: the tests advance time by hand rather than sleeping, so no test
+ * waits on a real timer.
  *
  * The signal cuts the wait short — it is the layer's lifetime (see
  * `TileLayer.lifetime`), so a disposal is noticed within a microtask instead of
@@ -108,6 +101,33 @@ interface TileEntry {
   item: DrawItem;
 }
 
+/** A decoded tile waiting for update() to upload it. */
+interface ReadyTile {
+  level: number;
+  face: Face;
+  x: number;
+  y: number;
+  bitmap: ImageBitmap;
+}
+
+/**
+ * Uploads per update(). Each one is a texStorage2D, a texSubImage2D and a
+ * mipmap generation, about 1-3 ms for a 512 px tile on a phone, so eight
+ * decodes landing together would otherwise make one long frame.
+ */
+const MAX_UPLOADS_PER_UPDATE = 3;
+/** Stop uploading for this update once this much time has gone. */
+const UPLOAD_BUDGET_MS = 4;
+/**
+ * Frames a tile may stay out of the view before its download is aborted (or
+ * its decoded bitmap dropped). A tile one pixel outside the frustum for a
+ * frame of a pan would otherwise be cancelled mid-download and fetched again
+ * when it comes back.
+ */
+const ABORT_AFTER_FRAMES = 10;
+/** Candidates at the head of each frame's queue fetched at high priority. */
+const HIGH_PRIORITY_CANDIDATES = 4;
+
 interface Candidate {
   key: string;
   level: number;
@@ -121,9 +141,88 @@ function tileKey(level: number, face: string, x: number, y: number): string {
   return `${level}/${face}/${x}-${y}`;
 }
 
+function sameMatrix(a: Mat4, b: Float32Array): boolean {
+  for (let k = 0; k < 16; k++) if (a[k] !== b[k]) return false;
+  return true;
+}
+
+/** Floats per tile in a LevelTable: bounding sphere, then unit centre direction. */
+const STRIDE = 7;
+/** Bounding spheres are padded slightly so a tile at the frustum edge is kept. */
+const CULL_PAD = 1.05;
+
+/**
+ * Everything update() needs about one pyramid level, computed once per layer
+ * the first time that level is wanted, so the per-frame cull is plain
+ * arithmetic. Tile `i = (faceIndex * g + y) * g + x`.
+ */
+interface LevelTable {
+  /** Tiles per face edge. */
+  g: number;
+  /** Per tile: sphere centre xyz, padded radius, then the unit direction
+   *  through the tile's UV centre (the load priority's axis). */
+  data: Float32Array;
+  /** Per tile cache key, so a frame builds no strings. */
+  keys: string[];
+}
+
+function buildLevelTable(level: number): LevelTable {
+  const g = tilesPerEdge(level);
+  const count = FACES.length * g * g;
+  const data = new Float32Array(count * STRIDE);
+  const keys = new Array<string>(count);
+  for (let f = 0; f < FACES.length; f++) {
+    const face = FACES[f]!;
+    for (let y = 0; y < g; y++) {
+      for (let x = 0; x < g; x++) {
+        const i = (f * g + y) * g + x;
+        // Corners on the flat cube face, where the quad is drawn
+        // (tile-geometry.ts), not on the sphere.
+        const corners = tileCornersUV(level, x, y);
+        const p = corners.map((c) => {
+          const d = faceUVToDir(face, c.u, c.v);
+          return { x: d.x * RADIUS, y: d.y * RADIUS, z: d.z * RADIUS };
+        });
+        const cx = (p[0]!.x + p[1]!.x + p[2]!.x + p[3]!.x) / 4;
+        const cy = (p[0]!.y + p[1]!.y + p[2]!.y + p[3]!.y) / 4;
+        const cz = (p[0]!.z + p[1]!.z + p[2]!.z + p[3]!.z) / 4;
+        let r = 0;
+        for (const q of p) r = Math.max(r, Math.hypot(q.x - cx, q.y - cy, q.z - cz));
+        const md = faceUVToDir(
+          face,
+          (corners[0].u + corners[1].u) / 2,
+          (corners[0].v + corners[2].v) / 2,
+        );
+        const mlen = Math.hypot(md.x, md.y, md.z) || 1;
+        const o = i * STRIDE;
+        data[o] = cx;
+        data[o + 1] = cy;
+        data[o + 2] = cz;
+        data[o + 3] = r * CULL_PAD;
+        data[o + 4] = md.x / mlen;
+        data[o + 5] = md.y / mlen;
+        data[o + 6] = md.z / mlen;
+        keys[i] = tileKey(level, face, x, y);
+      }
+    }
+  }
+  return { g, data, keys };
+}
+
+/** Candidate order: nearest the view centre first. */
+const byPriority = (a: Candidate, b: Candidate): number => a.priority - b.priority;
+
 export class TileLayer {
   private cache = new Map<string, TileEntry>();
   private inflight = new Map<string, AbortController>();
+  // Decoded and not yet uploaded, in arrival order. See drainReady().
+  private ready = new Map<string, ReadyTile>();
+  // Consecutive frames an in-flight or decoded tile has been unwanted.
+  private stale = new Map<string, number>();
+  // `${level}/` for every level, the start of that level's keys.
+  private levelPrefix: string[];
+  // Parents already queued this frame, so siblings queue one between them.
+  private parentsQueued = new Set<string>();
   private queue: Candidate[] = [];
   // Next queue index pump() takes. A cursor rather than shift(), which is
   // O(n) per dequeue; update() replaces the queue and resets it every frame.
@@ -135,10 +234,10 @@ export class TileLayer {
   // Aborted by dispose(). Only the base loader's retry wait listens to it: the
   // in-flight fetches are cancelled through their own controllers in `inflight`.
   private lifetime = new AbortController();
-  // The one wake timer: fires onInvalidate when something held back may start
-  // again (the backoff lifting, or a failed tile's cooldown ending), so an
-  // idle viewer moves without waiting for an interaction. `wakeAt` is when it
-  // fires, on the retry clock, so an earlier need can replace a later one.
+  // The one wake timer: fires onInvalidate when a failed tile's cooldown ends,
+  // so an idle viewer retries it without waiting for an interaction. `wakeAt`
+  // is when it fires, on the retry clock, so an earlier need can replace a
+  // later one.
   private wakeTimer: ReturnType<typeof setTimeout> | undefined;
   private wakeAt = Infinity;
 
@@ -147,18 +246,25 @@ export class TileLayer {
   // pan away and back refills the hole) until it exhausts its attempt budget,
   // while a 404/410 is still skipped for good. See tile-retry.ts.
   private retry: TileRetryBudget;
-  private monitor: TileFailureMonitor;
 
   // Reusable scratch buffers — no per-frame allocation.
-  private frustum: Frustum | null = null;
+  private frustum: Frustum = new Float32Array(24);
+  private sphere = { cx: 0, cy: 0, cz: 0, r: 0 };
   private desired = new Set<string>();
   private candidates: Candidate[] = [];
+  // Candidate objects are reused frame to frame: `candidates` holds the first
+  // `candidates.length` of them.
+  private candidatePool: Candidate[] = [];
   private _drawList: DrawItem[] = [];
-  // Written by tileVisible: unit direction through the tile's UV centre, reused
-  // by update() for the load-priority dot product (avoids recomputing corners).
-  private midDirX = 0;
-  private midDirY = 0;
-  private midDirZ = 0;
+  // Built lazily per level; see LevelTable.
+  private levels: (LevelTable | undefined)[] = [];
+  // Tile indices at `visibleLevel` that passed the cull, `visibleCount` long.
+  private visible: Int32Array;
+  private visibleCount = 0;
+  private visibleLevel = -1;
+  // The view the cull last ran for. An unchanged view and level reuse the
+  // visible set: a tile landing asks for a frame but moves nothing.
+  private lastViewProj = new Float32Array(16);
 
   constructor(
     private renderer: GLRenderer,
@@ -167,16 +273,15 @@ export class TileLayer {
     textureBudgetMB: number,
     private onInvalidate: () => void,
     maxConcurrent = 8,
-    monitor: TileFailureMonitor = sharedTileFailureMonitor(),
+    private now: () => number = () => performance.now(),
     private sleep: (ms: number, signal: AbortSignal) => Promise<void> = defaultSleep,
   ) {
-    const tileMB = (manifest.tileSize * manifest.tileSize * 4) / (1024 * 1024);
-    this.maxTiles = Math.max(24, Math.floor(textureBudgetMB / tileMB));
+    this.maxTiles = maxTilesForBudget(textureBudgetMB, manifest.tileSize);
     this.maxConcurrent = maxConcurrent;
-    // The monitor owns the clock so per-tile cooldowns and the global backoff
-    // measure time the same way (and are faked together in tests).
-    this.monitor = monitor;
-    this.retry = new TileRetryBudget(() => this.monitor.now());
+    // Cooldowns and the wake timer share one clock (faked together in tests).
+    this.retry = new TileRetryBudget(this.now);
+    this.visible = new Int32Array(FACES.length * tilesPerEdge(manifest.maxLevel) ** 2);
+    this.levelPrefix = Array.from({ length: manifest.maxLevel + 1 }, (_, l) => `${l}/`);
   }
 
   /**
@@ -192,10 +297,6 @@ export class TileLayer {
    * actually there, so a panorama that cannot load it is not a panorama that
    * loaded: this rejects rather than leaving the viewer to discover the hole
    * one hole at a time.
-   *
-   * Every failure still flows through the shared failure monitor (see
-   * `acquireExempt()`), so cross-panorama outage detection keeps working — the
-   * load just fails regardless of what the backoff would have preferred.
    */
   async loadBase(): Promise<void> {
     // allSettled, not all: a rejection from one face must not leave the other
@@ -216,7 +317,7 @@ export class TileLayer {
     const key = tileKey(0, face, 0, 0);
     let cause: unknown;
     for (;;) {
-      const result = await this.ensureTile(0, face, 0, 0, true);
+      const result = await this.ensureTile(0, face, 0, 0, 'high');
       if (result.kind === 'loaded') return;
       // Disposal (or a newer load superseding this one) tears the layer down
       // mid-flight. That is not the base layer failing — the caller already
@@ -258,59 +359,66 @@ export class TileLayer {
       this.manifest.tileSize,
       this.manifest.maxLevel,
     );
-    this.frustum = frustumFromViewProj(viewProj);
-
-    this.desired.clear();
-    this.candidates.length = 0;
-    // Soonest a wanted tile that is cooling down after a failure may go again.
-    let nextRetryMs = Infinity;
-
-    for (const face of FACES) {
-      const g = tilesPerEdge(level);
-      for (let y = 0; y < g; y++) {
-        for (let x = 0; x < g; x++) {
-          if (this.tileVisible(face as Face, level, x, y)) {
-            const key = tileKey(level, face, x, y);
-            this.desired.add(key);
-            const entry = this.cache.get(key);
-            if (entry) {
-              // Cached and still wanted — refresh LRU stamp so eviction reflects
-              // actual visibility, not upload/insertion order.
-              entry.lastUsed = this.clock;
-            } else if (!this.inflight.has(key) && this.retry.eligible(key)) {
-              // tileVisible wrote the unit centre direction into midDir* — reuse
-              // it for the load priority (smaller = closer to camera centre).
-              const priority =
-                1 - (this.midDirX * fwd.x + this.midDirY * fwd.y + this.midDirZ * fwd.z);
-              this.candidates.push({
-                key,
-                level,
-                face: face as Face,
-                x,
-                y,
-                priority,
-              });
-            } else if (!this.inflight.has(key)) {
-              nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
-            }
-          }
-        }
-      }
+    if (level !== this.visibleLevel || !sameMatrix(viewProj, this.lastViewProj)) {
+      this.lastViewProj.set(viewProj);
+      frustumFromViewProj(viewProj, this.frustum);
+      this.cull(level);
+      this.desired.clear();
+      const { keys } = this.table(level);
+      for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
     }
 
-    // Abort inflight loads that are no longer in the desired set. Level-0
-    // tiles are exempt: they are the base loadBase() is waiting on (and is
-    // never in a deeper level's desired set), and once resident they are
-    // pinned and drawn at every level, so one is never wasted work.
+    this.drainReady(level);
+
+    // The candidates are rebuilt even for a still view: a tile that landed,
+    // failed or finished its cooldown since the last frame changes them.
+    this.candidates.length = 0;
+    this.parentsQueued.clear();
+    // Soonest a wanted tile that is cooling down after a failure may go again.
+    let nextRetryMs = Infinity;
+    const { g, data, keys } = this.table(level);
+    for (let n = 0; n < this.visibleCount; n++) {
+      const i = this.visible[n]!;
+      const key = keys[i]!;
+      const entry = this.cache.get(key);
+      if (entry) {
+        // Cached and still wanted — refresh LRU stamp so eviction reflects
+        // actual visibility, not upload/insertion order.
+        entry.lastUsed = this.clock;
+        continue;
+      }
+      const o = i * STRIDE;
+      // Smaller = closer to the view centre.
+      const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
+      const f = Math.floor(i / (g * g));
+      const rest = i - f * g * g;
+      const x = rest % g;
+      const y = Math.floor(rest / g);
+      if (this.inflight.has(key) || this.ready.has(key)) {
+        // On its way.
+      } else if (this.retry.eligible(key)) {
+        this.pushCandidate(key, level, FACES[f]!, x, y, priority);
+      } else {
+        nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
+      }
+      // Missing, however long for: its parent is what shows in its place.
+      if (level >= 2) this.queueParent(f, level - 1, x >> 1, y >> 1, priority);
+    }
+
+    // Abort in-flight loads that have been out of the view for
+    // ABORT_AFTER_FRAMES frames in a row. See wanted() for what is kept.
     for (const [key, controller] of this.inflight) {
-      if (!this.desired.has(key) && !key.startsWith('0/')) {
+      if (this.wanted(key, level)) {
+        this.stale.delete(key);
+      } else if (this.staleFrames(key) > ABORT_AFTER_FRAMES) {
         controller.abort();
         this.inflight.delete(key);
+        this.stale.delete(key);
       }
     }
 
     // Sort candidates by priority ascending (nearest-to-centre first).
-    this.candidates.sort((a, b) => a.priority - b.priority);
+    this.candidates.sort(byPriority);
     this.queue = this.candidates;
     this.queueHead = 0;
 
@@ -318,10 +426,11 @@ export class TileLayer {
     // higher-LOD tiles from drawing on top after a zoom-out.
     //
     // The converse is the coarse fallback, and it is why a hole can never show
-    // through: every *coarser* resident tile stays visible, drawList() emits
-    // them all and the renderer paints them low-level-first (sortDrawList in
-    // render/gl-renderer.ts, with depth testing off), so a finer tile that is
-    // absent simply leaves its ancestor's texels on screen. loadBase()
+    // through: every *coarser* resident tile stays visible and drawList()
+    // emits them all. The renderer draws finest-first with each level at its
+    // own depth, finer in front (see render() in render/gl-renderer.ts), so a
+    // coarser tile only shows where no finer tile covers it, and a finer tile
+    // that is absent simply leaves its ancestor's texels on screen. loadBase()
     // guarantees the level-0 ancestor is resident and selectEvictions() never
     // evicts it, so that floor always exists.
     for (const entry of this.cache.values()) {
@@ -335,7 +444,7 @@ export class TileLayer {
     this.armWake(nextRetryMs);
   }
 
-  /** Current visible draw list (coarse first is enforced by the renderer sort). */
+  /** Every resident tile at or below the target level; the renderer orders them. */
   drawList(): DrawItem[] {
     this._drawList.length = 0;
     for (const entry of this.cache.values()) {
@@ -354,31 +463,52 @@ export class TileLayer {
     // discarded.
     if (this.disposed) return;
     while (this.inflight.size < this.maxConcurrent && this.queueHead < this.queue.length) {
-      // Global backoff: hold the queue intact rather than draining it into
-      // no-op ensureTile calls. update() rebuilds it next frame anyway, and
-      // the one probe the monitor allows is started from here too.
-      if (!this.monitor.canStart()) {
-        this.armWake(this.monitor.msUntilStart());
-        return;
-      }
       const next = this.queue[this.queueHead++]!;
-      if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
-      void this.ensureTile(next.level, next.face, next.x, next.y);
+      if (this.cache.has(next.key) || this.inflight.has(next.key) || this.ready.has(next.key)) {
+        continue;
+      }
+      // The head of the queue is what the view is centred on (or the parents
+      // it needs first); the rest can wait behind other requests.
+      const priority = this.queueHead <= HIGH_PRIORITY_CANDIDATES ? 'high' : 'low';
+      void this.ensureTile(next.level, next.face, next.x, next.y, priority);
     }
   }
 
   /**
+   * Queue the parent of a missing tile ahead of every tile at the target
+   * level. Its nearest resident ancestor is then at least two levels up (the
+   * base always is), so a big zoom would show that soft ancestor until the
+   * target level lands; the parent costs a quarter of its children and gives
+   * a sharper step in between.
+   */
+  private queueParent(f: number, level: number, x: number, y: number, childPriority: number): void {
+    const t = this.table(level);
+    const key = t.keys[(f * t.g + y) * t.g + x]!;
+    const entry = this.cache.get(key);
+    if (entry) {
+      // On screen as the fallback for its missing child: not to be evicted.
+      entry.lastUsed = this.clock;
+      return;
+    }
+    if (this.inflight.has(key) || this.ready.has(key)) return;
+    if (this.parentsQueued.has(key) || !this.retry.eligible(key)) return;
+    this.parentsQueued.add(key);
+    // Centre-first priorities are 1 - cos, in [0, 2]: minus 2 sorts every
+    // parent before every target-level tile, still centre-first among them.
+    this.pushCandidate(key, level, FACES[f]!, x, y, childPriority - 2);
+  }
+
+  /**
    * A frame is what refills and pumps the queue, and an idle viewer draws no
-   * frames. Without a wake, tiles held by the backoff or by a per-tile retry
-   * cooldown (and so tiles-settled, and a preview waiting on it) would wait
-   * for the next pan or zoom. One timer serves both: a later request keeps
-   * the earlier timer, an earlier one replaces it.
+   * frames. Without a wake, a tile held by a per-tile retry cooldown would
+   * wait for the next pan or zoom. One timer serves every tile: a later
+   * request keeps the earlier timer, an earlier one replaces it.
    */
   private armWake(ms: number): void {
     if (this.disposed || !Number.isFinite(ms)) return;
     // At least 1 ms, so a clock that disagrees with the timer cannot spin.
     const delay = Math.max(1, ms);
-    const at = this.monitor.now() + delay;
+    const at = this.now() + delay;
     if (this.wakeTimer !== undefined && this.wakeAt <= at) return;
     clearTimeout(this.wakeTimer);
     this.wakeAt = at;
@@ -389,48 +519,70 @@ export class TileLayer {
     }, delay);
   }
 
-  private tileVisible(face: Face, level: number, x: number, y: number): boolean {
-    // Cull against the flat-quad bounds (padded slightly). tileCornersUV returns
-    // [TL, TR, BL, BR]. Also derive the UV-centre unit direction into midDir*
-    // scratch for update()'s load priority. Scalar locals only — no per-call
-    // object/array allocation.
-    const corners = tileCornersUV(level, x, y);
-    // UV-centre direction (matches the former faceUVToDir(uMid, vMid)).
-    const uMid = (corners[0]!.u + corners[1]!.u) / 2;
-    const vMid = (corners[0]!.v + corners[2]!.v) / 2;
-    const md = faceUVToDir(face, uMid, vMid);
-    const mlen = Math.hypot(md.x, md.y, md.z) || 1;
-    this.midDirX = md.x / mlen;
-    this.midDirY = md.y / mlen;
-    this.midDirZ = md.z / mlen;
+  private table(level: number): LevelTable {
+    let t = this.levels[level];
+    if (!t) {
+      t = buildLevelTable(level);
+      this.levels[level] = t;
+    }
+    return t;
+  }
 
-    if (!this.frustum) return true;
+  /**
+   * Fill `visible` with the tiles at `level` whose padded bounding sphere
+   * meets the frustum. Descends from level 0 and skips a subtree whose parent
+   * is outside: a child's quad lies inside its parent's, so its padded sphere
+   * lies inside the parent's and fails the same plane. Same result as testing
+   * every tile, at O(visible × level) instead of O(4^level).
+   */
+  private cull(level: number): void {
+    this.visibleCount = 0;
+    this.visibleLevel = level;
+    for (let f = 0; f < FACES.length; f++) this.descend(f, 0, 0, 0, level);
+  }
 
-    // Corner positions on the flat cube face, accumulated as scalars.
-    const d0 = faceUVToDir(face, corners[0]!.u, corners[0]!.v);
-    const d1 = faceUVToDir(face, corners[1]!.u, corners[1]!.v);
-    const d2 = faceUVToDir(face, corners[2]!.u, corners[2]!.v);
-    const d3 = faceUVToDir(face, corners[3]!.u, corners[3]!.v);
-    const p0x = d0.x * RADIUS,
-      p0y = d0.y * RADIUS,
-      p0z = d0.z * RADIUS;
-    const p1x = d1.x * RADIUS,
-      p1y = d1.y * RADIUS,
-      p1z = d1.z * RADIUS;
-    const p2x = d2.x * RADIUS,
-      p2y = d2.y * RADIUS,
-      p2z = d2.z * RADIUS;
-    const p3x = d3.x * RADIUS,
-      p3y = d3.y * RADIUS,
-      p3z = d3.z * RADIUS;
-    const cx = (p0x + p1x + p2x + p3x) / 4;
-    const cy = (p0y + p1y + p2y + p3y) / 4;
-    const cz = (p0z + p1z + p2z + p3z) / 4;
-    let r = Math.hypot(p0x - cx, p0y - cy, p0z - cz);
-    r = Math.max(r, Math.hypot(p1x - cx, p1y - cy, p1z - cz));
-    r = Math.max(r, Math.hypot(p2x - cx, p2y - cy, p2z - cz));
-    r = Math.max(r, Math.hypot(p3x - cx, p3y - cy, p3z - cz));
-    return intersectsSphere(this.frustum, { cx, cy, cz, r: r * 1.05 });
+  private descend(f: number, level: number, x: number, y: number, target: number): void {
+    const t = this.table(level);
+    const o = ((f * t.g + y) * t.g + x) * STRIDE;
+    const sphere = this.sphere;
+    sphere.cx = t.data[o]!;
+    sphere.cy = t.data[o + 1]!;
+    sphere.cz = t.data[o + 2]!;
+    sphere.r = t.data[o + 3]!;
+    if (!intersectsSphere(this.frustum, sphere)) return;
+    if (level === target) {
+      this.visible[this.visibleCount++] = o / STRIDE;
+      return;
+    }
+    const cx = x * 2;
+    const cy = y * 2;
+    this.descend(f, level + 1, cx, cy, target);
+    this.descend(f, level + 1, cx + 1, cy, target);
+    this.descend(f, level + 1, cx, cy + 1, target);
+    this.descend(f, level + 1, cx + 1, cy + 1, target);
+  }
+
+  private pushCandidate(
+    key: string,
+    level: number,
+    face: Face,
+    x: number,
+    y: number,
+    priority: number,
+  ): void {
+    let c = this.candidatePool[this.candidates.length];
+    if (c) {
+      c.key = key;
+      c.level = level;
+      c.face = face;
+      c.x = x;
+      c.y = y;
+      c.priority = priority;
+    } else {
+      c = { key, level, face, x, y, priority };
+      this.candidatePool.push(c);
+    }
+    this.candidates.push(c);
   }
 
   private async ensureTile(
@@ -438,18 +590,12 @@ export class TileLayer {
     face: Face,
     x: number,
     y: number,
-    exempt = false,
+    priority: RequestPriority,
   ): Promise<TileLoadOutcome> {
     if (this.disposed) return { kind: 'aborted' };
     const key = tileKey(level, face, x, y);
     if (this.cache.has(key)) return { kind: 'loaded' };
-    if (this.inflight.has(key)) return { kind: 'skipped' };
-    // Suppressed by the cross-panorama backoff — not a failure, and no attempt
-    // is spent, so the tile is re-queued unchanged once the window clears.
-    // Base tiles are exempt from suppression but not from reporting; see
-    // TileFailureMonitor.acquireExempt().
-    const permit = exempt ? this.monitor.acquireExempt() : this.monitor.acquire();
-    if (!permit) return { kind: 'skipped' };
+    if (this.inflight.has(key) || this.ready.has(key)) return { kind: 'skipped' };
     const url = tilePath(
       this.baseUrl,
       this.manifest.pano,
@@ -463,14 +609,13 @@ export class TileLayer {
     const controller = new AbortController();
     this.inflight.set(key, controller);
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      // `priority` is a hint; browsers without it ignore the field.
+      const res = await fetch(url, { signal: controller.signal, priority });
       if (!res.ok) throw new TileHttpError(res.status);
       const blob = await res.blob();
-      // flipY here matches WebGL's bottom-left texture origin, so
-      // gl-renderer.ts can leave UNPACK_FLIP_Y_WEBGL off.
-      const bitmap = await createImageBitmap(blob, {
-        imageOrientation: 'flipY',
-      });
+      // Decoded upright (row 0 = top). The renderer uploads it unflipped and
+      // the tile UVs address row 0 as v = 0 (see tile-geometry.ts).
+      const bitmap = await createImageBitmap(blob);
       if (this.disposed) {
         bitmap.close();
         return { kind: 'aborted' };
@@ -480,61 +625,147 @@ export class TileLayer {
       // load aborted mid-decode still lands — after a reload has started. The
       // second one to land must not upload over the first, or the first
       // texture is never freed.
-      if (this.cache.has(key)) {
+      if (this.cache.has(key) || this.ready.has(key)) {
         bitmap.close();
         return { kind: 'loaded' };
       }
-      const geom = buildTileGeometry(face, level, x, y);
-      let handle: TileHandle;
-      try {
-        handle = this.renderer.uploadTile(geom, bitmap);
-      } finally {
-        // The GPU texture owns the pixels now (or the upload failed, e.g. on a
-        // lost context): free the CPU copy either way.
-        bitmap.close();
+      // The base goes up at once: loadBase() is waiting on it, and no frame
+      // runs while the layer is still loading. Everything else waits for
+      // update() to upload it, a few per frame.
+      if (level === 0) {
+        this.upload(key, level, face, x, y, bitmap);
+        return { kind: 'loaded' };
       }
-      this.cache.set(key, {
-        key,
-        handle,
-        lastUsed: this.clock,
-        level,
-        visible: true,
-        item: { handle, level },
-      });
-      this.retry.recordSuccess(key);
-      this.monitor.succeed(permit);
+      this.ready.set(key, { level, face, x, y, bitmap });
       this.onInvalidate();
-      return { kind: 'loaded' };
+      return { kind: 'decoded' };
     } catch (err) {
-      // Abort (from AbortController) is expected churn — leave re-queueable,
-      // spend no attempt and tell the monitor nothing. Everything else is
-      // classified: a permanent status (404/410/401/403) retires the tile for
-      // this load, a transient one costs an attempt and feeds the global
-      // failure monitor. Either way the coarser parent tile stays as fallback.
+      // Abort (from AbortController) is expected churn — leave re-queueable
+      // and spend no attempt. Everything else is classified: a permanent
+      // status (404/410/401/403) retires the tile for this load, a transient
+      // one costs an attempt. Either way the coarser parent tile stays as
+      // fallback.
       if (isAbortError(err)) return { kind: 'aborted' };
-      const failure = classifyFailure(err);
-      this.retry.recordFailure(key, failure);
-      this.monitor.fail(permit, this.manifest.pano, failure);
-      // Still on screen: come back for it when its cooldown ends, even if
-      // nothing else asks for a frame before then.
-      if (this.desired.has(key)) this.armWake(this.retry.waitMs(key));
+      const failure = this.recordFailure(key, err);
       return { kind: 'failed', failure, error: err };
     } finally {
-      // No-op when succeed()/fail() already settled it; this covers the
-      // abort and disposed-mid-load paths, which must still free the probe.
-      this.monitor.release(permit);
       // Only clear the slot this call owns. After an abort the key may already
       // belong to a reload, which must stay tracked: it still counts against
       // maxConcurrent and update() must still be able to abort it.
       if (this.inflight.get(key) === controller) this.inflight.delete(key);
+      if (!this.inflight.has(key) && !this.ready.has(key)) this.stale.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
   }
 
+  /** Upload a decoded tile and cache it. Closes the bitmap, even on a throw. */
+  private upload(
+    key: string,
+    level: number,
+    face: Face,
+    x: number,
+    y: number,
+    bitmap: ImageBitmap,
+  ): void {
+    const geom = buildTileGeometry(face, level, x, y);
+    let handle: TileHandle;
+    try {
+      handle = this.renderer.uploadTile(geom, bitmap);
+    } finally {
+      // The GPU texture owns the pixels now (or the upload failed, e.g. on a
+      // lost context): free the CPU copy either way.
+      bitmap.close();
+    }
+    this.cache.set(key, {
+      key,
+      handle,
+      lastUsed: this.clock,
+      level,
+      visible: true,
+      item: { handle, level },
+    });
+    this.retry.recordSuccess(key);
+    this.onInvalidate();
+  }
+
+  /**
+   * Is a tile that is loading still worth finishing at `level`? Yes if it is
+   * in view, if it is level 0 (the base loadBase() is waiting on, pinned and
+   * drawn at every level once resident), or if it is one level coarser than
+   * the target: after a zoom-in step those still improve on the fallback
+   * until the finer tiles land.
+   */
+  private wanted(key: string, level: number): boolean {
+    return (
+      this.desired.has(key) ||
+      key.startsWith('0/') ||
+      (level > 0 && key.startsWith(this.levelPrefix[level - 1]!))
+    );
+  }
+
+  /** Count one more unwanted frame for `key`, and return the total. */
+  private staleFrames(key: string): number {
+    const n = (this.stale.get(key) ?? 0) + 1;
+    this.stale.set(key, n);
+    return n;
+  }
+
+  private recordFailure(key: string, err: unknown): FailureKind {
+    const failure = classifyFailure(err);
+    this.retry.recordFailure(key, failure);
+    // Still on screen: come back for it when its cooldown ends, even if
+    // nothing else asks for a frame before then.
+    const wait = this.retry.waitMs(key);
+    if (this.desired.has(key)) this.armWake(wait);
+    // Never coming back (permanent, or out of attempts): the tile has stopped
+    // being pending, which may be what settles the view. Ask for a frame so
+    // hasPending() is read again, or tiles-settled waits for the next input.
+    if (!Number.isFinite(wait)) this.onInvalidate();
+    return failure;
+  }
+
+  /**
+   * Upload what has decoded since the last frame: at most
+   * MAX_UPLOADS_PER_UPDATE, and none once UPLOAD_BUDGET_MS has gone, so a
+   * burst of decodes is spread over several frames instead of one long one.
+   * A tile out of the view waits without uploading, and once it has been out
+   * for ABORT_AFTER_FRAMES frames it is dropped and its bitmap closed.
+   * Anything left over asks for another frame.
+   */
+  private drainReady(level: number): void {
+    if (this.ready.size === 0) return;
+    const start = this.now();
+    let uploads = 0;
+    for (const [key, tile] of this.ready) {
+      if (this.wanted(key, level)) {
+        this.stale.delete(key);
+      } else {
+        if (this.staleFrames(key) > ABORT_AFTER_FRAMES) {
+          tile.bitmap.close();
+          this.ready.delete(key);
+          this.stale.delete(key);
+        }
+        continue;
+      }
+      if (uploads >= MAX_UPLOADS_PER_UPDATE || this.now() - start >= UPLOAD_BUDGET_MS) continue;
+      this.ready.delete(key);
+      uploads++;
+      try {
+        this.upload(key, tile.level, tile.face, tile.x, tile.y, tile.bitmap);
+      } catch (err) {
+        this.recordFailure(key, err);
+      }
+    }
+    if (this.ready.size > 0) this.onInvalidate();
+  }
+
   private evict(): void {
-    // Nothing can be evicted while under budget — skip the O(cacheSize)
-    // candidate array allocation entirely.
-    if (this.cache.size <= this.maxTiles) return;
+    // selectEvictions() keeps every tile on screen and the six base tiles
+    // whatever the budget, so the cache may overshoot up to that many. Inside
+    // that bound there is nothing to do: skip the O(cacheSize) candidate
+    // array, which a view wider than the budget would otherwise build every
+    // frame for nothing.
+    if (this.cache.size <= Math.max(this.maxTiles, this.desired.size + FACES.length)) return;
     const keysToRemove = selectEvictions(
       [...this.cache.values()].map((e) => ({
         key: e.key,
@@ -555,16 +786,22 @@ export class TileLayer {
   }
 
   /**
-   * Is any tile for the current view still to come? In flight, or queued: the
-   * queue is non-empty after pump() only when every slot is busy or the
-   * cross-panorama backoff is holding it, and a held queue is work that has
-   * not happened yet, not work that is done. A tile that failed is in neither
-   * (it is out of the queue while it waits out a per-tile cooldown, and for
-   * good once it is permanent or out of attempts), so failures do not keep
-   * this true.
+   * Is any tile for the current view still to come? Queued, in flight or
+   * decoded and waiting to be uploaded. The queue is non-empty after pump()
+   * only when every slot is busy, and a held queue is work that has not
+   * happened yet, not work that is done. Tiles that are only finishing after
+   * leaving the view (see ABORT_AFTER_FRAMES) do not count, and neither does
+   * a tile that failed: it is out of the queue while it waits out a per-tile
+   * cooldown, and for good once it is permanent or out of attempts.
    */
   hasPending(): boolean {
-    return this.inflight.size > 0 || this.queueHead < this.queue.length;
+    if (this.queueHead < this.queue.length) return true;
+    for (const key of this.inflight.keys()) {
+      // The base counts before the first frame has said what is in view.
+      if (this.desired.has(key) || key.startsWith('0/')) return true;
+    }
+    for (const key of this.ready.keys()) if (this.desired.has(key)) return true;
+    return false;
   }
 
   dispose(): void {
@@ -581,8 +818,14 @@ export class TileLayer {
     this.queueHead = 0;
     this.candidates.length = 0;
     this.desired.clear();
+    this.visibleCount = 0;
+    this.visibleLevel = -1;
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
+    for (const tile of this.ready.values()) tile.bitmap.close();
+    this.ready.clear();
+    this.stale.clear();
+    this.parentsQueued.clear();
     for (const e of this.cache.values()) {
       this.renderer.removeTile(e.handle);
     }

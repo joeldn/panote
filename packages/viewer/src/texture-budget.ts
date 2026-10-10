@@ -2,12 +2,13 @@
  * The default texture budget, in MB, for a viewer whose caller did not name
  * one — scaled by the device pixel ratio the renderer will actually draw at.
  *
- * Why it has to scale at all. The budget buys a tile count: tile-layer.ts turns
- * MB into `maxTiles` by dividing by the bytes one tile occupies, and a tile is
- * one RGBA8 texture of `tileSize²` texels — 512² × 4 = 1 MiB, 1024² × 4 = 4 MiB.
- * (Mip levels add ~33% on top of that in real VRAM; the budget counts base-level
- * bytes, as it always has.) So 128 MB is 128 tiles at `tileSize` 512 and 32 at
- * 1024, and scaling the budget scales the tile count identically for both.
+ * Why it has to scale at all. The budget buys a tile count: `maxTilesForBudget`
+ * turns MB into `maxTiles` by dividing by the bytes one tile occupies in VRAM,
+ * and a tile is one RGBA8 texture of `tileSize²` texels plus its full mip chain
+ * (the renderer allocates every level), which adds a third: 512² × 4 × 4/3 =
+ * 1.33 MiB, 1024² × 4 × 4/3 = 5.33 MiB. So 128 MB is 96 tiles at `tileSize` 512
+ * and 24 at 1024, and scaling the budget scales the tile count identically for
+ * both. The MB named here is the VRAM really spent on tile textures.
  *
  * The tile count the viewer *needs* is set by the pyramid level, and the level
  * is chosen from the framebuffer's device-pixel height (see `selectLevel` in
@@ -15,15 +16,15 @@
  * display that is one level finer than on DPR 1, and one level finer is four
  * times as many tiles on screen: the measured visible set for a 70° FOV on an
  * 800 CSS-px-tall viewport goes from 24 tiles at level 2 to 88 at level 3. A
- * flat 128-tile budget is 5.3× the visible set in the first case and 1.45× in
- * the second — too tight to pan without evicting tiles that are about to be
+ * flat 128 MB budget (96 tiles) is 4× the visible set in the first case and
+ * 1.1× in the second — too tight to pan without evicting tiles that are about to be
  * wanted again, which costs a re-decode and a re-upload every frame.
  *
  * Why the scale is the pixel ratio and not its square. Matching the 4× growth
  * in tile count would mean 512 MB of textures on a phone, and GPU memory is the
  * one budget a viewer cannot borrow against — exceeding it does not slow the
  * page down, it loses the WebGL context. Linear in the pixel ratio, capped at
- * `MAX_BUDGET_PIXEL_RATIO`, gives DPR-2 displays 256 MB / 256 tiles ≈ 2.9× the
+ * `MAX_BUDGET_PIXEL_RATIO`, gives DPR-2 displays 256 MB / 192 tiles ≈ 2.2× the
  * visible set: enough headroom that ordinary panning reuses tiles instead of
  * refetching them, while the worst case stays bounded at twice what a DPR-1
  * display already spends. Full sharpness is kept either way — this changes only
@@ -67,4 +68,20 @@ export function defaultTextureBudgetMB(
   );
   const scale = Math.min(Math.max(rendered, 1), MAX_BUDGET_PIXEL_RATIO);
   return BASE_TEXTURE_BUDGET_MB * scale;
+}
+
+/** Fewest tiles the cache may hold, however small the budget. */
+export const MIN_RESIDENT_TILES = 24;
+
+/** Mip levels add a third on top of the base level: 1 + 1/4 + 1/16 + … = 4/3. */
+const MIP_CHAIN_FACTOR = 4 / 3;
+
+/**
+ * How many tiles of `tileSize`² fit in `budgetMB` of VRAM, counting each
+ * tile's full mip chain as the renderer allocates it. Never below
+ * `MIN_RESIDENT_TILES`.
+ */
+export function maxTilesForBudget(budgetMB: number, tileSize: number): number {
+  const tileMB = (tileSize * tileSize * 4 * MIP_CHAIN_FACTOR) / (1024 * 1024);
+  return Math.max(MIN_RESIDENT_TILES, Math.floor(budgetMB / tileMB));
 }
