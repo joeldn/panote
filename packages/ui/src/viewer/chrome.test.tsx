@@ -26,6 +26,7 @@ function fakeViewer() {
       behind: yaw < 0,
     })),
     heading: vi.fn(() => 0.5),
+    requestRender: vi.fn(),
     getView: vi.fn(() => ({ yaw: 0, pitch: 0, fov: v.fov })),
     setView: vi.fn((view: { fov?: number }) => {
       if (view.fov !== undefined) v.fov = view.fov;
@@ -66,6 +67,20 @@ describe('HotspotMarkers', () => {
     fireEvent.click(kitchen);
     expect(onOpen).toHaveBeenCalledWith(spots[0]);
   });
+
+  it('asks for a frame when the markers change, so new ones get placed', () => {
+    const v = fakeViewer();
+    const a = { id: 'a', yaw: 1, pitch: 0, title: 'Kitchen' };
+    const { rerender } = withViewer(v, <HotspotMarkers hotspots={[a]} onOpen={() => {}} />);
+    v.requestRender.mockClear();
+    const b = { id: 'b', yaw: 0.5, pitch: 0, title: 'Hall' };
+    rerender(
+      <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
+        <HotspotMarkers hotspots={[a, b]} onOpen={() => {}} />
+      </PanoViewerContext.Provider>,
+    );
+    expect(v.requestRender).toHaveBeenCalled();
+  });
 });
 
 describe('FloorLinks', () => {
@@ -81,6 +96,33 @@ describe('FloorLinks', () => {
     );
     fireEvent.click(btn);
     expect(onGo).toHaveBeenCalledWith(link);
+  });
+
+  it('hides a chevron whose far point is behind the camera, even with the near one in front', () => {
+    const v = fakeViewer();
+    // Pitched down: the near floor point (-0.6) is in front, the far one (-0.2) behind.
+    v.project.mockImplementation((yaw: number, pitch: number) => ({
+      x: yaw * 100,
+      y: pitch * 100,
+      behind: pitch > -0.4,
+    }));
+    withViewer(v, <FloorLinks links={[{ to: 'hall', yaw: 1, label: 'Hall' }]} onGo={() => {}} />);
+    v.frame();
+    const anchor = document.querySelector('[aria-label="Go to Hall"]')!.parentElement!;
+    expect(anchor.style.visibility).toBe('hidden');
+  });
+
+  it('asks for a frame when the links change, so new ones get placed', () => {
+    const v = fakeViewer();
+    const hall = { to: 'hall', yaw: 1, label: 'Hall' };
+    const { rerender } = withViewer(v, <FloorLinks links={[hall]} onGo={() => {}} />);
+    v.requestRender.mockClear();
+    rerender(
+      <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
+        <FloorLinks links={[hall, { to: 'yard', yaw: 2, label: 'Yard' }]} onGo={() => {}} />
+      </PanoViewerContext.Provider>,
+    );
+    expect(v.requestRender).toHaveBeenCalled();
   });
 });
 

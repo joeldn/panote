@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 
 import type { ViewerLinkArrow } from './types.js';
 import { useViewerFrame } from './use-render.js';
@@ -15,14 +15,17 @@ export interface FloorLinksProps {
 /** Floor chevrons to linked scenes, laid along the floor and foreshortened with zoom. */
 export function FloorLinks({ links, onGo }: FloorLinksProps) {
   const refs = useRef(new Map<string, HTMLElement>());
-  useViewerFrame((viewer) => {
+  const viewer = useViewerFrame((v) => {
     for (const link of links) {
       const el = refs.current.get(link.to);
       if (!el) continue;
-      const near = viewer.project(link.yaw, PITCH_NEAR);
-      const far = viewer.project(link.yaw, PITCH_FAR);
-      el.style.visibility = near.behind ? 'hidden' : 'visible';
-      if (near.behind) continue;
+      const near = v.project(link.yaw, PITCH_NEAR);
+      const far = v.project(link.yaw, PITCH_FAR);
+      // Either point behind the camera projects mirrored, so the chevron
+      // built from it would land in the wrong place or flipped.
+      const behind = near.behind || far.behind;
+      el.style.visibility = behind ? 'hidden' : 'visible';
+      if (behind) continue;
       const dx = far.x - near.x;
       const dy = far.y - near.y;
       const angle = Math.atan2(dx, -dy);
@@ -32,6 +35,11 @@ export function FloorLinks({ links, onGo }: FloorLinksProps) {
       el.style.transform = `translate(${x}px, ${y}px) rotate(${angle}rad) scale(${scale})`;
     }
   });
+  // Chevrons start hidden until a frame places them, and the viewer only draws
+  // when something changed: a new list on the same viewer asks for a frame.
+  useLayoutEffect(() => {
+    viewer?.requestRender();
+  }, [viewer, links]);
 
   return (
     <div className="pn-anchors" aria-label="Go to">
