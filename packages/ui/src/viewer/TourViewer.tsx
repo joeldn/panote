@@ -1,6 +1,6 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
 import type { Tour } from '@panote/viewer/ui';
-import { useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
 import { PanoStage, type ViewerFactory } from '../PanoStage.js';
@@ -64,6 +64,8 @@ export interface TourViewerProps {
 }
 
 type Scene = { id: string; view: { yaw?: number; pitch?: number; fov?: number } | undefined };
+
+const NONE: never[] = [];
 
 const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => {
   const h: ViewerHotspot = {
@@ -149,49 +151,83 @@ export function TourViewer({
   createViewer,
 }: TourViewerProps) {
   const frame = useRef<HTMLDivElement>(null);
-  const [scene, setScene] = useState<Scene>(() => ({
+  // `target` is the scene asked for; `shown` is the one on screen, which only
+  // moves once the viewer reports the new pano drawable. The chrome follows
+  // `shown`, so nothing for the next scene lands over the old pano.
+  const [target, setTarget] = useState<Scene>(() => ({
     id: start,
     view: data.tour?.scenes[start]?.initialView,
   }));
+  const [shown, setShown] = useState(start);
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(data.settings.autoRotate);
+  // The scene last passed to `onSceneChange`: a reload of the scene on screen
+  // (after a failed change) lands it again, and that is not a new visit.
+  const reported = useRef<string | null>(null);
 
-  const panoId = scene.id;
-  const hotspots = (data.hotspots[panoId] ?? []).map(toHotspot);
-  const links: ViewerLinkArrow[] = single
-    ? []
-    : (data.links[panoId] ?? []).map((l) => ({
-        to: l.to,
-        yaw: l.yaw,
-        label: l.label ?? data.titles[l.to] ?? '',
-      }));
+  const panoId = shown;
+  const moving = target.id !== shown;
+  const sceneHotspots = useMemo(
+    () => (data.hotspots[panoId] ?? []).map(toHotspot),
+    [data.hotspots, panoId],
+  );
+  const sceneLinks = useMemo<ViewerLinkArrow[]>(
+    () =>
+      single
+        ? []
+        : (data.links[panoId] ?? []).map((l) => ({
+            to: l.to,
+            yaw: l.yaw,
+            label: l.label ?? data.titles[l.to] ?? '',
+          })),
+    [single, data.links, data.titles, panoId],
+  );
+  // Like the vanilla nav arrows: no points or chevrons while the pano is changing.
+  const hotspots = moving ? NONE : sceneHotspots;
+  const links = moving ? NONE : sceneLinks;
   const go = (id: string, view: Scene['view']) => {
     setActive(null);
-    setScene({ id, view });
+    setTarget({ id, view });
   };
-  const scenes = Object.keys(data.tour?.scenes ?? {}).map((id) => ({
-    id,
-    title: data.titles[id] ?? id,
-    ...data.mapPositions[id],
-  }));
+  const landed = (id: string) => {
+    setShown(id);
+    if (reported.current === id) return;
+    reported.current = id;
+    onSceneChange?.(id);
+  };
+  const loadFailed = (error: unknown, id: string) => {
+    // A failed change leaves the old pano on screen: go back to it, which
+    // also lets the visitor try the same link again.
+    if (id === target.id && id !== shown) setTarget({ id: shown, view: undefined });
+    onLoadError?.(error, id);
+  };
+  const scenes = useMemo(
+    () =>
+      Object.keys(data.tour?.scenes ?? {}).map((id) => ({
+        id,
+        title: data.titles[id] ?? id,
+        ...data.mapPositions[id],
+      })),
+    [data.tour, data.titles, data.mapPositions],
+  );
   const { controls, showCompass, showMap } = data.settings;
 
   return (
     <div ref={frame} className={cx('pn-tour', className)}>
       <PanoStage
         baseUrl={baseUrl}
-        panoId={panoId}
-        {...(scene.view && { view: scene.view })}
+        panoId={target.id}
+        {...(target.view && { view: target.view })}
         north={data.north[panoId] ?? 0}
         autoRotate={autoRotate}
         transition
         {...(createViewer && { createViewer })}
         aria-label={`${title}: ${data.titles[panoId] ?? ''}`}
-        {...(onSceneChange && { onSceneChange })}
+        onSceneChange={landed}
         {...(onHotspotOpen && {
           onHotspotOpen: (hotspotId: string) => onHotspotOpen(panoId, hotspotId),
         })}
-        {...(onLoadError && { onLoadError })}
+        onLoadError={loadFailed}
       >
         <PointsLayer
           isAllowedMediaUrl={isAllowedMediaUrl}

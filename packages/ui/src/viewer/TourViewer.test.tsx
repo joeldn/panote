@@ -6,14 +6,37 @@ import { TourViewer, type TourViewerData, type TourViewerProps } from './TourVie
 
 type Handler = (payload: string) => void;
 
+interface PendingTransition {
+  pano: string;
+  /** Lands the pano: emits scene-change, as the viewer does once it is drawable, then resolves. */
+  resolve: () => void;
+  reject: (err: unknown) => void;
+}
+
 class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
   fail = false;
+  /** When set, transitionTo stays pending until the test settles it from `pending`. */
+  defer = false;
+  pending: PendingTransition[] = [];
   load = vi.fn(async (pano: string) => {
     if (this.fail) throw new Error('manifest 404');
     this.emit('scene-change', pano);
   });
-  transitionTo = vi.fn(async (pano: string, _view?: unknown) => this.emit('scene-change', pano));
+  transitionTo = vi.fn(async (pano: string, _view?: unknown) => {
+    if (!this.defer) return this.emit('scene-change', pano);
+    return new Promise<void>((resolve, reject) => {
+      this.pending.push({
+        pano,
+        resolve: () => {
+          this.emit('scene-change', pano);
+          resolve();
+        },
+        reject,
+      });
+    });
+  });
+  requestRender = vi.fn();
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
   setNorth = vi.fn();
@@ -193,6 +216,69 @@ describe('TourViewer', () => {
     );
     await waitFor(() => expect(onLoadError).toHaveBeenCalledWith(expect.any(Error), 'square'));
     expect(screen.getByRole('navigation', { name: 'Tour' })).toBeTruthy();
+  });
+
+  describe('while a scene change is in flight', () => {
+    const crumb = () =>
+      within(screen.getByRole('navigation', { name: 'Tour' })).getByText(
+        (_, el) => el?.getAttribute('aria-current') === 'location',
+      ).textContent;
+    const mapCurrent = () =>
+      document.querySelector('.pn-scenemap__item[aria-current="location"]')?.textContent;
+
+    async function startTransition(props: Partial<TourViewerProps> = {}) {
+      const r = renderViewer({
+        data: data({ north: { square: 0.3, church: 0.9 } }),
+        bar: { home: null },
+        ...props,
+      });
+      await waitFor(() => expect(r.viewer().load).toHaveBeenCalledWith('square'));
+      r.viewer().defer = true;
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(r.viewer().pending).toHaveLength(1));
+      return r;
+    }
+
+    it('hides the markers and chevrons and keeps the rest on the scene on screen', async () => {
+      const { viewer } = await startTransition();
+      // Neither the old scene's points nor the new one's are clickable over the old pano.
+      expect(screen.queryByRole('button', { name: 'Fountain' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Altar' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Go to To the church' })).toBeNull();
+      expect(crumb()).toBe('Square');
+      expect(mapCurrent()).toBe('Square');
+      expect(screen.getByLabelText('Old town: Square')).toBeTruthy();
+      expect(viewer().setNorth).toHaveBeenLastCalledWith(0.3);
+
+      await act(async () => viewer().pending[0]!.resolve());
+
+      expect(screen.getByRole('button', { name: 'Altar' })).toBeTruthy();
+      expect(crumb()).toBe('Church');
+      expect(mapCurrent()).toBe('Church');
+      expect(screen.getByLabelText('Old town: Church')).toBeTruthy();
+      expect(viewer().setNorth).toHaveBeenLastCalledWith(0.9);
+    });
+
+    it('snaps back to the scene on screen when the load fails, and can retry', async () => {
+      const onLoadError = vi.fn();
+      const onSceneChange = vi.fn();
+      const { viewer } = await startTransition({ onLoadError, onSceneChange });
+      const err = new Error('manifest 500');
+
+      await act(async () => viewer().pending[0]!.reject(err));
+
+      expect(onLoadError).toHaveBeenCalledWith(err, 'church');
+      expect(screen.getByRole('button', { name: 'Fountain' })).toBeTruthy();
+      expect(crumb()).toBe('Square');
+      // The stage reloads the pano on screen; landing it again is not a new scene.
+      const back = viewer().pending.at(-1)!;
+      expect(back.pano).toBe('square');
+      await act(async () => back.resolve());
+      expect(onSceneChange.mock.calls).toEqual([['square']]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(viewer().pending.at(-1)!.pano).toBe('church'));
+    });
   });
 
   it('renders overlay and children', async () => {
