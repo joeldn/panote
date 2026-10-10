@@ -44,6 +44,8 @@ function sources(dir: string): string[] {
 const MODIFIERS = new Set(['solid', 'brands', 'spin']);
 
 const used = new Map<string, string>();
+/** Every `fa-${expr}` class built at runtime, as "file: expr". */
+const dynamic: string[] = [];
 for (const dir of [
   'apps/website/src',
   'apps/admin/src',
@@ -51,12 +53,23 @@ for (const dir of [
   'packages/web-kit/src',
 ]) {
   for (const file of sources(join(repo, dir))) {
-    for (const m of readFileSync(file, 'utf8').matchAll(/(?<![\w-])fa-([a-z0-9-]+)/g)) {
+    const text = readFileSync(file, 'utf8');
+    const rel = file.slice(repo.length + 1);
+    for (const m of text.matchAll(/(?<![\w-])fa-([a-z0-9-]+)/g)) {
       const name = m[1] as string;
-      if (!MODIFIERS.has(name) && !used.has(name)) used.set(name, file.slice(repo.length + 1));
+      if (!MODIFIERS.has(name) && !used.has(name)) used.set(name, rel);
     }
+    for (const m of text.matchAll(/(?<![\w-])fa-\$\{([^}]*)\}/g)) dynamic.push(`${rel}: ${m[1]}`);
+    for (const m of text.matchAll(/['"`]fa-['"`]\s*\+\s*[^\s;]+/g)) dynamic.push(`${rel}: ${m[0]}`);
   }
 }
+
+// Dynamic names the grep above can't see. Each must go through pointIcon() (which
+// maps anything off-list to the fallback) or be a known-good site below.
+const DYNAMIC_ALLOWED = new Set([
+  // The picker maps over searchIcons(), which only returns POINT_ICONS.
+  'apps/admin/src/editor/PointEditor.tsx: name',
+]);
 // The generated stylesheet itself lives in styles/, outside the scanned dirs.
 const css = readFileSync(join(styles, 'icons.css'), 'utf8');
 const rule = (name: string) => new RegExp(`^\\.fa-${name} \\{\\n  --fa: '\\\\[0-9a-f]+';`, 'm');
@@ -73,6 +86,20 @@ describe('icon subset', () => {
     const missing = [...used].filter(([name]) => !shipped.has(name));
     expect(missing).toEqual([]);
     for (const name of [...used.keys(), ...POINT_ICONS]) expect(css).toMatch(rule(name));
+  });
+
+  it('builds dynamic icon names only through pointIcon() or a listed site', () => {
+    const bad = dynamic.filter((d) => !/: pointIcon\(/.test(d) && !DYNAMIC_ALLOWED.has(d));
+    expect(bad).toEqual([]);
+    // The scan sees the known sites (so an empty `bad` isn't vacuous).
+    for (const site of [
+      'packages/ui/src/viewer/HotspotMarkers.tsx: pointIcon(h.icon)',
+      'packages/ui/src/viewer/HotspotPanel.tsx: pointIcon(hotspot.icon)',
+      'apps/admin/src/editor/Editor.tsx: pointIcon(h.icon)',
+      ...DYNAMIC_ALLOWED,
+    ]) {
+      expect(dynamic).toContain(site);
+    }
   });
 
   it('keeps styles/icons.css in step with the lists (rerun gen:icons after an edit)', () => {

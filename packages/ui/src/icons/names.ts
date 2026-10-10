@@ -2,6 +2,10 @@
 // styles/fa/ are generated from these lists (`pnpm --filter @internal/ui gen:icons`),
 // so an icon outside them renders blank (or as FALLBACK_ICON for solid).
 // Keep this file free of imports: the generator loads it with plain Node.
+//
+// A class built at runtime (`fa-${expr}`) is invisible to the drift test's grep, so
+// pass the name through pointIcon() or take it from a listed constant such as
+// POINT_ICONS; icons.test.ts fails on any other dynamic site unless allowlisted.
 
 /** Solid icons offered by the editor's point icon picker. */
 export const POINT_ICONS = [
