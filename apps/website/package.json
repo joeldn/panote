@@ -21,6 +21,7 @@
     "@internal/contracts": "workspace:*",
     "@internal/ui": "workspace:*",
     "@internal/web-kit": "workspace:*",
+    "@panote/core": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-router": "catalog:"

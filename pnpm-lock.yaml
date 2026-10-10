@@ -259,6 +259,9 @@ importers:
       '@internal/web-kit':
         specifier: workspace:*
         version: link:../../packages/web-kit
+      '@panote/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       react:
         specifier: 'catalog:'
         version: 19.3.0
