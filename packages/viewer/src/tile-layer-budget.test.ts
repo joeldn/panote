@@ -160,6 +160,44 @@ describe('texture budget while panning', () => {
     return result;
   }
 
+  it('keeps every visible tile when the visible set is bigger than the budget', async () => {
+    // 1 MB is the 24-tile floor, against 88 tiles on screen. Evicting by
+    // overflow alone would drop visible tiles, refetch them next frame and
+    // drop them again, forever, with the camera standing still.
+    const layer = new TileLayer(
+      renderer as unknown as GLRenderer,
+      deepManifest(),
+      '/tiles/',
+      1,
+      () => {},
+      8,
+      new TileFailureMonitor(),
+      () => Promise.resolve(),
+    );
+    await layer.loadBase();
+    const view = { yaw: 0, pitch: 0, fov: REQUESTED_FOV_DEG };
+    const still = (): void =>
+      layer.update(
+        viewProjection(view, ASPECT, MAX_HORIZONTAL_FOV_DEG),
+        FOV_DEG,
+        dirFromYawPitch(0, 0),
+        DEVICE_PIXEL_HEIGHT,
+      );
+    still();
+    for (let i = 0; i < 3; i++) await flush();
+    const loaded = requests.length;
+    const resident = new Set(renderer.live);
+    expect(resident.size).toBeGreaterThan(24);
+
+    for (let i = 0; i < 5; i++) {
+      still();
+      await flush();
+    }
+    expect(requests).toHaveLength(loaded);
+    expect(renderer.live).toEqual(resident);
+    layer.dispose();
+  });
+
   it('selects one pyramid level finer on a DPR-2 display', () => {
     // The premise the rest of this file rests on, and the change 084c1ea made:
     // the same viewport picks level 2 from CSS pixels and level 3 from device

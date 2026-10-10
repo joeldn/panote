@@ -514,6 +514,7 @@ export class TileLayer {
         lastUsed: e.lastUsed,
       })),
       this.maxTiles,
+      this.clock,
     );
     for (const key of keysToRemove) {
       const e = this.cache.get(key);
