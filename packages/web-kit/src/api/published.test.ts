@@ -118,3 +118,43 @@ describe('loadPublishedTour', () => {
     expect(fetch.mock.calls[0]?.[1]?.signal).toBe(ac.signal);
   });
 });
+
+describe('loadPublishedTour with worker boot data', () => {
+  const pointer = { v: 1, kind: 'tour', tourId: 'tour-a' };
+  const boot = (over: Record<string, unknown> = {}) => ({
+    slug: 'old-town',
+    record: pointer,
+    tour: bundle(),
+    ...over,
+  });
+  const network = () =>
+    cdn({ 'slugs/old-town.json': pointer, 'pub/tours/tour-a.json': bundle() });
+  const loadWith = (slug: string, fetch: ReturnType<typeof cdn>, data: unknown) =>
+    loadPublishedTour(CDN, slug, { fetch, now: () => NOW, boot: data });
+
+  it('uses boot data for the same slug without fetching', async () => {
+    const fetch = network();
+    const result = await loadWith('old-town', fetch, boot());
+    expect(result).toMatchObject({ kind: 'tour', tour: { tourId: 'tour-a' } });
+    expect(fetch).toHaveBeenCalledTimes(0);
+  });
+
+  it('ignores boot data for a different slug', async () => {
+    const fetch = network();
+    await loadWith('old-town', fetch, boot({ slug: 'elsewhere' }));
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['a malformed bundle', boot({ tour: { v: 1 } })],
+    ['a bundle of another tour', boot({ tour: bundle('tour-b') })],
+    ['an alias record', boot({ record: alias('new-name') })],
+    ['an unsafe tourId', boot({ record: { ...pointer, tourId: '../x' } })],
+    ['no boot data', null],
+  ])('falls back to the network for %s', async (_name, data) => {
+    const fetch = network();
+    const result = await loadWith('old-town', fetch, data);
+    expect(result).toMatchObject({ kind: 'tour', tour: { tourId: 'tour-a' } });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
