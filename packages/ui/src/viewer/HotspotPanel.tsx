@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
+import { pointIcon } from '../icons/names.js';
 import { renderMarkdown } from '../markdown.js';
 import type { ViewerHotspot, ViewerMedia } from './types.js';
 
@@ -103,7 +104,7 @@ export function HotspotPanel({ hotspot, onClose, isAllowedMediaUrl = NONE }: Hot
     >
       <header className="pn-hspanel__head">
         <i
-          className={`pn-hspanel__icon fa-solid fa-${hotspot.icon ?? 'info'}`}
+          className={`pn-hspanel__icon fa-solid fa-${pointIcon(hotspot.icon)}`}
           aria-hidden="true"
         />
         <h2 className="pn-hspanel__title">{hotspot.title}</h2>
