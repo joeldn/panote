@@ -16,8 +16,8 @@ import { sortDrawList, type GLRenderer } from './render/gl-renderer.js';
 //
 // Time is injected: the failure monitor owns the clock TileLayer measures
 // retry cooldowns against (see tile-retry.ts), so every delay in these tests
-// is advanced by hand rather than waited on. No timers are faked and no test
-// sleeps.
+// is advanced by hand rather than waited on, and no test sleeps. The wake
+// timer tests fake setTimeout as well and advance both together.
 
 const TILE_COOLDOWN_MS = 1_000; // first per-tile retry delay (tile-retry.ts)
 const BACKOFF_MS = 10_000; // overridden below so it dwarfs the tile cooldown
@@ -67,13 +67,17 @@ describe('TileLayer failure handling', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  function makeLayer(pano = 'pano-a', textureBudgetMB = 128): TileLayer {
+  function makeLayer(
+    pano = 'pano-a',
+    textureBudgetMB = 128,
+    onInvalidate: () => void = () => {},
+  ): TileLayer {
     return new TileLayer(
       renderer as unknown as GLRenderer,
       makeManifest(pano),
       '/tiles/',
       textureBudgetMB,
-      () => {},
+      onInvalidate,
       8,
       monitor,
       // The injected sleep advances the same clock the retry budget measures
@@ -373,17 +377,106 @@ describe('TileLayer failure handling', () => {
     layerC.dispose();
   });
 
-  it('cancels the backoff wake on dispose', async () => {
-    const layerA = makeLayer('pano-a');
-    script = { status: 500 };
-    await render(layerA, 0);
-    const layerB = makeLayer('pano-b');
-    await render(layerB, 0);
-    layerA.dispose();
-    const clears = vi.spyOn(globalThis, 'clearTimeout');
-    layerB.dispose();
-    expect(clears).toHaveBeenCalledWith(expect.anything());
-    clears.mockRestore();
+  describe('idle retry wake', () => {
+    // Fake timers for the wake itself; the retry clock is advanced alongside.
+    // Microtasks are drained by hand, since flush() waits on a real timer.
+    const drain = async (): Promise<void> => {
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** Fail exactly one non-base tile once, transiently; everything else loads. */
+    function failOneTileOnce(): () => string | undefined {
+      let failed: string | undefined;
+      respond = (url) => {
+        if (failed === undefined && !url.includes('/0/')) {
+          failed = url;
+          return { status: 503 };
+        }
+        return null;
+      };
+      return () => failed;
+    }
+
+    it('asks for a frame once a failed tile on a still view may be retried', async () => {
+      const invalidate = vi.fn();
+      const failed = failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      await drain();
+      expect(failed()).toBeDefined();
+      const calls = invalidate.mock.calls.length;
+
+      // Nothing else is going to draw a frame: the view is still and every
+      // other tile has landed. The cooldown has to end in a wake.
+      advance(TILE_COOLDOWN_MS - 1);
+      await vi.advanceTimersByTimeAsync(TILE_COOLDOWN_MS - 1);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+      advance(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(invalidate).toHaveBeenCalledTimes(calls + 1);
+
+      // The frame that wake asks for retries the tile, which now loads.
+      frame(layer, 0);
+      await drain();
+      expect(requests.filter((u) => u === failed())).toHaveLength(2);
+      expect(layer.hasPending()).toBe(false);
+      layer.dispose();
+    });
+
+    it('does not wake for a failed tile that is no longer wanted', async () => {
+      const invalidate = vi.fn();
+      failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      frame(layer, Math.PI); // pan away before the failure lands
+      await drain();
+      const calls = invalidate.mock.calls.length;
+      advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+      layer.dispose();
+    });
+
+    it('wakes for a cooling tile that a pan brings back on screen', async () => {
+      const invalidate = vi.fn();
+      failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      frame(layer, Math.PI); // the failure lands while the tile is off screen
+      await drain();
+      advance(TILE_COOLDOWN_MS / 2);
+      frame(layer, 0); // back on screen, still cooling, then the view rests
+      await drain();
+      const calls = invalidate.mock.calls.length;
+      advance(TILE_COOLDOWN_MS / 2);
+      await vi.advanceTimersByTimeAsync(TILE_COOLDOWN_MS / 2);
+      expect(invalidate).toHaveBeenCalledTimes(calls + 1);
+      layer.dispose();
+    });
+
+    it('cancels a pending wake on dispose', async () => {
+      const invalidate = vi.fn();
+      failOneTileOnce();
+      const layer = makeLayer('pano-a', 128, invalidate);
+      frame(layer, 0);
+      await drain();
+      expect(vi.getTimerCount()).toBe(1);
+
+      layer.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      const calls = invalidate.mock.calls.length;
+      advance(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(invalidate).toHaveBeenCalledTimes(calls);
+    });
   });
 
   it('leaves an aborted in-flight load fully re-queueable', async () => {
