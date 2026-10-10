@@ -14,9 +14,15 @@
   --vis-unlisted: #c8762e;
 
   --scrim: rgba(20, 18, 14, 0.5);
-  --scrim-blur: blur(6px);
   --cbg: rgba(255, 255, 255, 0.9);
   --cbf: blur(12px);
+  /*
+   * Solid glass for chrome over the pano. No backdrop blur: the canvas repaints
+   * every frame while it moves, and blurring under each control costs a GPU pass
+   * per element per frame for a barely visible effect. --cbg and --cbf stay for
+   * the admin editor until it drops its blur too.
+   */
+  --cbg-solid: rgba(255, 255, 255, 0.94);
   --mbg: rgba(250, 248, 244, 0.62);
   --chip-bg: rgba(20, 18, 14, 0.92);
   --chip-text: #f4f1ea;

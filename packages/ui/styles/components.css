@@ -61,9 +61,7 @@
   background: var(--ink-06);
 }
 .pn-btn--glass {
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   color: var(--ink);
   box-shadow: var(--shadow-glass);
   border-radius: 11px;
@@ -101,8 +99,6 @@
   justify-content: center;
   padding: 24px;
   background: var(--scrim);
-  backdrop-filter: var(--scrim-blur);
-  -webkit-backdrop-filter: var(--scrim-blur);
 }
 .pn-modal {
   position: relative;
@@ -227,9 +223,7 @@ button.pn-chip {
   font-size: 10px;
 }
 .pn-chip--dark {
-  background: rgba(20, 18, 14, 0.5);
-  backdrop-filter: var(--scrim-blur);
-  -webkit-backdrop-filter: var(--scrim-blur);
+  background: rgba(20, 18, 14, 0.72);
   color: #fff;
 }
 .pn-chip--accent {
@@ -237,7 +231,7 @@ button.pn-chip {
   color: #fff;
 }
 .pn-chip--light {
-  background: var(--cbg);
+  background: var(--cbg-solid);
   color: var(--ink);
   font-weight: 500;
   font-size: 12px;

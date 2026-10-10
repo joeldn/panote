@@ -18,9 +18,7 @@
   border: 0;
   padding: 9px 12px;
   border-radius: 11px;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   color: var(--ink);
   font: 500 13px var(--fmono);
@@ -52,7 +50,7 @@
   left: 14px;
   padding: 6px 10px;
   border-radius: var(--r-pill);
-  background: var(--cbg);
+  background: var(--cbg-solid);
   color: var(--ink);
   text-decoration: none;
   font-size: 12px;

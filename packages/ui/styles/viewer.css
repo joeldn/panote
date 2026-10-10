@@ -80,9 +80,7 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
 }
 .pn-compass__needle {
@@ -106,9 +104,7 @@
   gap: 4px;
   padding: 6px;
   border-radius: 14px;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   transform: translateX(-50%);
 }
@@ -159,9 +155,7 @@
   border: 0;
   padding: 9px 14px;
   border-radius: 11px;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   color: var(--ink);
   font: 500 13px var(--fbody);
@@ -177,9 +171,7 @@
   overflow: auto;
   padding: 10px;
   border-radius: var(--r-lg);
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-popover);
   animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
 }
@@ -399,9 +391,7 @@
   min-width: 0;
   padding: 9px 14px;
   border-radius: 11px;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   font-size: 13.5px;
   white-space: nowrap;
@@ -425,9 +415,7 @@
 .pn-tourbar__btn {
   padding: 10px 16px;
   border-radius: 11px;
-  background: var(--cbg);
-  backdrop-filter: var(--cbf);
-  -webkit-backdrop-filter: var(--cbf);
+  background: var(--cbg-solid);
   box-shadow: var(--shadow-glass);
   color: var(--ink);
   font: 500 14px var(--fbody);
