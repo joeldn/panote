@@ -1,8 +1,8 @@
 import { Button } from '@internal/ui';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouteError } from 'react-router';
 
-import { isChunkLoadError, page, reloadOnce } from './chunk-reload.js';
+import { canReload, isChunkLoadError, page, reloadOnce } from './chunk-reload.js';
 
 /**
  * errorElement for the lazy Shell routes. A chunk that 404s after a deploy reloads the page
@@ -11,9 +11,21 @@ import { isChunkLoadError, page, reloadOnce } from './chunk-reload.js';
  */
 export function RouteError() {
   const error = useRouteError();
-  const reloading = isChunkLoadError(error) && reloadOnce();
+  // Decided once, without side effects: StrictMode renders twice, and a reload started from
+  // the first render would make the second one show the retry card while the page reloads.
+  const [reloading, setReloading] = useState(() => isChunkLoadError(error) && canReload());
+  const reloaded = useRef(false);
   useEffect(() => {
-    if (!reloading) console.error('page failed to load', error);
+    if (!reloading) {
+      console.error('page failed to load', error);
+      return;
+    }
+    // StrictMode runs effects twice too; the ref keeps it to one reload.
+    if (reloaded.current) return;
+    reloaded.current = true;
+    // Only when storage refused the timestamp: with no loop guard, show the card instead.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!reloadOnce()) setReloading(false);
   }, [error, reloading]);
   if (reloading) return null;
   return (

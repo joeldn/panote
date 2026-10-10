@@ -53,7 +53,7 @@ anonymous).
 
 `apps/website` and `apps/admin` are Vite + React SPAs, each deployed as a Worker with **static
 assets** on the same host as the APIs. Admin is assets-only; the website also has a small `main`
-script that only runs for `/s/*` (slug redirects, below). Why not Pages, and why
+script that only runs for `/s/*` (slug redirects and tour page priming, below). Why not Pages, and why
 build-time config: `docs/decisions.md`.
 
 | App | Script (dev / production) | Route (dev / production) | Vite `base` / output |
@@ -215,9 +215,10 @@ Post-deploy checks (each `grep` should print `x-robots-tag: noindex, nofollow` u
 
 CSP notes for the D units:
 
-- The viewer's vanilla info-hotspots UI (`@panote/viewer/ui`) injects a `<style>` element, which
-  `style-src 'self'` blocks. The apps don't use it: the React viewer chrome in `@internal/ui`
-  (`styles/viewer.css`) replaces it. Inline `style` set from JS (CSSOM) is not affected.
+- No `<style>` elements: `style-src 'self'` would block them. The viewer chrome is React in
+  `@internal/ui` with a plain stylesheet (`styles/viewer.css`); the viewer's old vanilla UI
+  subpath (`@panote/viewer/ui`), which injected one, has been deleted. Inline `style` set from JS
+  (CSSOM) is not affected.
 - Hotspot media: video and images load only from `'self'` and the CDN (`media-src`/`img-src`),
   YouTube only via `www.youtube-nocookie.com` (`frame-src`). The public viewer renders media on any
   other host (or media that fails to load) as an "Open image/video ↗" link instead.

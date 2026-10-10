@@ -349,7 +349,9 @@ describe('primes a live tour page', () => {
     const started = Date.now();
     const res = await call('/s/new-name');
     expect(await res.text()).toBe(PAGE);
-    expect(Date.now() - started).toBeLessThan(BOOT_BUDGET_MS + 1500);
+    // A literal bound: one derived from the budget would pass however far it was raised.
+    expect(BOOT_BUDGET_MS).toBeLessThanOrEqual(500);
+    expect(Date.now() - started).toBeLessThan(2000);
     expect(warn).toHaveBeenCalledOnce();
   });
 
