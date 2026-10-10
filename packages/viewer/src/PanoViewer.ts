@@ -653,11 +653,6 @@ export class PanoViewer {
     this.invalidate();
   }
 
-  /** Report that a hotspot UI layer opened a hotspot, for analytics listeners. */
-  reportHotspotOpen(hotspotId: string): void {
-    this.emitter.emit('hotspot-open', hotspotId);
-  }
-
   // Pause auto-rotate immediately and arm a timer to resume it once the
   // configured idle window passes with no further interaction.
   private pauseAutoRotate(): void {

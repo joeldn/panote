@@ -1,8 +1,9 @@
 import { PanoViewer, type PreviewSource, type View, type ViewerOptions } from '@panote/viewer';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { cx } from './cx.js';
 import { panoteViewerPreset } from './panote-viewer.js';
+import { StageEventsContext, type StageEvents } from './stage-events.js';
 import { PanoViewerContext } from './viewer-context.js';
 
 export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewer;
@@ -85,6 +86,7 @@ export interface PanoStageProps {
   options?: StageViewerOptions;
   onViewer?: (viewer: PanoViewer | null) => void;
   onSceneChange?: (panoId: string) => void;
+  /** Chrome inside the stage opened a point (see `useStageEvents`). */
   onHotspotOpen?: (hotspotId: string) => void;
   /**
    * A tile load for `panoId` failed, including the reload the viewer runs on
@@ -158,6 +160,12 @@ export function PanoStage({
     callbacks.current = { onViewer, onSceneChange, onHotspotOpen, onLoadError, onPreviewError };
   });
 
+  // Handed to chrome through context; reads the latest callback when called.
+  const stageEvents = useMemo<StageEvents>(
+    () => ({ hotspotOpen: (id) => callbacks.current.onHotspotOpen?.(id) }),
+    [],
+  );
+
   // What the stage last loaded, to tell a pano change (apply the scene's view)
   // from a reload of the same pano (keep the camera), and which preview this
   // viewer has already been given (a source can only be shown once).
@@ -181,7 +189,6 @@ export function PanoStage({
       landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
       callbacks.current.onSceneChange?.(id);
     };
-    const onHotspot = (id: string) => callbacks.current.onHotspotOpen?.(id);
     const onRestored = () => setRestores((n) => n + 1);
     // The viewer's own reload after a restore has no promise to reject.
     const onReloadError = ({ error, id }: { error: unknown; id: string }) => {
@@ -191,7 +198,6 @@ export function PanoStage({
       callbacks.current.onLoadError?.(error, id);
     };
     v.on('scene-change', onScene);
-    v.on('hotspot-open', onHotspot);
     v.on('context-restored', onRestored);
     v.on('load-error', onReloadError);
     setViewer(v);
@@ -200,7 +206,6 @@ export function PanoStage({
       loaded.current = null;
       landed.current = null;
       v.off('scene-change', onScene);
-      v.off('hotspot-open', onHotspot);
       v.off('context-restored', onRestored);
       v.off('load-error', onReloadError);
       callbacks.current.onViewer?.(null);
@@ -349,7 +354,9 @@ export function PanoStage({
     <div className={cx('pn-stage', className)} style={style}>
       <div ref={hostRef} className="pn-stage__viewer" role="application" aria-label={ariaLabel} />
       <PanoViewerContext.Provider value={viewer}>
-        <div className="pn-stage__overlay">{children}</div>
+        <StageEventsContext.Provider value={stageEvents}>
+          <div className="pn-stage__overlay">{children}</div>
+        </StageEventsContext.Provider>
       </PanoViewerContext.Provider>
     </div>
   );

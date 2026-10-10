@@ -1,9 +1,10 @@
 import type { PanoViewer, PreviewSource, ViewerOptions } from '@panote/viewer';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PanoStage, type StagePreview } from './PanoStage.js';
+import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
 
 type Handler = (payload: unknown) => void;
@@ -230,14 +231,19 @@ describe('PanoStage', () => {
     expect(onLoadError).toHaveBeenCalledWith(new Error('manifest 404'), 'gone');
   });
 
-  it('forwards scene-change / hotspot-open events and exposes the viewer to children', () => {
+  it('forwards scene-change and chrome hotspot opens, and exposes the viewer to children', () => {
     const f = factory();
     const onSceneChange = vi.fn();
     const onHotspotOpen = vi.fn();
     const onViewer = vi.fn();
     function Chrome() {
       const viewer = usePanoViewer();
-      return <span>{viewer ? 'chrome:ready' : 'chrome:none'}</span>;
+      const events = useStageEvents();
+      return (
+        <button type="button" onClick={() => events.hotspotOpen('h1')}>
+          {viewer ? 'chrome:ready' : 'chrome:none'}
+        </button>
+      );
     }
     const { unmount } = render(
       <PanoStage
@@ -255,9 +261,11 @@ describe('PanoStage', () => {
     expect(screen.getByText('chrome:ready')).toBeTruthy();
     expect(onViewer).toHaveBeenLastCalledWith(v);
     v.emit('scene-change', 'hall');
-    v.emit('hotspot-open', 'h1');
+    fireEvent.click(screen.getByText('chrome:ready'));
     expect(onSceneChange).toHaveBeenCalledWith('hall');
-    expect(onHotspotOpen).toHaveBeenCalledWith('h1');
+    expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('h1');
+    // Analytics no longer pass through the viewer.
+    expect(v.handlers.has('hotspot-open')).toBe(false);
     unmount();
     expect(v.dispose).toHaveBeenCalledTimes(1);
     expect(v.handlers.get('scene-change')?.size).toBe(0);

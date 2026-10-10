@@ -85,8 +85,8 @@ describe('owner preview', () => {
     await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
     fireEvent.click(screen.getByRole('button', { name: 'Altar' }));
     expect(await screen.findByRole('complementary')).toBeTruthy();
-    // The open went through the viewer's hotspot-open event, as it does for visitors.
-    expect(lastViewer().reportHotspotOpen).toHaveBeenCalledWith('i1');
+    // The open is reported to the stage, as it is for visitors; Preview gives the
+    // stage no onHotspotOpen, so it goes nowhere (nothing is sent, below).
     fireEvent.click(screen.getByRole('button', { name: 'Go to Square' }));
     await waitFor(() => expect(lastViewer().transitionTo.mock.calls[0]?.[0]).toBe('square'));
     document.dispatchEvent(new Event('visibilitychange'));

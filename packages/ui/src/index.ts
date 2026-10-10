@@ -54,6 +54,7 @@ export {
 } from './share/links.js';
 export { ShareModal, type ShareModalProps, type SharePano } from './share/ShareModal.js';
 export { SlugField, type SlugFieldProps } from './share/SlugField.js';
+export { StageEventsContext, useStageEvents, type StageEvents } from './stage-events.js';
 export { useModalTitleId } from './use-modal-title-id.js';
 export { usePanoViewer } from './viewer-context.js';
 export { VISIBILITY_META, type Visibility } from './visibility.js';

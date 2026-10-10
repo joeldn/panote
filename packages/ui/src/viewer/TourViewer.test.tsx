@@ -54,7 +54,6 @@ class FakeViewer {
   onRender = () => () => {};
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
-  reportHotspotOpen = vi.fn((id: string) => this.emit('hotspot-open', id));
   prefetch = vi.fn(async () => {});
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
@@ -456,6 +455,15 @@ describe('TourViewer', () => {
       expect(crumb()).toBe('Square');
       expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
     });
+  });
+
+  it('hands point opens to onHotspotOpen through the stage, not the viewer', async () => {
+    const onHotspotOpen = vi.fn();
+    const { viewer } = renderViewer({ onHotspotOpen });
+    await waitFor(() => expect(viewer().load).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+    expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('square', 'i1');
+    expect(viewer().handlers.has('hotspot-open')).toBe(false);
   });
 
   describe('prefetching linked scenes', () => {

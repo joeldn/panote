@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { cx } from '../cx.js';
 import { prefetchPano } from '../panote-viewer.js';
 import { PanoStage, type ViewerFactory } from '../PanoStage.js';
+import { useStageEvents } from '../stage-events.js';
 import { usePanoViewer } from '../viewer-context.js';
 import { Compass } from './Compass.js';
 import { FloorLinks } from './FloorLinks.js';
@@ -98,7 +99,7 @@ interface PointsLayerProps {
   onGo: (link: ViewerLinkArrow) => void;
 }
 
-// Rendered inside PanoStage so it can reach the viewer for hotspot-open events.
+// Rendered inside PanoStage so it can report point opens through the stage.
 function PointsLayer({
   panoId,
   isAllowedMediaUrl,
@@ -109,6 +110,7 @@ function PointsLayer({
   onGo,
 }: PointsLayerProps) {
   const viewer = usePanoViewer();
+  const events = useStageEvents();
   const open = (h: ViewerHotspot) => {
     // The marker is a toggle (aria-pressed): a second click closes its point.
     if (active?.id === h.id) {
@@ -116,7 +118,9 @@ function PointsLayer({
       return;
     }
     setActive(h);
-    viewer?.reportHotspotOpen(h.id);
+    // Reported once the stage has its viewer, as when the open went through
+    // the viewer: a click before that is not counted.
+    if (viewer) events.hotspotOpen(h.id);
   };
   return (
     <>

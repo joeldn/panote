@@ -1066,19 +1066,6 @@ describe('PanoViewer', () => {
     });
   });
 
-  describe('hotspot-open reporting', () => {
-    it('emits hotspot-open with the reported id', () => {
-      const viewer = new PanoViewer(makeContainer(400, 800));
-      const hotspotOpen = vi.fn();
-      viewer.on('hotspot-open', hotspotOpen);
-
-      viewer.reportHotspotOpen('spot-1');
-
-      expect(hotspotOpen).toHaveBeenCalledTimes(1);
-      expect(hotspotOpen).toHaveBeenCalledWith('spot-1');
-    });
-  });
-
   describe('local preview', () => {
     type FakeRenderer = {
       uploadTile: ReturnType<typeof vi.fn>;

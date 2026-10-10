@@ -59,7 +59,6 @@ export type PanoViewerEvents = {
   'tiles-settled': undefined;
   loading: string; // source id
   'scene-change': string; // source id, emitted whenever a load() or showPreview() completes
-  'hotspot-open': string; // hotspotId, reported by a hotspot UI layer
   // The WebGL context was lost (GPU reset, memory pressure, a backgrounded
   // mobile tab). Nothing draws until it is restored.
   'context-lost': undefined;
