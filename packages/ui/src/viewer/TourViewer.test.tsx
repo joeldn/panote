@@ -346,6 +346,67 @@ describe('TourViewer', () => {
     });
   });
 
+  describe('prefetching linked scenes', () => {
+    const many = () =>
+      data({
+        links: {
+          square: [
+            { to: 'church', yaw: 1, label: 'To the church' },
+            { to: 'church', yaw: 1.2, label: 'Also the church' },
+            { to: 'tower', yaw: 2 },
+            { to: 'bridge', yaw: 3 },
+            { to: 'market', yaw: 4 },
+          ],
+          church: [],
+        },
+        titles: { square: 'Square', church: 'Church', tower: 'Tower', bridge: 'Bridge' },
+      });
+    const settle = (v: FakeViewer) =>
+      act(() => v.emit('tiles-settled', undefined as unknown as string));
+
+    it('fetches up to three link targets, only once the scene on screen has settled', async () => {
+      const prefetch = vi.fn(async () => {});
+      const { viewer } = renderViewer({ data: many(), prefetch });
+      await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
+      expect(prefetch).not.toHaveBeenCalled();
+
+      settle(viewer());
+
+      expect(prefetch.mock.calls.map((c: unknown[]) => c.slice(0, 2))).toEqual([
+        ['https://cdn.test/tiles/', 'church'],
+        ['https://cdn.test/tiles/', 'tower'],
+        ['https://cdn.test/tiles/', 'bridge'],
+      ]);
+      // Later settles (after each pan) don't fetch again.
+      settle(viewer());
+      expect(prefetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('cancels them when the visitor moves on', async () => {
+      const signals: AbortSignal[] = [];
+      const prefetch = vi.fn(async (_b: string, _p: string, o?: { signal?: AbortSignal }) => {
+        if (o?.signal) signals.push(o.signal);
+      });
+      const { viewer } = renderViewer({ data: many(), prefetch });
+      await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
+      settle(viewer());
+      expect(signals).toHaveLength(3);
+      expect(signals.some((s) => s.aborted)).toBe(false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Go to Tower' }));
+
+      expect(signals.every((s) => s.aborted)).toBe(true);
+    });
+
+    it('fetches nothing for a single scene', async () => {
+      const prefetch = vi.fn(async () => {});
+      const { viewer } = renderViewer({ data: many(), prefetch, single: true });
+      await waitFor(() => expect(viewer().load).toHaveBeenCalledWith('square'));
+      settle(viewer());
+      expect(prefetch).not.toHaveBeenCalled();
+    });
+  });
+
   it('renders overlay and children', async () => {
     renderViewer({
       overlay: (panoId) => <p>overlay {panoId}</p>,

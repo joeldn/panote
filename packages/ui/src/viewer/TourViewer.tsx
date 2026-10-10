@@ -1,6 +1,7 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
 import type { Tour } from '@panote/viewer/ui';
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { prefetchPano } from '@panote/viewer';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
 import { PanoStage, type ViewerFactory } from '../PanoStage.js';
@@ -61,6 +62,8 @@ export interface TourViewerProps {
   children?: ReactNode;
   /** Test seam: builds the viewer. */
   createViewer?: ViewerFactory;
+  /** Test seam: warms the cache for a linked scene (defaults to `prefetchPano`). */
+  prefetch?: typeof prefetchPano;
 }
 
 type Scene = { id: string; view: { yaw?: number; pitch?: number; fov?: number } | undefined };
@@ -135,6 +138,43 @@ function PointsLayer({
   );
 }
 
+// Linked scenes warmed per scene: each costs a manifest and six base tiles.
+const PREFETCH_LIMIT = 3;
+
+interface LinkPrefetchProps {
+  baseUrl: string;
+  /** Scenes to warm, in order; empty while a change is in flight. */
+  targets: readonly string[];
+  prefetch: typeof prefetchPano;
+}
+
+// Once the scene on screen has its tiles, warm the next scenes' bases so a
+// floor-link hop starts from the cache. Rendered inside PanoStage for the viewer.
+function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
+  const viewer = usePanoViewer();
+  const key = targets.join('\n');
+  const latest = useRef({ targets, prefetch });
+  useEffect(() => {
+    latest.current = { targets, prefetch };
+  });
+  useEffect(() => {
+    if (!viewer || key === '') return;
+    const controller = new AbortController();
+    const settled = () => {
+      // Once per scene: later settles follow pans, not a new scene.
+      viewer.off('tiles-settled', settled);
+      const { targets: ids, prefetch: warm } = latest.current;
+      for (const id of ids) void warm(baseUrl, id, { signal: controller.signal });
+    };
+    viewer.on('tiles-settled', settled);
+    return () => {
+      viewer.off('tiles-settled', settled);
+      controller.abort();
+    };
+  }, [viewer, baseUrl, key]);
+  return null;
+}
+
 /**
  * Screen 05's viewer: the pano with its points, floor links, compass, map and
  * controls, under an optional top bar. Honours the tour's settings. It sends
@@ -156,6 +196,7 @@ export function TourViewer({
   className,
   children,
   createViewer,
+  prefetch = prefetchPano,
 }: TourViewerProps) {
   const frame = useRef<HTMLDivElement>(null);
   // `target` is the scene asked for; `shown` is the one on screen, which only
@@ -194,6 +235,11 @@ export function TourViewer({
   // Like the vanilla nav arrows: no points or chevrons while the pano is changing.
   const hotspots = moving ? NONE : sceneHotspots;
   const links = moving ? NONE : sceneLinks;
+  const prefetchTargets = useMemo(
+    () =>
+      [...new Set(links.map((l) => l.to))].filter((id) => id !== panoId).slice(0, PREFETCH_LIMIT),
+    [links, panoId],
+  );
   const go = (id: string, view: Scene['view']) => {
     setActive(null);
     setTarget({ id, view });
@@ -238,6 +284,7 @@ export function TourViewer({
         })}
         onLoadError={loadFailed}
       >
+        <LinkPrefetch baseUrl={baseUrl} targets={prefetchTargets} prefetch={prefetch} />
         <PointsLayer
           isAllowedMediaUrl={isAllowedMediaUrl}
           panoId={panoId}
