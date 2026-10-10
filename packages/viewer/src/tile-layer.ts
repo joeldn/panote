@@ -10,7 +10,12 @@ import {
   type Frustum,
   type Mat4,
 } from './render/projection.js';
-import type { GLRenderer, DrawItem, TileHandle } from './render/gl-renderer.js';
+import {
+  ContextLostError,
+  type GLRenderer,
+  type DrawItem,
+  type TileHandle,
+} from './render/gl-renderer.js';
 import {
   TileHttpError,
   TileRetryBudget,
@@ -29,6 +34,7 @@ type TileLoadOutcome =
   | { kind: 'decoded' } // waiting in the ready queue for update() to upload it
   | { kind: 'skipped' } // another call owns it
   | { kind: 'aborted' } // cancelled: panned away, or the layer was disposed
+  | { kind: 'lost' } // decoded, but the WebGL context is lost and it cannot go up
   | { kind: 'failed'; failure: FailureKind; error: unknown };
 
 /**
@@ -91,6 +97,14 @@ const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
     signal.addEventListener('abort', onAbort, { once: true });
   });
 
+/** Resolves once `signal` aborts. */
+function untilAborted(signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener('abort', () => resolve(), { once: true });
+  });
+}
+
 interface TileEntry {
   key: string;
   handle: TileHandle;
@@ -119,12 +133,14 @@ const MAX_UPLOADS_PER_UPDATE = 3;
 /** Stop uploading for this update once this much time has gone. */
 const UPLOAD_BUDGET_MS = 4;
 /**
- * Frames a tile may stay out of the view before its download is aborted (or
- * its decoded bitmap dropped). A tile one pixel outside the frustum for a
- * frame of a pan would otherwise be cancelled mid-download and fetched again
- * when it comes back.
+ * How long a tile may stay out of the view before its download is aborted (or
+ * its decoded bitmap dropped), in ms: just under ten frames at 60 Hz. A tile
+ * one pixel outside the frustum for a frame of a pan would otherwise be
+ * cancelled mid-download and fetched again when it comes back. Time, not
+ * frames, because frames stop when the view does: counted in frames, a fetch
+ * left behind by the last pan would never age out.
  */
-const ABORT_AFTER_FRAMES = 10;
+const ABORT_GRACE_MS = 160;
 /** Candidates at the head of each frame's queue fetched at high priority. */
 const HIGH_PRIORITY_CANDIDATES = 4;
 
@@ -217,7 +233,7 @@ export class TileLayer {
   private inflight = new Map<string, AbortController>();
   // Decoded and not yet uploaded, in arrival order. See drainReady().
   private ready = new Map<string, ReadyTile>();
-  // Consecutive frames an in-flight or decoded tile has been unwanted.
+  // When an in-flight or decoded tile stopped being wanted, on the layer's clock.
   private stale = new Map<string, number>();
   // `${level}/` for every level, the start of that level's keys.
   private levelPrefix: string[];
@@ -231,12 +247,15 @@ export class TileLayer {
   private maxTiles: number;
   private maxConcurrent: number;
   private disposed = false;
+  // Set while the viewer is off screen: no new requests start.
+  private paused = false;
   // Aborted by dispose(). Only the base loader's retry wait listens to it: the
   // in-flight fetches are cancelled through their own controllers in `inflight`.
   private lifetime = new AbortController();
   // The one wake timer: fires onInvalidate when a failed tile's cooldown ends,
-  // so an idle viewer retries it without waiting for an interaction. `wakeAt`
-  // is when it fires, on the retry clock, so an earlier need can replace a
+  // so an idle viewer retries it without waiting for an interaction, or when
+  // a load left out of view has had its grace and can be aborted. `wakeAt` is
+  // when it fires, on the layer's clock, so an earlier need can replace a
   // later one.
   private wakeTimer: ReturnType<typeof setTimeout> | undefined;
   private wakeAt = Infinity;
@@ -324,6 +343,13 @@ export class TileLayer {
       // discards this load — so it resolves quietly rather than reporting an
       // error nobody is waiting for.
       if (this.disposed) return;
+      // The tile is fine, but no texture can be made until the context is
+      // restored, and the viewer replaces this layer then. Failing the load
+      // would report a fault that is not there.
+      if (result.kind === 'lost') {
+        await untilAborted(this.lifetime.signal);
+        return;
+      }
       // 'skipped'/'aborted' spend no attempt, so retrying would spin: the only
       // producers are a concurrent load of the same key or a cancellation the
       // layer did not ask for, and neither resolves by asking again.
@@ -368,14 +394,18 @@ export class TileLayer {
       for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
     }
 
-    this.drainReady(level);
+    const now = this.now();
+    this.drainReady(level, now);
 
     // The candidates are rebuilt even for a still view: a tile that landed,
     // failed or finished its cooldown since the last frame changes them.
     this.candidates.length = 0;
     this.parentsQueued.clear();
-    // Soonest a wanted tile that is cooling down after a failure may go again.
-    let nextRetryMs = Infinity;
+    // Soonest the layer needs a frame with nothing else asking for one: a
+    // wanted tile's retry cooldown ending, or a stale load's grace running out.
+    let wakeMs = Infinity;
+    // Visible tiles at the target level not yet resident or decoded.
+    let missing = 0;
     const { g, data, keys } = this.table(level);
     for (let n = 0; n < this.visibleCount; n++) {
       const i = this.visible[n]!;
@@ -387,33 +417,60 @@ export class TileLayer {
         entry.lastUsed = this.clock;
         continue;
       }
-      const o = i * STRIDE;
-      // Smaller = closer to the view centre.
-      const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
-      const f = Math.floor(i / (g * g));
-      const rest = i - f * g * g;
-      const x = rest % g;
-      const y = Math.floor(rest / g);
-      if (this.inflight.has(key) || this.ready.has(key)) {
-        // On its way.
-      } else if (this.retry.eligible(key)) {
-        this.pushCandidate(key, level, FACES[f]!, x, y, priority);
+      if (this.ready.has(key)) continue; // goes up within a few frames
+      missing++;
+      if (this.inflight.has(key)) continue; // on its way
+      if (this.retry.eligible(key)) {
+        const o = i * STRIDE;
+        // Smaller = closer to the view centre.
+        const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
+        const f = Math.floor(i / (g * g));
+        const rest = i - f * g * g;
+        this.pushCandidate(key, level, FACES[f]!, rest % g, Math.floor(rest / g), priority);
       } else {
-        nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
+        wakeMs = Math.min(wakeMs, this.retry.waitMs(key));
       }
-      // Missing, however long for: its parent is what shows in its place.
-      if (level >= 2) this.queueParent(f, level - 1, x >> 1, y >> 1, priority);
+    }
+
+    // A missing tile's parent is what shows in its place. Fetching parents
+    // only pays when the missing tiles cannot all be requested at once (a
+    // zoom, a jump): then a parent lands in the first round where its four
+    // children would take several. On a steady pan the few tiles that come
+    // into view all go in one round, and their parents would only add
+    // requests ahead of them.
+    if (level >= 2) {
+      const fetchParents = missing > this.maxConcurrent;
+      for (let n = 0; n < this.visibleCount; n++) {
+        const i = this.visible[n]!;
+        if (this.cache.has(keys[i]!)) continue;
+        const o = i * STRIDE;
+        const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
+        const f = Math.floor(i / (g * g));
+        const rest = i - f * g * g;
+        const x = rest % g;
+        const y = Math.floor(rest / g);
+        wakeMs = Math.min(
+          wakeMs,
+          this.queueParent(f, level - 1, x >> 1, y >> 1, priority, fetchParents),
+        );
+      }
     }
 
     // Abort in-flight loads that have been out of the view for
-    // ABORT_AFTER_FRAMES frames in a row. See wanted() for what is kept.
+    // ABORT_GRACE_MS. See wanted() for what is kept.
     for (const [key, controller] of this.inflight) {
       if (this.wanted(key, level)) {
         this.stale.delete(key);
-      } else if (this.staleFrames(key) > ABORT_AFTER_FRAMES) {
+        continue;
+      }
+      const age = this.unwantedFor(key, now);
+      if (age >= ABORT_GRACE_MS) {
         controller.abort();
         this.inflight.delete(key);
         this.stale.delete(key);
+      } else {
+        // Frames stop when the view does, so the abort needs its own wake.
+        wakeMs = Math.min(wakeMs, ABORT_GRACE_MS - age);
       }
     }
 
@@ -440,8 +497,9 @@ export class TileLayer {
     this.evict();
     this.pump();
     // Frames only run when something is dirty, so a hole waiting out a retry
-    // cooldown on a still view needs its own wake.
-    this.armWake(nextRetryMs);
+    // cooldown, or a stale load waiting out its grace, on a still view needs
+    // its own wake.
+    this.armWake(wakeMs);
   }
 
   /** Every resident tile at or below the target level; the renderer orders them. */
@@ -455,13 +513,24 @@ export class TileLayer {
     return this._drawList;
   }
 
+  /**
+   * Hold (or release) the queue: while paused, no new request starts, and the
+   * ones in flight finish. For a viewer scrolled off screen, whose frames
+   * have stopped but whose finishing loads would otherwise keep pumping.
+   */
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    this.pump();
+  }
+
   private pump(): void {
     // ensureTile()'s `finally` pumps unconditionally, and dispose() aborts
     // every in-flight fetch at once — so without this guard a disposal frees
     // maxConcurrent slots and drains whatever update() last queued into a
     // fresh round of fetches that are downloaded and decoded only to be
     // discarded.
-    if (this.disposed) return;
+    if (this.disposed || this.paused) return;
     while (this.inflight.size < this.maxConcurrent && this.queueHead < this.queue.length) {
       const next = this.queue[this.queueHead++]!;
       if (this.cache.has(next.key) || this.inflight.has(next.key) || this.ready.has(next.key)) {
@@ -475,27 +544,38 @@ export class TileLayer {
   }
 
   /**
-   * Queue the parent of a missing tile ahead of every tile at the target
-   * level. Its nearest resident ancestor is then at least two levels up (the
-   * base always is), so a big zoom would show that soft ancestor until the
-   * target level lands; the parent costs a quarter of its children and gives
-   * a sharper step in between.
+   * Keep a resident parent of a missing tile, and with `fetch`, queue a
+   * missing one ahead of every tile at the target level. Its nearest resident
+   * ancestor is then at least two levels up (the base always is), so a big
+   * zoom would show that soft ancestor until the target level lands; the
+   * parent costs a quarter of its children and gives a sharper step in
+   * between. Returns how long until a parent cooling down after a failure may
+   * go again, Infinity when there is nothing to wait for.
    */
-  private queueParent(f: number, level: number, x: number, y: number, childPriority: number): void {
+  private queueParent(
+    f: number,
+    level: number,
+    x: number,
+    y: number,
+    childPriority: number,
+    fetch: boolean,
+  ): number {
     const t = this.table(level);
     const key = t.keys[(f * t.g + y) * t.g + x]!;
     const entry = this.cache.get(key);
     if (entry) {
       // On screen as the fallback for its missing child: not to be evicted.
       entry.lastUsed = this.clock;
-      return;
+      return Infinity;
     }
-    if (this.inflight.has(key) || this.ready.has(key)) return;
-    if (this.parentsQueued.has(key) || !this.retry.eligible(key)) return;
+    if (!fetch || this.parentsQueued.has(key)) return Infinity;
+    if (this.inflight.has(key) || this.ready.has(key)) return Infinity;
+    if (!this.retry.eligible(key)) return this.retry.waitMs(key);
     this.parentsQueued.add(key);
     // Centre-first priorities are 1 - cos, in [0, 2]: minus 2 sorts every
     // parent before every target-level tile, still centre-first among them.
     this.pushCandidate(key, level, FACES[f]!, x, y, childPriority - 2);
+    return Infinity;
   }
 
   /**
@@ -616,7 +696,10 @@ export class TileLayer {
       // Decoded upright (row 0 = top). The renderer uploads it unflipped and
       // the tile UVs address row 0 as v = 0 (see tile-geometry.ts).
       const bitmap = await createImageBitmap(blob);
-      if (this.disposed) {
+      // createImageBitmap ignores the signal, so an abort during the decode
+      // shows up only here. The slot and the key have moved on (a reload may
+      // own the key now), so this bitmap must not join the queue.
+      if (this.disposed || controller.signal.aborted) {
         bitmap.close();
         return { kind: 'aborted' };
       }
@@ -646,6 +729,8 @@ export class TileLayer {
       // one costs an attempt. Either way the coarser parent tile stays as
       // fallback.
       if (isAbortError(err)) return { kind: 'aborted' };
+      // Not the tile's fault either: it loads again once the context is back.
+      if (err instanceof ContextLostError) return { kind: 'lost' };
       const failure = this.recordFailure(key, err);
       return { kind: 'failed', failure, error: err };
     } finally {
@@ -703,11 +788,14 @@ export class TileLayer {
     );
   }
 
-  /** Count one more unwanted frame for `key`, and return the total. */
-  private staleFrames(key: string): number {
-    const n = (this.stale.get(key) ?? 0) + 1;
-    this.stale.set(key, n);
-    return n;
+  /** How long `key` has been unwanted, counting from now if it just stopped being wanted. */
+  private unwantedFor(key: string, now: number): number {
+    let since = this.stale.get(key);
+    if (since === undefined) {
+      since = now;
+      this.stale.set(key, since);
+    }
+    return now - since;
   }
 
   private recordFailure(key: string, err: unknown): FailureKind {
@@ -729,18 +817,17 @@ export class TileLayer {
    * MAX_UPLOADS_PER_UPDATE, and none once UPLOAD_BUDGET_MS has gone, so a
    * burst of decodes is spread over several frames instead of one long one.
    * A tile out of the view waits without uploading, and once it has been out
-   * for ABORT_AFTER_FRAMES frames it is dropped and its bitmap closed.
-   * Anything left over asks for another frame.
+   * for ABORT_GRACE_MS it is dropped and its bitmap closed. Anything left
+   * over asks for another frame.
    */
-  private drainReady(level: number): void {
+  private drainReady(level: number, start: number): void {
     if (this.ready.size === 0) return;
-    const start = this.now();
     let uploads = 0;
     for (const [key, tile] of this.ready) {
       if (this.wanted(key, level)) {
         this.stale.delete(key);
       } else {
-        if (this.staleFrames(key) > ABORT_AFTER_FRAMES) {
+        if (this.unwantedFor(key, start) >= ABORT_GRACE_MS) {
           tile.bitmap.close();
           this.ready.delete(key);
           this.stale.delete(key);
@@ -753,7 +840,8 @@ export class TileLayer {
       try {
         this.upload(key, tile.level, tile.face, tile.x, tile.y, tile.bitmap);
       } catch (err) {
-        this.recordFailure(key, err);
+        // A lost context is no fault of the tile's: it spends no attempt.
+        if (!(err instanceof ContextLostError)) this.recordFailure(key, err);
       }
     }
     if (this.ready.size > 0) this.onInvalidate();
@@ -790,7 +878,7 @@ export class TileLayer {
    * decoded and waiting to be uploaded. The queue is non-empty after pump()
    * only when every slot is busy, and a held queue is work that has not
    * happened yet, not work that is done. Tiles that are only finishing after
-   * leaving the view (see ABORT_AFTER_FRAMES) do not count, and neither does
+   * leaving the view (see ABORT_GRACE_MS) do not count, and neither does
    * a tile that failed: it is out of the queue while it waits out a per-tile
    * cooldown, and for good once it is permanent or out of attempts.
    */

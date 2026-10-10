@@ -22,9 +22,10 @@ import { TileLayer } from './tile-layer.js';
 // over any module-scope binding declared here — the fake class is therefore
 // defined entirely inside the factory itself.
 vi.mock('./render/gl-renderer.js', () => {
+  class ContextLostError extends Error {
+    override name = 'ContextLostError';
+  }
   class FakeGLRenderer {
-    // Scaled 2x on resize to stand in for a devicePixelRatio-2 display — real
-    // GLRenderer.resize() does exactly this scaling (see gl-renderer.ts).
     // The listener/style/tabIndex surface is what Controls attaches to once a
     // load succeeds (see controls.ts) — nothing here reads it back.
     canvas = {
@@ -38,20 +39,47 @@ vi.mock('./render/gl-renderer.js', () => {
     };
     nextHandle = 1;
     maxTextureSize = 16384;
+    lost = false;
     dispose = vi.fn();
-    uploadTile = vi.fn(() => this.nextHandle++);
+    uploadTile = vi.fn(() => {
+      if (this.lost) throw new ContextLostError();
+      return this.nextHandle++;
+    });
     removeTile = vi.fn();
-    resize(w: number, h: number): void {
-      this.canvas.width = Math.round(w * 2);
-      this.canvas.height = Math.round(h * 2);
+    constructor(
+      _container: unknown,
+      readonly opts: { onContextLost?: () => void; onContextRestored?: () => void } = {},
+    ) {}
+    // Scaled by the window's devicePixelRatio, 2 when it reports none, as
+    // the real GLRenderer.resize() does (see gl-renderer.ts). Like it, says
+    // whether anything changed.
+    resize = vi.fn((w: number, h: number): boolean => {
+      const dpr = (globalThis as { window?: { devicePixelRatio?: number } }).window
+        ?.devicePixelRatio;
+      const bw = Math.round(w * (dpr ?? 2));
+      const bh = Math.round(h * (dpr ?? 2));
+      if (bw === this.canvas.width && bh === this.canvas.height) return false;
+      this.canvas.width = bw;
+      this.canvas.height = bh;
+      return true;
+    });
+    isContextLost(): boolean {
+      return this.lost;
     }
     setCamera(): void {}
     render = vi.fn();
-    snapshot(): string {
-      return 'data:image/png;base64,';
+    snapshot = vi.fn((): unknown => document.createElement('canvas'));
+    /** Stand-ins for the browser's webglcontextlost and webglcontextrestored. */
+    loseContext(): void {
+      this.lost = true;
+      this.opts.onContextLost?.();
+    }
+    restoreContext(): void {
+      this.lost = false;
+      this.opts.onContextRestored?.();
     }
   }
-  return { GLRenderer: FakeGLRenderer };
+  return { GLRenderer: FakeGLRenderer, ContextLostError };
 });
 
 class FakeResizeObserver {
@@ -176,12 +204,16 @@ describe('PanoViewer', () => {
     raf = new FakeRaf();
     vi.stubGlobal('requestAnimationFrame', raf.request);
     vi.stubGlobal('cancelAnimationFrame', raf.cancel);
+    // One clock for frames and everything else (the tile layer's grace
+    // periods), as rAF timestamps and performance.now() share an origin.
+    vi.spyOn(performance, 'now').mockImplementation(() => raf.now);
     FakeResizeObserver.instances = [];
     FakeIntersectionObserver.instances = [];
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   describe('device-pixel-ratio-aware level selection', () => {
@@ -1700,24 +1732,6 @@ describe('PanoViewer', () => {
           },
         ],
         [
-          'the ResizeObserver reports a new size',
-          async () => {
-            vi.stubGlobal('ResizeObserver', FakeResizeObserver);
-            const viewer = idleViewer();
-            return { viewer, fire: () => FakeResizeObserver.instances[0]!.trigger(500, 500) };
-          },
-        ],
-        [
-          'the window resizes (no ResizeObserver)',
-          async () => {
-            const viewer = idleViewer();
-            const onResize = vi
-              .mocked(window.addEventListener)
-              .mock.calls.find((c) => c[0] === 'resize')![1] as () => void;
-            return { viewer, fire: onResize };
-          },
-        ],
-        [
           'a load swaps in',
           async () => {
             // The base resolves without uploading (whose own invalidations
@@ -1891,7 +1905,7 @@ describe('PanoViewer', () => {
         const loading = viewer.load('pano-a', { view: { yaw: 2 } });
         await flush();
         // The prime has run update() with the base in flight; now well past
-        // the 10-frame grace, turning all the while.
+        // the abort grace, turning all the while.
         for (let i = 0; i < 15; i++) raf.step();
         const baseSignals = FACES.map((f) => net.signalOf(`/tiles/pano-a/0/${f}/0-0.jpg`));
         for (const signal of baseSignals) {
@@ -1997,7 +2011,7 @@ describe('PanoViewer', () => {
       const viewer = new PanoViewer(makeContainer(400, 800));
       viewer.dispose();
       await expect(viewer.transitionTo('pano-a', { yaw: 1 })).resolves.toBeUndefined();
-      expect(window.matchMedia).not.toHaveBeenCalled();
+      expect(window.matchMedia).not.toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
       expect(fetch).not.toHaveBeenCalled();
     });
 
@@ -2076,6 +2090,306 @@ describe('PanoViewer', () => {
       const layer = internals(viewer).layer as { manifest: { pano: string } };
       expect(layer.manifest.pano).toBe('pano-c');
       viewer.dispose();
+    });
+
+    describe('canvas lifecycle', () => {
+      type Fake = {
+        opts: { maxPixels?: number };
+        loseContext(): void;
+        restoreContext(): void;
+        uploadTile: ReturnType<typeof vi.fn>;
+        removeTile: ReturnType<typeof vi.fn>;
+        render: ReturnType<typeof vi.fn>;
+        resize: ReturnType<typeof vi.fn>;
+        snapshot: ReturnType<typeof vi.fn>;
+        canvas: { width: number; height: number };
+      };
+      const fakeOf = (viewer: PanoViewer) => internals(viewer).renderer as unknown as Fake;
+      const manifestFetches = () =>
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('manifest.json')).length;
+      const layerPano = (viewer: PanoViewer) =>
+        (internals(viewer).layer as { manifest: { pano: string } } | undefined)?.manifest.pano;
+
+      describe('context loss', () => {
+        it('stops drawing while lost, then loads the scene again from its held manifest', async () => {
+          stubNet();
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          await viewer.load('pano-a');
+          runUntilIdle();
+          viewer.setView({ yaw: 1, pitch: 0.2, fov: 50 });
+          runUntilIdle();
+          const view = viewer.getView();
+          const events: string[] = [];
+          for (const type of [
+            'context-lost',
+            'context-restored',
+            'ready',
+            'scene-change',
+          ] as const) {
+            viewer.on(type, () => events.push(type));
+          }
+          const fake = fakeOf(viewer);
+          const before = internals(viewer).layer;
+
+          fake.loseContext();
+          expect(events).toEqual(['context-lost']);
+          fake.render.mockClear();
+          viewer.setView({ yaw: 2 });
+          raf.step();
+          expect(fake.render).not.toHaveBeenCalled();
+          expect(raf.pending).toBe(0);
+
+          const fetches = manifestFetches();
+          const uploads = fake.uploadTile.mock.calls.length;
+          viewer.setView(view);
+          fake.restoreContext();
+          await flush();
+          expect(events).toEqual(['context-lost', 'context-restored']);
+          // The same scene, a new layer, its base uploaded again, no manifest fetch.
+          expect(manifestFetches()).toBe(fetches);
+          expect(internals(viewer).layer).not.toBe(before);
+          expect(layerPano(viewer)).toBe('pano-a');
+          expect(fake.uploadTile.mock.calls.length).toBeGreaterThanOrEqual(uploads + FACES.length);
+          runUntilIdle();
+          expect(fake.render).toHaveBeenCalled();
+          expect(viewer.getView()).toEqual(view);
+          viewer.dispose();
+        });
+
+        it('cancels a load in flight when the context is lost, and finishes it on restore', async () => {
+          const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          await viewer.load('pano-a');
+          const sceneChange = vi.fn();
+          viewer.on('scene-change', sceneChange);
+          const loading = viewer.load('pano-b', { view: { yaw: 1.5 } });
+          await flush();
+          fakeOf(viewer).loseContext();
+          await expect(loading).resolves.toBe(false);
+          const fetches = manifestFetches();
+
+          fakeOf(viewer).restoreContext();
+          net.release();
+          for (let i = 0; i < 5; i++) await flush();
+          expect(manifestFetches()).toBe(fetches);
+          expect(layerPano(viewer)).toBe('pano-b');
+          expect(viewer.getView().yaw).toBeCloseTo(1.5, 10);
+          expect(sceneChange.mock.calls).toEqual([['pano-b']]);
+          viewer.dispose();
+        });
+
+        it('drops the preview, whose pixels are gone with the context', () => {
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          const image = () =>
+            ({ width: 1026, height: 1024, close: vi.fn() }) as unknown as ImageBitmap;
+          viewer.showPreview('pano-c', {
+            width: 2048,
+            height: 1024,
+            patches: [
+              { x: 0, y: 0, w: 1026, h: 1024, image: image() },
+              { x: 1022, y: 0, w: 1026, h: 1024, image: image() },
+            ],
+          });
+          const fake = fakeOf(viewer);
+          fake.loseContext();
+          expect(fake.removeTile).toHaveBeenCalledTimes(2);
+          fake.restoreContext();
+          raf.step();
+          expect(fake.render.mock.calls.at(-1)![0]).toEqual([]);
+          viewer.dispose();
+        });
+      });
+
+      describe('isSettled', () => {
+        it('is true from the frame that settles the tiles until the next change', async () => {
+          const net = stubNet({ holdTile: (url) => !url.includes('/0/') });
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          const settled = vi.fn(() => viewer.isSettled());
+          viewer.on('tiles-settled', settled);
+          await viewer.load('pano-a');
+          expect(viewer.isSettled()).toBe(false); // nothing drawn for it yet
+          runUntilIdle();
+          expect(viewer.isSettled()).toBe(false); // tiles still to come
+          net.release();
+          await flush();
+          runUntilIdle();
+          expect(settled).toHaveReturnedWith(true);
+          expect(viewer.isSettled()).toBe(true);
+
+          viewer.setView({ yaw: 0.5 });
+          expect(viewer.isSettled()).toBe(false); // the camera is moving
+          viewer.dispose();
+        });
+
+        it('is false until the frame that emits tiles-settled has run', () => {
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          runUntilIdle();
+          internals(viewer).layer = {
+            update: vi.fn(),
+            drawList: () => [],
+            hasPending: () => false,
+          };
+          // As a load leaves it: tiles were pending at the swap.
+          internals(viewer).wasPending = true;
+          const settled = vi.fn(() => viewer.isSettled());
+          viewer.on('tiles-settled', settled);
+          expect(viewer.isSettled()).toBe(false);
+          tick(viewer);
+          expect(settled).toHaveReturnedWith(true);
+          expect(viewer.isSettled()).toBe(true);
+        });
+
+        it('is false while momentum is left or auto-rotate turns', () => {
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          runUntilIdle();
+          expect(viewer.isSettled()).toBe(true);
+          internals(viewer).momentum.yaw = 1e-3;
+          expect(viewer.isSettled()).toBe(false);
+          internals(viewer).momentum.yaw = 0;
+          viewer.setAutoRotate(true);
+          expect(viewer.isSettled()).toBe(false);
+          viewer.dispose();
+        });
+      });
+
+      describe('resizing', () => {
+        it('draws a new size in the same call, with no frame of cleared canvas', () => {
+          vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          runUntilIdle();
+          const fake = fakeOf(viewer);
+          fake.render.mockClear();
+          FakeResizeObserver.instances[0]!.trigger(500, 300);
+          expect(fake.render).toHaveBeenCalledTimes(1);
+          expect(fake.canvas.width).toBe(1000);
+          expect(raf.pending).toBe(0);
+          expect(viewer.project(0, 0).x).toBe(250);
+          viewer.dispose();
+        });
+
+        it('does nothing when the size reported has not changed', () => {
+          vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          runUntilIdle();
+          const fake = fakeOf(viewer);
+          fake.render.mockClear();
+          FakeResizeObserver.instances[0]!.trigger(400, 800);
+          expect(fake.render).not.toHaveBeenCalled();
+          expect(raf.pending).toBe(0);
+          viewer.dispose();
+        });
+
+        it('draws a window resize in the same call too (no ResizeObserver)', () => {
+          const container = makeContainer(400, 800);
+          const viewer = new PanoViewer(container);
+          runUntilIdle();
+          const onResize = vi
+            .mocked(window.addEventListener)
+            .mock.calls.find((c) => c[0] === 'resize')![1] as () => void;
+          const fake = fakeOf(viewer);
+          fake.render.mockClear();
+          (container as { clientWidth: number }).clientWidth = 600;
+          onResize();
+          expect(fake.render).toHaveBeenCalledTimes(1);
+          viewer.dispose();
+        });
+
+        it('keeps going from a resize mid-motion without stepping the camera', () => {
+          vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          runUntilIdle();
+          viewer.setView({ yaw: 1 });
+          raf.step();
+          const yaw = internals(viewer).view.yaw;
+          FakeResizeObserver.instances[0]!.trigger(500, 300);
+          expect(internals(viewer).view.yaw).toBe(yaw);
+          expect(raf.pending).toBe(1);
+          viewer.dispose();
+        });
+
+        it('follows the device pixel ratio through a re-armed matchMedia query', () => {
+          type Query = {
+            media: string;
+            listeners: Set<() => void>;
+            addEventListener: (t: string, fn: () => void) => void;
+            removeEventListener: (t: string, fn: () => void) => void;
+          };
+          const queries: Query[] = [];
+          const win = {
+            devicePixelRatio: 2,
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            matchMedia: vi.fn((media: string) => {
+              const q: Query = {
+                media,
+                listeners: new Set(),
+                addEventListener: (_t, fn) => q.listeners.add(fn),
+                removeEventListener: (_t, fn) => q.listeners.delete(fn),
+              };
+              queries.push(q);
+              return q;
+            }),
+          };
+          vi.stubGlobal('window', win);
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          runUntilIdle();
+          const fake = fakeOf(viewer);
+          const first = queries.find((q) => q.media.startsWith('(resolution'))!;
+          expect(first.media).toBe('(resolution: 2dppx)');
+          expect(first.listeners.size).toBe(1);
+
+          // Dragged to a DPR-1 display: same CSS size, half the backbuffer.
+          win.devicePixelRatio = 1;
+          fake.render.mockClear();
+          for (const fn of [...first.listeners]) fn();
+          expect(fake.canvas.height).toBe(800);
+          expect(fake.render).toHaveBeenCalledTimes(1);
+          expect(first.listeners.size).toBe(0);
+          const second = queries.at(-1)!;
+          expect(second.media).toBe('(resolution: 1dppx)');
+          expect(second.listeners.size).toBe(1);
+
+          viewer.dispose();
+          expect(second.listeners.size).toBe(0);
+        });
+
+        it('passes maxPixels to the renderer, 4.2 Mpx unless set', () => {
+          expect(fakeOf(new PanoViewer(makeContainer(400, 800))).opts.maxPixels).toBe(4_200_000);
+          const viewer = new PanoViewer(makeContainer(400, 800), { maxPixels: 1e6 });
+          expect(fakeOf(viewer).opts.maxPixels).toBe(1e6);
+        });
+      });
+
+      it('pauses the tile requests while off screen', async () => {
+        vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+        stubNet();
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const layer = internals(viewer).layer as { paused: boolean };
+        FakeIntersectionObserver.instances[0]!.trigger(false);
+        expect(layer.paused).toBe(true);
+        FakeIntersectionObserver.instances[0]!.trigger(true);
+        expect(layer.paused).toBe(false);
+        viewer.dispose();
+      });
+
+      it('fades a GPU copy of the frame, not an encoded image', async () => {
+        stubNet();
+        const { container, overlays } = stubOverlayDom();
+        const viewer = new PanoViewer(container, { transitionMs: 0 });
+        await viewer.load('pano-0');
+        tick(viewer);
+        const fake = fakeOf(viewer);
+        const done = viewer.transitionTo('pano-a');
+        expect(fake.snapshot).toHaveBeenCalledTimes(1);
+        const overlay = overlays[0]!;
+        expect(fake.snapshot.mock.results[0]!.value).toBe(overlay);
+        expect(container.appendChild).toHaveBeenCalledWith(overlay);
+        expect(overlay.style['cssText']).toContain('width:100%');
+        await finish(done);
+        expect(overlay.remove).toHaveBeenCalled();
+        viewer.dispose();
+      });
     });
   });
 });
