@@ -1,7 +1,15 @@
 import type { ViewerFactory } from '@internal/ui';
 import type * as webKit from '@internal/web-kit';
 import { loadConfig, signInPath, type Auth } from '@internal/web-kit';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  configure,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +38,9 @@ const dropTarget = () => screen.getByRole('link', { name: /^Upload your first to
 
 // The Shell and its pages are lazy routes: load their modules once up front, so the first
 // test's queries don't time out on the module transform.
+// The first render of a lazy page can take over the default 1s on a loaded CI runner
+// (seen under coverage); only the wait gets longer, the assertions are unchanged.
+configure({ asyncUtilTimeout: 5000 });
 beforeAll(async () => {
   await Promise.all([import('../Shell.js'), import('../pages.js')]);
 });

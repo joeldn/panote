@@ -1,10 +1,13 @@
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, configure, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, LOCAL, renderSite } from './__fixtures__/auth.js';
 
 // The Shell and its pages are lazy routes: load their modules once up front, so the first
 // test's queries don't time out on the module transform.
+// The first render of a lazy page can take over the default 1s on a loaded CI runner
+// (seen under coverage); only the wait gets longer, the assertions are unchanged.
+configure({ asyncUtilTimeout: 5000 });
 beforeAll(async () => {
   await Promise.all([import('./Shell.js'), import('./pages.js')]);
 });

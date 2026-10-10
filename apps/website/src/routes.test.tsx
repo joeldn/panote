@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, configure, screen, within } from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { renderSite } from './__fixtures__/auth.js';
@@ -7,6 +7,9 @@ import { routes } from './routes.js';
 const renderAt = (path: string) => renderSite(path);
 
 // Warm the lazy route modules once, so the first test doesn't time out on the transform.
+// The first render of a lazy page can take over the default 1s on a loaded CI runner
+// (seen under coverage); only the wait gets longer, the assertions are unchanged.
+configure({ asyncUtilTimeout: 5000 });
 beforeAll(async () => {
   await Promise.all([import('./Shell.js'), import('./pages.js')]);
 });
