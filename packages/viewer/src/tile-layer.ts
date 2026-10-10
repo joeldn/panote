@@ -216,6 +216,9 @@ export class TileLayer {
   private sphere = { cx: 0, cy: 0, cz: 0, r: 0 };
   private desired = new Set<string>();
   private candidates: Candidate[] = [];
+  // Candidate objects are reused frame to frame: `candidates` holds the first
+  // `candidates.length` of them.
+  private candidatePool: Candidate[] = [];
   private _drawList: DrawItem[] = [];
   // Built lazily per level; see LevelTable.
   private levels: (LevelTable | undefined)[] = [];
@@ -348,14 +351,7 @@ export class TileLayer {
         const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
         const f = Math.floor(i / (g * g));
         const rest = i - f * g * g;
-        this.candidates.push({
-          key,
-          level,
-          face: FACES[f]!,
-          x: rest % g,
-          y: Math.floor(rest / g),
-          priority,
-        });
+        this.pushCandidate(key, level, FACES[f]!, rest % g, Math.floor(rest / g), priority);
       } else if (!this.inflight.has(key)) {
         nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
       }
@@ -485,6 +481,29 @@ export class TileLayer {
     this.descend(f, level + 1, cx + 1, cy, target);
     this.descend(f, level + 1, cx, cy + 1, target);
     this.descend(f, level + 1, cx + 1, cy + 1, target);
+  }
+
+  private pushCandidate(
+    key: string,
+    level: number,
+    face: Face,
+    x: number,
+    y: number,
+    priority: number,
+  ): void {
+    let c = this.candidatePool[this.candidates.length];
+    if (c) {
+      c.key = key;
+      c.level = level;
+      c.face = face;
+      c.x = x;
+      c.y = y;
+      c.priority = priority;
+    } else {
+      c = { key, level, face, x, y, priority };
+      this.candidatePool.push(c);
+    }
+    this.candidates.push(c);
   }
 
   private async ensureTile(

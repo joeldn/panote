@@ -166,4 +166,14 @@ describe('TileLayer cull', () => {
     for (let i = 0; i < 24; i++) frame((i * Math.PI) / 12, 0.2, 70, 16 / 9, 4);
     expect(faceUVToDir).not.toHaveBeenCalled();
   });
+
+  it('reuses its candidate objects from frame to frame', () => {
+    const candidates = (): object[] => (layer as unknown as { candidates: object[] }).candidates;
+    frame(0, 0, 70, 16 / 9, 4);
+    const first = new Set(candidates());
+    expect(first.size).toBeGreaterThan(8);
+    frame(0.05, 0, 70, 16 / 9, 4);
+    expect(candidates().length).toBeGreaterThan(0);
+    for (const c of candidates()) expect(first.has(c)).toBe(true);
+  });
 });
