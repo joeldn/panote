@@ -253,6 +253,14 @@ export function TourViewer({
     [arrived, links, panoId],
   );
   const go = (id: string, view: Scene['view']) => {
+    // Markers and chevrons hide during a move, so one activated from the
+    // keyboard would take focus down to <body> with it: hand focus to the
+    // stage (the viewer makes it focusable for its keys) before it goes.
+    const focused = document.activeElement;
+    const root = frame.current;
+    if (root && focused?.closest('.pn-anchors') && root.contains(focused)) {
+      root.querySelector<HTMLElement>('.pn-stage__viewer')?.focus();
+    }
     setActive(null);
     setTarget({ id, view });
   };

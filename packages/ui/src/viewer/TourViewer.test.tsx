@@ -342,6 +342,40 @@ describe('TourViewer', () => {
       expect(viewer().setNorth).toHaveBeenLastCalledWith(0.9);
     });
 
+    it('hands focus to the stage when the focused chevron hides for the move', async () => {
+      renderViewer({
+        createViewer: (el) => {
+          // As the viewer's controls do, so the stage takes keyboard focus.
+          el.tabIndex = 0;
+          const v = new FakeViewer();
+          v.defer = true;
+          return v as unknown as PanoViewer;
+        },
+      });
+      const chevron = await screen.findByRole('button', { name: 'Go to To the church' });
+      chevron.focus();
+      fireEvent.click(chevron);
+      expect(screen.queryByRole('button', { name: 'Go to To the church' })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole('application'));
+    });
+
+    it('leaves focus alone when the move starts from outside the markers', async () => {
+      renderViewer({
+        createViewer: (el) => {
+          el.tabIndex = 0;
+          const v = new FakeViewer();
+          v.defer = true;
+          return v as unknown as PanoViewer;
+        },
+      });
+      await screen.findByRole('button', { name: 'Go to To the church' });
+      fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+      const toggle = screen.getByRole('button', { name: 'Map' });
+      toggle.focus();
+      fireEvent.click(screen.getByRole('button', { name: 'Church' }));
+      expect(document.activeElement).toBe(toggle);
+    });
+
     it('goes back to the scene on screen from the map, keeping the camera', async () => {
       const { viewer } = await startTransition();
       const pick = (name: string) => {
