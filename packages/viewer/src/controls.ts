@@ -303,10 +303,11 @@ export class Controls {
   private onKeyDown = (e: KeyboardEvent) => {
     // Modified keys belong to the browser and OS: Ctrl/Cmd +/- is page zoom,
     // which low-vision users rely on, and Alt/Cmd+arrow is history navigation.
-    // AltGr arrives as Ctrl+Alt on Windows and types characters, so it is
-    // not a modifier here.
+    // AltGr arrives as Ctrl+Alt on Windows and types characters, so it
+    // excuses Ctrl and Alt, but never Cmd.
+    if (e.metaKey) return;
     const altGraph = e.getModifierState?.('AltGraph') ?? false;
-    if (!altGraph && (e.ctrlKey || e.metaKey || e.altKey)) return;
+    if (!altGraph && (e.ctrlKey || e.altKey)) return;
     // Keys move the target, not the camera, so damping smooths key repeat
     // into a glide instead of 40 px jumps.
     const panStep = 40; // px-equivalent

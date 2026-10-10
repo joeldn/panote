@@ -424,6 +424,18 @@ describe('Controls: modifier edge cases', () => {
     expect(ev.defaultPrevented).toBe(true);
     expect(host.zoomAt).toHaveBeenCalledTimes(1);
   });
+
+  it('leaves Cmd to the browser even alongside AltGr', () => {
+    setup();
+    const ev = key('+', {
+      metaKey: true,
+      ctrlKey: true,
+      altKey: true,
+      getModifierState: (k: string) => k === 'AltGraph',
+    });
+    expect(ev.defaultPrevented).toBe(false);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
 });
 
 describe('Controls: remaining branches', () => {
