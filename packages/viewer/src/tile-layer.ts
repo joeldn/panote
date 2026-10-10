@@ -104,6 +104,8 @@ interface TileEntry {
   lastUsed: number;
   level: number;
   visible: boolean;
+  /** Built once at upload, so drawList() pushes it without allocating. */
+  item: DrawItem;
 }
 
 interface Candidate {
@@ -123,6 +125,9 @@ export class TileLayer {
   private cache = new Map<string, TileEntry>();
   private inflight = new Map<string, AbortController>();
   private queue: Candidate[] = [];
+  // Next queue index pump() takes. A cursor rather than shift(), which is
+  // O(n) per dequeue; update() replaces the queue and resets it every frame.
+  private queueHead = 0;
   private clock = 0;
   private maxTiles: number;
   private maxConcurrent: number;
@@ -130,9 +135,12 @@ export class TileLayer {
   // Aborted by dispose(). Only the base loader's retry wait listens to it: the
   // in-flight fetches are cancelled through their own controllers in `inflight`.
   private lifetime = new AbortController();
-  // Set while pump() is held by the backoff: fires onInvalidate when fetches
-  // may start again, so the queue moves without waiting for an interaction.
+  // The one wake timer: fires onInvalidate when something held back may start
+  // again (the backoff lifting, or a failed tile's cooldown ending), so an
+  // idle viewer moves without waiting for an interaction. `wakeAt` is when it
+  // fires, on the retry clock, so an earlier need can replace a later one.
   private wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  private wakeAt = Infinity;
 
   // Per-tile retry accounting for this panorama load. Replaces the old
   // permanent `failed` set: a transiently-failed tile stays re-queueable (so a
@@ -254,6 +262,8 @@ export class TileLayer {
 
     this.desired.clear();
     this.candidates.length = 0;
+    // Soonest a wanted tile that is cooling down after a failure may go again.
+    let nextRetryMs = Infinity;
 
     for (const face of FACES) {
       const g = tilesPerEdge(level);
@@ -280,15 +290,20 @@ export class TileLayer {
                 y,
                 priority,
               });
+            } else if (!this.inflight.has(key)) {
+              nextRetryMs = Math.min(nextRetryMs, this.retry.waitMs(key));
             }
           }
         }
       }
     }
 
-    // Abort inflight loads that are no longer in the desired set.
+    // Abort inflight loads that are no longer in the desired set. Level-0
+    // tiles are exempt: they are the base loadBase() is waiting on (and is
+    // never in a deeper level's desired set), and once resident they are
+    // pinned and drawn at every level, so one is never wasted work.
     for (const [key, controller] of this.inflight) {
-      if (!this.desired.has(key)) {
+      if (!this.desired.has(key) && !key.startsWith('0/')) {
         controller.abort();
         this.inflight.delete(key);
       }
@@ -297,6 +312,7 @@ export class TileLayer {
     // Sort candidates by priority ascending (nearest-to-centre first).
     this.candidates.sort((a, b) => a.priority - b.priority);
     this.queue = this.candidates;
+    this.queueHead = 0;
 
     // Hide tiles finer than the current target level to prevent stale
     // higher-LOD tiles from drawing on top after a zoom-out.
@@ -314,6 +330,9 @@ export class TileLayer {
 
     this.evict();
     this.pump();
+    // Frames only run when something is dirty, so a hole waiting out a retry
+    // cooldown on a still view needs its own wake.
+    this.armWake(nextRetryMs);
   }
 
   /** Current visible draw list (coarse first is enforced by the renderer sort). */
@@ -321,7 +340,7 @@ export class TileLayer {
     this._drawList.length = 0;
     for (const entry of this.cache.values()) {
       if (entry.visible) {
-        this._drawList.push({ handle: entry.handle, level: entry.level });
+        this._drawList.push(entry.item);
       }
     }
     return this._drawList;
@@ -334,15 +353,15 @@ export class TileLayer {
     // fresh round of fetches that are downloaded and decoded only to be
     // discarded.
     if (this.disposed) return;
-    while (this.inflight.size < this.maxConcurrent && this.queue.length > 0) {
+    while (this.inflight.size < this.maxConcurrent && this.queueHead < this.queue.length) {
       // Global backoff: hold the queue intact rather than draining it into
       // no-op ensureTile calls. update() rebuilds it next frame anyway, and
       // the one probe the monitor allows is started from here too.
       if (!this.monitor.canStart()) {
-        this.wakeWhenStartable();
+        this.armWake(this.monitor.msUntilStart());
         return;
       }
-      const next = this.queue.shift()!;
+      const next = this.queue[this.queueHead++]!;
       if (this.cache.has(next.key) || this.inflight.has(next.key)) continue;
       void this.ensureTile(next.level, next.face, next.x, next.y);
     }
@@ -350,17 +369,24 @@ export class TileLayer {
 
   /**
    * A frame is what refills and pumps the queue, and an idle viewer draws no
-   * frames. Without this, tiles held by the backoff (and so tiles-settled, and
-   * a preview waiting on it) would wait for the next pan or zoom.
+   * frames. Without a wake, tiles held by the backoff or by a per-tile retry
+   * cooldown (and so tiles-settled, and a preview waiting on it) would wait
+   * for the next pan or zoom. One timer serves both: a later request keeps
+   * the earlier timer, an earlier one replaces it.
    */
-  private wakeWhenStartable(): void {
-    if (this.wakeTimer !== undefined) return;
-    // At least 1 ms, so a clock that disagrees with canStart() cannot spin.
-    const ms = Math.max(1, this.monitor.msUntilStart());
+  private armWake(ms: number): void {
+    if (this.disposed || !Number.isFinite(ms)) return;
+    // At least 1 ms, so a clock that disagrees with the timer cannot spin.
+    const delay = Math.max(1, ms);
+    const at = this.monitor.now() + delay;
+    if (this.wakeTimer !== undefined && this.wakeAt <= at) return;
+    clearTimeout(this.wakeTimer);
+    this.wakeAt = at;
     this.wakeTimer = setTimeout(() => {
       this.wakeTimer = undefined;
+      this.wakeAt = Infinity;
       if (!this.disposed) this.onInvalidate();
-    }, ms);
+    }, delay);
   }
 
   private tileVisible(face: Face, level: number, x: number, y: number): boolean {
@@ -449,15 +475,31 @@ export class TileLayer {
         bitmap.close();
         return { kind: 'aborted' };
       }
+      // An earlier load of this key can finish first: update() aborts a tile
+      // that leaves the view, but createImageBitmap ignores the signal, so a
+      // load aborted mid-decode still lands — after a reload has started. The
+      // second one to land must not upload over the first, or the first
+      // texture is never freed.
+      if (this.cache.has(key)) {
+        bitmap.close();
+        return { kind: 'loaded' };
+      }
       const geom = buildTileGeometry(face, level, x, y);
-      const handle = this.renderer.uploadTile(geom, bitmap);
-      bitmap.close(); // GPU texture owns the pixels now; free the CPU copy.
+      let handle: TileHandle;
+      try {
+        handle = this.renderer.uploadTile(geom, bitmap);
+      } finally {
+        // The GPU texture owns the pixels now (or the upload failed, e.g. on a
+        // lost context): free the CPU copy either way.
+        bitmap.close();
+      }
       this.cache.set(key, {
         key,
         handle,
         lastUsed: this.clock,
         level,
         visible: true,
+        item: { handle, level },
       });
       this.retry.recordSuccess(key);
       this.monitor.succeed(permit);
@@ -473,12 +515,18 @@ export class TileLayer {
       const failure = classifyFailure(err);
       this.retry.recordFailure(key, failure);
       this.monitor.fail(permit, this.manifest.pano, failure);
+      // Still on screen: come back for it when its cooldown ends, even if
+      // nothing else asks for a frame before then.
+      if (this.desired.has(key)) this.armWake(this.retry.waitMs(key));
       return { kind: 'failed', failure, error: err };
     } finally {
       // No-op when succeed()/fail() already settled it; this covers the
       // abort and disposed-mid-load paths, which must still free the probe.
       this.monitor.release(permit);
-      this.inflight.delete(key);
+      // Only clear the slot this call owns. After an abort the key may already
+      // belong to a reload, which must stay tracked: it still counts against
+      // maxConcurrent and update() must still be able to abort it.
+      if (this.inflight.get(key) === controller) this.inflight.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
   }
@@ -493,6 +541,7 @@ export class TileLayer {
         lastUsed: e.lastUsed,
       })),
       this.maxTiles,
+      this.clock,
     );
     for (const key of keysToRemove) {
       const e = this.cache.get(key);
@@ -515,7 +564,7 @@ export class TileLayer {
    * this true.
    */
   hasPending(): boolean {
-    return this.inflight.size > 0 || this.queue.length > 0;
+    return this.inflight.size > 0 || this.queueHead < this.queue.length;
   }
 
   dispose(): void {
@@ -525,9 +574,11 @@ export class TileLayer {
     this.lifetime.abort();
     clearTimeout(this.wakeTimer);
     this.wakeTimer = undefined;
+    this.wakeAt = Infinity;
     // The queue is what pump() would otherwise drain the moment those aborts
     // free their concurrency slots.
     this.queue = [];
+    this.queueHead = 0;
     this.candidates.length = 0;
     this.desired.clear();
     for (const c of this.inflight.values()) c.abort();

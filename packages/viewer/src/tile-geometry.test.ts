@@ -26,4 +26,12 @@ describe('buildTileGeometry', () => {
     expect([...uv]).toEqual([0, 1, 1, 1, 0, 0, 1, 0]);
     expect([...index]).toEqual([0, 2, 1, 1, 2, 3]);
   });
+
+  it('shares one uv and index array across tiles', () => {
+    const a = buildTileGeometry('pz', 0, 0, 0);
+    const b = buildTileGeometry('nx', 2, 1, 3);
+    expect(b.uv).toBe(a.uv);
+    expect(b.index).toBe(a.index);
+    expect(b.pos).not.toBe(a.pos);
+  });
 });

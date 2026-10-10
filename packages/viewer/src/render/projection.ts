@@ -1,11 +1,8 @@
-import { dirFromYawPitch } from '../project.js';
 import type { Vec3 } from '../project.js';
 import type { View } from '../types.js';
 
 /** 4×4 matrix, column-major (same element layout as three's Matrix4.elements). */
 export type Mat4 = Float32Array;
-// Vec3 is re-exported so existing importers of it from projection.js keep working.
-export type { Vec3 };
 export type Sphere = { cx: number; cy: number; cz: number; r: number };
 /** 6 planes × [a,b,c,d], each normalized so a²+b²+c²=1. */
 export type Frustum = Float32Array;
@@ -29,84 +26,111 @@ export function effectiveVFovDeg(
   return Math.min(requestedDeg, maxVFov);
 }
 
-/** Perspective projection, column-major, identical to three's makePerspective. */
-export function perspective(vfovDeg: number, aspect: number, near: number, far: number): Mat4 {
-  const f = 1 / Math.tan((vfovDeg * DEG2RAD) / 2);
-  const nf = 1 / (near - far);
-  const m = new Float32Array(16);
-  m[0] = f / aspect;
-  m[5] = f;
-  m[10] = (far + near) * nf;
-  m[11] = -1;
-  m[14] = 2 * far * near * nf;
-  return m;
+/**
+ * Write the camera basis for (yaw, pitch) into `b` as
+ * [xx, xz, yx, yy, yz, zx, zy, zz] (x.y is always 0). three's lookAt
+ * convention: -z is forward, up is +y.
+ *
+ * The right vector is (cos yaw, 0, sin yaw). It is unit length and depends
+ * on yaw alone, so it has no degenerate case at the poles and does not flip
+ * when pitch passes ±π/2.
+ */
+function cameraBasis(yaw: number, pitch: number, b: Float64Array): void {
+  // z = -dirFromYawPitch(yaw, pitch), written out to skip the object.
+  const cy = Math.cos(yaw),
+    sy = Math.sin(yaw),
+    cp = Math.cos(pitch);
+  const zx = -sy * cp,
+    zy = -Math.sin(pitch),
+    zz = cy * cp;
+  const xx = cy;
+  const xz = sy;
+  // y = cross(z, x), with x.y == 0
+  b[0] = xx;
+  b[1] = xz;
+  b[2] = zy * xz;
+  b[3] = zz * xx - zx * xz;
+  b[4] = -zy * xx;
+  b[5] = zx;
+  b[6] = zy;
+  b[7] = zz;
 }
+
+const basis = new Float64Array(8);
 
 /**
  * View matrix for a camera at the origin looking along dirFromYawPitch(yaw,pitch),
  * up = +y. Column-major. Equivalent to three's lookAt(target)+matrixWorldInverse
- * when the camera is at the origin.
+ * when the camera is at the origin. Writes into `out` when given.
  */
-export function viewMatrix(yaw: number, pitch: number): Mat4 {
-  const fwd = dirFromYawPitch(yaw, pitch); // points toward the target
-  // three's lookAt builds a basis with -z = forward.
-  const zx = -fwd.x,
-    zy = -fwd.y,
-    zz = -fwd.z; // camera +z (away from target)
-  // x = normalize(cross(up, z)) with up = (0,1,0); cross((0,1,0), z) = (z_z, 0, -z_x)
-  // The y-component is always 0 by construction, so it is kept as a literal
-  // below rather than carried through as a variable.
-  let xx = zz;
-  let xz = -zx;
-  const xl = Math.hypot(xx, xz) || 1; // degeneracy guard: fwd parallel to up (straight up/down)
-  xx /= xl;
-  xz /= xl;
-  // y = cross(z, x), with x.y == 0
-  const yx = zy * xz;
-  const yy = zz * xx - zx * xz;
-  const yz = -zy * xx;
-  // View matrix = inverse of the camera world matrix (rotation transposed,
-  // translation zero because the camera is at the origin). Column-major.
-  const m = new Float32Array(16);
-  m[0] = xx;
-  m[4] = 0;
-  m[8] = xz;
-  m[12] = 0;
-  m[1] = yx;
-  m[5] = yy;
-  m[9] = yz;
-  m[13] = 0;
-  m[2] = zx;
-  m[6] = zy;
-  m[10] = zz;
-  m[14] = 0;
-  m[3] = 0;
-  m[7] = 0;
-  m[11] = 0;
-  m[15] = 1;
-  return m;
+export function viewMatrix(yaw: number, pitch: number, out: Mat4 = new Float32Array(16)): Mat4 {
+  cameraBasis(yaw, pitch, basis);
+  // Inverse of the camera world matrix: rotation transposed, no translation.
+  out[0] = basis[0]!;
+  out[4] = 0;
+  out[8] = basis[1]!;
+  out[12] = 0;
+  out[1] = basis[2]!;
+  out[5] = basis[3]!;
+  out[9] = basis[4]!;
+  out[13] = 0;
+  out[2] = basis[5]!;
+  out[6] = basis[6]!;
+  out[10] = basis[7]!;
+  out[14] = 0;
+  out[3] = 0;
+  out[7] = 0;
+  out[11] = 0;
+  out[15] = 1;
+  return out;
 }
 
-/** Column-major multiply: out = a · b (a on the left, as in three's premultiply). */
-function multiply(a: Mat4, b: Mat4): Mat4 {
-  const o = new Float32Array(16);
-  for (let c = 0; c < 4; c++) {
-    for (let r = 0; r < 4; r++) {
-      o[c * 4 + r] =
-        a[0 * 4 + r]! * b[c * 4 + 0]! +
-        a[1 * 4 + r]! * b[c * 4 + 1]! +
-        a[2 * 4 + r]! * b[c * 4 + 2]! +
-        a[3 * 4 + r]! * b[c * 4 + 3]!;
-    }
-  }
-  return o;
-}
-
-export function viewProjection(view: View, aspect: number, maxHorizontalFovDeg: number): Mat4 {
+/**
+ * Projection · view, column-major. Writes into `out` when given, so a caller
+ * can reuse one matrix every frame.
+ *
+ * P is sparse (f/aspect, f, A, B and -1), so the product is written out
+ * directly: row 0 is (f/aspect)·x, row 1 is f·y, row 2 is A·z plus B in the
+ * translation column, and row 3 is -z.
+ */
+export function viewProjection(
+  view: View,
+  aspect: number,
+  maxHorizontalFovDeg: number,
+  out: Mat4 = new Float32Array(16),
+): Mat4 {
   const vfov = effectiveVFovDeg(view.fov, maxHorizontalFovDeg, aspect);
-  const proj = perspective(vfov, aspect, NEAR, FAR);
-  const vm = viewMatrix(view.yaw, view.pitch);
-  return multiply(proj, vm);
+  const f = 1 / Math.tan((vfov * DEG2RAD) / 2);
+  const fa = f / aspect;
+  const nf = 1 / (NEAR - FAR);
+  const a = (FAR + NEAR) * nf;
+  const b = 2 * FAR * NEAR * nf;
+  cameraBasis(view.yaw, view.pitch, basis);
+  const xx = basis[0]!,
+    xz = basis[1]!,
+    yx = basis[2]!,
+    yy = basis[3]!,
+    yz = basis[4]!,
+    zx = basis[5]!,
+    zy = basis[6]!,
+    zz = basis[7]!;
+  out[0] = fa * xx;
+  out[1] = f * yx;
+  out[2] = a * zx;
+  out[3] = -zx;
+  out[4] = 0;
+  out[5] = f * yy;
+  out[6] = a * zy;
+  out[7] = -zy;
+  out[8] = fa * xz;
+  out[9] = f * yz;
+  out[10] = a * zz;
+  out[11] = -zz;
+  out[12] = 0;
+  out[13] = 0;
+  out[14] = b;
+  out[15] = 0;
+  return out;
 }
 
 /** Transform a point/direction by a column-major matrix, returning w too. */
@@ -131,170 +155,28 @@ export function projectDir(dir: Vec3, viewProj: Mat4): Vec3 {
   return { x: t.x * iw, y: t.y * iw, z: t.z * iw };
 }
 
-function invert(m: Mat4): Mat4 {
-  // Standard 4×4 inverse (column-major). Adapted from three's Matrix4.invert.
-  const n11 = m[0]!,
-    n21 = m[1]!,
-    n31 = m[2]!,
-    n41 = m[3]!;
-  const n12 = m[4]!,
-    n22 = m[5]!,
-    n32 = m[6]!,
-    n42 = m[7]!;
-  const n13 = m[8]!,
-    n23 = m[9]!,
-    n33 = m[10]!,
-    n43 = m[11]!;
-  const n14 = m[12]!,
-    n24 = m[13]!,
-    n34 = m[14]!,
-    n44 = m[15]!;
-  const t11 =
-    n23 * n34 * n42 -
-    n24 * n33 * n42 +
-    n24 * n32 * n43 -
-    n22 * n34 * n43 -
-    n23 * n32 * n44 +
-    n22 * n33 * n44;
-  const t12 =
-    n14 * n33 * n42 -
-    n13 * n34 * n42 -
-    n14 * n32 * n43 +
-    n12 * n34 * n43 +
-    n13 * n32 * n44 -
-    n12 * n33 * n44;
-  const t13 =
-    n13 * n24 * n42 -
-    n14 * n23 * n42 +
-    n14 * n22 * n43 -
-    n12 * n24 * n43 -
-    n13 * n22 * n44 +
-    n12 * n23 * n44;
-  const t14 =
-    n14 * n23 * n32 -
-    n13 * n24 * n32 -
-    n14 * n22 * n33 +
-    n12 * n24 * n33 +
-    n13 * n22 * n34 -
-    n12 * n23 * n34;
-  const det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
-  const idet = 1 / det;
-  const o = new Float32Array(16);
-  o[0] = t11 * idet;
-  o[1] =
-    (n24 * n33 * n41 -
-      n23 * n34 * n41 -
-      n24 * n31 * n43 +
-      n21 * n34 * n43 +
-      n23 * n31 * n44 -
-      n21 * n33 * n44) *
-    idet;
-  o[2] =
-    (n22 * n34 * n41 -
-      n24 * n32 * n41 +
-      n24 * n31 * n42 -
-      n21 * n34 * n42 -
-      n22 * n31 * n44 +
-      n21 * n32 * n44) *
-    idet;
-  o[3] =
-    (n23 * n32 * n41 -
-      n22 * n33 * n41 -
-      n23 * n31 * n42 +
-      n21 * n33 * n42 +
-      n22 * n31 * n43 -
-      n21 * n32 * n43) *
-    idet;
-  o[4] = t12 * idet;
-  o[5] =
-    (n13 * n34 * n41 -
-      n14 * n33 * n41 +
-      n14 * n31 * n43 -
-      n11 * n34 * n43 -
-      n13 * n31 * n44 +
-      n11 * n33 * n44) *
-    idet;
-  o[6] =
-    (n14 * n32 * n41 -
-      n12 * n34 * n41 -
-      n14 * n31 * n42 +
-      n11 * n34 * n42 +
-      n12 * n31 * n44 -
-      n11 * n32 * n44) *
-    idet;
-  o[7] =
-    (n12 * n33 * n41 -
-      n13 * n32 * n41 +
-      n13 * n31 * n42 -
-      n11 * n33 * n42 -
-      n12 * n31 * n43 +
-      n11 * n32 * n43) *
-    idet;
-  o[8] = t13 * idet;
-  o[9] =
-    (n14 * n23 * n41 -
-      n13 * n24 * n41 -
-      n14 * n21 * n43 +
-      n11 * n24 * n43 +
-      n13 * n21 * n44 -
-      n11 * n23 * n44) *
-    idet;
-  o[10] =
-    (n12 * n24 * n41 -
-      n14 * n22 * n41 +
-      n14 * n21 * n42 -
-      n11 * n24 * n42 -
-      n12 * n21 * n44 +
-      n11 * n22 * n44) *
-    idet;
-  o[11] =
-    (n13 * n22 * n41 -
-      n12 * n23 * n41 -
-      n13 * n21 * n42 +
-      n11 * n23 * n42 +
-      n12 * n21 * n43 -
-      n11 * n22 * n43) *
-    idet;
-  o[12] = t14 * idet;
-  o[13] =
-    (n13 * n24 * n31 -
-      n14 * n23 * n31 +
-      n14 * n21 * n33 -
-      n11 * n24 * n33 -
-      n13 * n21 * n34 +
-      n11 * n23 * n34) *
-    idet;
-  o[14] =
-    (n14 * n22 * n31 -
-      n12 * n24 * n31 -
-      n14 * n21 * n32 +
-      n11 * n24 * n32 +
-      n12 * n21 * n34 -
-      n11 * n22 * n34) *
-    idet;
-  o[15] =
-    (n12 * n23 * n31 -
-      n13 * n22 * n31 +
-      n13 * n21 * n32 -
-      n11 * n23 * n32 -
-      n12 * n21 * n33 +
-      n11 * n22 * n33) *
-    idet;
-  return o;
-}
-
 /**
- * NDC (with z=0.5) → normalized ray direction from the origin. Matches
- * three's Vector3.unproject(camera) followed by sub(cameraPosition).normalize()
- * when the camera is at the origin.
+ * NDC → normalized ray direction from the origin. Matches three's
+ * Vector3.unproject(camera) followed by sub(cameraPosition).normalize() when
+ * the camera is at the origin.
+ *
+ * For M = P·V from {@link viewProjection}, rows 0, 1 and 3 of M are
+ * (f/aspect)·x, f·y and the forward vector. So the ray through (ndcX, ndcY)
+ * is ndcX·r0/|r0|² + ndcY·r1/|r1|² + r3, with no general 4×4 inverse.
  */
 export function unprojectNDC(ndcX: number, ndcY: number, viewProj: Mat4): Vec3 {
-  const inv = invert(viewProj);
-  const t = transform(inv, ndcX, ndcY, 0.5);
-  const iw = 1 / t.w;
-  const x = t.x * iw;
-  const y = t.y * iw;
-  const z = t.z * iw;
+  const m = viewProj;
+  const r0x = m[0]!,
+    r0y = m[4]!,
+    r0z = m[8]!;
+  const r1x = m[1]!,
+    r1y = m[5]!,
+    r1z = m[9]!;
+  const s0 = ndcX / (r0x * r0x + r0y * r0y + r0z * r0z);
+  const s1 = ndcY / (r1x * r1x + r1y * r1y + r1z * r1z);
+  const x = s0 * r0x + s1 * r1x + m[3]!;
+  const y = s0 * r0y + s1 * r1y + m[7]!;
+  const z = s0 * r0z + s1 * r1z + m[11]!;
   const len = Math.hypot(x, y, z) || 1;
   return { x: x / len, y: y / len, z: z / len };
 }
@@ -304,7 +186,7 @@ export function unprojectNDC(ndcX: number, ndcY: number, viewProj: Mat4): Vec3 {
  * them, matching three's Frustum.setFromProjectionMatrix. Plane order:
  * right, left, bottom, top, far, near.
  */
-export function frustumFromViewProj(viewProj: Mat4): Frustum {
+export function frustumFromViewProj(viewProj: Mat4, out: Frustum = new Float32Array(24)): Frustum {
   const m = viewProj;
   const m0 = m[0]!,
     m1 = m[1]!,
@@ -322,21 +204,21 @@ export function frustumFromViewProj(viewProj: Mat4): Frustum {
     m13 = m[13]!,
     m14 = m[14]!,
     m15 = m[15]!;
-  const planes = new Float32Array(24);
-  const set = (i: number, a: number, b: number, c: number, d: number) => {
-    const inv = 1 / Math.hypot(a, b, c);
-    planes[i * 4] = a * inv;
-    planes[i * 4 + 1] = b * inv;
-    planes[i * 4 + 2] = c * inv;
-    planes[i * 4 + 3] = d * inv;
-  };
-  set(0, m3 - m0, m7 - m4, m11 - m8, m15 - m12); // right
-  set(1, m3 + m0, m7 + m4, m11 + m8, m15 + m12); // left
-  set(2, m3 + m1, m7 + m5, m11 + m9, m15 + m13); // bottom
-  set(3, m3 - m1, m7 - m5, m11 - m9, m15 - m13); // top
-  set(4, m3 - m2, m7 - m6, m11 - m10, m15 - m14); // far
-  set(5, m3 + m2, m7 + m6, m11 + m10, m15 + m14); // near
-  return planes;
+  setPlane(out, 0, m3 - m0, m7 - m4, m11 - m8, m15 - m12); // right
+  setPlane(out, 1, m3 + m0, m7 + m4, m11 + m8, m15 + m12); // left
+  setPlane(out, 2, m3 + m1, m7 + m5, m11 + m9, m15 + m13); // bottom
+  setPlane(out, 3, m3 - m1, m7 - m5, m11 - m9, m15 - m13); // top
+  setPlane(out, 4, m3 - m2, m7 - m6, m11 - m10, m15 - m14); // far
+  setPlane(out, 5, m3 + m2, m7 + m6, m11 + m10, m15 + m14); // near
+  return out;
+}
+
+function setPlane(out: Frustum, i: number, a: number, b: number, c: number, d: number): void {
+  const inv = 1 / Math.hypot(a, b, c);
+  out[i * 4] = a * inv;
+  out[i * 4 + 1] = b * inv;
+  out[i * 4 + 2] = c * inv;
+  out[i * 4 + 3] = d * inv;
 }
 
 /** Plane-vs-sphere test, matching three's Frustum.intersectsSphere. */

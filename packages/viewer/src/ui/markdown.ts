@@ -15,6 +15,9 @@ function escapeHtml(s: string): string {
 // data:, vbscript:) renders as plain text so a description can't smuggle code.
 function safeUrl(url: string): string | null {
   const u = url.trim();
+  // Browsers strip tab, CR and LF from URLs before parsing, so `/\t/evil.com`
+  // would pass the relative check below yet resolve as `//evil.com`.
+  if (/[\t\n\r]/.test(u)) return null;
   if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u)) {
     return u;
   }
@@ -28,23 +31,40 @@ function safeUrl(url: string): string | null {
   return null;
 }
 
+function emphasis(s: string): string {
+  return s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+}
+
+// A private-use character marks where a finished link goes back in, so the
+// emphasis and code passes never see (and mangle) an href. It is stripped
+// from the input first, so the text itself can't fake a placeholder.
+const MARK = '';
+const MARKS = new RegExp(MARK, 'g');
+const PLACEHOLDER = new RegExp(`${MARK}(\\d+)${MARK}`, 'g');
+// [label](url), where the url may hold one level of balanced parentheses.
+const LINK = /\[([^\]]+)\]\(((?:[^()]|\([^()]*\))+)\)/g;
+
 function inline(text: string): string {
-  let out = escapeHtml(text);
-  // Links: [label](url) — resolved before emphasis so labels can be styled.
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label: string, rawUrl: string) => {
+  const links: string[] = [];
+  let out = escapeHtml(text.replace(MARKS, ''));
+  out = out.replace(LINK, (_m, label: string, rawUrl: string) => {
     const url = safeUrl(rawUrl);
-    if (!url) return label;
     // Not escapeHtml(url) here: `text` was already escaped as a whole above,
     // so `url` (sliced out of that escaped text) is already HTML-safe.
     // Escaping it again double-encodes entities already produced by that
     // pass — e.g. `&` in a query string becomes `&amp;amp;` — corrupting
     // any link whose URL contains `&`, `<`, `>`, or `"`.
-    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    links.push(
+      url
+        ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`
+        : emphasis(label),
+    );
+    return `${MARK}${links.length - 1}${MARK}`;
   });
-  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  return out;
+  return emphasis(out).replace(PLACEHOLDER, (_m, i: string) => links[Number(i)]!);
 }
 
 export function renderMarkdown(src: string): string {

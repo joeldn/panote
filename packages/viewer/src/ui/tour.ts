@@ -14,6 +14,14 @@ export interface Tour {
   scenes: Record<string, TourScene>;
 }
 
-export function arrivalView(link: TourLink): Partial<View> {
-  return { yaw: link.yaw };
+export interface InfoHotspotData {
+  yaw: number; // radians
+  pitch: number; // radians
+  title: string;
+  /** Markdown body shown in the panel when the hotspot is opened. */
+  body?: string;
+  /** Optional short caption shown under the title. */
+  subtitle?: string;
+  /** Stable id reported via the viewer's `hotspot-open` event when set. */
+  id?: string;
 }

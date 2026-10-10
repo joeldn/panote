@@ -11,10 +11,12 @@
   ],
   "exports": {
     ".": {
+      "source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./ui": {
+      "source": "./src/ui/index.ts",
       "types": "./dist/ui/index.d.ts",
       "default": "./dist/ui/index.js"
     }

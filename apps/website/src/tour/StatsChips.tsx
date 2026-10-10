@@ -1,16 +1,19 @@
 import type { TourStatsState } from './use-stats.js';
 
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+const full = new Intl.NumberFormat('en');
 
 /** View count and the like button beside the breadcrumb (screen 05). */
 export function StatsChips({ stats, liked, like }: TourStatsState) {
   return (
     <div className="tour-stats">
-      <span className="tour-chip" aria-label={stats ? `${stats.views} views` : 'Views'}>
+      {/* aria-label on a plain span is ignored, so the count is read from hidden text. */}
+      <span className="tour-chip">
         <i className="fa-solid fa-chart-line" aria-hidden="true" />
-        <span className="tour-chip__num">
+        <span className="tour-chip__num" aria-hidden="true">
           {stats ? compact.format(stats.views).toLowerCase() : '–'}
         </span>
+        <span className="pn-sr-only">{stats ? `${full.format(stats.views)} views` : 'Views'}</span>
       </span>
       <button
         type="button"
