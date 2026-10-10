@@ -98,7 +98,8 @@ export interface UrlTemplateInit {
   /**
    * A tile URL with `{level}`, `{face}`, `{x}` and `{y}` in it, e.g.
    * `'https://cdn.example/p1/{level}/{face}/{x}-{y}.jpg'`. Substituted as
-   * given, not URL-encoded.
+   * given, not URL-encoded. A single-level cube (maxLevel 0) needs only
+   * `{face}`, e.g. `'/cube/{face}.jpg'`.
    */
   template: string;
   tileSize: number;
@@ -109,12 +110,15 @@ export interface UrlTemplateInit {
   meta?: unknown;
 }
 
-const PLACEHOLDERS = ['{level}', '{face}', '{x}', '{y}'] as const;
+// Every tile of a maxLevel-0 cube is level 0, tile 0-0, so only {face} tells
+// its tiles apart.
+const TILE_PLACEHOLDERS = ['{level}', '{x}', '{y}'] as const;
 
 /** A source for the common static layout: one URL template for every tile. */
 export function urlTemplateSource(init: UrlTemplateInit): CubeTileSource {
   const { id, template, tileSize, maxLevel, faceNames = {}, version, meta } = init;
-  for (const p of PLACEHOLDERS) {
+  const required = maxLevel > 0 ? ['{face}', ...TILE_PLACEHOLDERS] : ['{face}'];
+  for (const p of required) {
     if (!template.includes(p)) throw new TypeError(`urlTemplateSource: template has no ${p}`);
   }
   const names = Object.fromEntries(FACES.map((f) => [f, faceNames[f] ?? f])) as Record<

@@ -201,7 +201,7 @@ export class GLRenderer {
       // no preserveDrawingBuffer — snapshot() copies the frame in the same task instead.
     });
     if (!gl) {
-      throw new Error('WebGL2 is not available in this browser; the pano viewer requires WebGL2.');
+      throw new Error('PanoViewer needs WebGL2, which this browser does not provide.');
     }
     this.gl = gl;
     container.appendChild(this.canvas);

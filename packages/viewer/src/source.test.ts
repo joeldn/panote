@@ -71,9 +71,24 @@ describe('urlTemplateSource', () => {
 
   it.each(['{level}', '{face}', '{x}', '{y}'])('refuses a template without %s', (p) => {
     const template = '/{level}/{face}/{x}-{y}.jpg'.replace(p, 'z');
-    expect(() => urlTemplateSource({ id: 'p1', template, tileSize: 512, maxLevel: 0 })).toThrow(
+    expect(() => urlTemplateSource({ id: 'p1', template, tileSize: 512, maxLevel: 1 })).toThrow(
       `template has no ${p}`,
     );
+  });
+
+  it('needs only {face} for a single-level cube', () => {
+    const s = urlTemplateSource({
+      id: 'p1',
+      template: '/cube/{face}.jpg',
+      tileSize: 512,
+      maxLevel: 0,
+    });
+    expect(FACES.map((face) => s.tileUrl!({ face, level: 0, x: 0, y: 0 }))).toEqual(
+      FACES.map((f) => `/cube/${f}.jpg`),
+    );
+    expect(() =>
+      urlTemplateSource({ id: 'p1', template: '/cube/front.jpg', tileSize: 512, maxLevel: 0 }),
+    ).toThrow('template has no {face}');
   });
 
   it('refuses a malformed pyramid', () => {

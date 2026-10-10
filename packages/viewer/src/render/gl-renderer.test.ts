@@ -711,4 +711,11 @@ describe('GLRenderer options', () => {
       1,
     );
   });
+
+  it('says what it needs when the browser has no WebGL2', () => {
+    const { container } = makeFakeDocumentAndContainer(null);
+    expect(() => new GLRenderer(container as unknown as HTMLElement)).toThrow(
+      'PanoViewer needs WebGL2, which this browser does not provide.',
+    );
+  });
 });

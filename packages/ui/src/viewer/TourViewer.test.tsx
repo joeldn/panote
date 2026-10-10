@@ -472,6 +472,30 @@ describe('TourViewer', () => {
     expect(viewer().handlers.has('hotspot-open')).toBe(false);
   });
 
+  it('does not count a point opened before the stage has its viewer', () => {
+    const onHotspotOpen = vi.fn();
+    let early = false;
+    renderViewer({
+      onHotspotOpen,
+      createViewer: (el, options) => {
+        // The stage builds its viewer in an effect, once its chrome is in the
+        // DOM: a click now reaches a point layer with no viewer yet.
+        fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+        early = true;
+        return new FakeViewer(el, options) as unknown as PanoViewer;
+      },
+    });
+    expect(early).toBe(true);
+    expect(screen.getByRole('button', { name: 'Fountain' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(onHotspotOpen).not.toHaveBeenCalled();
+    // Closed and opened again with the viewer in place, it counts.
+    fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+    expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('square', 'i1');
+  });
+
   it('passes embed to the stage, which engages the wheel', () => {
     const { viewer } = renderViewer({ embed: true });
     expect(viewer().options?.interaction?.wheel).toBe('engaged');
