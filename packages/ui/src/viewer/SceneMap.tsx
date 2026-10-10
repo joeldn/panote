@@ -43,42 +43,44 @@ export function SceneMap({ scenes, current, onSelect }: SceneMapProps) {
 
   return (
     <div className="pn-scenemap">
-      {/* Always rendered, so the toggle's aria-controls names an element that exists. */}
-      <div id={panelId} className="pn-scenemap__panel" hidden={!open}>
-        {placed.length > 1 && (
-          <div className="pn-scenemap__plan" aria-hidden="true">
-            {placed.map((s) => (
-              <span
-                key={s.id}
-                className={cx('pn-scenemap__dot', s.id === current && 'pn-scenemap__dot--on')}
-                style={{
-                  left: `${toPercent(s.x, minX, maxX)}%`,
-                  top: `${toPercent(s.y, minY, maxY)}%`,
-                }}
-              />
+      {open && (
+        <div id={panelId} className="pn-scenemap__panel">
+          {placed.length > 1 && (
+            <div className="pn-scenemap__plan" aria-hidden="true">
+              {placed.map((s) => (
+                <span
+                  key={s.id}
+                  className={cx('pn-scenemap__dot', s.id === current && 'pn-scenemap__dot--on')}
+                  style={{
+                    left: `${toPercent(s.x, minX, maxX)}%`,
+                    top: `${toPercent(s.y, minY, maxY)}%`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          <ul className="pn-scenemap__list">
+            {scenes.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className="pn-scenemap__item"
+                  aria-current={s.id === current ? 'location' : undefined}
+                  onClick={() => select(s.id)}
+                >
+                  {s.title}
+                </button>
+              </li>
             ))}
-          </div>
-        )}
-        <ul className="pn-scenemap__list">
-          {scenes.map((s) => (
-            <li key={s.id}>
-              <button
-                type="button"
-                className="pn-scenemap__item"
-                aria-current={s.id === current ? 'location' : undefined}
-                onClick={() => select(s.id)}
-              >
-                {s.title}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
+          </ul>
+        </div>
+      )}
       <button
         type="button"
         className="pn-scenemap__toggle"
         aria-expanded={open}
-        aria-controls={panelId}
+        // Only while open: the panel isn't in the DOM when closed.
+        aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((o) => !o)}
       >
         <i className="fa-solid fa-table-cells-large" aria-hidden="true" />

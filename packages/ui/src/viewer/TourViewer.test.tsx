@@ -287,8 +287,11 @@ describe('TourViewer', () => {
       within(screen.getByRole('navigation', { name: 'Tour' })).getByText(
         (_, el) => el?.getAttribute('aria-current') === 'location',
       ).textContent;
-    const mapCurrent = () =>
-      document.querySelector('.pn-scenemap__item[aria-current="location"]')?.textContent;
+    const mapCurrent = () => {
+      const toggle = screen.getByRole('button', { name: 'Map' });
+      if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+      return document.querySelector('.pn-scenemap__item[aria-current="location"]')?.textContent;
+    };
 
     async function startTransition(props: Partial<TourViewerProps> = {}) {
       const r = renderViewer({

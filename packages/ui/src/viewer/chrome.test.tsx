@@ -291,13 +291,17 @@ describe('SceneMap', () => {
     expect(screen.queryByRole('button', { name: 'Kitchen' })).toBeNull();
   });
 
-  it('points the toggle at a panel that exists while closed too', () => {
+  it('never points the toggle at a panel that is not there', () => {
     render(<SceneMap scenes={[{ id: 'a', title: 'Hall' }]} current="a" onSelect={() => {}} />);
     const toggle = screen.getByRole('button', { name: 'Map' });
-    const panel = document.getElementById(toggle.getAttribute('aria-controls')!);
-    expect(panel).toBeTruthy();
-    expect(panel!.hidden).toBe(true);
+    const controlled = () => {
+      const id = toggle.getAttribute('aria-controls');
+      return id === null ? null : document.getElementById(id);
+    };
+    expect(toggle.getAttribute('aria-controls')).toBeNull();
     fireEvent.click(toggle);
-    expect(panel!.hidden).toBe(false);
+    expect(controlled()?.className).toBe('pn-scenemap__panel');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-controls')).toBeNull();
   });
 });
