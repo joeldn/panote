@@ -360,6 +360,29 @@ describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
     expect(host.zoomAt).toHaveBeenCalledWith(0.5, 200, 100);
   });
 
+  it('does not start a gesture zoom while a pointer is tracked', () => {
+    setup();
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    el.dispatch('gesturestart', { scale: 1, clientX: 150, clientY: 100 });
+    pointer('pointerup', { x: 100, y: 100, t: 16, id: 1, ...touch });
+    pointer('pointerup', { x: 200, y: 100, t: 16, id: 2, ...touch });
+    // A late gesturechange after the fingers lifted has no gesture to scale.
+    el.dispatch('gesturechange', { scale: 2, clientX: 150, clientY: 100 });
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('does not zoom a gesture change once pointers are tracked', () => {
+    setup();
+    // Gesture first (event order is not guaranteed), then the fingers land.
+    el.dispatch('gesturestart', { scale: 1, clientX: 150, clientY: 100 });
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    const change = el.dispatch('gesturechange', { scale: 2, clientX: 150, clientY: 100 });
+    expect(change.defaultPrevented).toBe(true);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
   it('falls back to the element centre when a gesture has no coordinates', () => {
     setup();
     el.dispatch('gesturestart', { scale: 1 });
