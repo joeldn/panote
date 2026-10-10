@@ -69,6 +69,7 @@ class FakeViewer {
   transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
+  isSettled = () => false;
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   dispose = vi.fn();

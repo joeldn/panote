@@ -38,6 +38,9 @@ class FakeViewer {
   });
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
+  /** What isSettled() answers. */
+  settled = false;
+  isSettled = () => this.settled;
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   dispose = vi.fn();
@@ -431,6 +434,47 @@ describe('TourViewer', () => {
       ]);
       // Later settles (after each pan) don't fetch again.
       settle(viewer());
+      expect(prefetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('fetches at once for a scene that settled before the prefetch subscribed', async () => {
+      const prefetch = vi.fn(async () => {});
+      renderViewer({
+        data: many(),
+        prefetch,
+        createViewer: () => {
+          const v = new FakeViewer();
+          // Its base was all it needed: settled by the time the scene is shown.
+          v.settled = true;
+          return v as unknown as PanoViewer;
+        },
+      });
+      await waitFor(() => expect(prefetch).toHaveBeenCalledTimes(3));
+      expect(prefetch.mock.calls.map((c: unknown[]) => c[1])).toEqual([
+        'church',
+        'tower',
+        'bridge',
+      ]);
+    });
+
+    it('waits for the start scene to land even when the empty viewer counts as settled', async () => {
+      const prefetch = vi.fn(async () => {});
+      let v!: FakeViewer;
+      renderViewer({
+        data: many(),
+        prefetch,
+        createViewer: () => {
+          v = new FakeViewer();
+          v.settled = true;
+          v.load.mockImplementation(() => new Promise<void>(() => {}));
+          return v as unknown as PanoViewer;
+        },
+      });
+      await waitFor(() => expect(v.load).toHaveBeenCalled());
+      await act(async () => {});
+      expect(prefetch).not.toHaveBeenCalled();
+
+      act(() => v.emit('scene-change', 'square'));
       expect(prefetch).toHaveBeenCalledTimes(3);
     });
 

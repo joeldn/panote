@@ -166,6 +166,9 @@ function LinkPrefetch({ baseUrl, targets, prefetch }: LinkPrefetchProps) {
       for (const id of ids) void warm(baseUrl, id, { signal: controller.signal });
     };
     viewer.on('tiles-settled', settled);
+    // This effect runs after the scene swapped in, and a scene that needs no
+    // more than its base can settle before that: its event has gone.
+    if (viewer.isSettled()) settled();
     return () => {
       viewer.off('tiles-settled', settled);
       controller.abort();
@@ -206,6 +209,9 @@ export function TourViewer({
     view: data.tour?.scenes[start]?.initialView,
   }));
   const [shown, setShown] = useState(start);
+  // Whether the viewer has reported any scene on screen yet: until then an
+  // empty viewer counts as settled, and the prefetch would race the start.
+  const [arrived, setArrived] = useState(false);
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(
     () => data.settings.autoRotate && !prefersReducedMotion(),
@@ -236,8 +242,12 @@ export function TourViewer({
   const links = moving ? NONE : sceneLinks;
   const prefetchTargets = useMemo(
     () =>
-      [...new Set(links.map((l) => l.to))].filter((id) => id !== panoId).slice(0, PREFETCH_LIMIT),
-    [links, panoId],
+      arrived
+        ? [...new Set(links.map((l) => l.to))]
+            .filter((id) => id !== panoId)
+            .slice(0, PREFETCH_LIMIT)
+        : NONE,
+    [arrived, links, panoId],
   );
   const go = (id: string, view: Scene['view']) => {
     setActive(null);
@@ -245,6 +255,7 @@ export function TourViewer({
   };
   const landed = (id: string) => {
     setShown(id);
+    setArrived(true);
     if (reported.current === id) return;
     reported.current = id;
     onSceneChange?.(id);
