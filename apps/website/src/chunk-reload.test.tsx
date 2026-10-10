@@ -68,6 +68,13 @@ describe('a lazy Shell chunk that fails to load', () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
+  it('does not reload again 30 s after the last reload', async () => {
+    sessionStorage.setItem('panote:chunk-reload', String(Date.now() - 30_000));
+    renderFailingShell(STALE);
+    expect(await failedCard()).toBeTruthy();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
   it('shows the retry card when storage refuses the timestamp', async () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota');

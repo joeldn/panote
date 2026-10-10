@@ -3,8 +3,11 @@
 // failure isn't a stale build (offline, or a chunk that is really missing).
 
 const KEY = 'panote:chunk-reload';
-/** A second chunk failure within this window shows the error instead of reloading again. */
-export const RELOAD_WINDOW_MS = 10_000;
+/**
+ * A second chunk failure within this window shows the error instead of reloading again.
+ * Long enough that a page which takes a while to load on a slow link can't loop.
+ */
+export const RELOAD_WINDOW_MS = 60_000;
 
 /** Indirection so tests can observe the reload; jsdom's location.reload can't be spied. */
 export const page = { reload: (): void => window.location.reload() };
