@@ -176,8 +176,12 @@ export function PanoStage({
     const onHotspot = (id: string) => callbacks.current.onHotspotOpen?.(id);
     const onRestored = () => setRestores((n) => n + 1);
     // The viewer's own reload after a restore has no promise to reject.
-    const onReloadError = ({ error, id }: { error: unknown; id: string }) =>
+    const onReloadError = ({ error, id }: { error: unknown; id: string }) => {
+      // That pano is no longer on screen (the restore left the stage blank),
+      // so going back to it must load it.
+      if (landed.current?.panoId === id) landed.current = null;
       callbacks.current.onLoadError?.(error, id);
+    };
     v.on('scene-change', onScene);
     v.on('hotspot-open', onHotspot);
     v.on('context-restored', onRestored);
@@ -221,6 +225,7 @@ export function PanoStage({
       prev?.failed &&
       !samePano &&
       back?.viewer === viewer &&
+      !back.failed &&
       back.panoId === panoId &&
       back.reloadKey === reloadKey &&
       back.restores === restores &&

@@ -861,6 +861,65 @@ describe('PanoStage', () => {
       expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
+    it("loads it when the viewer's own reload of it after a context restore failed", async () => {
+      const f = factory();
+      const stage = (panoId: string) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          transition
+          onLoadError={() => {}}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      act(() => {
+        v.emit('context-lost');
+        v.emit('context-restored');
+        v.emit('load-error', { error: new Error('manifest 503'), id: 'hall' });
+      });
+      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      await act(async () => rerender(stage('nave')));
+      await act(async () => rerender(stage('hall')));
+      // Nothing of hall is on screen any more: it has to be loaded.
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
+
+    it('loads it again when its own load failed after it landed', async () => {
+      const f = factory();
+      const { preview } = previewOf('hall');
+      const stage = (panoId: string) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          preview={preview}
+          transition
+          onLoadError={() => {}}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      // The preview landed (the viewer reports it on screen), then its tiles
+      // failed to load: what the stage has for hall is not settled.
+      v.showPreview.mockImplementation((pano) => {
+        v.calls.push(`show:${pano}`);
+        v.emit('scene-change', pano);
+      });
+      v.load.mockRejectedValueOnce(new Error('manifest 404'));
+      act(() => {
+        v.emit('context-lost');
+        v.emit('context-restored');
+      });
+      await act(async () => {});
+      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      await act(async () => rerender(stage('nave')));
+      await act(async () => rerender(stage('hall')));
+      expect(v.calls.filter((c) => c === 'show:hall')).toHaveLength(3);
+    });
+
     it('loads it when the change was only superseded, not failed', () => {
       const f = factory();
       const stage = (panoId: string) => (
