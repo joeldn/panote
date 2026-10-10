@@ -1,5 +1,5 @@
 import { MAX_HOTSPOT_BODY_LENGTH, MAX_TITLE_LENGTH, type Hotspot } from '@internal/contracts';
-import { Button, Segmented } from '@internal/ui';
+import { Button, FALLBACK_ICON, pointIcon, Segmented } from '@internal/ui';
 import { useId, useState } from 'react';
 
 import { searchIcons } from './icons.js';
@@ -127,7 +127,9 @@ export function PointEditor({
   // The parent keys this component by point id, so this starts fresh per point.
   const [title, setTitle] = useState(point.title);
   const icons = searchIcons(iconQuery);
-  const current = point.icon ?? 'info';
+  // An off-list stored icon renders as the fallback, so the picker shows that as selected.
+  const current = pointIcon(point.icon);
+  const unavailable = point.icon != null && current !== point.icon;
   const size = point.size ?? 1;
 
   return (
@@ -191,6 +193,12 @@ export function PointEditor({
           ))}
           {icons.length === 0 && <p className="ed-note">No icon matches.</p>}
         </div>
+        {unavailable && (
+          <p className="ed-note">
+            The stored icon “{point.icon}” isn’t available, so it shows as {FALLBACK_ICON}. Pick one
+            to replace it.
+          </p>
+        )}
       </div>
       <div className="ed-field">
         <label className="ed-label" htmlFor={`${id}-size`}>
