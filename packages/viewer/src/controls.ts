@@ -1,23 +1,21 @@
 import { pinchFactor } from './camera-math.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+import type { WheelMode } from './types.js';
+
+export type { WheelMode };
 
 export interface ControlHost {
+  /** Move the camera now: a drag follows the pointer exactly. */
   panByPixels(dx: number, dy: number): void;
+  /** Move where the camera is heading, and let damping ease it there (keys). */
+  panTargetByPixels(dx: number, dy: number): void;
   zoomAt(scaleFactor: number, clientX: number, clientY: number): void;
   flick(vx: number, vy: number): void;
   stopMomentum(): void;
 }
 
-/**
- * When the wheel drives the viewer.
- * - `'always'`: every wheel event zooms (or pans) and never scrolls the page.
- * - `'engaged'`: for embeds. A plain wheel scrolls the host page until the
- *   viewer is engaged; ctrl/cmd + wheel (and a trackpad pinch) always zooms.
- *   A pointerdown or focus engages; a mouse leaving or blur disengages.
- */
-export type WheelMode = 'always' | 'engaged';
-
 export interface ControlsOptions {
-  /** Wheel capture mode. Default `'always'`. */
+  /** Wheel capture mode. Default `VIEWER_DEFAULTS.wheel`. */
   wheel?: WheelMode;
 }
 
@@ -87,8 +85,8 @@ export class Controls {
     el.style.touchAction = 'none';
     el.style.cursor = 'grab';
     el.tabIndex = 0;
-    this.wheelMode = opts.wheel ?? 'always';
-    // The host may rebuild Controls on a focused element (a scene change).
+    this.wheelMode = opts.wheel ?? VIEWER_DEFAULTS.wheel;
+    // The element may already have focus when Controls is built.
     this.engaged = el.ownerDocument?.activeElement === el;
     el.addEventListener('pointerdown', this.onDown);
     el.addEventListener('pointermove', this.onMove);
@@ -305,23 +303,26 @@ export class Controls {
   private onKeyDown = (e: KeyboardEvent) => {
     // Modified keys belong to the browser and OS: Ctrl/Cmd +/- is page zoom,
     // which low-vision users rely on, and Alt/Cmd+arrow is history navigation.
-    // AltGr arrives as Ctrl+Alt on Windows and types characters, so it is
-    // not a modifier here.
+    // AltGr arrives as Ctrl+Alt on Windows and types characters, so it
+    // excuses Ctrl and Alt, but never Cmd.
+    if (e.metaKey) return;
     const altGraph = e.getModifierState?.('AltGraph') ?? false;
-    if (!altGraph && (e.ctrlKey || e.metaKey || e.altKey)) return;
+    if (!altGraph && (e.ctrlKey || e.altKey)) return;
+    // Keys move the target, not the camera, so damping smooths key repeat
+    // into a glide instead of 40 px jumps.
     const panStep = 40; // px-equivalent
     switch (e.key) {
       case 'ArrowLeft':
-        this.host.panByPixels(panStep, 0);
+        this.host.panTargetByPixels(panStep, 0);
         break;
       case 'ArrowRight':
-        this.host.panByPixels(-panStep, 0);
+        this.host.panTargetByPixels(-panStep, 0);
         break;
       case 'ArrowUp':
-        this.host.panByPixels(0, panStep);
+        this.host.panTargetByPixels(0, panStep);
         break;
       case 'ArrowDown':
-        this.host.panByPixels(0, -panStep);
+        this.host.panTargetByPixels(0, -panStep);
         break;
       case '+':
       case '=':

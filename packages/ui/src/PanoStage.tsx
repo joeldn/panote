@@ -212,15 +212,12 @@ export function PanoStage({
       return;
     }
 
-    // A preview goes on screen at once with the camera as it is, so aim the
-    // camera before it goes up.
-    if (sceneView) viewer.setView(sceneView);
-
     // Whether or not the preview made it up, it's done with for this entry:
-    // report a failure, then load the tiles.
+    // report a failure, then load the tiles, with the scene's view if it has
+    // one (the preview that would have carried it never went up).
     const previewFailed = (err: unknown) => {
       callbacks.current.onPreviewError?.(err, panoId);
-      load();
+      load(sceneView);
     };
     const show = (source: PreviewSource) => {
       if (!live()) {
@@ -232,6 +229,10 @@ export function PanoStage({
         newPreview.replacesVersion === undefined
           ? {}
           : { replacesVersion: newPreview.replacesVersion };
+      // A preview goes on screen at once with the camera as it is, so aim the
+      // camera just before it goes up, and not before: an async source may
+      // land late, or never.
+      if (sceneView) viewer.setView(sceneView);
       try {
         viewer.showPreview(panoId, source, opts);
       } catch (err) {
