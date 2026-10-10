@@ -575,6 +575,9 @@ describe('visitor share', () => {
     expect(x.getAttribute('href')).toContain(encodeURIComponent('https://panote.test/s/old-town'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // The lazily loaded sheet stays mounted and opens again.
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(await screen.findByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
   });
 
   it('is not offered in the embed', async () => {

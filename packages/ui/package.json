@@ -18,6 +18,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./share": {
+      "source": "./src/share/index.ts",
+      "types": "./dist/share/index.d.ts",
+      "default": "./dist/share/index.js"
+    },
     "./styles.css": "./styles/index.css",
     "./tokens.css": "./styles/tokens.css",
     "./fonts.css": "./styles/fonts.css",
