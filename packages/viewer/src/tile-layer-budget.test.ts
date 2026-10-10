@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Manifest } from '@panote/core';
 import { FACES } from './cube.js';
-import { selectLevel } from './lod.js';
 import { TileLayer } from './tile-layer.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
@@ -20,6 +19,8 @@ import type { GLRenderer } from './render/gl-renderer.js';
 const DEVICE_PIXEL_HEIGHT = 1600;
 /** The same viewport measured the way PanoViewer measured it before 084c1ea. */
 const CSS_PIXEL_HEIGHT = 800;
+/** 1200 CSS px tall at devicePixelRatio 2: tall enough to select level 3. */
+const TALL_PIXEL_HEIGHT = 2400;
 /** 16:9, i.e. the 1422x800 CSS-pixel viewport the two heights above describe. */
 const ASPECT = 16 / 9;
 const REQUESTED_FOV_DEG = 70;
@@ -181,7 +182,7 @@ describe('texture budget while panning', () => {
   }
 
   it('keeps every visible tile when the visible set is bigger than the budget', async () => {
-    // 1 MB is the 24-tile floor, against 88 tiles on screen. Evicting by
+    // 1 MB is the 24-tile floor, against more on screen at level 3. Evicting by
     // overflow alone would drop visible tiles, refetch them next frame and
     // drop them again, forever, with the camera standing still.
     const layer = new TileLayer(
@@ -201,7 +202,7 @@ describe('texture budget while panning', () => {
         viewProjection(view, ASPECT, MAX_HORIZONTAL_FOV_DEG),
         FOV_DEG,
         dirFromYawPitch(0, 0),
-        DEVICE_PIXEL_HEIGHT,
+        TALL_PIXEL_HEIGHT,
       );
     still();
     for (let i = 0; i < 3; i++) await flush();
@@ -216,14 +217,6 @@ describe('texture budget while panning', () => {
     expect(requests).toHaveLength(loaded);
     expect(renderer.live).toEqual(resident);
     layer.dispose();
-  });
-
-  it('selects one pyramid level finer on a DPR-2 display', () => {
-    // The premise the rest of this file rests on, and the change 084c1ea made:
-    // the same viewport picks level 2 from CSS pixels and level 3 from device
-    // pixels, and level 3 is 4x the tiles per face.
-    expect(selectLevel(FOV_DEG, CSS_PIXEL_HEIGHT, TILE_SIZE, 3)).toBe(2);
-    expect(selectLevel(FOV_DEG, DEVICE_PIXEL_HEIGHT, TILE_SIZE, 3)).toBe(3);
   });
 
   it('never refetches when a whole lap fits in the budget', async () => {

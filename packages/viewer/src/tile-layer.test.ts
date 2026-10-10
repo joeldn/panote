@@ -94,10 +94,13 @@ describe('TileLayer failure handling', () => {
     return `/tiles/${pano}/0/${face}/0-0.jpg`;
   }
 
-  /** One render frame at the given yaw, matching PanoViewer's loop() call. */
+  /**
+   * One render frame at the given yaw, matching PanoViewer's loop() call: an
+   * 800 px tall square view at devicePixelRatio 2, which selects level 2.
+   */
   function frame(layer: TileLayer, yaw: number): void {
     const view = { yaw, pitch: 0, fov: 70 };
-    layer.update(viewProjection(view, 1, 100), 70, dirFromYawPitch(yaw, 0), 800);
+    layer.update(viewProjection(view, 1, 100), 70, dirFromYawPitch(yaw, 0), 1600);
   }
 
   async function render(layer: TileLayer, yaw: number): Promise<void> {
