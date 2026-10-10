@@ -118,6 +118,13 @@ interface ReadyTile {
 const MAX_UPLOADS_PER_UPDATE = 3;
 /** Stop uploading for this update once this much time has gone. */
 const UPLOAD_BUDGET_MS = 4;
+/**
+ * Frames a tile may stay out of the view before its download is aborted (or
+ * its decoded bitmap dropped). A tile one pixel outside the frustum for a
+ * frame of a pan would otherwise be cancelled mid-download and fetched again
+ * when it comes back.
+ */
+const ABORT_AFTER_FRAMES = 10;
 
 interface Candidate {
   key: string;
@@ -208,6 +215,10 @@ export class TileLayer {
   private inflight = new Map<string, AbortController>();
   // Decoded and not yet uploaded, in arrival order. See drainReady().
   private ready = new Map<string, ReadyTile>();
+  // Consecutive frames an in-flight or decoded tile has been unwanted.
+  private stale = new Map<string, number>();
+  // `${level}/` for every level, the start of that level's keys.
+  private levelPrefix: string[];
   private queue: Candidate[] = [];
   // Next queue index pump() takes. A cursor rather than shift(), which is
   // O(n) per dequeue; update() replaces the queue and resets it every frame.
@@ -266,6 +277,7 @@ export class TileLayer {
     // Cooldowns and the wake timer share one clock (faked together in tests).
     this.retry = new TileRetryBudget(this.now);
     this.visible = new Int32Array(FACES.length * tilesPerEdge(manifest.maxLevel) ** 2);
+    this.levelPrefix = Array.from({ length: manifest.maxLevel + 1 }, (_, l) => `${l}/`);
   }
 
   /**
@@ -352,7 +364,7 @@ export class TileLayer {
       for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
     }
 
-    this.drainReady();
+    this.drainReady(level);
 
     // The candidates are rebuilt even for a still view: a tile that landed,
     // failed or finished its cooldown since the last frame changes them.
@@ -382,14 +394,15 @@ export class TileLayer {
       }
     }
 
-    // Abort inflight loads that are no longer in the desired set. Level-0
-    // tiles are exempt: they are the base loadBase() is waiting on (and is
-    // never in a deeper level's desired set), and once resident they are
-    // pinned and drawn at every level, so one is never wasted work.
+    // Abort in-flight loads that have been out of the view for
+    // ABORT_AFTER_FRAMES frames in a row. See wanted() for what is kept.
     for (const [key, controller] of this.inflight) {
-      if (!this.desired.has(key) && !key.startsWith('0/')) {
+      if (this.wanted(key, level)) {
+        this.stale.delete(key);
+      } else if (this.staleFrames(key) > ABORT_AFTER_FRAMES) {
         controller.abort();
         this.inflight.delete(key);
+        this.stale.delete(key);
       }
     }
 
@@ -599,6 +612,7 @@ export class TileLayer {
       // belong to a reload, which must stay tracked: it still counts against
       // maxConcurrent and update() must still be able to abort it.
       if (this.inflight.get(key) === controller) this.inflight.delete(key);
+      if (!this.inflight.has(key) && !this.ready.has(key)) this.stale.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
   }
@@ -633,6 +647,28 @@ export class TileLayer {
     this.onInvalidate();
   }
 
+  /**
+   * Is a tile that is loading still worth finishing at `level`? Yes if it is
+   * in view, if it is level 0 (the base loadBase() is waiting on, pinned and
+   * drawn at every level once resident), or if it is one level coarser than
+   * the target: after a zoom-in step those still improve on the fallback
+   * until the finer tiles land.
+   */
+  private wanted(key: string, level: number): boolean {
+    return (
+      this.desired.has(key) ||
+      key.startsWith('0/') ||
+      (level > 0 && key.startsWith(this.levelPrefix[level - 1]!))
+    );
+  }
+
+  /** Count one more unwanted frame for `key`, and return the total. */
+  private staleFrames(key: string): number {
+    const n = (this.stale.get(key) ?? 0) + 1;
+    this.stale.set(key, n);
+    return n;
+  }
+
   private recordFailure(key: string, err: unknown): FailureKind {
     const failure = classifyFailure(err);
     this.retry.recordFailure(key, failure);
@@ -646,17 +682,23 @@ export class TileLayer {
    * Upload what has decoded since the last frame: at most
    * MAX_UPLOADS_PER_UPDATE, and none once UPLOAD_BUDGET_MS has gone, so a
    * burst of decodes is spread over several frames instead of one long one.
-   * A tile that left the view while it waited is dropped and its bitmap
-   * closed. Anything left over asks for another frame.
+   * A tile out of the view waits without uploading, and once it has been out
+   * for ABORT_AFTER_FRAMES frames it is dropped and its bitmap closed.
+   * Anything left over asks for another frame.
    */
-  private drainReady(): void {
+  private drainReady(level: number): void {
     if (this.ready.size === 0) return;
     const start = this.now();
     let uploads = 0;
     for (const [key, tile] of this.ready) {
-      if (!this.desired.has(key)) {
-        tile.bitmap.close();
-        this.ready.delete(key);
+      if (this.wanted(key, level)) {
+        this.stale.delete(key);
+      } else {
+        if (this.staleFrames(key) > ABORT_AFTER_FRAMES) {
+          tile.bitmap.close();
+          this.ready.delete(key);
+          this.stale.delete(key);
+        }
         continue;
       }
       if (uploads >= MAX_UPLOADS_PER_UPDATE || this.now() - start >= UPLOAD_BUDGET_MS) continue;
@@ -695,16 +737,22 @@ export class TileLayer {
   }
 
   /**
-   * Is any tile for the current view still to come? In flight, decoded and
-   * waiting to be uploaded, or queued: the
-   * queue is non-empty after pump() only when every slot is busy, and a held
-   * queue is work that has not happened yet, not work that is done. A tile that failed is in neither
-   * (it is out of the queue while it waits out a per-tile cooldown, and for
-   * good once it is permanent or out of attempts), so failures do not keep
-   * this true.
+   * Is any tile for the current view still to come? Queued, in flight or
+   * decoded and waiting to be uploaded. The queue is non-empty after pump()
+   * only when every slot is busy, and a held queue is work that has not
+   * happened yet, not work that is done. Tiles that are only finishing after
+   * leaving the view (see ABORT_AFTER_FRAMES) do not count, and neither does
+   * a tile that failed: it is out of the queue while it waits out a per-tile
+   * cooldown, and for good once it is permanent or out of attempts.
    */
   hasPending(): boolean {
-    return this.inflight.size > 0 || this.ready.size > 0 || this.queueHead < this.queue.length;
+    if (this.queueHead < this.queue.length) return true;
+    for (const key of this.inflight.keys()) {
+      // The base counts before the first frame has said what is in view.
+      if (this.desired.has(key) || key.startsWith('0/')) return true;
+    }
+    for (const key of this.ready.keys()) if (this.desired.has(key)) return true;
+    return false;
   }
 
   dispose(): void {
@@ -727,6 +775,7 @@ export class TileLayer {
     this.inflight.clear();
     for (const tile of this.ready.values()) tile.bitmap.close();
     this.ready.clear();
+    this.stale.clear();
     for (const e of this.cache.values()) {
       this.renderer.removeTile(e.handle);
     }
