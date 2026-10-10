@@ -488,7 +488,7 @@ describe('PanoViewer', () => {
 
         status = 200; // the origin recovers — a retry would now succeed
         viewer.dispose();
-        await expect(load).resolves.toBeUndefined();
+        await expect(load).resolves.toBe(false);
         await flush();
 
         expect(tileRequests).toHaveLength(FACES.length);
@@ -1075,10 +1075,90 @@ describe('PanoViewer', () => {
       renderer: { render: ReturnType<typeof vi.fn> };
     };
     const internals = (viewer: PanoViewer) => viewer as unknown as Internals;
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
     function tick(viewer: PanoViewer): void {
       internals(viewer).dirty = true;
       internals(viewer).loop();
+    }
+
+    const manifestFor = (pano: string) => ({
+      pano,
+      faceSize: 2048,
+      tileSize: 512,
+      maxLevel: 2,
+      faces: [...FACES],
+      quality: 82,
+      format: 'jpg',
+    });
+
+    /**
+     * Manifests resolve at once unless `holdManifest` matches; tiles answer at
+     * once unless `holdTile` matches. A held request waits for release(), and
+     * rejects with an AbortError if its signal aborts first.
+     */
+    function stubNet(
+      opts: { holdManifest?: (url: string) => boolean; holdTile?: (url: string) => boolean } = {},
+    ) {
+      const held: (() => void)[] = [];
+      const signals = new Map<string, AbortSignal | undefined>();
+      const body = { ok: true, status: 200, blob: () => Promise.resolve({}) };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string, init?: { signal?: AbortSignal }) => {
+          signals.set(url, init?.signal);
+          const m = /\/tiles\/([^/]+)\/manifest\.json$/.exec(url);
+          const answer = m
+            ? { ok: true, status: 200, json: () => Promise.resolve(manifestFor(m[1]!)) }
+            : body;
+          const hold = m ? opts.holdManifest : opts.holdTile;
+          if (!hold?.(url)) return Promise.resolve(answer);
+          return new Promise((resolve, reject) => {
+            held.push(() => resolve(answer));
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          });
+        }),
+      );
+      vi.stubGlobal(
+        'createImageBitmap',
+        vi.fn(() => Promise.resolve({ close: vi.fn() })),
+      );
+      return {
+        release: () => held.splice(0).forEach((r) => r()),
+        signalOf: (url: string) => signals.get(url),
+      };
+    }
+
+    /** A container and document that can take the transition overlay. */
+    function stubOverlayDom() {
+      const overlays: { style: Record<string, string>; remove: ReturnType<typeof vi.fn> }[] = [];
+      vi.stubGlobal('document', {
+        createElement: vi.fn(() => {
+          const el = { style: {} as Record<string, string>, remove: vi.fn() };
+          overlays.push(el);
+          return el;
+        }),
+      });
+      const container = {
+        clientWidth: 400,
+        clientHeight: 800,
+        appendChild: vi.fn(),
+      } as unknown as HTMLElement;
+      return { container, overlays };
+    }
+
+    function source() {
+      const image = () => ({ width: 1026, height: 1024, close: vi.fn() }) as unknown as ImageBitmap;
+      return {
+        width: 2048,
+        height: 1024,
+        patches: [
+          { x: 0, y: 0, w: 1026, h: 1024, image: image() },
+          { x: 1022, y: 0, w: 1026, h: 1024, image: image() },
+        ],
+      };
     }
 
     it('eases setView the short way round after the yaw has wound up several turns', () => {
@@ -1136,6 +1216,117 @@ describe('PanoViewer', () => {
       internals(viewer).momentum.yaw = 2e-5;
       tick(viewer);
       expect(internals(viewer).dirty).toBe(true);
+    });
+
+    it('keeps the same Controls across loads and previews', async () => {
+      stubNet();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const controls = internals(viewer).controls;
+      expect(controls).toBeDefined();
+      await viewer.load('pano-a');
+      viewer.showPreview('pano-b', source());
+      await viewer.load('pano-b');
+      expect(internals(viewer).controls).toBe(controls);
+      viewer.dispose();
+    });
+
+    it('resolves true when the load takes effect', async () => {
+      stubNet();
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await expect(viewer.load('pano-a')).resolves.toBe(true);
+      viewer.dispose();
+    });
+
+    it('applies load(pano, { view }) at the swap, with no easing', async () => {
+      const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      await viewer.load('pano-a');
+      viewer.flick(100, 0);
+      const loading = viewer.load('pano-b', { view: { yaw: 1, pitch: 0.2, fov: 50 } });
+      await flush();
+      // Not applied before the swap: the old pano keeps its camera.
+      expect(viewer.getView().yaw).toBe(0);
+      net.release();
+      await expect(loading).resolves.toBe(true);
+      expect(internals(viewer).target).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
+      expect(internals(viewer).view).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
+      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+      tick(viewer);
+      expect(internals(viewer).view).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
+      viewer.dispose();
+    });
+
+    it('disposes the pending layer and aborts the manifest fetch of a superseded load', async () => {
+      const net = stubNet({
+        holdTile: (url) => url.includes('/pano-a/'),
+        holdManifest: (url) => url.includes('/pano-b/'),
+      });
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const a = viewer.load('pano-a');
+      await flush();
+      const [layerA] = [...internals(viewer).pendingLayers];
+      expect(layerA).toBeDefined();
+      const disposeA = vi.spyOn(layerA!, 'dispose');
+
+      const b = viewer.load('pano-b');
+      expect(disposeA).toHaveBeenCalled();
+      expect(internals(viewer).pendingLayers.size).toBe(0);
+      await expect(a).resolves.toBe(false);
+
+      const signalB = net.signalOf('/tiles/pano-b/manifest.json');
+      expect(signalB?.aborted).toBe(false);
+      viewer.showPreview('pano-c', source());
+      expect(signalB?.aborted).toBe(true);
+      await expect(b).resolves.toBe(false);
+      viewer.dispose();
+    });
+
+    it('resolves false, without throwing, when a superseded manifest fetch rejects', async () => {
+      const net = stubNet({ holdManifest: (url) => url.includes('/pano-a/') });
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const a = viewer.load('pano-a');
+      await viewer.load('pano-b');
+      expect(net.signalOf('/tiles/pano-a/manifest.json')?.aborted).toBe(true);
+      await expect(a).resolves.toBe(false);
+      viewer.dispose();
+    });
+
+    it('never applies a superseded transition view, and drops its overlay at once', async () => {
+      const net = stubNet({ holdTile: (url) => url.includes('/pano-a/') });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container);
+      await viewer.load('pano-0');
+      tick(viewer);
+
+      const a = viewer.transitionTo('pano-a', { yaw: 2 });
+      await flush();
+      expect(overlays).toHaveLength(1);
+      expect(overlays[0]!.remove).not.toHaveBeenCalled();
+
+      await viewer.load('pano-b', { view: { yaw: -1 } });
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect(viewer.getView().yaw).toBe(-1);
+
+      net.release();
+      await a;
+      expect(viewer.getView().yaw).toBe(-1);
+      viewer.dispose();
+    });
+
+    it('drops a transition overlay when a preview supersedes it', async () => {
+      stubNet({ holdTile: (url) => url.includes('/pano-a/') });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container);
+      await viewer.load('pano-0');
+      tick(viewer);
+
+      const a = viewer.transitionTo('pano-a', { yaw: 2 });
+      await flush();
+      viewer.showPreview('pano-c', source());
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      await a;
+      expect(viewer.getView().yaw).toBe(0);
+      viewer.dispose();
     });
   });
 });
