@@ -213,9 +213,12 @@ export function TourViewer({
     view: data.tour?.scenes[start]?.initialView,
   }));
   const [shown, setShown] = useState(start);
-  // Whether the viewer has reported any scene on screen yet: until then an
-  // empty viewer counts as settled, and the prefetch would race the start.
-  const [arrived, setArrived] = useState(false);
+  // The viewer (and its baseUrl) that last reported a scene on screen. Until
+  // the current viewer has, it is empty and counts as settled, so the
+  // prefetch would race its first load. The baseUrl is checked too: in the
+  // render where it changes, the old viewer is still the one in hand.
+  const [arrivedOn, setArrivedOn] = useState<{ viewer: PanoViewer; baseUrl: string } | null>(null);
+  const arrived = arrivedOn?.viewer === viewer && arrivedOn.baseUrl === baseUrl;
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(
     () => data.settings.autoRotate && !prefersReducedMotion(),
@@ -267,7 +270,7 @@ export function TourViewer({
   };
   const landed = (id: string) => {
     setShown(id);
-    setArrived(true);
+    if (viewer) setArrivedOn({ viewer, baseUrl });
     if (reported.current === id) return;
     reported.current = id;
     onSceneChange?.(id);

@@ -534,6 +534,44 @@ describe('TourViewer', () => {
       expect(prefetch).toHaveBeenCalledTimes(3);
     });
 
+    it('waits for a new viewer (a new baseUrl) to land its scene too', async () => {
+      const prefetch = vi.fn(async () => {});
+      const made: FakeViewer[] = [];
+      const createViewer = () => {
+        const v = new FakeViewer();
+        v.settled = true;
+        // The second viewer's load never lands.
+        if (made.length > 0) v.load.mockImplementation(() => new Promise<void>(() => {}));
+        made.push(v);
+        return v as unknown as PanoViewer;
+      };
+      const props = {
+        data: many(),
+        title: 'Old town',
+        start: 'square',
+        isAllowedMediaUrl: () => true,
+        prefetch,
+        createViewer,
+      };
+      const { rerender } = render(<TourViewer {...props} baseUrl="https://a.test/" />);
+      await waitFor(() => expect(prefetch).toHaveBeenCalledTimes(3));
+
+      rerender(<TourViewer {...props} baseUrl="https://b.test/" />);
+      await waitFor(() => expect(made[1]?.load).toHaveBeenCalled());
+      await act(async () => {});
+      expect(prefetch).toHaveBeenCalledTimes(3);
+
+      // Back to the first base before b's scene landed: a third viewer, as empty.
+      rerender(<TourViewer {...props} baseUrl="https://a.test/" />);
+      await waitFor(() => expect(made[2]?.load).toHaveBeenCalled());
+      await act(async () => {});
+      expect(prefetch).toHaveBeenCalledTimes(3);
+
+      act(() => made[2]!.emit('scene-change', 'square'));
+      expect(prefetch).toHaveBeenLastCalledWith('https://a.test/', 'bridge', expect.anything());
+      expect(prefetch).toHaveBeenCalledTimes(6);
+    });
+
     it('cancels them when the visitor moves on', async () => {
       const signals: AbortSignal[] = [];
       const prefetch = vi.fn(async (_b: string, _p: string, o?: { signal?: AbortSignal }) => {
