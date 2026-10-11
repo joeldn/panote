@@ -3205,6 +3205,45 @@ describe('PanoViewer', () => {
         (internals(viewer).layer as { source: CubeTileSource } | undefined)?.source.id;
 
       describe('context loss', () => {
+        it('draws a restored scene from its base until its finer tiles are back', async () => {
+          let holdFine = false;
+          const net = stubNet({ holdTile: (url) => holdFine && !url.includes('/0/') });
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          await viewer.load('pano-a');
+          for (let i = 0; i < 10; i++) {
+            runUntilIdle();
+            await flush();
+          }
+          const fake = fakeOf(viewer);
+          const lastList = () =>
+            fake.render.mock.calls.at(-1)![0] as { handle: number; level: number }[];
+          const levelsOf = (list: { level: number }[]) => list.map((d) => d.level).sort();
+          const before = lastList();
+          expect(before.filter((d) => d.level === 2).length).toBeGreaterThan(0);
+          const lastHandle = Math.max(...before.map((d) => d.handle));
+
+          fake.loseContext();
+          holdFine = true;
+          fake.restoreContext();
+          for (let i = 0; i < 10; i++) {
+            await flush();
+            runUntilIdle();
+          }
+          // Only the new layer's base: nothing from before the loss, and
+          // nothing hidden behind finer tiles that are not there yet.
+          const restored = lastList();
+          expect(levelsOf(restored)).toEqual(FACES.map(() => 0));
+          for (const d of restored) expect(d.handle).toBeGreaterThan(lastHandle);
+
+          net.release();
+          for (let i = 0; i < 10; i++) {
+            await flush();
+            runUntilIdle();
+          }
+          expect(levelsOf(lastList())).toEqual(levelsOf(before));
+          viewer.dispose();
+        });
+
         it('stops drawing while lost, then loads the scene again from its held manifest', async () => {
           stubNet();
           const viewer = new PanoViewer(makeContainer(400, 800));

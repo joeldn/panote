@@ -286,7 +286,13 @@ describe('TileLayer failure handling', () => {
     requests = [];
     await render(layer, 0);
     expect(new Set(requests)).toEqual(facing);
-    expect(layer.drawList()).toHaveLength(facing.size);
+    // All of them are resident again, and the level-2 tiles in view draw (a
+    // level-1 tile they all cover is left out of the draw list).
+    const { cache } = layer as unknown as { cache: Map<string, unknown> };
+    expect(cache.size).toBe(facing.size);
+    const inView = [...facing].filter((u) => u.includes('/2/')).length;
+    expect(inView).toBeGreaterThan(0);
+    expect(layer.drawList().filter((d) => d.level === 2)).toHaveLength(inView);
   });
 
   describe('idle retry wake', () => {

@@ -338,6 +338,14 @@ export class TileLayer {
   private visible: Int32Array;
   private visibleCount = 0;
   private visibleLevel = -1;
+  // Every tile the cull reached, level 0 down to `visibleLevel`, in the order
+  // it reached them (each tile before its children): `treeCount` long. What
+  // cover() walks to find the coarse tiles that finer ones hide.
+  private treeLevel = new Uint8Array(64);
+  private treeIndex = new Int32Array(64);
+  private treeCount = 0;
+  // cover()'s position in the tree.
+  private treeAt = 0;
   // The view the cull last ran for. An unchanged view and level reuse the
   // visible set: a tile landing asks for a frame but moves nothing.
   private lastViewProj = new Float32Array(16);
@@ -553,12 +561,14 @@ export class TileLayer {
     // coarser tile only shows where no finer tile covers it, and a finer tile
     // that is absent simply leaves its ancestor's texels on screen. loadBase()
     // guarantees the level-0 ancestor is resident and selectEvictions() never
-    // evicts it, so that floor always exists.
+    // evicts it, so that floor always exists. cover() then leaves out the
+    // coarser tiles nothing of which would show.
     for (const entry of this.cache.values()) {
       entry.visible = entry.level <= level;
     }
 
     this.evict();
+    this.cover();
     this.pump();
     // Frames only run when something is dirty, so a hole waiting out a retry
     // cooldown, or a stale load waiting out its grace, on a still view needs
@@ -566,7 +576,10 @@ export class TileLayer {
     this.armWake(wakeMs);
   }
 
-  /** Every resident tile at or below the target level; the renderer orders them. */
+  /**
+   * Every resident tile at or below the target level, less those finer
+   * resident tiles hide (see cover()); the renderer orders them.
+   */
   drawList(): DrawItem[] {
     this._drawList.length = 0;
     for (const entry of this.cache.values()) {
@@ -676,6 +689,7 @@ export class TileLayer {
    */
   private cull(level: number): void {
     this.visibleCount = 0;
+    this.treeCount = 0;
     this.visibleLevel = level;
     for (let f = 0; f < FACES.length; f++) this.descend(f, 0, 0, 0, level);
   }
@@ -689,6 +703,7 @@ export class TileLayer {
     sphere.cz = t.data[o + 2]!;
     sphere.r = t.data[o + 3]!;
     if (!intersectsSphere(this.frustum, sphere)) return;
+    this.addTreeNode(level, o / STRIDE);
     if (level === target) {
       this.visible[this.visibleCount++] = o / STRIDE;
       return;
@@ -699,6 +714,58 @@ export class TileLayer {
     this.descend(f, level + 1, cx + 1, cy, target);
     this.descend(f, level + 1, cx, cy + 1, target);
     this.descend(f, level + 1, cx + 1, cy + 1, target);
+  }
+
+  private addTreeNode(level: number, index: number): void {
+    if (this.treeCount === this.treeIndex.length) {
+      const size = this.treeCount * 2;
+      const levels = new Uint8Array(size);
+      const indices = new Int32Array(size);
+      levels.set(this.treeLevel);
+      indices.set(this.treeIndex);
+      this.treeLevel = levels;
+      this.treeIndex = indices;
+    }
+    this.treeLevel[this.treeCount] = level;
+    this.treeIndex[this.treeCount++] = index;
+  }
+
+  /**
+   * Leave out of the draw list every coarse tile that finer resident tiles
+   * hide wherever it is in view. The renderer draws the finest level in front,
+   * so such a tile only costs draw calls: the picture is the same without it.
+   *
+   * Walks the tree the cull built: a tile in view is filled when it is
+   * resident, or when every child of it in view is filled. A resident tile
+   * above the target level whose children in view are all filled is hidden.
+   * Children outside the view do not count; the renderer would cull them, and
+   * the parent's part over them is off screen too. Only uploaded tiles count
+   * (a decoded one waiting in the ready queue is not in the cache), and this
+   * runs after eviction, so a child just evicted brings its parent back the
+   * same frame.
+   *
+   * The level-0 base is always drawn: it is the floor under every seam, so a
+   * pixel the finer quads' edges leave uncovered still shows the panorama.
+   */
+  private cover(): void {
+    this.treeAt = 0;
+    while (this.treeAt < this.treeCount) this.coverNode();
+  }
+
+  /** Whether the tree node at treeAt is filled; moves treeAt past its subtree. */
+  private coverNode(): boolean {
+    const n = this.treeAt++;
+    const level = this.treeLevel[n]!;
+    const entry = this.cache.get(levelTable(level).keys[this.treeIndex[n]!]!);
+    if (level === this.visibleLevel) return entry !== undefined;
+    let filled = true;
+    // The children follow their parent, each with its own subtree after it.
+    while (this.treeAt < this.treeCount && this.treeLevel[this.treeAt] === level + 1) {
+      if (!this.coverNode()) filled = false;
+    }
+    if (!entry) return filled;
+    if (filled && level > 0) entry.visible = false;
+    return true;
   }
 
   private pushCandidate(
@@ -959,6 +1026,7 @@ export class TileLayer {
     this.desired.clear();
     this.visibleCount = 0;
     this.visibleLevel = -1;
+    this.treeCount = 0;
     for (const c of this.inflight.values()) c.abort();
     this.inflight.clear();
     for (const tile of this.ready.values()) releaseImage(tile.bitmap);
