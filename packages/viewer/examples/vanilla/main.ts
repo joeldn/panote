@@ -18,7 +18,7 @@ const viewer = new PanoViewer($('viewer'), {
 });
 
 const status = $('status');
-viewer.on('ready', (s) => (status.textContent = `${s.id}: base loaded`));
+viewer.on('ready', ({ id }) => (status.textContent = `${id}: base loaded`));
 viewer.on('tiles-settled', () => (status.textContent = 'every visible tile is in'));
 viewer.load(source).catch((err: unknown) => (status.textContent = `failed: ${String(err)}`));
 

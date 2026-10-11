@@ -52,6 +52,7 @@ class FakeViewer {
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
+    return () => this.off(type, fn);
   };
   off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
   emit(type: string, payload?: unknown) {
@@ -323,7 +324,7 @@ describe('PanoStage', () => {
     const v = f.last();
     expect(screen.getByText('chrome:ready')).toBeTruthy();
     expect(onViewer).toHaveBeenLastCalledWith(v);
-    v.emit('scene-change', 'hall');
+    v.emit('scene-change', { id: 'hall', kind: 'tiles' });
     fireEvent.click(screen.getByText('chrome:ready'));
     expect(onSceneChange).toHaveBeenCalledWith('hall');
     expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('h1');
@@ -911,7 +912,7 @@ describe('PanoStage', () => {
     // Nothing is on stage, so the canvas is hidden (and out of Tab order).
     expect(host.style.visibility).toBe('hidden');
     // The hall load lands after the stage was emptied: stale, so not reported.
-    v.emit('scene-change', 'hall');
+    v.emit('scene-change', { id: 'hall', kind: 'tiles' });
     expect(onSceneChange).not.toHaveBeenCalled();
     rerender(
       <PanoStage
@@ -923,7 +924,7 @@ describe('PanoStage', () => {
     );
     expect(host.style.visibility).toBe('');
     expect(v.load).toHaveBeenCalledTimes(2);
-    v.emit('scene-change', 'hall');
+    v.emit('scene-change', { id: 'hall', kind: 'tiles' });
     expect(onSceneChange).toHaveBeenCalledExactlyOnceWith('hall');
   });
 
@@ -1024,7 +1025,7 @@ describe('PanoStage', () => {
         />,
       );
       const lost = new Error('manifest 503');
-      act(() => f.last().emit('load-error', { error: lost, id: 'hall' }));
+      act(() => f.last().emit('load-error', { id: 'hall', error: lost }));
       expect(onLoadError).toHaveBeenCalledWith(lost, 'hall');
     });
   });
@@ -1045,7 +1046,7 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       const err = new Error('manifest 500');
       v.crossfade.mockRejectedValueOnce(err);
       await act(async () => rerender(stage('nave')));
@@ -1082,11 +1083,11 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       act(() => {
         v.emit('context-lost');
         v.emit('context-restored');
-        v.emit('load-error', { error: new Error('manifest 503'), id: 'hall' });
+        v.emit('load-error', { id: 'hall', error: new Error('manifest 503') });
       });
       v.crossfade.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('nave')));
@@ -1114,7 +1115,7 @@ describe('PanoStage', () => {
       // failed to load: what the stage has for hall is not settled.
       v.showPreview.mockImplementation((pano) => {
         v.calls.push(`show:${pano}`);
-        v.emit('scene-change', pano);
+        v.emit('scene-change', { id: pano, kind: 'tiles' });
       });
       v.load.mockRejectedValueOnce(new Error('manifest 404'));
       act(() => {
@@ -1141,11 +1142,11 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       rerender(stage('nave'));
       rerender(stage(null));
       // The hop lands on the empty stage: nave, not hall, is what the viewer has now.
-      act(() => v.emit('scene-change', 'nave'));
+      act(() => v.emit('scene-change', { id: 'nave', kind: 'tiles' }));
       v.load.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('crypt')));
       await act(async () => rerender(stage('hall')));
@@ -1169,7 +1170,7 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       let rejectHop!: (err: unknown) => void;
       v.crossfade.mockReturnValueOnce(new Promise((_, reject) => (rejectHop = reject)));
       rerender(stage('nave'));
@@ -1199,7 +1200,7 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall', 1));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       v.crossfade.mockReturnValueOnce(new Promise(() => {}));
       rerender(stage('nave', 1));
       rerender(stage('hall', 2));

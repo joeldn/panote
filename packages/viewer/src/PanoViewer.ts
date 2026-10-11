@@ -319,11 +319,18 @@ export class PanoViewer {
     // resizeTo() above has already asked for the first frame.
   }
 
-  on = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
-    this.emitter.on(type, fn);
+  /** Listen for `type` (see `PanoViewerEvents`); returns a function that removes the listener. */
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
+    return this.emitter.on(type, fn);
+  }
 
-  off = <K extends keyof PanoViewerEvents>(type: K, fn: (p: PanoViewerEvents[K]) => void) =>
+  /** Remove a listener added with `on()`. */
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
     this.emitter.off(type, fn);
+  }
 
   /**
    * Mark the frame stale and ask for one animation frame to redraw it, unless
@@ -395,7 +402,7 @@ export class PanoViewer {
     if (crossfade) request.crossfade = crossfade;
     this.request = request;
     try {
-      this.emitter.emit('loading', id);
+      this.emitter.emit('loading', { id });
       if (stale()) return false;
 
       let resolved: CubeTileSource;
@@ -537,10 +544,10 @@ export class PanoViewer {
     // Hosts place their overlays for the new scene on its first frame.
     this.requestRender();
     if (!req.announce) return true;
-    this.emitter.emit('ready', source);
+    this.emitter.emit('ready', { id: source.id, source });
     // A ready listener may have started another load or disposed the viewer;
     // the scene is then not changing to this one.
-    if (!stale()) this.emitter.emit('scene-change', source.id);
+    if (!stale()) this.emitter.emit('scene-change', { id: source.id, kind: 'tiles' });
     return true;
   }
 
@@ -586,7 +593,7 @@ export class PanoViewer {
   /** reload() with nobody awaiting it: a failure reaches the host as `load-error`. */
   private reloadInBackground(req: Reload): void {
     this.reload(req).catch((error: unknown) => {
-      this.emitter.emit('load-error', { error, id: req.id });
+      this.emitter.emit('load-error', { id: req.id, error });
     });
   }
 
@@ -684,7 +691,7 @@ export class PanoViewer {
     if (options.view) this.cutTo(options.view);
     this.stopMomentumOnly();
     this.requestRender();
-    this.emitter.emit('scene-change', id);
+    this.emitter.emit('scene-change', { id, kind: 'preview' });
   }
 
   private disposePreview(): void {

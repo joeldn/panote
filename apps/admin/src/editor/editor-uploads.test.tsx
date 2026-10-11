@@ -34,7 +34,7 @@ function setup(path: string, tilesMissing?: () => boolean) {
     if (tilesMissing) {
       fake.load.mockImplementation(async (pano: string) => {
         if (tilesMissing()) throw new Error('manifest 404');
-        fake.emit('scene-change', pano);
+        fake.emit('scene-change', { id: pano, kind: 'tiles' });
         return true;
       });
     }

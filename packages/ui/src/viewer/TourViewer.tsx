@@ -181,16 +181,16 @@ function LinkPrefetch({ targets, prefetch }: LinkPrefetchProps) {
     const controller = new AbortController();
     const settled = () => {
       // Once per scene: later settles follow pans, not a new scene.
-      viewer.off('tiles-settled', settled);
+      unsubscribe();
       const { targets: ids, prefetch: warm } = latest.current;
       for (const id of ids) void warm(viewer, id, { signal: controller.signal });
     };
-    viewer.on('tiles-settled', settled);
+    const unsubscribe = viewer.on('tiles-settled', settled);
     // This effect runs after the scene swapped in, and a scene that needs no
     // more than its base can settle before that: its event has gone.
     if (viewer.isSettled()) settled();
     return () => {
-      viewer.off('tiles-settled', settled);
+      unsubscribe();
       // Deliberately all of them, even one for the scene being entered: the
       // real load fetches the same URLs at full priority, and the next
       // scene's own prefetch should not queue behind this one's.

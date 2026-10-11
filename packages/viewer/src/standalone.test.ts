@@ -140,10 +140,11 @@ describe('PanoViewer with no options and a loadTile source', () => {
       FACES.map((face) => ({ face, level: 0, x: 0, y: 0 })),
     );
     expect(rendererOf(viewer).uploadTile).toHaveBeenCalledTimes(6);
-    expect(loading).toHaveBeenCalledWith('gen');
+    expect(loading).toHaveBeenCalledWith({ id: 'gen' });
     expect(ready).toHaveBeenCalledTimes(1);
-    expect(ready.mock.calls[0]![0]).toBe(source);
-    expect(sceneChange).toHaveBeenCalledWith('gen');
+    expect(ready.mock.calls[0]![0]).toEqual({ id: source.id, source });
+    expect(ready.mock.calls[0]![0].source).toBe(source);
+    expect(sceneChange).toHaveBeenCalledWith({ id: 'gen', kind: 'tiles' });
 
     // Frames ask for the finer levels through the same loadTile.
     runFrames();
@@ -167,7 +168,10 @@ describe('PanoViewer with no options and a loadTile source', () => {
     viewer.on('scene-change', sceneChange);
     await viewer.load(a.source);
     await expect(viewer.load(b.source, { view: { yaw: 1 }, transition: true })).resolves.toBe(true);
-    expect(sceneChange.mock.calls).toEqual([['a'], ['b']]);
+    expect(sceneChange.mock.calls).toEqual([
+      [{ id: 'a', kind: 'tiles' }],
+      [{ id: 'b', kind: 'tiles' }],
+    ]);
     expect(viewer.getView().yaw).toBe(1);
     expect(fetchSpy).not.toHaveBeenCalled();
     viewer.dispose();
@@ -248,7 +252,8 @@ describe('resolveSource', () => {
     expect(id).toBe('hall');
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(hints).toBeUndefined();
-    expect(ready.mock.calls[0]![0]).toBe(source);
+    expect(ready.mock.calls[0]![0]).toEqual({ id: source.id, source });
+    expect(ready.mock.calls[0]![0].source).toBe(source);
     viewer.dispose();
   });
 

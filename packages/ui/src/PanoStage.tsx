@@ -243,32 +243,29 @@ export function PanoStage({
     // No WebGL2: say so in place of the viewer rather than crash the tree.
     setUnsupported(v === null);
     if (!v) return;
-    const onScene = (id: string) => {
-      const cur = loaded.current;
-      // No load is current (the stage was emptied): this one is stale.
-      if (!cur) return;
-      landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
-      callbacks.current.onSceneChange?.(id);
-    };
-    const onRestored = () => setRestores((n) => n + 1);
-    // The viewer's own reload after a restore has no promise to reject.
-    const onReloadError = ({ error, id }: { error: unknown; id: string }) => {
-      // That pano is no longer on screen (the restore left the stage blank),
-      // so going back to it must load it.
-      if (landed.current?.panoId === id) landed.current = null;
-      callbacks.current.onLoadError?.(error, id);
-    };
-    v.on('scene-change', onScene);
-    v.on('context-restored', onRestored);
-    v.on('load-error', onReloadError);
+    const unsubscribe = [
+      v.on('scene-change', ({ id }) => {
+        const cur = loaded.current;
+        // No load is current (the stage was emptied): this one is stale.
+        if (!cur) return;
+        landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
+        callbacks.current.onSceneChange?.(id);
+      }),
+      v.on('context-restored', () => setRestores((n) => n + 1)),
+      // The viewer's own reload after a restore has no promise to reject.
+      v.on('load-error', ({ id, error }) => {
+        // That pano is no longer on screen (the restore left the stage blank),
+        // so going back to it must load it.
+        if (landed.current?.panoId === id) landed.current = null;
+        callbacks.current.onLoadError?.(error, id);
+      }),
+    ];
     setViewer(v);
     callbacks.current.onViewer?.(v);
     return () => {
       loaded.current = null;
       landed.current = null;
-      v.off('scene-change', onScene);
-      v.off('context-restored', onRestored);
-      v.off('load-error', onReloadError);
+      for (const off of unsubscribe) off();
       callbacks.current.onViewer?.(null);
       setViewer(null);
       v.dispose();

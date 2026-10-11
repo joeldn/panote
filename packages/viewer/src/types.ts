@@ -188,23 +188,44 @@ export interface ResolvedViewerOptions {
   readonly autoRotate: Readonly<Required<AutoRotateOptions>>;
 }
 
+/**
+ * Every event and its payload, for `PanoViewer.on()`. A type, not an
+ * interface: the emitter needs an index signature (`Record<string, unknown>`),
+ * which only a type alias gets implicitly. Payloads with data are objects, so
+ * fields can be added without breaking listeners.
+ */
 export type PanoViewerEvents = {
-  // The source a load() put on screen; a host reads its own data from `meta`.
-  ready: CubeTileSource;
+  /** A load is starting for the source `id`. */
+  loading: { id: string };
+  /**
+   * A load put `source` on screen (its base is resident). A host reads its own
+   * data from `source.meta`.
+   */
+  ready: { id: string; source: CubeTileSource };
+  /**
+   * The scene `id` went on screen: its tiles from a `load()` (`kind: 'tiles'`,
+   * right after `ready`) or a `showPreview()` (`kind: 'preview'`).
+   */
+  'scene-change': { id: string; kind: 'tiles' | 'preview' };
+  /** Every tile the view needs is in. Also see `isSettled()`. */
   'tiles-settled': undefined;
-  loading: string; // source id
-  'scene-change': string; // source id, emitted whenever a load() or showPreview() completes
-  // The WebGL context was lost (GPU reset, memory pressure, a backgrounded
-  // mobile tab). Nothing draws until it is restored.
+  /**
+   * The WebGL context was lost (GPU reset, memory pressure, a backgrounded
+   * mobile tab). Nothing draws until it is restored.
+   */
   'context-lost': undefined;
-  // The context is back. The scene on screen (or the load that was in flight)
-  // is loaded again by the viewer; a preview is not, since its pixels were
-  // released once uploaded.
+  /**
+   * The context is back. The scene on screen (or the load that was in
+   * flight) is loaded again by the viewer; a preview is not, since its pixels
+   * were released once uploaded.
+   */
   'context-restored': undefined;
-  // A load the viewer started on its own (the reload after a context restore)
-  // failed. `id` is the source it was loading. Loads the host starts reject
-  // their own promise instead.
-  'load-error': { error: unknown; id: string };
+  /**
+   * A load the viewer started on its own (the reload after a context restore)
+   * failed. `id` is the source it was loading. Loads the host starts reject
+   * their own promise instead.
+   */
+  'load-error': { id: string; error: unknown };
 };
 
 export interface LoadOptions {

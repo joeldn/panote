@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TourViewer, type TourViewerData, type TourViewerProps } from './TourViewer.js';
 
-type Handler = (payload: string) => void;
+type Handler = (payload: unknown) => void;
 
 interface PendingTransition {
   pano: string;
@@ -40,20 +40,20 @@ class FakeViewer {
   load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
     if (opts?.transition) return this.crossfade(pano, opts.view);
     if (this.fail) throw new Error('manifest 404');
-    this.emit('scene-change', pano);
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
     return true;
   });
   /** A load with a transition: `load` hands those here, so a test can script hops apart. */
   crossfade = vi.fn(async (pano: string, _view?: Partial<View>): Promise<boolean> => {
     if (!this.defer) {
-      this.emit('scene-change', pano);
+      this.emit('scene-change', { id: pano, kind: 'tiles' });
       return true;
     }
     return new Promise<boolean>((resolve, reject) => {
       this.pending.push({
         pano,
         resolve: () => {
-          this.emit('scene-change', pano);
+          this.emit('scene-change', { id: pano, kind: 'tiles' });
           resolve(true);
         },
         reject,
@@ -76,9 +76,10 @@ class FakeViewer {
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
+    return () => this.off(type, fn);
   };
   off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
+  emit(type: string, payload?: unknown) {
     this.handlers.get(type)?.forEach((fn) => fn(payload));
   }
 }
@@ -645,7 +646,7 @@ describe('TourViewer', () => {
       await act(async () => {});
       expect(prefetch).not.toHaveBeenCalled();
 
-      act(() => v.emit('scene-change', 'square'));
+      act(() => v.emit('scene-change', { id: 'square', kind: 'tiles' }));
       expect(prefetch).toHaveBeenCalledTimes(3);
     });
 
@@ -682,7 +683,7 @@ describe('TourViewer', () => {
       await act(async () => {});
       expect(prefetch).toHaveBeenCalledTimes(3);
 
-      act(() => made[2]!.emit('scene-change', 'square'));
+      act(() => made[2]!.emit('scene-change', { id: 'square', kind: 'tiles' }));
       expect(prefetch).toHaveBeenLastCalledWith(made[2], 'bridge', expect.anything());
       expect(prefetch).toHaveBeenCalledTimes(6);
     });

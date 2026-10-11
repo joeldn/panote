@@ -195,7 +195,7 @@ describe('landing showcase', () => {
         setAutoRotate: vi.fn(),
         setLabel: vi.fn(),
         dispose: vi.fn(),
-        on: vi.fn(),
+        on: vi.fn(() => () => {}),
         off: vi.fn(),
         onRender: () => () => {},
       };

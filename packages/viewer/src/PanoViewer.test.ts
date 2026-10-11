@@ -593,7 +593,7 @@ describe('PanoViewer', () => {
       await viewer.load('pano-a');
 
       expect(sceneChange).toHaveBeenCalledTimes(1);
-      expect(sceneChange).toHaveBeenCalledWith('pano-a');
+      expect(sceneChange).toHaveBeenCalledWith({ id: 'pano-a', kind: 'tiles' });
       viewer.dispose();
     });
 
@@ -1453,7 +1453,7 @@ describe('PanoViewer', () => {
       viewer.showPreview('pano-a', source());
       tick(viewer);
 
-      expect(sceneChange).toHaveBeenCalledWith('pano-a');
+      expect(sceneChange).toHaveBeenCalledWith({ id: 'pano-a', kind: 'preview' });
       expect(viewer.getView()).toEqual(before);
       expect(lastDrawList(viewer).map((d) => d.handle)).toEqual([1, 2]);
       viewer.dispose();
@@ -2998,7 +2998,7 @@ describe('PanoViewer', () => {
       });
       viewer.on('scene-change', sceneChange);
       await expect(viewer.load('pano-a')).resolves.toBe(true);
-      expect(sceneChange).toHaveBeenCalledExactlyOnceWith('pano-a');
+      expect(sceneChange).toHaveBeenCalledExactlyOnceWith({ id: 'pano-a', kind: 'tiles' });
       expect(reportError).toHaveBeenCalledExactlyOnceWith(boom);
       viewer.dispose();
     });
@@ -3324,7 +3324,7 @@ describe('PanoViewer', () => {
       net.release();
       await finish(c);
       expect(viewer.getView().yaw).toBe(-1);
-      expect(sceneChange.mock.calls).toEqual([['pano-c']]);
+      expect(sceneChange.mock.calls).toEqual([[{ id: 'pano-c', kind: 'tiles' }]]);
       expect(overlays).toHaveLength(1);
       expect(overlays[0]!.remove).toHaveBeenCalled();
       const layer = internals(viewer).layer as { source: CubeTileSource };
@@ -3453,7 +3453,7 @@ describe('PanoViewer', () => {
           expect(manifestFetches()).toBe(fetches);
           expect(layerPano(viewer)).toBe('pano-b');
           expect(viewer.getView().yaw).toBeCloseTo(1.5, 10);
-          expect(sceneChange.mock.calls).toEqual([['pano-b']]);
+          expect(sceneChange.mock.calls).toEqual([[{ id: 'pano-b', kind: 'tiles' }]]);
           viewer.dispose();
         });
 

@@ -21,6 +21,18 @@ describe('Emitter', () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
+  it('stops calling a listener once the function on() returned is called', () => {
+    const e = new Emitter<Events>();
+    const fn = vi.fn();
+    const other = vi.fn();
+    const off = e.on('progress', fn);
+    e.on('progress', other);
+    off();
+    e.emit('progress', 1);
+    expect(fn).not.toHaveBeenCalled();
+    expect(other).toHaveBeenCalledWith(1);
+  });
+
   describe('a listener that throws', () => {
     afterEach(() => {
       vi.unstubAllGlobals();

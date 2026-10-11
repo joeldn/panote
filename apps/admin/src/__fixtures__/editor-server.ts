@@ -179,7 +179,7 @@ export class FakeServer {
   });
 }
 
-type Handler = (payload: string) => void;
+type Handler = (payload: unknown) => void;
 type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 /** jsdom has no WebGL: a PanoViewer stand-in with a scriptable view. */
@@ -198,12 +198,12 @@ export class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
   load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
     if (opts?.transition) return this.crossfade(pano);
-    this.emit('scene-change', pano);
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
     return true;
   });
   /** A load with a transition: `load` hands those here, so a test can script hops apart. */
   crossfade = vi.fn(async (pano: string): Promise<boolean> => {
-    this.emit('scene-change', pano);
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
     return true;
   });
   setView = vi.fn((v: Partial<{ yaw: number; pitch: number; fov: number }>) => {
@@ -224,9 +224,10 @@ export class FakeViewer {
   on = (type: string, fn: Handler) => {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
+    return () => this.off(type, fn);
   };
   off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
+  emit(type: string, payload?: unknown) {
     this.handlers.get(type)?.forEach((fn) => fn(payload));
   }
 }

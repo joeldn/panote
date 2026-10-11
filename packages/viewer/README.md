@@ -170,20 +170,20 @@ The rules a source follows:
 | `directionAtPixel(x, y)` | The direction under a container pixel. |
 | `onRender(cb)` | Calls `cb(view)` after each frame that moves things on screen (the camera, a resize, a scene change, `setNorth`), and on the next frame after subscribing or `requestRender()`; not on a frame drawn only because tiles landed. Returns an unsubscribe. Use it to place overlays. |
 | `requestRender()` | Asks for a frame, with the `onRender` callbacks run on it. |
-| `on(type, fn)` / `off(type, fn)` | Adds or removes an event listener. |
+| `on(type, fn)` / `off(type, fn)` | Adds or removes an event listener. `on` returns a function that removes it. |
 | `dispose()` | Stops everything and frees the WebGL context. |
 
 ## Events
 
 | Event | Payload | When |
 |---|---|---|
-| `loading` | source id | A load started. |
-| `ready` | the `CubeTileSource` | A load put the scene on screen. Read your own data from `source.meta`. |
-| `scene-change` | source id | A load or `showPreview` changed what is on screen. |
+| `loading` | `{ id }` | A load started. |
+| `ready` | `{ id, source }` | A load put the scene on screen. Read your own data from `source.meta`. |
+| `scene-change` | `{ id, kind }` | A load (`kind: 'tiles'`) or `showPreview` (`kind: 'preview'`) changed what is on screen. |
 | `tiles-settled` | none | Every tile the view needs is in. |
 | `context-lost` | none | The WebGL context was lost. Nothing draws until it is restored. |
 | `context-restored` | none | The context is back. The viewer reloads the scene by itself; a preview is not shown again. |
-| `load-error` | `{ error, id }` | A load the viewer started by itself (the reload after a restore) failed. |
+| `load-error` | `{ id, error }` | A load the viewer started by itself (the reload after a restore) failed. |
 
 A base tile that can't be loaded rejects `load()` with a `BaseTileLoadError` carrying `sourceId`, `face`, `permanent` and `cause`. When `cause` is a `TileHttpError`, its `status` tells you, for example, a 401 apart from a 404.
 

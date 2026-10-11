@@ -333,7 +333,7 @@ describe('editor: scenes still tiling after a reload', () => {
       const fake = factory.viewers.at(-1)!;
       fake.load.mockImplementation(async (pano: string) => {
         if ((server.tiling.get(pano) ?? 'ready') !== 'ready') throw new Error('manifest 404');
-        fake.emit('scene-change', pano);
+        fake.emit('scene-change', { id: pano, kind: 'tiles' });
         return true;
       });
       return v;

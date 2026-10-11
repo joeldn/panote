@@ -27,7 +27,7 @@ export interface TileAddress {
  * tile.
  */
 export interface CubeTileSource {
-  /** Stable id: the payload of 'loading', 'scene-change' and 'load-error', and used in errors. */
+  /** Stable id: the `id` of every event about this source, and used in errors. */
   readonly id: string;
   /** Edge of every tile at every level, px. */
   readonly tileSize: number;
