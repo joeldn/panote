@@ -1,4 +1,4 @@
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewerApi } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -42,7 +42,7 @@ function fakeViewer() {
 
 const withViewer = (viewer: ReturnType<typeof fakeViewer>, ui: ReactNode) =>
   render(
-    <PanoViewerContext.Provider value={viewer as unknown as PanoViewer}>
+    <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
       {ui}
     </PanoViewerContext.Provider>,
   );
@@ -226,7 +226,7 @@ describe('HotspotMarkers', () => {
     const b = { id: 'b', yaw: 0.5, pitch: 0.2, title: 'Hall' };
     // An idle viewer draws no frame, so nothing else would place the new marker.
     rerender(
-      <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
+      <PanoViewerContext.Provider value={v as unknown as PanoViewerApi}>
         <HotspotMarkers hotspots={[a, b]} onOpen={() => {}} />
       </PanoViewerContext.Provider>,
     );
@@ -343,7 +343,7 @@ describe('FloorLinks', () => {
     const hall = { to: 'hall', yaw: 1, label: 'Hall' };
     const { rerender } = withViewer(v, <FloorLinks links={[hall]} onGo={() => {}} />);
     rerender(
-      <PanoViewerContext.Provider value={v as unknown as PanoViewer}>
+      <PanoViewerContext.Provider value={v as unknown as PanoViewerApi}>
         <FloorLinks links={[hall, { to: 'yard', yaw: 2, label: 'Yard' }]} onGo={() => {}} />
       </PanoViewerContext.Provider>,
     );

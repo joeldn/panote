@@ -1,4 +1,4 @@
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewerApi } from '@panote/viewer';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -13,7 +13,7 @@ describe('HotspotMarkers icons', () => {
   it('renders a stored icon outside the subset as the fallback', () => {
     const viewer = { onRender: () => () => {}, project: () => ({ x: 0, y: 0, behind: false }) };
     render(
-      <PanoViewerContext.Provider value={viewer as unknown as PanoViewer}>
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
         <HotspotMarkers
           hotspots={[
             { id: 'a', yaw: 0, pitch: 0, title: 'Anchor', icon: 'anchor' },

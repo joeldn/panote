@@ -1,4 +1,4 @@
-import type { ViewerFactory } from '@internal/ui';
+import type { PanoViewerEvents, ViewerFactory } from '@internal/ui';
 import { loadConfig, type Auth, type Auth0Like } from '@internal/web-kit';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Profiler, StrictMode } from 'react';
@@ -102,16 +102,19 @@ class FakeViewer implements PanoViewer {
   directionAtPixel = () => ({ yaw: 0, pitch: 0 });
   requestRender = vi.fn();
   readonly handlers = new Map<string, Set<(payload: never) => void>>();
-  on(type: string, fn: (payload: never) => void): () => void {
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
     return () => this.off(type, fn);
   }
-  off(type: string, fn: (payload: never) => void): void {
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
     this.handlers.get(type)?.delete(fn);
   }
-  emit(type: string, payload?: unknown): void {
-    this.handlers.get(type)?.forEach((fn) => (fn as (p: unknown) => void)(payload));
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 

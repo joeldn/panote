@@ -1,4 +1,4 @@
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewerApi } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,7 +17,7 @@ function setFullscreenEnabled(value: boolean | undefined) {
 
 function renderControls(target: HTMLElement) {
   render(
-    <PanoViewerContext.Provider value={viewer as unknown as PanoViewer}>
+    <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
       <ViewerControls fullscreenTarget={{ current: target }} />
     </PanoViewerContext.Provider>,
   );

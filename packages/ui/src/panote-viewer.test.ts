@@ -1,5 +1,5 @@
 import { FACES, manifestUrl, tilePath, type Manifest } from '@panote/core';
-import { resolveViewerOptions, type PanoViewer } from '@panote/viewer';
+import { resolveViewerOptions, type PanoViewerApi } from '@panote/viewer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -235,7 +235,7 @@ describe('panoteViewerPreset', () => {
 describe('prefetchPano', () => {
   const viewerWith = () => {
     const prefetch = vi.fn(async (_id: string, _o?: { signal?: AbortSignal }) => {});
-    return { viewer: { prefetch } as unknown as PanoViewer, prefetch };
+    return { viewer: { prefetch } as unknown as PanoViewerApi, prefetch };
   };
 
   it("hands the pano to the viewer's prefetch with the signal", async () => {

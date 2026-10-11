@@ -72,7 +72,7 @@ export interface InteractionOptions {
   /** The canvas's accessible name (aria-label). Change it at runtime with `setLabel()`. */
   label?: string | undefined;
   /** Give the canvas `role="application"` and the label. */
-  a11y?: boolean;
+  a11y?: boolean | undefined;
   /** Show the grab / grabbing cursor over the canvas. */
   cursor?: boolean | undefined;
   wheel?: WheelMode | undefined;
