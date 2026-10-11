@@ -162,7 +162,7 @@ describe('texture budget while panning', () => {
       await flush();
       await drawUntilUploaded(layer, render);
       // The target-level tiles this view asked for. The layer may also have
-      // fetched their parents first; those step aside once the children land.
+      // fetched a parent in place of a tile that failed.
       const level = selectLevel(FOV_DEG, viewportHeight, TILE_SIZE, 3);
       const wanted = requests.slice(before).filter((u) => u.includes(`/${level}/`));
       render();

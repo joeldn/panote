@@ -163,6 +163,12 @@ export class Controls {
     if (e.pointerType === 'mouse') this.engaged = false;
   };
 
+  // Written in place: a pointermove allocates nothing.
+  private moveLast(x: number, y: number): void {
+    this.last.x = x;
+    this.last.y = y;
+  }
+
   private slotFor(id: number): PointerSlot | null {
     if (this.p0?.id === id) return this.p0;
     if (this.p1?.id === id) return this.p1;
@@ -220,7 +226,7 @@ export class Controls {
     } catch {
       // ignore — capture is best-effort and must not break gesture handling
     }
-    this.last = { x: e.clientX, y: e.clientY };
+    this.moveLast(e.clientX, e.clientY);
     if (this.p0 && this.p1) {
       // A second finger makes this a multi-touch (pinch) gesture, a new one
       // each time a finger lands.
@@ -266,7 +272,7 @@ export class Controls {
     // Single pointer drag
     const dx = e.clientX - this.last.x;
     const dy = e.clientY - this.last.y;
-    this.last = { x: e.clientX, y: e.clientY };
+    this.moveLast(e.clientX, e.clientY);
     this.host.panByPixels(dx, dy);
     this.pushSample(e.timeStamp, e.clientX, e.clientY);
   };
@@ -295,7 +301,7 @@ export class Controls {
     const left = this.p0 ?? this.p1;
     if (left) {
       // The finger left drags on from where it is, with no jump.
-      this.last = { x: left.x, y: left.y };
+      this.moveLast(left.x, left.y);
       return;
     }
     // Only fling from a real drag — not from the tail of a pinch.
@@ -305,7 +311,7 @@ export class Controls {
     }
     this.gestureConsumed = false;
     this.sampleCount = 0;
-    this.last = { x: 0, y: 0 };
+    this.moveLast(0, 0);
     this.setCursor('grab');
   }
 

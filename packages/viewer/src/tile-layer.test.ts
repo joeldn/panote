@@ -142,6 +142,13 @@ describe('TileLayer failure handling', () => {
     return layer;
   }
 
+  /**
+   * Requests for level-2 tiles, the level these frames want. A level-2 tile
+   * that fails also has its level-1 parent fetched in its place, which the
+   * per-tile retry tests leave out of their counts.
+   */
+  const level2 = (): string[] => requests.filter((u) => u.includes('/2/'));
+
   /** Decoded tiles waiting for a frame to upload them. */
   const readyCount = (layer: TileLayer): number =>
     (layer as unknown as { ready: Map<string, unknown> }).ready.size;
@@ -195,17 +202,17 @@ describe('TileLayer failure handling', () => {
     script = { status: 503 };
 
     await render(layer, 0);
-    const firstPass = [...requests];
+    const firstPass = level2();
     expect(firstPass.length).toBeGreaterThan(0);
 
     // Same frame again, no time passed: the cooldown holds the retry back.
     await render(layer, 0);
-    expect(requests).toHaveLength(firstPass.length);
+    expect(level2()).toHaveLength(firstPass.length);
 
     advance(TILE_COOLDOWN_MS);
     await render(layer, 0);
-    expect(requests).toHaveLength(firstPass.length * 2);
-    expect(new Set(requests).size).toBe(firstPass.length); // the same tiles
+    expect(level2()).toHaveLength(firstPass.length * 2);
+    expect(new Set(level2()).size).toBe(firstPass.length); // the same tiles
   });
 
   it('retries a tile whose fetch was rejected outright (offline)', async () => {
@@ -228,13 +235,13 @@ describe('TileLayer failure handling', () => {
     script = { status: 404 };
 
     await render(layer, 0);
-    const firstPass = requests.length;
+    const firstPass = level2().length;
     expect(firstPass).toBeGreaterThan(0);
 
     advance(60_000);
     await render(layer, 0);
     await render(layer, 0);
-    expect(requests).toHaveLength(firstPass);
+    expect(level2()).toHaveLength(firstPass);
   });
 
   it('never retries a 403 either — the same request cannot become authorised', async () => {
@@ -242,10 +249,10 @@ describe('TileLayer failure handling', () => {
     script = { status: 403 };
 
     await render(layer, 0);
-    const firstPass = requests.length;
+    const firstPass = level2().length;
     advance(60_000);
     await render(layer, 0);
-    expect(requests).toHaveLength(firstPass);
+    expect(level2()).toHaveLength(firstPass);
   });
 
   it('stops retrying a tile once its attempt cap is spent', async () => {
@@ -286,7 +293,13 @@ describe('TileLayer failure handling', () => {
     requests = [];
     await render(layer, 0);
     expect(new Set(requests)).toEqual(facing);
-    expect(layer.drawList()).toHaveLength(facing.size);
+    // All of them are resident again, and the level-2 tiles in view draw (a
+    // level-1 tile they all cover is left out of the draw list).
+    const { cache } = layer as unknown as { cache: Map<string, unknown> };
+    expect(cache.size).toBe(facing.size);
+    const inView = [...facing].filter((u) => u.includes('/2/')).length;
+    expect(inView).toBeGreaterThan(0);
+    expect(layer.drawList().filter((d) => d.level === 2)).toHaveLength(inView);
   });
 
   describe('idle retry wake', () => {
@@ -786,28 +799,87 @@ describe('TileLayer failure handling', () => {
       layer.dispose();
     });
 
-    it('fetches the missing parent level first, once per parent', async () => {
-      const layer = makeLayer(); // only level 2 is wanted, and no level 1 is resident
+    it('asks for every tile at the target level before any parent on a first view', async () => {
+      // Only level 2 is wanted, nothing finer than the base is resident, and
+      // the view needs more tiles than there are request slots.
+      const layer = new TileLayer(
+        renderer as unknown as GLRenderer,
+        makeSource('pano-a'),
+        () => {},
+        { textureBudgetMB: 128, maxConcurrent: 3, now: () => clock },
+      );
+      await layer.loadBase();
+      requests = [];
       await render(layer, 0);
+      for (let i = 0; i < 10 && layer.hasPending(); i++) await render(layer, 0);
       const levels = requests.map((u) => Number(/\/tiles\/[^/]+\/(\d+)\//.exec(u)![1]));
-      expect(levels).toContain(1);
-      expect(levels).toContain(2);
-      // Every parent is asked for before the first level-2 tile.
-      expect(levels.lastIndexOf(1)).toBeLessThan(levels.indexOf(2));
-      expect(new Set(requests).size).toBe(requests.length);
-      // Each level-2 tile's parent was among them.
-      const parentOf = (u: string): string =>
-        u.replace(/\/2\/(\w+)\/(\d+)-(\d+)\.jpg$/, (_m, f: string, x: string, y: string) => {
-          return `/1/${f}/${Number(x) >> 1}-${Number(y) >> 1}.jpg`;
-        });
-      for (const u of requests.filter((r) => r.includes('/2/'))) {
-        expect(requests).toContain(parentOf(u));
-      }
+      const { desired } = layer as unknown as { desired: Set<string> };
+      expect(levels.length).toBe(desired.size);
+      expect(levels.every((l) => l === 2)).toBe(true);
       layer.dispose();
     });
 
-    it('queues each parent once, however many of its children are missing', () => {
+    it('queues the parent of a tile that failed ahead of the tiles still to go', async () => {
+      const layer = new TileLayer(
+        renderer as unknown as GLRenderer,
+        makeSource('pano-a'),
+        () => {},
+        { textureBudgetMB: 128, maxConcurrent: 1, now: () => clock },
+      );
+      await layer.loadBase();
+      requests = [];
+      // The first level-2 tile (the centre one) fails and cools down; the
+      // rest never answer.
+      let failing: string | undefined;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          requests.push(url);
+          failing ??= url;
+          if (url !== failing) return new Promise(() => {});
+          return Promise.resolve({ ok: false, status: 503, blob: () => Promise.resolve({}) });
+        }),
+      );
+      frame(layer, 0);
+      await flush();
+      frame(layer, 0);
+      const { candidates, queueHead } = layer as unknown as {
+        candidates: { key: string }[];
+        queueHead: number;
+      };
+      const [, face, xy] = /\/2\/(\w+)\/(\d+-\d+)\.jpg$/.exec(failing!)!;
+      const [x, y] = xy!.split('-').map(Number) as [number, number];
+      // Next in line for the one slot: the failed tile's parent, then the
+      // level-2 tiles nearest the centre. With one slot this view is many
+      // rounds, so the edges' parents follow those as their fallback.
+      expect(queueHead).toBe(0);
+      const failedParent = `1/${face}/${x >> 1}-${y >> 1}`;
+      expect(candidates[0]!.key).toBe(failedParent);
+      const firstOther = candidates.findIndex((c, i) => i > 0 && c.key.startsWith('1/'));
+      expect(firstOther).toBeGreaterThan(1);
+      expect(candidates.slice(1, firstOther).every((c) => c.key.startsWith('2/'))).toBe(true);
+      expect(candidates.filter((c) => c.key === failedParent)).toHaveLength(1);
+      layer.dispose();
+    });
+
+    it('fetches the parent of a tile that is missing for good', async () => {
       const layer = makeLayer();
+      await layer.loadBase();
+      requests = [];
+      respond = (url) => (url.endsWith('/2/nz/1-1.jpg') ? { status: 404 } : null);
+      await render(layer, 0);
+      await render(layer, 0);
+      expect(requests).toContain('/tiles/pano-a/1/nz/0-0.jpg');
+      expect(requests.filter((u) => u.includes('/1/'))).toHaveLength(1);
+      const { cache } = layer as unknown as { cache: Map<string, unknown> };
+      expect(cache.has('1/nz/0-0')).toBe(true);
+      layer.dispose();
+    });
+
+    it('queues each parent once, however many of its children are missing', async () => {
+      const layer = makeLayer();
+      script = { status: 503 };
+      await render(layer, 0); // every level-2 tile fails and cools down
       frame(layer, 0);
       const { candidates } = layer as unknown as { candidates: { key: string }[] };
       const keys = candidates.map((c) => c.key);
@@ -1041,27 +1113,74 @@ describe('TileLayer failure handling', () => {
       return { bitmaps, release: () => held.splice(0).forEach((r) => r()) };
     }
 
-    it('uploads at most three decoded tiles per frame', async () => {
+    /** A layer with a slot for each of the 16 tiles in view, so all 16 decode together. */
+    const wideLayer = (): TileLayer =>
+      new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+        textureBudgetMB: 128,
+        maxConcurrent: 16,
+        now: () => clock,
+      });
+
+    /** Uploads per frame while a burst of decoded tiles drains, each costing `ms`. */
+    async function drainBurst(ms: number): Promise<number[]> {
       const decodes = holdDecodes();
-      const layer = makeLayer();
+      const layer = wideLayer();
       frame(layer, 0);
       await flush();
-      expect(decodes.bitmaps).toHaveLength(8);
-      decodes.release(); // all eight land together
+      expect(decodes.bitmaps).toHaveLength(16);
+      decodes.release(); // all sixteen land together, as from the HTTP cache
       await flush();
       expect(renderer.uploadTile).not.toHaveBeenCalled();
-
+      renderer.uploadTile.mockImplementation(() => {
+        advance(ms);
+        return renderer.uploadTile.mock.calls.length;
+      });
       const perFrame: number[] = [];
-      for (let i = 0; i < 6; i++) {
+      while (readyCount(layer) > 0 && perFrame.length < 20) {
         const before = renderer.uploadTile.mock.calls.length;
+        advance(FRAME_MS);
         frame(layer, 0);
         perFrame.push(renderer.uploadTile.mock.calls.length - before);
-        decodes.release();
-        await flush();
       }
-      expect(perFrame[0]).toBe(3);
-      for (const n of perFrame) expect(n).toBeLessThanOrEqual(3);
       layer.dispose();
+      return perFrame;
+    }
+
+    it('uploads a burst of quick uploads eight per frame', async () => {
+      // 16 tiles from the HTTP cache at 0.3 ms each: two frames, not six.
+      expect(await drainBurst(0.3)).toEqual([8, 8]);
+    });
+
+    it('uploads no more a frame than maxUploadsPerUpdate', async () => {
+      // As the viewer builds the layer on a phone.
+      const decodes = holdDecodes();
+      const layer = new TileLayer(
+        renderer as unknown as GLRenderer,
+        makeSource('pano-a'),
+        () => {},
+        { textureBudgetMB: 128, maxConcurrent: 16, maxUploadsPerUpdate: 4, now: () => clock },
+      );
+      frame(layer, 0);
+      await flush();
+      decodes.release();
+      await flush();
+      const perFrame: number[] = [];
+      while (readyCount(layer) > 0 && perFrame.length < 20) {
+        const before = renderer.uploadTile.mock.calls.length;
+        advance(FRAME_MS);
+        frame(layer, 0);
+        perFrame.push(renderer.uploadTile.mock.calls.length - before);
+      }
+      expect(perFrame).toEqual([4, 4, 4, 4]);
+      layer.dispose();
+    });
+
+    it('still holds slow uploads to the frame time budget', async () => {
+      // 1.5 ms each: the third starts at 3 ms, inside the 4 ms budget, and
+      // no fourth starts after it.
+      const perFrame = await drainBurst(1.5);
+      expect(perFrame.slice(0, 5)).toEqual([3, 3, 3, 3, 3]);
+      expect(perFrame.reduce((a, b) => a + b)).toBe(16);
     });
 
     it('stops uploading for the frame once the time budget is spent', async () => {
@@ -1559,17 +1678,18 @@ describe('TileLayer failure handling', () => {
         'fetch',
         vi.fn((url: string) => {
           requests.push(url);
-          // Parents fail once; the level-2 tiles never answer, so no wake of theirs.
-          if (url.includes('/1/')) {
-            return Promise.resolve({ ok: false, status: 503, blob: () => Promise.resolve({}) });
-          }
-          return new Promise(() => {});
+          // The level-2 tiles are missing for good, so their parents are
+          // fetched and wake nothing of their own; the parents fail once.
+          const status = url.includes('/1/') ? 503 : 404;
+          return Promise.resolve({ ok: false, status, blob: () => Promise.resolve({}) });
         }),
       );
       const layer = makeLayer('pano-a', 128, invalidate);
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       try {
         frame(layer, 0);
+        await drain();
+        frame(layer, 0); // the level-2 tiles are gone: their parents go
         await drain();
         expect(requests.some((u) => u.includes('/1/'))).toBe(true);
         frame(layer, 0); // the parents are cooling down now
@@ -1583,12 +1703,10 @@ describe('TileLayer failure handling', () => {
       }
     });
 
-    it('fetches no parents on a steady pan, where the new tiles all go in one round', async () => {
+    it('fetches no parents on a steady pan', async () => {
       const layer = makeLayer();
       await layer.loadBase();
       await render(layer, 0);
-      // The jump to level 2 from nothing did fetch parents first.
-      expect(requests.some((u) => u.includes('/1/'))).toBe(true);
       requests = [];
       for (let yaw = 0.05; yaw < 1.5; yaw += 0.05) await render(layer, yaw);
       const byLevel = [0, 1, 2].map((l) => requests.filter((u) => u.includes(`/${l}/`)).length);

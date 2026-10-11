@@ -14,23 +14,35 @@ export type Face = (typeof FACES)[number];
  * direction on the unit cube (major axis = ±1, not normalised).
  */
 export function faceUVToDir(face: Face, u: number, v: number): Vec3 {
+  return faceUVInto({ x: 0, y: 0, z: 0 }, face, u, v);
+}
+
+/** {@link faceUVToDir} written into `out`, for loops that run per tile. */
+export function faceUVInto(out: Vec3, face: Face, u: number, v: number): Vec3 {
   const sc = 2 * u - 1;
   const tc = 2 * v - 1;
   // Add 0 to each component to normalise -0 → +0 (JS quirk with toEqual).
   switch (face) {
     case 'px':
-      return { x: 1, y: -tc + 0, z: -sc + 0 };
+      return set(out, 1, -tc + 0, -sc + 0);
     case 'nx':
-      return { x: -1, y: -tc + 0, z: sc + 0 };
+      return set(out, -1, -tc + 0, sc + 0);
     case 'py':
-      return { x: sc + 0, y: 1, z: tc + 0 };
+      return set(out, sc + 0, 1, tc + 0);
     case 'ny':
-      return { x: sc + 0, y: -1, z: -tc + 0 };
+      return set(out, sc + 0, -1, -tc + 0);
     case 'pz':
-      return { x: sc + 0, y: -tc + 0, z: 1 };
+      return set(out, sc + 0, -tc + 0, 1);
     case 'nz':
-      return { x: -sc + 0, y: -tc + 0, z: -1 };
+      return set(out, -sc + 0, -tc + 0, -1);
   }
+}
+
+function set(out: Vec3, x: number, y: number, z: number): Vec3 {
+  out.x = x;
+  out.y = y;
+  out.z = z;
+  return out;
 }
 
 const TAU = Math.PI * 2;

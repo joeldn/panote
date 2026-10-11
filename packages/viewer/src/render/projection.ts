@@ -133,26 +133,26 @@ export function viewProjection(
   return out;
 }
 
-/** Transform a point/direction by a column-major matrix, returning w too. */
-function transform(
-  m: Mat4,
-  x: number,
-  y: number,
-  z: number,
-): { x: number; y: number; z: number; w: number } {
-  return {
-    x: m[0]! * x + m[4]! * y + m[8]! * z + m[12]!,
-    y: m[1]! * x + m[5]! * y + m[9]! * z + m[13]!,
-    z: m[2]! * x + m[6]! * y + m[10]! * z + m[14]!,
-    w: m[3]! * x + m[7]! * y + m[11]! * z + m[15]!,
-  };
+/** Whether two matrices are equal, element by element. */
+export function sameMatrix(a: Mat4, b: Mat4): boolean {
+  for (let k = 0; k < 16; k++) if (a[k] !== b[k]) return false;
+  return true;
 }
 
 /** Direction → NDC. Matches three's Vector3.project(camera). */
 export function projectDir(dir: Vec3, viewProj: Mat4): Vec3 {
-  const t = transform(viewProj, dir.x, dir.y, dir.z);
-  const iw = 1 / t.w;
-  return { x: t.x * iw, y: t.y * iw, z: t.z * iw };
+  return projectDirInto({ x: 0, y: 0, z: 0 }, dir, viewProj);
+}
+
+/** {@link projectDir} written into `out`, which may be `dir` itself. */
+export function projectDirInto(out: Vec3, dir: Vec3, viewProj: Mat4): Vec3 {
+  const m = viewProj;
+  const { x, y, z } = dir;
+  const iw = 1 / (m[3]! * x + m[7]! * y + m[11]! * z + m[15]!);
+  out.x = (m[0]! * x + m[4]! * y + m[8]! * z + m[12]!) * iw;
+  out.y = (m[1]! * x + m[5]! * y + m[9]! * z + m[13]!) * iw;
+  out.z = (m[2]! * x + m[6]! * y + m[10]! * z + m[14]!) * iw;
+  return out;
 }
 
 /**

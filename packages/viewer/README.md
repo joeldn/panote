@@ -143,7 +143,7 @@ The rules a source follows:
 | `network.decode` | none | `(blob) => Promise<TileImage>`; `createImageBitmap(blob)` when unset. |
 | `network.retry.maxAttempts` | `3` | Attempts per tile, counting the first, for a transient failure. |
 | `network.retry.baseDelayMs` | `1000` | Wait before the first retry; it doubles each time. |
-| `memory.textureBudgetMB` | `"auto"` | VRAM for resident tiles. `"auto"` is 128 MB at DPR 1, scaled with the rendered pixel ratio up to 256 MB at DPR 2. A number is used as given. |
+| `memory.textureBudgetMB` | `"auto"` | VRAM for resident tiles. `"auto"` is 128 MB at DPR 1, scaled with the rendered pixel ratio up to 256 MB at DPR 2, and 128 MB on a phone-class device (a touch-first small screen, or 4 GB of memory or less). A number is used as given. |
 | `memory.minResidentTiles` | `24` | Fewest tiles kept resident, whatever the budget. |
 | `transition.durationMs` | `400` | `transitionTo()` crossfade, ms. |
 | `transition.respectReducedMotion` | `true` | Cut instead of crossfading when the visitor prefers reduced motion. |
@@ -167,10 +167,10 @@ The rules a source follows:
 | `setLabel(label)` | Renames the canvas, e.g. for each scene. |
 | `focus()` | Moves keyboard focus to the canvas without scrolling the page. |
 | `isSettled()` | Whether every tile the view needs is in, as `tiles-settled` reports. |
-| `project(yaw, pitch)` | Screen position of a direction in the last frame, in CSS px from the container's top left, plus `behind`. |
+| `project(yaw, pitch, out?)` | Screen position of a direction in the last frame, in CSS px from the container's top left, plus `behind`. Written into `out` when given, so placing markers every frame allocates nothing. |
 | `directionAtPixel(x, y)` | The direction under a container pixel. |
-| `onRender(cb)` | Calls `cb(view)` after every frame and returns an unsubscribe. Use it to place overlays. |
-| `requestRender()` | Asks for a frame. |
+| `onRender(cb)` | Calls `cb(view)` after each frame that moves things on screen (the camera, a resize, a scene change, `setNorth`), and on the next frame after subscribing or `requestRender()`; not on a frame drawn only because tiles landed. Returns an unsubscribe. Use it to place overlays. |
+| `requestRender()` | Asks for a frame, with the `onRender` callbacks run on it. |
 | `on(type, fn)` / `off(type, fn)` | Adds or removes an event listener. |
 | `dispose()` | Stops everything and frees the WebGL context. |
 

@@ -43,6 +43,48 @@ export const BASE_TEXTURE_BUDGET_MB = 128;
 /** Highest pixel ratio the default budget is allowed to scale by. */
 export const MAX_BUDGET_PIXEL_RATIO = 2;
 
+/**
+ * The default budget on a phone-class device, however dense its display.
+ * iOS Safari gives a tab little memory, and running out loses the WebGL
+ * context, which costs far more than refetching a tile. A phone's view is
+ * also small: a 390 × 844 screen at a 70° fov shows 8 level-2 tiles, so 96
+ * resident tiles is still a dozen views' worth.
+ */
+export const CONSTRAINED_TEXTURE_BUDGET_MB = 128;
+
+/** Below this shorter screen side, in CSS px, a touch-first device is a phone or a small tablet. */
+const SMALL_SCREEN_PX = 768;
+
+/** The parts of `window` isConstrainedDevice reads. */
+interface DeviceWindow {
+  matchMedia?: (query: string) => { matches: boolean };
+  screen?: { width: number; height: number };
+}
+
+/**
+ * A phone-class device: a touch-first one whose screen's shorter side is
+ * under 768 CSS px, or one whose `navigator.deviceMemory` (Chromium only, in
+ * GB) is 4 or less. A desktop window made small keeps its full budget (its
+ * pointer is fine), and so does a touch laptop or a full-size tablet.
+ * Anything `win` or `nav` lacks, or throws on, counts as not known.
+ */
+export function isConstrainedDevice(
+  win: DeviceWindow | undefined,
+  nav: object | undefined,
+): boolean {
+  // Not in TypeScript's DOM lib.
+  const memory = (nav as { deviceMemory?: unknown } | undefined)?.deviceMemory;
+  if (typeof memory === 'number' && memory > 0 && memory <= 4) return true;
+  const side = Math.min(win?.screen?.width ?? NaN, win?.screen?.height ?? NaN);
+  if (!(side > 0 && side < SMALL_SCREEN_PX)) return false;
+  try {
+    return win?.matchMedia?.('(pointer: coarse)').matches === true;
+  } catch {
+    // An embed host with a broken matchMedia.
+    return false;
+  }
+}
+
 /** A positive, finite number, or `fallback` for anything else. */
 function positive(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
@@ -50,7 +92,9 @@ function positive(value: number | undefined, fallback: number): number {
 
 /**
  * The default texture budget in MB for a display of `devicePixelRatio`, on a
- * viewer that renders at most `maxPixelRatio` device pixels per CSS pixel.
+ * viewer that renders at most `maxPixelRatio` device pixels per CSS pixel,
+ * held to CONSTRAINED_TEXTURE_BUDGET_MB on a `constrained` (phone-class)
+ * device.
  *
  * `devicePixelRatio` may be `undefined` (or 0, or `NaN`) — a non-browser host,
  * or an environment that does not report one — and is then treated as 1, which
@@ -63,13 +107,15 @@ function positive(value: number | undefined, fallback: number): number {
 export function defaultTextureBudgetMB(
   devicePixelRatio: number | undefined,
   maxPixelRatio: number,
+  constrained = false,
 ): number {
   const rendered = Math.min(
     positive(devicePixelRatio, 1),
     positive(maxPixelRatio, MAX_BUDGET_PIXEL_RATIO),
   );
   const scale = Math.min(Math.max(rendered, 1), MAX_BUDGET_PIXEL_RATIO);
-  return BASE_TEXTURE_BUDGET_MB * scale;
+  const budget = BASE_TEXTURE_BUDGET_MB * scale;
+  return constrained ? Math.min(budget, CONSTRAINED_TEXTURE_BUDGET_MB) : budget;
 }
 
 /** Mip levels add a third on top of the base level: 1 + 1/4 + 1/16 + … = 4/3. */

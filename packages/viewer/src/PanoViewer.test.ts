@@ -322,12 +322,16 @@ describe('PanoViewer', () => {
       format: 'jpg',
     };
 
-    /** Stub a host whose display reports `dpr`, with every fetch succeeding. */
-    function stubDisplay(dpr: number | undefined): void {
+    /**
+     * Stub a host whose display reports `dpr`, with every fetch succeeding;
+     * `phone` makes it a touch-first 390 × 844 screen.
+     */
+    function stubDisplay(dpr: number | undefined, phone = false): void {
       vi.stubGlobal('window', {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
-        matchMedia: vi.fn(() => ({ matches: false })),
+        matchMedia: vi.fn((q: string) => ({ matches: phone && q === '(pointer: coarse)' })),
+        screen: phone ? { width: 390, height: 844 } : { width: 1512, height: 982 },
         ...(dpr === undefined ? {} : { devicePixelRatio: dpr }),
       });
       vi.stubGlobal(
@@ -374,6 +378,37 @@ describe('PanoViewer', () => {
     it('does not scale past the cap on a devicePixelRatio-3 display', async () => {
       stubDisplay(3);
       const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(192);
+      viewer.dispose();
+    });
+
+    it('holds a phone to the base budget whatever its pixel ratio', async () => {
+      stubDisplay(3, true);
+      const viewer = new PanoViewer(makeContainer(390, 844));
+      expect(await loadedMaxTiles(viewer)).toBe(96);
+      viewer.dispose();
+    });
+
+    it('uploads four decoded tiles a frame on a phone, eight elsewhere', async () => {
+      const maxUploads = async (viewer: PanoViewer): Promise<number> => {
+        await viewer.load('pano-a');
+        return (viewer as unknown as { layer: { maxUploads: number } }).layer.maxUploads;
+      };
+      stubDisplay(3, true);
+      const phone = new PanoViewer(makeContainer(390, 844));
+      expect(await maxUploads(phone)).toBe(4);
+      phone.dispose();
+      stubDisplay(2);
+      const laptop = new PanoViewer(makeContainer(1422, 800));
+      expect(await maxUploads(laptop)).toBe(8);
+      laptop.dispose();
+    });
+
+    it('gives a phone the budget its host names', async () => {
+      stubDisplay(3, true);
+      const viewer = new PanoViewer(makeContainer(390, 844), {
+        memory: { textureBudgetMB: 256 },
+      });
       expect(await loadedMaxTiles(viewer)).toBe(192);
       viewer.dispose();
     });
@@ -863,6 +898,25 @@ describe('PanoViewer', () => {
       expect(centre.y).toBeCloseTo(400, 3);
     });
 
+    it('projects into an object the caller passes, for a frame that allocates nothing', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: 0.2 } });
+      const out = { x: -1, y: -1, behind: true };
+      for (const [yaw, pitch] of [
+        [0.3, 0.1],
+        [Math.PI, 0],
+        [-0.4, -0.3],
+      ] as const) {
+        expect(viewer.project(yaw, pitch, out)).toBe(out);
+        expect(out).toEqual(viewer.project(yaw, pitch));
+      }
+      // Without one, each call gets its own: a caller may hold two at once.
+      const a = viewer.project(0.1, 0);
+      const b = viewer.project(-0.1, 0);
+      expect(a).not.toBe(b);
+      expect(a.x).toBeGreaterThan(b.x);
+      viewer.dispose();
+    });
+
     it('projects from the initial view before the first frame', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: Math.PI } });
       const ahead = viewer.project(Math.PI, 0);
@@ -914,7 +968,8 @@ describe('PanoViewer', () => {
         (v as View).yaw = 9;
       });
       raf.step();
-      tick(viewer);
+      viewer.requestRender();
+      raf.step();
       expect(seen).toEqual([0.3, 0.3]);
       expect(internals(viewer).view.yaw).toBe(0.3);
       viewer.dispose();
@@ -1739,6 +1794,92 @@ describe('PanoViewer', () => {
         signalOf: (url: string) => signals.get(url),
       };
     }
+
+    describe('render callbacks', () => {
+      /** A viewer at rest with `cb` subscribed and its first call made. */
+      async function atRest(cb: ReturnType<typeof vi.fn<(view: Readonly<View>) => void>>) {
+        const net = stubNet({ holdTile: (url) => !url.includes('/0/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        viewer.onRender(cb);
+        runUntilIdle();
+        expect(cb).toHaveBeenCalled();
+        cb.mockClear();
+        return { viewer, net };
+      }
+
+      it('skip a frame that only a tile landing asked for', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer, net } = await atRest(cb);
+        const render = internals(viewer).renderer.render;
+        render.mockClear();
+        net.release();
+        await flush();
+        runUntilIdle();
+        expect(render).toHaveBeenCalled(); // the tiles were drawn
+        expect(cb).not.toHaveBeenCalled(); // nothing on screen moved
+        viewer.dispose();
+      });
+
+      it('run on every frame the camera moves', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        viewer.setView({ yaw: 1 });
+        const frames = runUntilIdle();
+        expect(frames).toBeGreaterThan(1);
+        expect(cb).toHaveBeenCalledTimes(frames);
+        expect(cb.mock.calls.at(-1)![0]).toMatchObject({ yaw: 1 });
+        viewer.dispose();
+      });
+
+      it('run when the host asks with requestRender', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        viewer.requestRender();
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run after a resize, even one that leaves the camera matrix as it was', async () => {
+        vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        // Twice the size, the same aspect: the same matrix, other pixels.
+        FakeResizeObserver.instances.at(-1)!.trigger(800, 1600);
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run when another scene swaps in under a still camera', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        await viewer.load('pano-b');
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run when north is set, which turns the compass', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        viewer.setNorth(1);
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run a callback that just subscribed on the next frame', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        const late = vi.fn();
+        viewer.onRender(late);
+        runUntilIdle();
+        expect(late).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+    });
 
     /** A container and document that can take the transition overlay. */
     function stubOverlayDom() {
@@ -2774,7 +2915,8 @@ describe('PanoViewer', () => {
       it('asks for another frame while decoded tiles are still queued', async () => {
         let holding = true;
         const net = stubNet({ holdTile: (url) => holding && !url.includes('/0/') });
-        const viewer = new PanoViewer(makeContainer(400, 800));
+        // Wide: a request slot for every tile in view, so they all decode at once.
+        const viewer = new PanoViewer(makeContainer(800, 800), { network: { maxConcurrent: 64 } });
         await viewer.load('pano-a');
         runUntilIdle();
         const base = uploads(viewer);
@@ -2782,7 +2924,7 @@ describe('PanoViewer', () => {
         net.release();
         await flush();
         const decoded = readyOf(viewer).size;
-        expect(decoded).toBeGreaterThan(3); // more than one frame uploads
+        expect(decoded).toBeGreaterThan(8); // more than one frame uploads
         expect(raf.pending).toBe(1);
 
         raf.step();
@@ -3205,6 +3347,45 @@ describe('PanoViewer', () => {
         (internals(viewer).layer as { source: CubeTileSource } | undefined)?.source.id;
 
       describe('context loss', () => {
+        it('draws a restored scene from its base until its finer tiles are back', async () => {
+          let holdFine = false;
+          const net = stubNet({ holdTile: (url) => holdFine && !url.includes('/0/') });
+          const viewer = new PanoViewer(makeContainer(400, 800));
+          await viewer.load('pano-a');
+          for (let i = 0; i < 10; i++) {
+            runUntilIdle();
+            await flush();
+          }
+          const fake = fakeOf(viewer);
+          const lastList = () =>
+            fake.render.mock.calls.at(-1)![0] as { handle: number; level: number }[];
+          const levelsOf = (list: { level: number }[]) => list.map((d) => d.level).sort();
+          const before = lastList();
+          expect(before.filter((d) => d.level === 2).length).toBeGreaterThan(0);
+          const lastHandle = Math.max(...before.map((d) => d.handle));
+
+          fake.loseContext();
+          holdFine = true;
+          fake.restoreContext();
+          for (let i = 0; i < 10; i++) {
+            await flush();
+            runUntilIdle();
+          }
+          // Only the new layer's base: nothing from before the loss, and
+          // nothing hidden behind finer tiles that are not there yet.
+          const restored = lastList();
+          expect(levelsOf(restored)).toEqual(FACES.map(() => 0));
+          for (const d of restored) expect(d.handle).toBeGreaterThan(lastHandle);
+
+          net.release();
+          for (let i = 0; i < 10; i++) {
+            await flush();
+            runUntilIdle();
+          }
+          expect(levelsOf(lastList())).toEqual(levelsOf(before));
+          viewer.dispose();
+        });
+
         it('stops drawing while lost, then loads the scene again from its held manifest', async () => {
           stubNet();
           const viewer = new PanoViewer(makeContainer(400, 800));

@@ -7,6 +7,16 @@ export interface View {
   fov: number; // vertical fov in degrees
 }
 
+/** A direction on screen, from `PanoViewer.project()`. */
+export interface ProjectedPoint {
+  /** CSS px from the container's left. */
+  x: number;
+  /** CSS px from the container's top. */
+  y: number;
+  /** The direction is behind the camera; `x` and `y` mean nothing then. */
+  behind: boolean;
+}
+
 /**
  * When the wheel drives the viewer.
  * - `'always'`: every wheel event zooms (or pans) and never scrolls the page.
@@ -136,7 +146,9 @@ export interface MemoryOptions {
    * devicePixelRatio-1 display, scaled linearly with the ratio the viewer
    * renders at and capped at 2x (256): a finer display selects a finer
    * level and so needs more tiles resident to pan without re-decoding them.
-   * A number is used as given, unscaled and uncapped.
+   * On a phone-class device (a touch-first small screen, or 4 GB of memory
+   * or less) it stays at 128. A number is used as given, unscaled and
+   * uncapped.
    */
   textureBudgetMB?: number | 'auto';
   /** Fewest tiles kept resident, however small the budget. */
