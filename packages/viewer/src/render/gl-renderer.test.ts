@@ -388,8 +388,31 @@ describe('GLRenderer', () => {
       expect([copies[0]!.width, copies[0]!.height]).toEqual([100, 50]);
       // Rendered first, then copied in the same call.
       expect(gl.clear).toHaveBeenCalledTimes(1);
-      expect(copies[0]!.drawImage).toHaveBeenCalledExactlyOnceWith(canvas, 0, 0);
+      expect(copies[0]!.drawImage).toHaveBeenCalledExactlyOnceWith(canvas, 0, 0, 100, 50);
       expect(canvas.toDataURL).not.toHaveBeenCalled();
+    });
+
+    it('copies at CSS size, not at the device pixels of the backbuffer', () => {
+      vi.stubGlobal('window', { devicePixelRatio: 2 });
+      const { canvas, renderer, copies } = setup();
+      renderer.resize(150.4, 80);
+      expect([canvas.width, canvas.height]).toEqual([301, 160]);
+      renderer.setCamera(new Float32Array(16));
+      renderer.snapshot([]);
+      // A quarter of the pixels to allocate and copy, for an image that only
+      // fades out.
+      expect([copies[0]!.width, copies[0]!.height]).toEqual([150, 80]);
+      expect(copies[0]!.drawImage).toHaveBeenCalledExactlyOnceWith(canvas, 0, 0, 150, 80);
+    });
+
+    it('never makes the copy larger than the backbuffer', () => {
+      vi.stubGlobal('window', { devicePixelRatio: 0.5 });
+      const { canvas, renderer, copies } = setup();
+      renderer.resize(100, 50);
+      expect([canvas.width, canvas.height]).toEqual([50, 25]);
+      renderer.setCamera(new Float32Array(16));
+      renderer.snapshot([]);
+      expect([copies[0]!.width, copies[0]!.height]).toEqual([50, 25]);
     });
   });
 

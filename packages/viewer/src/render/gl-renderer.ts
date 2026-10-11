@@ -518,20 +518,27 @@ export class GLRenderer {
   }
 
   /**
-   * Render, then copy the frame into a new 2D canvas of the same size. The
-   * copy is made in the same task as the render, so it needs no
+   * Render, then copy the frame into a new 2D canvas at the canvas's CSS
+   * size. The copy is made in the same task as the render, so it needs no
    * preserveDrawingBuffer, and drawImage stays on the GPU where a toDataURL
    * would encode a PNG on the main thread. Null while the context is lost.
+   *
+   * CSS size, not the backbuffer's device pixels: the copy is only faded out
+   * over a scene change, which does not need the DPR detail, and at DPR 2 it
+   * is a quarter of the memory and copy (a 1512×982 view: 5.9 MB, not 23.8).
    */
   snapshot(drawList: DrawItem[]): HTMLCanvasElement | null {
     if (this.lost) return null;
     this.render(drawList);
+    const { width, height } = this.canvas;
+    const w = Math.min(width, Math.max(1, Math.round(this.cssW)));
+    const h = Math.min(height, Math.max(1, Math.round(this.cssH)));
     const copy = document.createElement('canvas');
-    copy.width = this.canvas.width;
-    copy.height = this.canvas.height;
+    copy.width = w;
+    copy.height = h;
     const ctx = copy.getContext('2d');
     if (!ctx) return null;
-    ctx.drawImage(this.canvas, 0, 0);
+    ctx.drawImage(this.canvas, 0, 0, w, h);
     return copy;
   }
 
