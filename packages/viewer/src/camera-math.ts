@@ -27,7 +27,7 @@ export function anglePerPixel(fovRad: number, dimensionPx: number): number {
  * Exact anywhere on screen and at any pitch, not only on the centre lines.
  * The pitch is held to [minPitch, maxPitch], and the yaw is then the best one
  * for that pitch, so the clamp eases the point off rather than jumping it.
- * Written into `out`; the yaw is the one nearest yaw0.
+ * Written into `out`; the yaw is the one nearest yaw0, unwrapped.
  */
 export function zoomAnchorView(
   out: { yaw: number; pitch: number },
@@ -69,8 +69,10 @@ export function zoomAnchorView(
   const pitch = Math.min(maxPitch, Math.max(minPitch, angle - Math.atan(cy1)));
   // Then yaw it so the ray's heading matches too.
   const hz1 = cy1 * Math.sin(pitch) - Math.cos(pitch);
-  const yaw = heading - Math.atan2(cx1, -hz1);
-  out.yaw = yaw0 + normalizeAngle(yaw - yaw0);
+  // yaw0 plus the difference of two turns to the same side (both rays have
+  // the sign of nx), so within π of yaw0: the nearest yaw, never wrapped
+  // across ±π (damping would swing the long way round).
+  out.yaw = heading - Math.atan2(cx1, -hz1);
   out.pitch = pitch;
   return out;
 }

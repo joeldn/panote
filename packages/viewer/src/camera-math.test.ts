@@ -93,6 +93,29 @@ describe('zoomAnchorView', () => {
     },
   );
 
+  it.each([
+    { yaw0: Math.PI - 0.05, nx: 0.9 },
+    { yaw0: -Math.PI + 0.05, nx: -0.9 },
+    { yaw0: 7, nx: 0.8 },
+  ])('gives the yaw nearest $yaw0, unwrapped across ±π', ({ yaw0, nx }) => {
+    const { yaw } = zoomAnchorView(
+      { yaw: 0, pitch: 0 },
+      yaw0,
+      0.2,
+      nx,
+      0.3,
+      tan(80) * 1.5,
+      tan(80),
+      tan(30) * 1.5,
+      tan(30),
+      -LIMIT,
+      LIMIT,
+    );
+    // Zooming in toward the side turns toward it by a fraction of a turn.
+    expect(Math.sign(yaw - yaw0)).toBe(Math.sign(nx));
+    expect(Math.abs(yaw - yaw0)).toBeLessThan(0.6);
+  });
+
   it('holds pitch to its limits and gives the yaw nearest the start', () => {
     const out = zoomAnchorView(
       { yaw: 0, pitch: 0 },

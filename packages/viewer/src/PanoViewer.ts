@@ -743,7 +743,9 @@ export class PanoViewer {
   }
 
   private zoomAt(scaleFactor: number, clientX: number, clientY: number): void {
-    this.pauseAutoRotate();
+    // A glide left running would carry the target, and the point under the
+    // cursor with it, away from the anchor solved here.
+    this.stopMomentum();
     // The pointer is in client coordinates, so it is mapped through the
     // canvas's on-screen rect: page scroll moves it without a resize, and a
     // CSS transform scales it without changing the cached layout size.

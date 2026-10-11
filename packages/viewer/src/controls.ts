@@ -272,14 +272,20 @@ export class Controls {
     const unit = e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? this.el.clientHeight || 800 : 1;
     const dy = e.deltaY * unit;
     const dx = e.deltaX * unit;
-    if (dy) {
+    // One axis per event: a scroll-zoom is never exactly vertical and its
+    // momentum tail jitters sideways, so a deltaX riding along a zoom must
+    // not pan (it would slide the point under the cursor), and a mostly
+    // sideways swipe pans without zooming. A pinch (ctrl-wheel) never pans.
+    const zoom = dy !== 0 && (e.ctrlKey || Math.abs(dy) >= Math.abs(dx));
+    if (zoom) {
       const pinch = e.ctrlKey && e.deltaMode === 0 && Math.abs(e.deltaY) < PINCH_MAX_DELTA;
       const gain = pinch ? this.opts.pinchGain : this.opts.wheelGain;
       const logScale = Math.max(-MAX_WHEEL_LOG_SCALE, Math.min(MAX_WHEEL_LOG_SCALE, dy * gain));
       this.host.zoomAt(Math.exp(logScale), e.clientX, e.clientY);
+    } else if (dx && !e.ctrlKey) {
+      // A horizontal two-finger swipe pans like a drag in the same direction.
+      this.host.panByPixels(-dx, 0);
     }
-    // A horizontal two-finger swipe pans like a drag in the same direction.
-    if (dx && !e.ctrlKey) this.host.panByPixels(-dx, 0);
   };
 
   // Best effort: these events exist only in Safari. macOS reports a trackpad

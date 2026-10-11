@@ -1959,13 +1959,13 @@ describe('PanoViewer', () => {
         return viewer;
       }
 
-      const wheelAt = (viewer: PanoViewer, x: number, y: number, deltaY: number) =>
+      const wheelAt = (viewer: PanoViewer, x: number, y: number, deltaY: number, deltaX = 0) =>
         canvasListener(
           viewer,
           'wheel',
         )({
           deltaY,
-          deltaX: 0,
+          deltaX,
           deltaMode: 0,
           ctrlKey: false,
           metaKey: false,
@@ -2060,6 +2060,63 @@ describe('PanoViewer', () => {
         worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, ms));
         expect(internals(viewer).view.fov).not.toBeCloseTo(fov, 1);
         expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('keeps the anchor through a scroll-zoom that jitters sideways', () => {
+        const viewer = zoomViewer({ yaw: 0.3, pitch: 0.3, fov: 75 });
+        const x = 980;
+        const y = 180;
+        const anchor = viewer.directionAtPixel(x, y);
+        let worst = 0;
+        // A two-finger scroll is never exactly vertical, and its momentum
+        // tail keeps sending small deltaX values.
+        const jitter = [0.5, -0.4, 1.2, -0.8, 3, 0.2, -2.5, 0.7];
+        for (let i = 0; i < 30; i++) {
+          wheelAt(viewer, x, y, -8, jitter[i % jitter.length]!);
+          raf.step(raf.now + 16);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
+        }
+        worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, 16));
+        expect(internals(viewer).view.fov).toBeLessThan(60);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('pans on a mostly sideways swipe without zooming', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0, fov: 70 });
+        wheelAt(viewer, 600, 400, 4, 40);
+        runUntilIdle();
+        expect(internals(viewer).view.fov).toBe(70);
+        expect(internals(viewer).view.yaw).toBeGreaterThan(0); // a deltaX right turns right
+        viewer.dispose();
+      });
+
+      it('stops a fling glide when a zoom starts, so the anchor holds', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0.3, fov: 70 });
+        internals(viewer).flick(25, 5);
+        raf.step(raf.now + 16);
+        const x = 1000;
+        const y = 200;
+        const anchor = viewer.directionAtPixel(x, y);
+        for (let i = 0; i < 4; i++) wheelAt(viewer, x, y, -100);
+        expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+        expect(settleKeepingAnchor(viewer, x, y, anchor, 16)).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('anchors on the fov on screen when a wheel zoom lands mid fov glide', () => {
+        const viewer = zoomViewer({ yaw: 0.2, pitch: 0.4, fov: 75 });
+        viewer.setView({ fov: 30 }); // a button zoom: the fov eases toward 30
+        raf.step(raf.now + 16);
+        raf.step(raf.now + 16);
+        const { view, target } = internals(viewer);
+        expect(view.fov).not.toBeCloseTo(target.fov, 1);
+        const x = 200;
+        const y = 650;
+        const anchor = viewer.directionAtPixel(x, y);
+        wheelAt(viewer, x, y, -100);
+        expect(settleKeepingAnchor(viewer, x, y, anchor, 8)).toBeLessThan(TOL);
         viewer.dispose();
       });
 
