@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Controls, type ControlHost, type ControlsOptions } from './controls.js';
+import {
+  Controls,
+  WHEEL_GESTURE_GAP_MS,
+  type ControlHost,
+  type ControlsOptions,
+} from './controls.js';
 
 /**
  * Controls only needs a small slice of HTMLElement, so these tests run in Node
@@ -50,6 +55,8 @@ function makeHost() {
     panByPixels: vi.fn<ControlHost['panByPixels']>(),
     panTargetByPixels: vi.fn<ControlHost['panTargetByPixels']>(),
     zoomAt: vi.fn<ControlHost['zoomAt']>(),
+    pinchStart: vi.fn<ControlHost['pinchStart']>(),
+    pinchTo: vi.fn<ControlHost['pinchTo']>(),
     flick: vi.fn<ControlHost['flick']>(),
     stopMomentum: vi.fn<ControlHost['stopMomentum']>(),
   };
@@ -128,18 +135,20 @@ describe('Controls: pointer drag and release', () => {
     expect(host.panByPixels).toHaveBeenCalledWith(12, -4);
   });
 
-  it('pinches with two touch pointers and does not pan or fling from it', () => {
+  it('pinches with two touch pointers, drags on with the finger left, and never flings', () => {
     const touch = { pointerType: 'touch' };
     pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    expect(host.pinchStart).toHaveBeenCalledWith(150, 100);
     pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
-    // Distance 100 -> 200 halves the fov around the midpoint.
-    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 200, 100);
+    // Distance 100 -> 200 halves the start fov, about the moved midpoint.
+    expect(host.pinchTo).toHaveBeenCalledWith(0.5, 200, 100);
+    expect(host.zoomAt).not.toHaveBeenCalled();
     pointer('pointerup', { x: 300, y: 100, t: 20, id: 2, ...touch });
-    // The finger left over from the pinch must not pan.
+    // The finger left drags on from where it is, with no jump.
     pointer('pointermove', { x: 150, y: 100, t: 32, id: 1, ...touch });
+    expect(host.panByPixels).toHaveBeenCalledWith(50, 0);
     pointer('pointerup', { x: 150, y: 100, t: 34, id: 1, ...touch });
-    expect(host.panByPixels).not.toHaveBeenCalled();
     expect(host.flick).not.toHaveBeenCalled();
   });
 });
@@ -200,6 +209,7 @@ function wheel(init: {
   deltaMode?: number;
   ctrlKey?: boolean;
   metaKey?: boolean;
+  timeStamp?: number;
 }) {
   return el.dispatch('wheel', {
     deltaX: 0,
@@ -296,6 +306,56 @@ describe('Controls: wheel and trackpad', () => {
     expect(host.panByPixels).not.toHaveBeenCalled();
   });
 
+  describe('one axis per wheel gesture', () => {
+    it('keeps zooming through a tail whose sideways jitter outgrows it', () => {
+      setup();
+      for (let i = 0; i < 30; i++) wheel({ deltaY: -30 * 0.85 ** i, deltaX: 2, timeStamp: i * 16 });
+      expect(host.zoomAt).toHaveBeenCalledTimes(30);
+      expect(host.panByPixels).not.toHaveBeenCalled();
+    });
+
+    it('keeps panning through a swipe whose vertical jitter outgrows it', () => {
+      setup();
+      for (let i = 0; i < 30; i++)
+        wheel({ deltaX: 30 * 0.85 ** i, deltaY: 1.5, timeStamp: i * 16 });
+      expect(host.panByPixels).toHaveBeenCalledTimes(30);
+      expect(host.zoomAt).not.toHaveBeenCalled();
+    });
+
+    it(`picks the axis again after a pause of more than ${WHEEL_GESTURE_GAP_MS} ms`, () => {
+      setup();
+      wheel({ deltaY: -30, deltaX: 1, timeStamp: 0 });
+      // Within the gap, a sideways event is still the zoom gesture's.
+      wheel({ deltaY: 0.5, deltaX: 20, timeStamp: WHEEL_GESTURE_GAP_MS });
+      expect(host.panByPixels).not.toHaveBeenCalled();
+      expect(host.zoomAt).toHaveBeenCalledTimes(2);
+      // After a longer pause it is a new gesture, picked by its own axes.
+      wheel({ deltaY: 0.5, deltaX: 20, timeStamp: 2 * WHEEL_GESTURE_GAP_MS + 1 });
+      expect(host.panByPixels).toHaveBeenCalledWith(-20, 0);
+      expect(host.zoomAt).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets the first event with a delta pick the axis', () => {
+      setup();
+      wheel({ timeStamp: 0 });
+      wheel({ deltaX: 20, deltaY: 1, timeStamp: 16 });
+      expect(host.panByPixels).toHaveBeenCalledWith(-20, 0);
+    });
+
+    it('always zooms on a ctrl-wheel, and starts a new gesture when ctrl changes', () => {
+      setup();
+      wheel({ deltaY: 1, deltaX: 30, ctrlKey: true, timeStamp: 0 });
+      expect(host.zoomAt).toHaveBeenCalledTimes(1);
+      // Ctrl let go within the gap: a new gesture, here a sideways pan.
+      wheel({ deltaY: 1, deltaX: 30, timeStamp: 16 });
+      expect(host.panByPixels).toHaveBeenCalledWith(-30, 0);
+      // And held again: a pinch, which zooms and never pans.
+      wheel({ deltaY: 1, deltaX: 30, ctrlKey: true, timeStamp: 32 });
+      expect(host.zoomAt).toHaveBeenCalledTimes(2);
+      expect(host.panByPixels).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('zooms on a Safari pinch gesture and stops the page zooming', () => {
     setup();
     const start = el.dispatch('gesturestart', { scale: 1, clientX: 400, clientY: 300 });
@@ -303,7 +363,8 @@ describe('Controls: wheel and trackpad', () => {
     el.dispatch('gestureend', { scale: 2, clientX: 400, clientY: 300 });
     expect(start.defaultPrevented).toBe(true);
     expect(change.defaultPrevented).toBe(true);
-    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 400, 300);
+    expect(host.pinchStart).toHaveBeenCalledWith(400, 300);
+    expect(host.pinchTo).toHaveBeenCalledWith(0.5, 400, 300);
   });
 });
 
@@ -386,8 +447,9 @@ describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
     pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
     expect(start.defaultPrevented).toBe(true);
     expect(change.defaultPrevented).toBe(true);
-    expect(host.zoomAt).toHaveBeenCalledTimes(1);
-    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 200, 100);
+    expect(host.pinchStart).toHaveBeenCalledTimes(1);
+    expect(host.pinchTo).toHaveBeenCalledTimes(1);
+    expect(host.pinchTo).toHaveBeenCalledWith(0.5, 200, 100);
   });
 
   it('does not start a gesture zoom while a pointer is tracked', () => {
@@ -399,7 +461,7 @@ describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
     pointer('pointerup', { x: 200, y: 100, t: 16, id: 2, ...touch });
     // A late gesturechange after the fingers lifted has no gesture to scale.
     el.dispatch('gesturechange', { scale: 2, clientX: 150, clientY: 100 });
-    expect(host.zoomAt).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
   });
 
   it('does not zoom a gesture change once pointers are tracked', () => {
@@ -410,15 +472,16 @@ describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
     const change = el.dispatch('gesturechange', { scale: 2, clientX: 150, clientY: 100 });
     expect(change.defaultPrevented).toBe(true);
-    expect(host.zoomAt).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
   });
 
   it('falls back to the element centre when a gesture has no coordinates', () => {
     setup();
     el.dispatch('gesturestart', { scale: 1 });
     el.dispatch('gesturechange', { scale: 2 });
-    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 400, 300);
-    for (const args of host.zoomAt.mock.calls) {
+    expect(host.pinchStart).toHaveBeenCalledWith(400, 300);
+    expect(host.pinchTo).toHaveBeenCalledWith(0.5, 400, 300);
+    for (const args of host.pinchTo.mock.calls) {
       expect(args.every((n) => Number.isFinite(n))).toBe(true);
     }
   });
@@ -517,29 +580,32 @@ describe('Controls: remaining branches', () => {
     pointer('pointerdown', { x: 500, y: 500, t: 0, id: 3, ...touch });
     pointer('pointermove', { x: 600, y: 600, t: 16, id: 3, ...touch });
     pointer('pointerup', { x: 600, y: 600, t: 20, id: 3, ...touch });
-    expect(host.zoomAt).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
     expect(host.panByPixels).not.toHaveBeenCalled();
     // The first two fingers still pinch normally.
     pointer('pointermove', { x: 300, y: 100, t: 32, id: 2, ...touch });
-    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 200, 100);
+    expect(host.pinchTo).toHaveBeenCalledWith(0.5, 200, 100);
   });
 
-  it('carries on pinching when the first finger lifts and a new one lands', () => {
+  it('drags on when the first finger lifts, and starts a new pinch when one lands', () => {
     setup();
     pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
     pointer('pointerup', { x: 100, y: 100, t: 16, id: 1, ...touch });
-    // The finger left over from the pinch must not pan.
+    // The finger left drags on from where it is.
     pointer('pointermove', { x: 210, y: 100, t: 24, id: 2, ...touch });
-    expect(host.panByPixels).not.toHaveBeenCalled();
-    // A new finger 100 px away, then spreading to 200 px, halves the fov.
+    expect(host.panByPixels).toHaveBeenCalledTimes(1);
+    expect(host.panByPixels).toHaveBeenCalledWith(10, 0);
+    // A new finger 100 px away starts a new pinch; spreading to 200 px
+    // halves the fov it started at.
     pointer('pointerdown', { x: 310, y: 100, t: 32, id: 3, ...touch });
+    expect(host.pinchStart).toHaveBeenLastCalledWith(260, 100);
     pointer('pointermove', { x: 410, y: 100, t: 48, id: 3, ...touch });
-    expect(host.zoomAt).toHaveBeenCalledTimes(1);
-    expect(host.zoomAt).toHaveBeenCalledWith(0.5, 310, 100);
+    expect(host.pinchTo).toHaveBeenCalledTimes(1);
+    expect(host.pinchTo).toHaveBeenCalledWith(0.5, 310, 100);
     pointer('pointerup', { x: 410, y: 100, t: 56, id: 3, ...touch });
     pointer('pointerup', { x: 210, y: 100, t: 56, id: 2, ...touch });
-    expect(host.panByPixels).not.toHaveBeenCalled();
+    expect(host.panByPixels).toHaveBeenCalledTimes(1);
     expect(host.flick).not.toHaveBeenCalled();
   });
 });

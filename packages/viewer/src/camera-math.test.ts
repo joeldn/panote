@@ -5,6 +5,8 @@ import {
   damp,
   anglePerPixel,
   zoomAnchorView,
+  rayAt,
+  aimRay,
   pinchFactor,
   normalizeAngle,
   compassHeading,
@@ -133,6 +135,49 @@ describe('zoomAnchorView', () => {
     expect(out.pitch).toBe(1.45);
     expect(Math.abs(out.yaw - 7)).toBeLessThan(Math.PI);
   });
+});
+
+describe('rayAt and aimRay', () => {
+  const D = Math.PI / 180;
+  const LIMIT = Math.PI / 2 - 0.001;
+
+  // A pinch moves the scene point between the fingers to a new screen point
+  // at a new fov: the world ray from one screen point, aimed at another.
+  it.each([
+    { from: [0.2, 0.1], to: [-0.5, 0.6], pitch: 0.3, fov0: 70, fov1: 40, aspect: 1.5 },
+    { from: [-0.7, -0.4], to: [0.3, -0.8], pitch: -0.6, fov0: 30, fov1: 60, aspect: 0.6 },
+    { from: [0, 0.6], to: [0.02, 0.4], pitch: 1.2, fov0: 70, fov1: 35, aspect: 1.5 },
+  ])(
+    'puts the ray from $from under $to at pitch $pitch',
+    ({ from, to, pitch, fov0, fov1, aspect }) => {
+      const ty0 = Math.tan((fov0 * D) / 2);
+      const ty1 = Math.tan((fov1 * D) / 2);
+      const world = unprojectNDC(
+        from[0]!,
+        from[1]!,
+        viewProjection({ yaw: 1, pitch, fov: fov0 }, aspect, 179),
+      );
+      const ray = rayAt({ yaw: 0, pitch: 0 }, 1, pitch, from[0]! * ty0 * aspect, from[1]! * ty0);
+      const cam = aimRay(
+        { yaw: 0, pitch: 0 },
+        ray.yaw,
+        ray.pitch,
+        to[0]! * ty1 * aspect,
+        to[1]! * ty1,
+        1,
+        pitch,
+        -LIMIT,
+        LIMIT,
+      );
+      expect(Math.abs(cam.yaw - 1)).toBeLessThan(Math.PI);
+      const p = projectDir(
+        world,
+        viewProjection({ yaw: cam.yaw, pitch: cam.pitch, fov: fov1 }, aspect, 179),
+      );
+      expect(p.x).toBeCloseTo(to[0]!, 6);
+      expect(p.y).toBeCloseTo(to[1]!, 6);
+    },
+  );
 });
 
 describe('pinchFactor', () => {

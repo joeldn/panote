@@ -1971,6 +1971,7 @@ describe('PanoViewer', () => {
           metaKey: false,
           clientX: x,
           clientY: y,
+          timeStamp: raf.now,
           preventDefault: vi.fn(),
         });
 
@@ -2134,67 +2135,206 @@ describe('PanoViewer', () => {
         viewer.dispose();
       });
 
-      it('keeps a two-finger pinch anchored at its midpoint', () => {
-        const viewer = zoomViewer({ yaw: 0, pitch: 0.4, fov: 70 });
-        const y = 200;
-        const ptr = (type: string, pointerId: number, x: number) =>
+      /** Two touch pointers on the viewer's canvas, moved one event at a time. */
+      function fingers(viewer: PanoViewer, a: [number, number], b: [number, number]) {
+        const pos = { 1: a, 2: b };
+        const send = (type: string, id: 1 | 2) =>
           canvasListener(
             viewer,
             type,
           )({
-            pointerId,
+            pointerId: id,
             pointerType: 'touch',
             button: 0,
-            clientX: x,
-            clientY: y,
+            clientX: pos[id][0],
+            clientY: pos[id][1],
             timeStamp: raf.now,
           });
-        // One finger holds still and the other spreads, so the midpoint moves
-        // with every event: each event zooms about the midpoint it makes.
-        const still = 800;
-        let moving = 900;
-        ptr('pointerdown', 1, still);
-        ptr('pointerdown', 2, moving);
+        send('pointerdown', 1);
+        send('pointerdown', 2);
+        return {
+          mid: (): [number, number] => [(pos[1][0] + pos[2][0]) / 2, (pos[1][1] + pos[2][1]) / 2],
+          move(id: 1 | 2, x: number, y: number) {
+            pos[id] = [x, y];
+            send('pointermove', id);
+          },
+          lift(id: 1 | 2) {
+            send('pointerup', id);
+          },
+          at: (id: 1 | 2) => pos[id],
+        };
+      }
+
+      /**
+       * A pinch whose fingers move one event at a time, unevenly, while their
+       * midpoint also travels. After every event the scene direction that was
+       * under the midpoint at the start must be under the midpoint now.
+       */
+      function pinchTracking(
+        viewer: PanoViewer,
+        start: [[number, number], [number, number]],
+        steps: number,
+        spread: number,
+        travel: [number, number],
+      ): number {
+        const f = fingers(viewer, start[0], start[1]);
+        const [mx, my] = f.mid();
+        const anchor = viewer.directionAtPixel(mx, my);
         let worst = 0;
-        for (let i = 0; i < 12; i++) {
-          moving += 15;
-          const mid = (still + moving) / 2;
-          const anchor = viewer.directionAtPixel(mid, y);
-          ptr('pointermove', 2, moving);
-          for (let f = 0; f < 3; f++) {
-            raf.step(raf.now + 8);
-            worst = Math.max(worst, angleBetween(viewer.directionAtPixel(mid, y), anchor));
-          }
+        for (let i = 0; i < steps; i++) {
+          // Finger 1 moves out by more than finger 2, and each takes its turn.
+          const [x1, y1] = f.at(1);
+          f.move(1, x1 - spread * 1.6 + travel[0], y1 + travel[1] - spread * 0.3);
+          raf.step(raf.now + 8);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(...f.mid()), anchor));
+          const [x2, y2] = f.at(2);
+          f.move(2, x2 + spread * 0.4 + travel[0], y2 + travel[1] + spread * 0.2);
+          raf.step(raf.now + 8);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(...f.mid()), anchor));
         }
-        const mid = (still + moving) / 2;
-        worst = Math.max(
-          worst,
-          settleKeepingAnchor(viewer, mid, y, viewer.directionAtPixel(mid, y), 8),
+        return Math.max(worst, settleKeepingAnchor(viewer, ...f.mid(), anchor, 8));
+      }
+
+      it('keeps the pinch start direction under the moving midpoint', () => {
+        const viewer = zoomViewer({ yaw: 0.2, pitch: 0.4, fov: 75 });
+        const worst = pinchTracking(
+          viewer,
+          [
+            [700, 300],
+            [800, 320],
+          ],
+          20,
+          6,
+          [4, 3],
         );
+        expect(internals(viewer).view.fov).toBeLessThan(40);
+        expect(internals(viewer).view.fov).toBeGreaterThan(15);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('keeps tracking the midpoint once the pinch hits the fov limit', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: -0.2, fov: 40 });
+        const worst = pinchTracking(
+          viewer,
+          [
+            [500, 500],
+            [560, 500],
+          ],
+          30,
+          12,
+          [-3, -4],
+        );
+        expect(internals(viewer).view.fov).toBe(15);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('keeps tracking the midpoint through a pinch near the zenith', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 1.2, fov: 70 });
+        // The midpoint's direction is past straight up when the pinch starts.
+        const worst = pinchTracking(
+          viewer,
+          [
+            [560, 150],
+            [640, 150],
+          ],
+          12,
+          4,
+          [2, 1],
+        );
+        expect(internals(viewer).view.fov).toBeLessThan(50);
+        // Exact, and by pitching on over the top, not by turning around.
+        expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(0.5);
+        expect(internals(viewer).view.pitch).toBeGreaterThan(1.2);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('zooms out on a pinch in, tracking the midpoint', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0.3, fov: 30 });
+        const worst = pinchTracking(
+          viewer,
+          [
+            [300, 200],
+            [700, 300],
+          ],
+          15,
+          -6,
+          [5, 2],
+        );
+        expect(internals(viewer).view.fov).toBeGreaterThan(40);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('hands a pinch to a drag without a jump when a finger lifts', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0.3, fov: 70 });
+        const f = fingers(viewer, [700, 300], [800, 300]);
+        f.move(2, 900, 310);
+        f.move(1, 650, 300);
+        runUntilIdle();
+        const before = { ...internals(viewer).view };
+        f.lift(1);
+        runUntilIdle();
+        expect(internals(viewer).view).toEqual(before);
+        // The finger left drags by what it moves, not by where the midpoint was.
+        f.move(2, 902, 310);
+        runUntilIdle();
+        const { view } = internals(viewer);
+        expect(view.fov).toBe(before.fov);
+        expect(Math.abs(view.yaw - before.yaw)).toBeGreaterThan(0);
+        expect(Math.abs(view.yaw - before.yaw)).toBeLessThan(0.01);
+        expect(view.pitch).toBeCloseTo(before.pitch, 12);
+        viewer.dispose();
+      });
+
+      it('keeps a Safari trackpad pinch anchored where it began', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: -0.3, fov: 70 });
+        const at = { x: 300, y: 650 };
+        const anchor = viewer.directionAtPixel(at.x, at.y);
+        const gesture = (type: string, scale: number, x: number, y: number) =>
+          canvasListener(viewer, type)({ scale, clientX: x, clientY: y, preventDefault: vi.fn() });
+        gesture('gesturestart', 1, at.x, at.y);
+        let worst = 0;
+        // Changes report a wandering point; the pinch stays where it began.
+        for (let i = 1; i <= 25; i++) {
+          gesture('gesturechange', 1 + i * 0.08, at.x + i * 3, at.y - i * 2);
+          raf.step(raf.now + 16);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(at.x, at.y), anchor));
+        }
+        gesture('gestureend', 3, at.x, at.y);
+        worst = Math.max(worst, settleKeepingAnchor(viewer, at.x, at.y, anchor, 16));
         expect(internals(viewer).view.fov).toBeLessThan(30);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
 
-      it('keeps a Safari trackpad pinch anchored where it happens', () => {
-        const viewer = zoomViewer({ yaw: 0, pitch: -0.3, fov: 70 });
-        const at = { x: 300, y: 650 };
-        const anchor = viewer.directionAtPixel(at.x, at.y);
-        const gesture = (type: string, scale: number) =>
-          canvasListener(
-            viewer,
-            type,
-          )({ scale, clientX: at.x, clientY: at.y, preventDefault: vi.fn() });
-        gesture('gesturestart', 1);
+      it('never pans on the sideways jitter of a decaying scroll-zoom tail', () => {
+        const viewer = zoomViewer({ yaw: 0.3, pitch: 0.2, fov: 75 });
+        const x = 950;
+        const y = 600;
+        const anchor = viewer.directionAtPixel(x, y);
         let worst = 0;
-        for (let scale = 1.1; scale < 3; scale += 0.1) {
-          gesture('gesturechange', scale);
+        // Momentum: deltaY decays well below the steady deltaX of 2 px.
+        for (let i = 0; i < 40; i++) {
+          wheelAt(viewer, x, y, -30 * 0.88 ** i, 2);
           raf.step(raf.now + 16);
-          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(at.x, at.y), anchor));
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
         }
-        gesture('gestureend', 3);
-        worst = Math.max(worst, settleKeepingAnchor(viewer, at.x, at.y, anchor, 16));
+        worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, 16));
         expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('never zooms on the vertical jitter of a sideways swipe', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0, fov: 70 });
+        for (let i = 0; i < 40; i++) {
+          wheelAt(viewer, 600, 400, i % 2 ? 1.5 : -1.5, 30 * 0.88 ** i);
+          raf.step(raf.now + 16);
+          expect(internals(viewer).view.fov).toBe(70);
+        }
+        expect(internals(viewer).view.yaw).toBeGreaterThan(0.1);
         viewer.dispose();
       });
 

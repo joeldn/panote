@@ -10,6 +10,13 @@ export interface ControlHost {
   /** Move where the camera is heading, and let damping ease it there (keys). */
   panTargetByPixels(dx: number, dy: number): void;
   zoomAt(scaleFactor: number, clientX: number, clientY: number): void;
+  /** A pinch starts with its midpoint here. */
+  pinchStart(clientX: number, clientY: number): void;
+  /**
+   * The pinch now: fov at `scaleFactor` times the fov it started at, and the
+   * scene point that was under the start midpoint now under this one.
+   */
+  pinchTo(scaleFactor: number, clientX: number, clientY: number): void;
   flick(vx: number, vy: number): void;
   stopMomentum(): void;
 }
@@ -47,6 +54,9 @@ const PINCH_MAX_DELTA = 50;
 const MAX_WHEEL_LOG_SCALE = 0.3;
 // deltaMode 1 (lines) is converted at a 16 px line height.
 const LINE_PX = 16;
+// Wheel events closer together than this are one gesture (a scroll and its
+// momentum tail), which keeps the axis its first event picked.
+export const WHEEL_GESTURE_GAP_MS = 120;
 
 /** Safari's non-standard GestureEvent, fired for trackpad pinch on macOS. */
 interface SafariGestureEvent extends UIEvent {
@@ -64,18 +74,26 @@ export class Controls {
   private p0: PointerSlot | null = null;
   private p1: PointerSlot | null = null;
   private last = { x: 0, y: 0 };
-  private prevDist = 0;
+  // Finger distance when the pinch started; the zoom is relative to it.
+  private pinchDist0 = 0;
   // Recent drag positions and timestamps (ring buffer) for release velocity.
   private sampleT = new Float64Array(SAMPLES);
   private sampleX = new Float64Array(SAMPLES);
   private sampleY = new Float64Array(SAMPLES);
   private sampleCount = 0;
   private sampleHead = 0;
-  // Set once a gesture goes multi-touch (pinch). Blocks single-finger panning
-  // until ALL fingers lift, so a finger lingering after a pinch can't pan.
+  // Set once a gesture goes multi-touch (pinch), until ALL fingers lift: a
+  // finger left after a pinch drags on, but its release never flings.
   private gestureConsumed = false;
-  // Last cumulative scale of an in-progress Safari pinch, or null.
+  // Starting scale and client point of an in-progress Safari pinch, or null.
   private gestureScale: number | null = null;
+  private gestureX = 0;
+  private gestureY = 0;
+  // The current wheel gesture: the axis it drives (null until an event with
+  // a delta picks it), when its last event came, and whether ctrl was held.
+  private wheelAxis: 'zoom' | 'pan' | null = null;
+  private wheelT = -Infinity;
+  private wheelCtrl = false;
   private readonly opts: ResolvedControls;
   private readonly wheelMode: WheelMode;
   // Whether the user has engaged the viewer (see WheelMode 'engaged').
@@ -194,9 +212,11 @@ export class Controls {
     }
     this.last = { x: e.clientX, y: e.clientY };
     if (this.p0 && this.p1) {
-      // A second finger makes this a multi-touch (pinch) gesture.
+      // A second finger makes this a multi-touch (pinch) gesture, a new one
+      // each time a finger lands.
       this.gestureConsumed = true;
-      this.prevDist = Math.hypot(this.p0.x - this.p1.x, this.p0.y - this.p1.y);
+      this.pinchDist0 = Math.hypot(this.p0.x - this.p1.x, this.p0.y - this.p1.y);
+      this.host.pinchStart((this.p0.x + this.p1.x) / 2, (this.p0.y + this.p1.y) / 2);
     }
     // Grabbing halts any ongoing inertial glide and resets velocity tracking.
     this.host.stopMomentum();
@@ -213,18 +233,13 @@ export class Controls {
 
     const { p0, p1 } = this;
     if (p0 && p1) {
+      // Both fingers' latest positions, against the pinch's start: a zoom
+      // and a pan together, the scene between the fingers following them.
       const dist = Math.hypot(p0.x - p1.x, p0.y - p1.y);
-      if (this.prevDist && dist) {
-        const scale = pinchFactor(this.prevDist, dist);
-        this.host.zoomAt(scale, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+      if (this.pinchDist0 && dist) {
+        const scale = pinchFactor(this.pinchDist0, dist);
+        this.host.pinchTo(scale, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
       }
-      this.prevDist = dist;
-      return;
-    }
-
-    // A finger left over from a pinch must not pan; wait for a fresh gesture.
-    if (this.gestureConsumed) {
-      this.last = { x: e.clientX, y: e.clientY };
       return;
     }
 
@@ -250,8 +265,13 @@ export class Controls {
     }
     if (this.p0?.id === e.pointerId) this.p0 = null;
     else this.p1 = null;
-    this.prevDist = 0;
-    if (this.p0 || this.p1) return;
+    this.pinchDist0 = 0;
+    const left = this.p0 ?? this.p1;
+    if (left) {
+      // The finger left drags on from where it is, with no jump.
+      this.last = { x: left.x, y: left.y };
+      return;
+    }
     // Only fling from a real drag — not from the tail of a pinch.
     if (fling && this.opts.inertia && !this.gestureConsumed) {
       const [vx, vy] = this.releaseVelocity(e.timeStamp);
@@ -272,17 +292,27 @@ export class Controls {
     const unit = e.deltaMode === 1 ? LINE_PX : e.deltaMode === 2 ? this.el.clientHeight || 800 : 1;
     const dy = e.deltaY * unit;
     const dx = e.deltaX * unit;
-    // One axis per event: a scroll-zoom is never exactly vertical and its
-    // momentum tail jitters sideways, so a deltaX riding along a zoom must
-    // not pan (it would slide the point under the cursor), and a mostly
-    // sideways swipe pans without zooming. A pinch (ctrl-wheel) never pans.
-    const zoom = dy !== 0 && (e.ctrlKey || Math.abs(dy) >= Math.abs(dx));
-    if (zoom) {
+    // One axis per gesture: a scroll-zoom is never exactly vertical, and its
+    // momentum tail decays until the sideways jitter outweighs it, so a
+    // deltaX riding along a zoom must not pan (it would slide the point
+    // under the cursor), and a sideways swipe must not zoom. The first event
+    // with a delta picks the larger axis; a pinch (ctrl-wheel) always zooms,
+    // and pressing or releasing ctrl starts a new gesture.
+    const t = e.timeStamp;
+    if (!(t - this.wheelT <= WHEEL_GESTURE_GAP_MS) || e.ctrlKey !== this.wheelCtrl) {
+      this.wheelAxis = null;
+    }
+    this.wheelT = t;
+    this.wheelCtrl = e.ctrlKey;
+    if (this.wheelAxis === null && (dx || dy)) {
+      this.wheelAxis = e.ctrlKey || Math.abs(dy) >= Math.abs(dx) ? 'zoom' : 'pan';
+    }
+    if (this.wheelAxis === 'zoom' && dy) {
       const pinch = e.ctrlKey && e.deltaMode === 0 && Math.abs(e.deltaY) < PINCH_MAX_DELTA;
       const gain = pinch ? this.opts.pinchGain : this.opts.wheelGain;
       const logScale = Math.max(-MAX_WHEEL_LOG_SCALE, Math.min(MAX_WHEEL_LOG_SCALE, dy * gain));
       this.host.zoomAt(Math.exp(logScale), e.clientX, e.clientY);
-    } else if (dx && !e.ctrlKey) {
+    } else if (this.wheelAxis === 'pan' && dx) {
       // A horizontal two-finger swipe pans like a drag in the same direction.
       this.host.panByPixels(-dx, 0);
     }
@@ -296,7 +326,18 @@ export class Controls {
   private onGestureStart = (e: Event) => {
     e.preventDefault();
     if (this.p0 || this.p1) return;
-    this.gestureScale = (e as SafariGestureEvent).scale || 1;
+    const g = e as SafariGestureEvent;
+    this.gestureScale = g.scale || 1;
+    // GestureEvent may come without coordinates; zoom about the centre then.
+    if (Number.isFinite(g.clientX) && Number.isFinite(g.clientY)) {
+      this.gestureX = g.clientX;
+      this.gestureY = g.clientY;
+    } else {
+      const r = this.el.getBoundingClientRect();
+      this.gestureX = r.left + r.width / 2;
+      this.gestureY = r.top + r.height / 2;
+    }
+    this.host.pinchStart(this.gestureX, this.gestureY);
   };
 
   private onGestureChange = (e: Event) => {
@@ -304,14 +345,9 @@ export class Controls {
     if (this.p0 || this.p1) return;
     const g = e as SafariGestureEvent;
     if (this.gestureScale === null || !g.scale) return;
-    const scale = pinchFactor(this.gestureScale, g.scale);
-    this.gestureScale = g.scale;
-    // GestureEvent may come without coordinates; zoom about the centre then.
-    if (Number.isFinite(g.clientX) && Number.isFinite(g.clientY)) {
-      this.host.zoomAt(scale, g.clientX, g.clientY);
-    } else {
-      this.zoomCenter(scale);
-    }
+    // The scale is cumulative, so each change is solved from the start,
+    // about the point where the pinch began.
+    this.host.pinchTo(pinchFactor(this.gestureScale, g.scale), this.gestureX, this.gestureY);
   };
 
   private onGestureEnd = (e: Event) => {

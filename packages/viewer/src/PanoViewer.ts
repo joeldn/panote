@@ -28,6 +28,9 @@ import {
   damp,
   anglePerPixel,
   zoomAnchorView,
+  rayAt,
+  aimRay,
+  type YawPitch,
   compassHeading,
   normalizeAngle,
 } from './camera-math.js';
@@ -171,7 +174,13 @@ export class PanoViewer {
   // Scratch for project(), which may run many times a frame.
   private projectScratch: Vec3 = { x: 0, y: 0, z: 0 };
   // zoomAt's solved view, reused so a wheel or pinch event allocates nothing.
-  private zoomScratch = { yaw: 0, pitch: 0 };
+  private zoomScratch: YawPitch = { yaw: 0, pitch: 0 };
+  // A pointer in NDC, from toNdc().
+  private ndcScratch = { x: 0, y: 0 };
+  // A pinch is solved from where it started, not event by event: the scene
+  // direction under the fingers then, and the fov then.
+  private pinchRay: YawPitch = { yaw: 0, pitch: 0 };
+  private pinchFov = 0;
   private north: number;
   private autoRotateEnabled: boolean;
   private autoRotateSpeed: number;
@@ -246,6 +255,8 @@ export class PanoViewer {
       panByPixels: (dx, dy) => this.panByPixels(dx, dy),
       panTargetByPixels: (dx, dy) => this.panTargetByPixels(dx, dy),
       zoomAt: (scale, x, y) => this.zoomAt(scale, x, y),
+      pinchStart: (x, y) => this.pinchStart(x, y),
+      pinchTo: (scale, x, y) => this.pinchTo(scale, x, y),
       flick: (vx, vy) => this.flick(vx, vy),
       stopMomentum: () => this.stopMomentum(),
     };
@@ -746,12 +757,7 @@ export class PanoViewer {
     // A glide left running would carry the target, and the point under the
     // cursor with it, away from the anchor solved here.
     this.stopMomentum();
-    // The pointer is in client coordinates, so it is mapped through the
-    // canvas's on-screen rect: page scroll moves it without a resize, and a
-    // CSS transform scales it without changing the cached layout size.
-    const rect = this.renderer.canvas.getBoundingClientRect();
-    const nx = ((clientX - rect.left) / (rect.width || 1)) * 2 - 1;
-    const ny = -(((clientY - rect.top) / (rect.height || 1)) * 2 - 1);
+    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
     const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const newReqDeg = this.clampFov(this.target.fov * scaleFactor);
     const vfov1 = this.effectiveVFovDeg(newReqDeg) * DEG2RAD;
@@ -776,6 +782,56 @@ export class PanoViewer {
     this.target.pitch = pitch;
     this.view.fov = newReqDeg;
     this.target.fov = newReqDeg;
+    this.invalidate();
+  }
+
+  /** A pointer in client coordinates as NDC (−1..1, y up), in a reused object. */
+  private toNdc(clientX: number, clientY: number): { x: number; y: number } {
+    // Mapped through the canvas's on-screen rect: page scroll moves it
+    // without a resize, and a CSS transform scales it without changing the
+    // cached layout size.
+    const rect = this.renderer.canvas.getBoundingClientRect();
+    const out = this.ndcScratch;
+    out.x = ((clientX - rect.left) / (rect.width || 1)) * 2 - 1;
+    out.y = -(((clientY - rect.top) / (rect.height || 1)) * 2 - 1);
+    return out;
+  }
+
+  // A pinch starts: remember the scene direction under its midpoint and the
+  // fov on screen, which every later pinchTo() is solved from.
+  private pinchStart(clientX: number, clientY: number): void {
+    this.stopMomentum();
+    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
+    const ty = Math.tan((this.effectiveVFovDeg(this.view.fov) * DEG2RAD) / 2);
+    rayAt(this.pinchRay, this.view.yaw, this.view.pitch, nx * ty * this.aspect, ny * ty);
+    this.pinchFov = this.view.fov;
+  }
+
+  // The pinch now: the fov is the start fov times `scale`, and the camera
+  // puts the start direction under the midpoint, wherever it has moved. Each
+  // step is solved from the start, so nothing builds up between events.
+  private pinchTo(scale: number, clientX: number, clientY: number): void {
+    this.stopMomentum();
+    const fov = this.clampFov(this.pinchFov * scale);
+    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
+    const ty = Math.tan((this.effectiveVFovDeg(fov) * DEG2RAD) / 2);
+    const { yaw, pitch } = aimRay(
+      this.zoomScratch,
+      this.pinchRay.yaw,
+      this.pinchRay.pitch,
+      nx * ty * this.aspect,
+      ny * ty,
+      this.view.yaw,
+      this.view.pitch,
+      this.camera.minPitch,
+      this.camera.maxPitch,
+    );
+    this.view.yaw = unwound(yaw);
+    this.target.yaw = this.view.yaw;
+    this.view.pitch = pitch;
+    this.target.pitch = pitch;
+    this.view.fov = fov;
+    this.target.fov = fov;
     this.invalidate();
   }
 

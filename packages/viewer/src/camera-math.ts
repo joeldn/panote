@@ -20,17 +20,86 @@ export function anglePerPixel(fovRad: number, dimensionPx: number): number {
   return (2 * Math.tan(fovRad / 2)) / dimensionPx;
 }
 
+/** A direction as yaw and pitch, or a camera's yaw and pitch. */
+export interface YawPitch {
+  yaw: number;
+  pitch: number;
+}
+
+/**
+ * The world direction (yaw, pitch) of the ray through the screen point at
+ * camera-space tangents (cx, cy) (x right, y up, at depth 1 ahead), for a
+ * camera at (yaw, pitch). The yaw is the one nearest the camera's.
+ * Written into `out`.
+ */
+export function rayAt(out: YawPitch, yaw: number, pitch: number, cx: number, cy: number): YawPitch {
+  // Turned by pitch about x and then by yaw about y into the world.
+  const len = Math.sqrt(cx * cx + cy * cy + 1);
+  const sp = Math.sin(pitch);
+  const cp = Math.cos(pitch);
+  const wy = (cy * cp + sp) / len;
+  const hz = cy * sp - cp; // camera-space z after the pitch, unscaled
+  out.yaw = yaw + Math.atan2(cx, -hz);
+  out.pitch = Math.asin(wy < -1 ? -1 : wy > 1 ? 1 : wy);
+  return out;
+}
+
+/**
+ * The camera (yaw, pitch) that puts the world direction (rayYaw, rayPitch)
+ * under the screen point at camera-space tangents (cx, cy). Of the cameras
+ * that do (one each side of straight up or down), it takes the one nearest
+ * the reference camera (yawRef, pitchRef), so a ray past the pole stays past
+ * it rather than the camera flipping. The pitch is held to
+ * [minPitch, maxPitch] and the yaw is then the best one for that pitch, so
+ * the clamp eases the point off instead of jumping it. The yaw is the one
+ * nearest yawRef, never wrapped across ±π (damping would swing the long way
+ * round). Written into `out`.
+ */
+export function aimRay(
+  out: YawPitch,
+  rayYaw: number,
+  rayPitch: number,
+  cx: number,
+  cy: number,
+  yawRef: number,
+  pitchRef: number,
+  minPitch: number,
+  maxPitch: number,
+): YawPitch {
+  // (cy, 1) is at angle atan(cy) above ahead with length r; pitched by p it
+  // rises to r·sin(p + atan(cy)), which must match the ray's height.
+  const len = Math.sqrt(cx * cx + cy * cy + 1);
+  const r = Math.sqrt(cy * cy + 1) / len;
+  const s = Math.sin(rayPitch) / r;
+  const rise = Math.asin(s < -1 ? -1 : s > 1 ? 1 : s);
+  const up = Math.atan(cy);
+  const spr = Math.sin(pitchRef);
+  const cpr = Math.cos(pitchRef);
+  let best = -Infinity;
+  for (let i = 0; i < 3; i++) {
+    const angle = i === 0 ? rise : i === 1 ? Math.PI - rise : -Math.PI - rise;
+    const pitch = Math.min(maxPitch, Math.max(minPitch, angle - up));
+    // Then yaw it so the ray's heading matches too.
+    const yaw = rayYaw - Math.atan2(cx, Math.cos(pitch) - cy * Math.sin(pitch));
+    const near = Math.cos(pitch) * cpr * Math.cos(yaw - yawRef) + Math.sin(pitch) * spr;
+    if (near > best) {
+      best = near;
+      out.yaw = yawRef + normalizeAngle(yaw - yawRef);
+      out.pitch = pitch;
+    }
+  }
+  return out;
+}
+
 /**
  * The camera (yaw, pitch) that keeps the scene direction under the screen
  * point (nx, ny) (NDC, −1..1, y up) at that point through a zoom: from
  * (yaw0, pitch0) with half-fov tangents (tx0, ty0) to tangents (tx1, ty1).
- * Exact anywhere on screen and at any pitch, not only on the centre lines.
- * The pitch is held to [minPitch, maxPitch], and the yaw is then the best one
- * for that pitch, so the clamp eases the point off rather than jumping it.
- * Written into `out`; the yaw is the one nearest yaw0, unwrapped.
+ * Exact anywhere on screen and at any pitch; see {@link aimRay} for the
+ * pole and the pitch limits. Written into `out`.
  */
 export function zoomAnchorView(
-  out: { yaw: number; pitch: number },
+  out: YawPitch,
   yaw0: number,
   pitch0: number,
   nx: number,
@@ -41,40 +110,9 @@ export function zoomAnchorView(
   ty1: number,
   minPitch: number,
   maxPitch: number,
-): { yaw: number; pitch: number } {
-  // The point's ray before the zoom, camera space (x right, y up, −z ahead),
-  // turned by pitch0 about x and then by yaw0 about y into the world.
-  const cx = nx * tx0;
-  const cy = ny * ty0;
-  const len0 = Math.sqrt(cx * cx + cy * cy + 1);
-  const sp0 = Math.sin(pitch0);
-  const cp0 = Math.cos(pitch0);
-  const wy = (cy * cp0 + sp0) / len0;
-  const hz = cy * sp0 - cp0; // camera-space z after the pitch, unscaled
-  const heading = yaw0 + Math.atan2(cx, -hz); // the ray's world yaw
-
-  // The point's ray after the zoom. Pitch it so its height matches the
-  // world ray's: (cy1, 1) at angle atan(cy1) above ahead, of length r,
-  // pitched by p rises to r·sin(p + atan(cy1)). Of the two angles with that
-  // sine, take the one on the same side of straight up (or down) as the ray
-  // was, so a ray past the pole stays past it instead of the pitch jumping.
-  const cx1 = nx * tx1;
-  const cy1 = ny * ty1;
-  const len1 = Math.sqrt(cx1 * cx1 + cy1 * cy1 + 1);
-  const r = Math.sqrt(cy1 * cy1 + 1) / len1;
-  const s = wy / r;
-  const rise = Math.asin(s < -1 ? -1 : s > 1 ? 1 : s);
-  const was = pitch0 + Math.atan(cy);
-  const angle = was > Math.PI / 2 ? Math.PI - rise : was < -Math.PI / 2 ? -Math.PI - rise : rise;
-  const pitch = Math.min(maxPitch, Math.max(minPitch, angle - Math.atan(cy1)));
-  // Then yaw it so the ray's heading matches too.
-  const hz1 = cy1 * Math.sin(pitch) - Math.cos(pitch);
-  // yaw0 plus the difference of two turns to the same side (both rays have
-  // the sign of nx), so within π of yaw0: the nearest yaw, never wrapped
-  // across ±π (damping would swing the long way round).
-  out.yaw = heading - Math.atan2(cx1, -hz1);
-  out.pitch = pitch;
-  return out;
+): YawPitch {
+  rayAt(out, yaw0, pitch0, nx * tx0, ny * ty0);
+  return aimRay(out, out.yaw, out.pitch, nx * tx1, ny * ty1, yaw0, pitch0, minPitch, maxPitch);
 }
 
 /** Move `current` a fraction `factor` (0..1) toward `target`. */
