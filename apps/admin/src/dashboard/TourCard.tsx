@@ -3,14 +3,14 @@ import { Chip, VISIBILITY_META } from '@internal/ui';
 import { useState } from 'react';
 import { Link } from 'react-router';
 
-import { fallbackHue } from './cover.js';
+import { coverStyle, fallbackHue, type Cover } from './cover.js';
 import { writeCurrentTour } from './current-tour.js';
 import { formatCount, plural, relativeTime } from './format.js';
 import { SHARED_PANOS_NOTE } from './use-dashboard.js';
 
 export interface TourCardProps {
   tour: TourSummary;
-  coverSrc: string | null;
+  cover: Cover | null;
   /** Absent while loading, null when stats are unavailable. */
   views: number | null | undefined;
   current: boolean;
@@ -58,17 +58,18 @@ function VisibilityChip({
   );
 }
 
-function Cover({ tour, src }: { tour: TourSummary; src: string | null }) {
+function CoverImage({ tour, cover }: { tour: TourSummary; cover: Cover | null }) {
   const [failed, setFailed] = useState<string | null>(null);
-  if (src && src !== failed) {
+  if (cover && cover.src !== failed) {
     return (
       <img
         className="dash-card__img"
-        src={src}
+        src={cover.src}
+        style={coverStyle(cover)}
         alt=""
         loading="lazy"
         decoding="async"
-        onError={() => setFailed(src)}
+        onError={() => setFailed(cover.src)}
       />
     );
   }
@@ -88,7 +89,7 @@ function Cover({ tour, src }: { tour: TourSummary; src: string | null }) {
 
 export function TourCard({
   tour,
-  coverSrc,
+  cover,
   views,
   current,
   now,
@@ -118,7 +119,7 @@ export function TourCard({
   return (
     <article className="dash-card">
       <div className="dash-card__cover">
-        <Cover tour={tour} src={coverSrc} />
+        <CoverImage tour={tour} cover={cover} />
         <div className="dash-card__scrim" />
         <VisibilityChip tour={tour} pending={visPending} onToggle={toggle} />
         {current && (

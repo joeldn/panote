@@ -102,6 +102,21 @@ describe('Unused panos', () => {
     expect(url.searchParams.get('include')).toBe('references');
   });
 
+  it('flips a face-tile thumbnail back the right way round, and leaves a preview alone', async () => {
+    const face = { version: 't1-abc', format: 'jpg', tileSize: 512 } as const;
+    const { fetch } = server(
+      listing([pano(), pano({ panoId: 'p-face', title: 'Crypt', manifest: face })]),
+    );
+    renderAdmin('/app/panos/unused', { fetch, strict: true });
+    await screen.findByText('Crypt');
+    const img = (title: string) => row(title).querySelector('img');
+    expect(img('Crypt')?.getAttribute('src')).toBe(
+      'https://cdn.panote.dev/tiles/p-face/t1-abc/0/nz/0-0.jpg',
+    );
+    expect(img('Crypt')?.style.transform).toBe('scaleX(-1)');
+    expect(img('Old nave')?.style.transform).toBe('');
+  });
+
   it('shows an empty state when every pano is in a tour', async () => {
     const { fetch } = server(listing([pano({ referenced: true })]));
     renderAdmin('/app/panos/unused', { fetch });
