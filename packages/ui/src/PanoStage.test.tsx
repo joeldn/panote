@@ -1,7 +1,9 @@
 import {
   WebGLUnavailableError,
+  type LoadOptions,
   type PanoViewer,
   type PreviewSource,
+  type View,
   type ViewerOptions,
 } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -17,8 +19,9 @@ type Handler = (payload: unknown) => void;
 
 class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
-  load = vi.fn(async (_pano: string, _opts?: unknown) => true);
-  transitionTo = vi.fn(async (_pano: string, _view?: unknown) => {});
+  load = vi.fn(async (_pano: string, _opts?: LoadOptions) => true);
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (_pano: string, _view?: Partial<View>) => true);
   showPreview = vi.fn((_pano: string, _source: PreviewSource, _opts?: unknown) => {});
   cancelLoad = vi.fn(() => {
     this.calls.push('cancel');
@@ -34,7 +37,8 @@ class FakeViewer {
     readonly container: HTMLElement,
     readonly options: ViewerOptions,
   ) {
-    this.load.mockImplementation(async (pano) => {
+    this.load.mockImplementation(async (pano, opts) => {
+      if (opts?.transition) return this.crossfade(pano, opts.view);
       this.calls.push(`load:${pano}`);
       return true;
     });
@@ -223,8 +227,9 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.transitionTo).toHaveBeenCalledWith('crypt', { yaw: 3 });
-    expect(v.load).toHaveBeenCalledTimes(2);
+    expect(v.load).toHaveBeenLastCalledWith('crypt', { view: { yaw: 3 }, transition: true });
+    expect(v.crossfade).toHaveBeenCalledWith('crypt', { yaw: 3 });
+    expect(v.load).toHaveBeenCalledTimes(3);
     expect(f.createViewer).toHaveBeenCalledTimes(1);
   });
 
@@ -454,7 +459,7 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.transitionTo).not.toHaveBeenCalled();
+    expect(v.crossfade).not.toHaveBeenCalled();
     expect(v.load).toHaveBeenCalledTimes(2);
     expect(v.setView).not.toHaveBeenCalled();
   });
@@ -1042,7 +1047,7 @@ describe('PanoStage', () => {
       const v = f.last();
       act(() => v.emit('scene-change', 'hall'));
       const err = new Error('manifest 500');
-      v.transitionTo.mockRejectedValueOnce(err);
+      v.crossfade.mockRejectedValueOnce(err);
       await act(async () => rerender(stage('nave')));
       expect(onLoadError).toHaveBeenCalledWith(err, 'nave');
       await act(async () => rerender(stage('hall', over.reloadKey)));
@@ -1051,17 +1056,17 @@ describe('PanoStage', () => {
 
     it('does not reload the pano the viewer still has on screen', async () => {
       const { v, rerender, stage } = await failedHop();
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave']);
       expect(v.calls).toEqual(['load:hall']);
 
       // It is the pano on stage again: the same link can be tried again.
       await act(async () => rerender(stage('nave')));
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
     });
 
     it('reloads it when its reloadKey changed meanwhile', async () => {
       const { v } = await failedHop({ reloadKey: 'v2' });
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
     it("loads it when the viewer's own reload of it after a context restore failed", async () => {
@@ -1083,11 +1088,11 @@ describe('PanoStage', () => {
         v.emit('context-restored');
         v.emit('load-error', { error: new Error('manifest 503'), id: 'hall' });
       });
-      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      v.crossfade.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('nave')));
       await act(async () => rerender(stage('hall')));
       // Nothing of hall is on screen any more: it has to be loaded.
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
     it('loads it again when its own load failed after it landed', async () => {
@@ -1117,7 +1122,7 @@ describe('PanoStage', () => {
         v.emit('context-restored');
       });
       await act(async () => {});
-      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      v.crossfade.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('nave')));
       await act(async () => rerender(stage('hall')));
       expect(v.calls.filter((c) => c === 'show:hall')).toHaveLength(3);
@@ -1144,8 +1149,9 @@ describe('PanoStage', () => {
       v.load.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('crypt')));
       await act(async () => rerender(stage('hall')));
-      expect(v.load.mock.calls.map((c) => c[0])).toEqual(['hall', 'crypt']);
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      const cuts = v.load.mock.calls.filter(([, opts]) => !opts?.transition);
+      expect(cuts.map((c) => c[0])).toEqual(['hall', 'crypt']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
     it('cancels a change still in flight instead of reloading the pano on screen', async () => {
@@ -1165,19 +1171,19 @@ describe('PanoStage', () => {
       const v = f.last();
       act(() => v.emit('scene-change', 'hall'));
       let rejectHop!: (err: unknown) => void;
-      v.transitionTo.mockReturnValueOnce(new Promise((_, reject) => (rejectHop = reject)));
+      v.crossfade.mockReturnValueOnce(new Promise((_, reject) => (rejectHop = reject)));
       rerender(stage('nave'));
       rerender(stage('hall'));
       // Hall never left the screen: the hop is dropped, and hall keeps its tiles
       // and camera rather than crossfading down to its base again.
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave']);
       expect(v.calls).toEqual(['load:hall', 'cancel']);
       // The cancelled hop settling late is not reported.
       await act(async () => rejectHop(new Error('aborted')));
       expect(onLoadError).not.toHaveBeenCalled();
       // Hall is the pano on stage again: the same link can be tried again.
       rerender(stage('nave'));
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
     });
 
     it('reloads the pano on screen, rather than cancel, when its reloadKey changed meanwhile', () => {
@@ -1194,11 +1200,11 @@ describe('PanoStage', () => {
       const { rerender } = render(stage('hall', 1));
       const v = f.last();
       act(() => v.emit('scene-change', 'hall'));
-      v.transitionTo.mockReturnValueOnce(new Promise(() => {}));
+      v.crossfade.mockReturnValueOnce(new Promise(() => {}));
       rerender(stage('nave', 1));
       rerender(stage('hall', 2));
       expect(v.cancelLoad).not.toHaveBeenCalled();
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
   });
 });

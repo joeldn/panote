@@ -159,14 +159,14 @@ describe('PanoViewer with no options and a loadTile source', () => {
     viewer.dispose();
   });
 
-  it('crossfades to a source with transitionTo', async () => {
+  it('crossfades to a source with a transition load', async () => {
     const a = generated('a');
     const b = generated('b');
     const viewer = new PanoViewer(container());
     const sceneChange = vi.fn();
     viewer.on('scene-change', sceneChange);
     await viewer.load(a.source);
-    await viewer.transitionTo(b.source, { yaw: 1 });
+    await expect(viewer.load(b.source, { view: { yaw: 1 }, transition: true })).resolves.toBe(true);
     expect(sceneChange.mock.calls).toEqual([['a'], ['b']]);
     expect(viewer.getView().yaw).toBe(1);
     expect(fetchSpy).not.toHaveBeenCalled();

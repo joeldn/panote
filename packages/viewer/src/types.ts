@@ -31,8 +31,8 @@ export type WheelMode = 'always' | 'engaged' | 'off';
 // say what each option means. Every field at every depth is optional.
 export interface ViewerOptions {
   /**
-   * Turns the ids given to load(), transitionTo() and prefetch() into tile
-   * sources. Needed only by a host that passes ids rather than sources.
+   * Turns the ids given to load() and prefetch() into tile sources. Needed
+   * only by a host that passes ids rather than sources.
    */
   resolveSource?: SourceResolver;
   /** The camera before the first load. Unset axes take the defaults. */
@@ -155,7 +155,7 @@ export interface MemoryOptions {
 }
 
 export interface TransitionOptions {
-  /** transitionTo()'s crossfade, ms. */
+  /** The crossfade of a `load()` with `transition`, ms. */
   durationMs?: number;
   /** Cut instead of crossfading for a visitor who prefers reduced motion. */
   respectReducedMotion?: boolean;
@@ -208,9 +208,16 @@ export type PanoViewerEvents = {
 };
 
 export interface LoadOptions {
-  // Camera for the incoming scene, applied when it swaps in rather than eased
-  // to from the outgoing scene's camera. Unset axes keep their current value.
-  view?: Partial<View>;
+  /**
+   * Camera for the incoming scene, applied when it swaps in rather than eased
+   * to from the outgoing scene's camera. Unset axes keep their current value.
+   */
+  view?: Partial<View> | undefined;
+  /**
+   * Crossfade from a snapshot of the old scene, taken at the swap, rather
+   * than cut. The load's promise settles once the fade is over.
+   */
+  transition?: boolean | undefined;
 }
 
 export interface ShowPreviewOptions {

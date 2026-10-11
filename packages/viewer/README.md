@@ -48,7 +48,7 @@ await viewer.load(
 }
 ```
 
-**Container requirements.** The container must be a positioned element (`relative`, `absolute` or `fixed`) with a size. The viewer adds a `<canvas>` to it, plus a full-size overlay during a `transitionTo` crossfade. It follows the container's size with a `ResizeObserver`, and it never styles the container. `dispose()` removes everything it added.
+**Container requirements.** The container must be a positioned element (`relative`, `absolute` or `fixed`) with a size. The viewer adds a `<canvas>` to it, plus a full-size overlay during a crossfade (`load` with `transition`). It follows the container's size with a `ResizeObserver`, and it never styles the container. `dispose()` removes everything it added.
 
 ## Example
 
@@ -100,7 +100,7 @@ The rules a source follows:
 
 `urlTemplateSource({ id, template, tileSize, maxLevel, faceNames?, version?, meta? })` builds a source for the common static layout. It substitutes `{level}`, `{face}`, `{x}` and `{y}` into the template as given, without URL-encoding them. A cube with `maxLevel: 0` needs only `{face}`. Use `faceNames` to rename faces, e.g. `{ nz: 'front' }`.
 
-**Ids instead of sources.** `load`, `transitionTo` and `prefetch` also accept a string id when you set `resolveSource: (id, signal, hints) => Promise<CubeTileSource>`. The resolver is where a manifest gets fetched and parsed. It must reject with an `AbortError` once `signal` aborts. `hints.priority` is `'low'` for a prefetch.
+**Ids instead of sources.** `load` and `prefetch` also accept a string id when you set `resolveSource: (id, signal, hints) => Promise<CubeTileSource>`. The resolver is where a manifest gets fetched and parsed. It must reject with an `AbortError` once `signal` aborts. `hints.priority` is `'low'` for a prefetch.
 
 ## Options
 
@@ -145,7 +145,7 @@ The rules a source follows:
 | `network.retry.baseDelayMs` | `1000` | Wait before the first retry; it doubles each time. |
 | `memory.textureBudgetMB` | `"auto"` | VRAM for resident tiles. `"auto"` is 128 MB at DPR 1, scaled with the rendered pixel ratio up to 256 MB at DPR 2, and 128 MB on a phone-class device (a touch-first small screen, or 4 GB of memory or less). A number is used as given. |
 | `memory.minResidentTiles` | `24` | Fewest tiles kept resident, whatever the budget. |
-| `transition.durationMs` | `400` | `transitionTo()` crossfade, ms. |
+| `transition.durationMs` | `400` | Crossfade of a `load()` with `transition`, ms. |
 | `transition.respectReducedMotion` | `true` | Cut instead of crossfading when the visitor prefers reduced motion. |
 | `autoRotate.enabled` | `false` | Pan slowly when idle; `setAutoRotate()` toggles it. |
 | `autoRotate.speed` | `0.036` | Radians of yaw per second. |
@@ -155,8 +155,7 @@ The rules a source follows:
 
 | Method | What it does |
 |---|---|
-| `load(source \| id, { view? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
-| `transitionTo(source \| id, view?)` | Like `load`, but crossfades from a snapshot of the old scene, taken at the swap: the old scene stays live until the new one is ready. |
+| `load(source \| id, { view?, transition? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. With `transition: true` it crossfades from a snapshot of the old scene, taken at the swap (the old scene stays live until the new one is ready), and settles once the fade is over. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
 | `cancelLoad()` | Cancels the load or transition in flight: its `load()` resolves `false` and the scene on screen stays as it is. |
 | `showPreview(id, preview, { replacesVersion?, view? })` | Shows an equirect preview of `id` now and cancels any load in flight. Call `load(id)` afterwards to get the tiles. `view` is cut to as the preview goes up. |
 | `prefetch(source \| id, { signal? })` | Warms the HTTP cache with the six base tiles of a scene the visitor may open next. Best effort: it never rejects. |

@@ -100,7 +100,7 @@ export interface PanoStageProps {
    * viewer drops it when the context is lost.
    */
   preview?: StagePreview | null;
-  /** Crossfade between panos with `transitionTo` instead of a plain `load`. */
+  /** Crossfade between panos (a `load` with `transition`) instead of cutting. */
   transition?: boolean;
   /**
    * The stage sits in someone else's page (the website's /embed): a plain
@@ -348,11 +348,11 @@ export function PanoStage({
     const crossfade = fade && !samePano && prev?.viewer === viewer && !newPreview;
 
     if (!newPreview) {
+      // The viewer applies the view as the pano swaps in, so neither scene
+      // swings round to it.
       if (crossfade) {
-        viewer.transitionTo(panoId, sceneView).catch(failed);
+        viewer.load(panoId, { view: sceneView, transition: true }).catch(failed);
       } else {
-        // The viewer applies the view as the pano swaps in, so neither scene
-        // swings round to it.
         load(sceneView);
       }
       return;

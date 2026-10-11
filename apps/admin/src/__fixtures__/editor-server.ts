@@ -196,11 +196,16 @@ export class FakeViewer {
   /** What directionAtPixel returns (where a placed point lands). */
   pointAt = { yaw: 0.5, pitch: 0.1 };
   handlers = new Map<string, Set<Handler>>();
-  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
+  load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
+    if (opts?.transition) return this.crossfade(pano);
     this.emit('scene-change', pano);
     return true;
   });
-  transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (pano: string): Promise<boolean> => {
+    this.emit('scene-change', pano);
+    return true;
+  });
   setView = vi.fn((v: Partial<{ yaw: number; pitch: number; fov: number }>) => {
     this.view = { ...this.view, ...v };
   });

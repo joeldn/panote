@@ -190,7 +190,6 @@ describe('landing showcase', () => {
           loads.push(id);
           return true;
         }),
-        transitionTo: vi.fn(async () => {}),
         setView: vi.fn(),
         setNorth: vi.fn(),
         setAutoRotate: vi.fn(),

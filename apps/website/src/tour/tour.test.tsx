@@ -75,12 +75,17 @@ class FakeViewer {
   handlers = new Map<string, Set<Handler>>();
   failLoad = false;
   constructor(readonly options: ViewerOptions) {}
-  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
+  load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
+    if (opts?.transition) return this.crossfade(pano, opts.view);
     if (this.failLoad) throw new Error('manifest 404');
     this.emit('scene-change', pano);
     return true;
   });
-  transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (pano: string, _view?: unknown): Promise<boolean> => {
+    this.emit('scene-change', pano);
+    return true;
+  });
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
   isSettled = () => false;
@@ -243,9 +248,7 @@ describe('/s/:slug', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
     expect(screen.queryByRole('complementary', { name: 'Fountain' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
-    await waitFor(() =>
-      expect(lastViewer().transitionTo).toHaveBeenCalledWith('church', { yaw: 1 }),
-    );
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', { yaw: 1 }));
     expect(screen.queryByRole('complementary')).toBeNull();
     expect(screen.getByText('Church').getAttribute('aria-current')).toBe('location');
   });
@@ -336,13 +339,11 @@ describe('/s/:slug', () => {
     renderAt('/s/old-town');
     await screen.findByText('Old town');
     expect(screen.getByRole('img', { name: 'Compass' })).toBeTruthy();
-    // Picking a scene before the first load lands would `load` it instead of `transitionTo`.
+    // Picking a scene before the first load lands would cut to it instead of crossfading.
     await shown('square');
     fireEvent.click(screen.getByRole('button', { name: 'Map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Church' }));
-    await waitFor(() =>
-      expect(lastViewer().transitionTo).toHaveBeenCalledWith('church', undefined),
-    );
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', undefined));
   });
 
   it('adds noindex for an unlisted tour', async () => {
@@ -1041,7 +1042,7 @@ describe('analytics beacon', () => {
     await shown('square');
     await viewRecorded();
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
-    await waitFor(() => expect(lastViewer().transitionTo.mock.calls.at(-1)?.[0]).toBe('church'));
+    await waitFor(() => expect(lastViewer().crossfade.mock.calls.at(-1)?.[0]).toBe('church'));
     fireEvent.click(await screen.findByRole('button', { name: 'Altar' }));
     window.dispatchEvent(new Event('pagehide'));
     expect(beacons()).toContainEqual({

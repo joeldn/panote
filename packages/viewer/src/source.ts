@@ -63,8 +63,8 @@ export interface ResolveHints {
 }
 
 /**
- * Turns an id given to `load()`, `transitionTo()` or `prefetch()` into a
- * source. Must reject with an AbortError once `signal` aborts.
+ * Turns an id given to `load()` or `prefetch()` into a source. Must reject
+ * with an AbortError once `signal` aborts.
  */
 export type SourceResolver = (
   id: string,

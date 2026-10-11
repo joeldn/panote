@@ -76,7 +76,7 @@ function dropOverlay(el: HTMLCanvasElement): void {
   el.height = 0;
 }
 
-/** A transitionTo's crossfade, shared between it and the swap it waits on. */
+/** A load's crossfade, shared between it and the swap it waits on. */
 interface Crossfade {
   ms: number;
   /** The snapshot of the old scene, put up at the swap. */
@@ -91,7 +91,7 @@ interface Reload {
   source?: CubeTileSource;
   /** Emit ready and scene-change: false for the scene that was already on screen. */
   announce: boolean;
-  /** Crossfade from the old scene at the swap (transitionTo). */
+  /** Crossfade from the old scene at the swap (`LoadOptions.transition`). */
   crossfade?: Crossfade;
 }
 
@@ -364,6 +364,11 @@ export class PanoViewer {
    * current, including a source that fails to resolve or is malformed. `options.view` is applied
    * at the swap, with no easing from the old camera.
    *
+   * With `options.transition`, the new scene crossfades in over a snapshot of
+   * the old one, taken at the swap, for `transition.durationMs`: the old scene
+   * stays live until the new one is ready. The promise then settles once the
+   * fade is over.
+   *
    * WebGL context loss: a load in flight when the context is lost resolves
    * false, and so does one started while it is lost, which waits (its base
    * tiles cannot be uploaded) until the context is restored or the viewer is
@@ -372,7 +377,9 @@ export class PanoViewer {
    * if that reload fails it emits `load-error` instead.
    */
   load(source: CubeTileSource | string, options: LoadOptions = {}): Promise<boolean> {
-    return this.start(source, options.view);
+    return options.transition
+      ? this.crossfadeTo(source, options.view)
+      : this.start(source, options.view);
   }
 
   private async start(
@@ -585,9 +592,9 @@ export class PanoViewer {
 
   private async reload(req: Reload): Promise<boolean> {
     const { source } = req;
-    if (!source) return this.load(req.id, req.view ? { view: req.view } : {});
+    if (!source) return this.start(req.id, req.view);
     const token = this.supersede();
-    // No crossfade: the transitionTo that asked for one has already given up.
+    // No crossfade: the load that asked for one has already given up.
     const request: Reload = { id: req.id, view: req.view, source, announce: req.announce };
     this.request = request;
     try {
@@ -1258,7 +1265,7 @@ export class PanoViewer {
   }
 
   /**
-   * Put a copy of the frame on screen over the canvas, for transitionTo to
+   * Put a copy of the frame on screen over the canvas, for a transition to
    * fade out. Taken at the swap, while the old scene is still drawable, so
    * the old scene stays live and interactive for the whole load and the
    * snapshot is up only for the fade.
@@ -1285,8 +1292,12 @@ export class PanoViewer {
     }
   }
 
-  async transitionTo(source: CubeTileSource | string, view?: Partial<View>): Promise<void> {
-    if (this.disposed) return;
+  /** A load with a crossfade: see `load()`. */
+  private async crossfadeTo(
+    source: CubeTileSource | string,
+    view: Partial<View> | undefined,
+  ): Promise<boolean> {
+    if (this.disposed) return false;
     const { durationMs, respectReducedMotion } = this.opts.transition;
     const reduce =
       respectReducedMotion && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1300,9 +1311,10 @@ export class PanoViewer {
         snap.style.opacity = '0';
         await new Promise((r) => setTimeout(r, fade.ms));
       }
+      return tookEffect;
     } finally {
-      // Always tear the overlay down — even if load() rejected — but don't
-      // clobber an overlay a newer transitionTo may have installed.
+      // Always tear the overlay down — even if the load rejected — but don't
+      // clobber an overlay a newer transition may have installed.
       const snap = fade.snap;
       if (snap) {
         dropOverlay(snap);

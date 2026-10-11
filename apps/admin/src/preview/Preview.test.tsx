@@ -88,7 +88,7 @@ describe('owner preview', () => {
     // The open is reported to the stage, as it is for visitors; Preview gives the
     // stage no onHotspotOpen, so it goes nowhere (nothing is sent, below).
     fireEvent.click(screen.getByRole('button', { name: 'Go to Square' }));
-    await waitFor(() => expect(lastViewer().transitionTo.mock.calls[0]?.[0]).toBe('square'));
+    await waitFor(() => expect(lastViewer().crossfade.mock.calls[0]?.[0]).toBe('square'));
     document.dispatchEvent(new Event('visibilitychange'));
     window.dispatchEvent(new Event('pagehide'));
     // The admin GET is the only request; nothing reached the public API.
@@ -134,7 +134,7 @@ describe('owner preview', () => {
     const failing = viewerFactory();
     create = (...args) => {
       const v = failing.create(...args) as unknown as FakeViewer;
-      v.transitionTo.mockRejectedValue(new Error('manifest 404'));
+      v.crossfade.mockRejectedValue(new Error('manifest 404'));
       v.load.mockRejectedValue(new Error('manifest 404'));
       viewers.push(v);
       return v as never;

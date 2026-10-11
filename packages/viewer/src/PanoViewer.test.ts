@@ -2062,7 +2062,7 @@ describe('PanoViewer', () => {
       await viewer.load('pano-0');
       tick(viewer);
 
-      const a = viewer.transitionTo('pano-a', { yaw: 2 });
+      const a = viewer.load('pano-a', { view: { yaw: 2 }, transition: true });
       await flush();
       const b = viewer.load('pano-b', { view: { yaw: -1 } });
 
@@ -2085,7 +2085,7 @@ describe('PanoViewer', () => {
       await viewer.load('pano-0');
       tick(viewer);
 
-      const a = viewer.transitionTo('pano-a', { yaw: 2 });
+      const a = viewer.load('pano-a', { view: { yaw: 2 }, transition: true });
       for (let i = 0; i < 50 && overlays[0]?.style['opacity'] !== '0'; i++) {
         await flush();
         raf.step();
@@ -3030,7 +3030,7 @@ describe('PanoViewer', () => {
         snapshot: ReturnType<typeof vi.fn>;
       };
 
-      const done = viewer.transitionTo('pano-a');
+      const done = viewer.load('pano-a', { transition: true });
       await flush();
       // Nothing covers the old scene while the new one loads.
       expect(overlays).toHaveLength(0);
@@ -3050,6 +3050,8 @@ describe('PanoViewer', () => {
       // The snapshot goes up at the swap, of the old scene where it was left.
       net.release();
       await finish(done);
+      // Settled once the fade is over, as a load that took effect.
+      await expect(done).resolves.toBe(true);
       expect(fake.snapshot).toHaveBeenCalledTimes(1);
       expect(fake.snapshot.mock.calls[0]![0]).toHaveLength(drawn.length);
       expect(overlays).toHaveLength(1);
@@ -3069,7 +3071,7 @@ describe('PanoViewer', () => {
         if (src.id === 'pano-a') void viewer.load('pano-b');
       });
       let done = false;
-      const t = viewer.transitionTo('pano-a').then(() => (done = true));
+      const t = viewer.load('pano-a', { transition: true }).then(() => (done = true));
       for (let i = 0; i < 10 && !done; i++) await flush();
       // Settled with no frame drawn: nothing waited on a fade.
       expect(done).toBe(true);
@@ -3091,10 +3093,10 @@ describe('PanoViewer', () => {
         loseContext(): void;
         restoreContext(): void;
       };
-      const done = viewer.transitionTo('pano-a');
+      const done = viewer.load('pano-a', { transition: true });
       await flush();
       fake.loseContext();
-      await done;
+      await expect(done).resolves.toBe(false);
       fake.restoreContext();
       net.release();
       for (let i = 0; i < 20; i++) {
@@ -3150,7 +3152,7 @@ describe('PanoViewer', () => {
         const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
         await viewer.load('pano-a');
         runUntilIdle();
-        const t = viewer.transitionTo('pano-b', { yaw: 2 });
+        const t = viewer.load('pano-b', { view: { yaw: 2 }, transition: true });
         await flush();
         viewer.cancelLoad();
         await t;
@@ -3244,26 +3246,28 @@ describe('PanoViewer', () => {
       });
     });
 
-    it('does nothing when transitionTo is called after dispose', async () => {
+    it('does nothing for a transition load after dispose', async () => {
       stubNet();
       const viewer = new PanoViewer(makeContainer(400, 800));
       viewer.dispose();
-      await expect(viewer.transitionTo('pano-a', { yaw: 1 })).resolves.toBeUndefined();
+      await expect(viewer.load('pano-a', { view: { yaw: 1 }, transition: true })).resolves.toBe(
+        false,
+      );
       expect(window.matchMedia).not.toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
       expect(fetch).not.toHaveBeenCalled();
     });
 
-    it('hands over to a newer transitionTo: the older one applies nothing and loses its overlay', async () => {
+    it('hands over to a newer transition: the older one applies nothing and loses its overlay', async () => {
       const net = stubNet({ holdTile: (url) => /\/pano-[ab]\//.test(url) });
       const { container, overlays } = stubOverlayDom();
       const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
       await viewer.load('pano-0');
       tick(viewer);
 
-      const a = viewer.transitionTo('pano-a', { yaw: 2 });
+      const a = viewer.load('pano-a', { view: { yaw: 2 }, transition: true });
       await flush();
-      const b = viewer.transitionTo('pano-b', { yaw: -1 });
-      await a;
+      const b = viewer.load('pano-b', { view: { yaw: -1 }, transition: true });
+      await expect(a).resolves.toBe(false);
       expect(viewer.getView().yaw).toBe(0);
       expect(overlays).toHaveLength(0);
 
@@ -3285,7 +3289,7 @@ describe('PanoViewer', () => {
       tick(viewer);
 
       let done = false;
-      const fading = viewer.transitionTo('pano-a').then(() => (done = true));
+      const fading = viewer.load('pano-a', { transition: true }).then(() => (done = true));
       for (let i = 0; i < 50 && overlays[0]?.style['opacity'] !== '0'; i++) {
         await flush();
         raf.step();
@@ -3308,12 +3312,12 @@ describe('PanoViewer', () => {
       const sceneChange = vi.fn();
       viewer.on('scene-change', sceneChange);
 
-      const a = viewer.transitionTo('pano-a', { yaw: 1 });
+      const a = viewer.load('pano-a', { view: { yaw: 1 }, transition: true });
       await flush();
-      const b = viewer.transitionTo('pano-b', { yaw: 2 });
+      const b = viewer.load('pano-b', { view: { yaw: 2 }, transition: true });
       await flush();
-      const c = viewer.transitionTo('pano-c', { yaw: -1 });
-      await Promise.all([a, b]);
+      const c = viewer.load('pano-c', { view: { yaw: -1 }, transition: true });
+      await expect(Promise.all([a, b])).resolves.toEqual([false, false]);
       expect(viewer.getView().yaw).toBe(0);
       expect(overlays).toHaveLength(0);
 
@@ -3707,7 +3711,7 @@ describe('PanoViewer', () => {
         await viewer.load('pano-0');
         tick(viewer);
         const fake = fakeOf(viewer);
-        await finish(viewer.transitionTo('pano-a'));
+        await finish(viewer.load('pano-a', { transition: true }));
         expect(fake.snapshot).toHaveBeenCalledTimes(1);
         const overlay = overlays[0]!;
         expect(fake.snapshot.mock.results[0]!.value).toBe(overlay);
@@ -3817,7 +3821,7 @@ describe('PanoViewer', () => {
         });
         await viewer.load('pano-0');
         tick(viewer);
-        await finish(viewer.transitionTo('pano-a'));
+        await finish(viewer.load('pano-a', { transition: true }));
         expect(window.matchMedia).not.toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
         viewer.dispose();
       });
