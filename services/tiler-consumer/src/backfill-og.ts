@@ -6,7 +6,7 @@
 //   R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... \
 //   R2_SECRET_ACCESS_KEY=... node services/tiler-consumer/dist/backfill-og.js --dry-run
 import { backfillOg, setVipsConcurrency, type OgStore } from '@internal/tiler';
-import { createR2S3Client } from '@internal/worker-kit/r2-s3';
+import { createR2S3Client, R2PreconditionFailedError } from '@internal/worker-kit/r2-s3';
 import { manifestKey, TILES_ROOT, tilesPrefix, tileVersionPrefix } from '@internal/contracts';
 import { panoIdsFromPrefixes, parseBackfillArgs } from './backfill-args.js';
 
@@ -19,9 +19,19 @@ async function main(): Promise<void> {
       const res = await r2.get(key);
       if (res.status === 404) return null;
       if (!res.ok) throw new Error(`R2 GET ${key} -> ${res.status}`);
-      return new Uint8Array(await res.arrayBuffer());
+      const etag = res.headers.get('etag');
+      if (!etag) throw new Error(`R2 GET ${key} has no ETag`);
+      return { body: new Uint8Array(await res.arrayBuffer()), etag };
     },
-    put: (key, body, contentType, cacheControl) => r2.put(key, body, { contentType, cacheControl }),
+    async put(key, body, contentType, cacheControl, ifMatch) {
+      try {
+        await r2.put(key, body, { contentType, cacheControl, ifMatch });
+        return true;
+      } catch (e) {
+        if (e instanceof R2PreconditionFailedError) return false;
+        throw e;
+      }
+    },
   };
   const panos = args.panos ?? panoIdsFromPrefixes(await r2.listPrefixes(TILES_ROOT));
   console.log(

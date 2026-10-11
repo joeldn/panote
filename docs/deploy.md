@@ -887,7 +887,10 @@ from their existing tiles (no original needed): for each pano under `tiles/` it 
 manifest, skips it if it already has `og: true`, stitches the faces the view needs from the
 smallest level that is sharp enough (level 2 for 512px tiles, 48 tile GETs), writes og.jpg into
 the version dir, then re-reads the manifest and adds `og: true` only if it still names the same
-version (a re-tile that landed meanwhile already has its own og.jpg). It is safe to re-run.
+version (a re-tile that landed meanwhile already has its own og.jpg). That manifest PUT carries
+`If-Match` with the ETag it just read (R2 supports conditional `PutObject`), so a re-tile that
+writes its manifest between the re-read and the PUT makes R2 answer 412 and the pano is reported
+as skipped, never rolled back to its old tiles. It is safe to re-run.
 
 It needs an R2 API token with Object Read & Write on the bucket (Dashboard → R2 → Manage API
 tokens; the tiler's token is a write-only Worker secret, so make a new one, or reuse one you

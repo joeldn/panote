@@ -33,12 +33,18 @@ export interface R2S3Client {
   get(key: string): Promise<Response>;
   /**
    * PUT. Throws on a non-2xx response. A thrown network error is retried
-   * twice with a short backoff; 4xx responses are never retried.
+   * twice with a short backoff; 4xx responses are never retried. With
+   * `ifMatch` (an ETag as `head`/`get` return it), R2 writes only while the
+   * object still has that ETag, and a mismatch throws R2PreconditionFailedError.
    */
   put(
     key: string,
     body: Uint8Array | string,
-    opts: { contentType: string; cacheControl?: string | undefined },
+    opts: {
+      contentType: string;
+      cacheControl?: string | undefined;
+      ifMatch?: string | undefined;
+    },
   ): Promise<void>;
   /** Signed HEAD. Never throws on a non-2xx - the caller checks `ok`. */
   head(key: string): Promise<R2HeadResult>;
@@ -60,6 +66,14 @@ const XML_ENTITIES: Record<string, string> = {
 };
 const unescapeXml = (s: string): string =>
   s.replace(/&(amp|lt|gt|quot|apos);/g, (e) => XML_ENTITIES[e] ?? e);
+
+/** A conditional PUT's If-Match no longer matched: someone else wrote the object first. */
+export class R2PreconditionFailedError extends Error {
+  constructor(key: string) {
+    super(`R2 PUT ${key} -> 412`);
+    this.name = 'R2PreconditionFailedError';
+  }
+}
 
 const DEFAULT_PRESIGN_EXPIRY_SECONDS = 900;
 
@@ -157,9 +171,11 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
           headers: {
             'content-type': opts.contentType,
             ...(opts.cacheControl ? { 'cache-control': opts.cacheControl } : {}),
+            ...(opts.ifMatch ? { 'if-match': opts.ifMatch } : {}),
           },
         }),
       );
+      if (res.status === 412) throw new R2PreconditionFailedError(key);
       if (!res.ok) throw new Error(`R2 PUT ${key} -> ${res.status}`);
     },
   };

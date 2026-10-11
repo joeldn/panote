@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createR2S3Client } from './r2-s3.js';
+import { createR2S3Client, R2PreconditionFailedError } from './r2-s3.js';
 
 const config = {
   accountId: 'acct123',
@@ -86,6 +86,35 @@ describe('put', () => {
     const request = fetchMock.mock.calls[0]?.[0];
     expect(request?.headers.get('content-type')).toBe('application/json');
     expect(request?.headers.get('cache-control')).toBe('public, max-age=30');
+  });
+
+  it('sends no if-match unless asked', async () => {
+    const fetchMock = vi.fn(async (_req: Request) => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await createR2S3Client(config).put('k', '{}', { contentType: 'application/json' });
+    expect(fetchMock.mock.calls[0]?.[0].headers.has('if-match')).toBe(false);
+  });
+
+  it('sends if-match, so R2 writes only over that ETag', async () => {
+    const fetchMock = vi.fn(async (_req: Request) => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await createR2S3Client(config).put('tiles/p/manifest.json', '{}', {
+      contentType: 'application/json',
+      ifMatch: '"abc123"',
+    });
+    expect(fetchMock.mock.calls[0]?.[0].headers.get('if-match')).toBe('"abc123"');
+  });
+
+  it('throws R2PreconditionFailedError on a 412, and does not retry it', async () => {
+    const fetchMock = vi.fn(async () => new Response('PreconditionFailed', { status: 412 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const put = createR2S3Client(config).put('tiles/p/manifest.json', '{}', {
+      contentType: 'application/json',
+      ifMatch: '"old"',
+    });
+    await expect(put).rejects.toBeInstanceOf(R2PreconditionFailedError);
+    await expect(put).rejects.toThrow('R2 PUT tiles/p/manifest.json -> 412');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('throws when the response is not ok, naming the key and status', async () => {

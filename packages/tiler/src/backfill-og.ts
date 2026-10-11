@@ -11,10 +11,21 @@ import {
 } from './og.js';
 import type { RgbImage } from './remap.js';
 
-/** The bucket, as the backfill needs it. `get` resolves null for a missing key. */
+/** The bucket, as the backfill needs it. */
 export interface OgStore {
-  get(key: string): Promise<Uint8Array | null>;
-  put(key: string, body: Uint8Array, contentType: string, cacheControl: string): Promise<void>;
+  /** The object and its ETag (as the store sends it), or null for a missing key. */
+  get(key: string): Promise<{ body: Uint8Array; etag: string } | null>;
+  /**
+   * Writes the object. With `ifMatch`, only while the object still has that ETag:
+   * resolves false when it doesn't (R2 answers 412), true once written.
+   */
+  put(
+    key: string,
+    body: Uint8Array,
+    contentType: string,
+    cacheControl: string,
+    ifMatch?: string,
+  ): Promise<boolean>;
 }
 
 /** Where a pano's manifest and its version dir (ending in `/`) live. */
@@ -86,9 +97,9 @@ async function loadFace(
   }));
   await mapLimit(coords, concurrency, async ({ tx, ty }) => {
     const key = `${dir}${level}/${face}/${tx}-${ty}.${format}`;
-    const bytes = await store.get(key);
-    if (!bytes) throw new Error(`missing tile ${key}`);
-    const { data: tile, info } = await sharp(bytes)
+    const got = await store.get(key);
+    if (!got) throw new Error(`missing tile ${key}`);
+    const { data: tile, info } = await sharp(got.body)
       .removeAlpha()
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -112,7 +123,7 @@ async function backfillOne(
   const { store, keys } = opts;
   const raw = await store.get(keys.manifest(pano));
   if (!raw) return { pano, status: 'skipped', detail: 'no manifest' };
-  const json = decode(raw) as Record<string, unknown>;
+  const json = decode(raw.body) as Record<string, unknown>;
   const manifest = parseManifest(json);
   if (manifest.og) return { pano, status: 'skipped', detail: 'already has og.jpg' };
 
@@ -131,17 +142,26 @@ async function backfillOne(
   await store.put(`${dir}${OG_FILE}`, new Uint8Array(jpeg), 'image/jpeg', IMMUTABLE);
 
   // A re-tile can land while this ran; its manifest names a new version dir that
-  // has its own og.jpg, so only flag the manifest this render was made for.
+  // has its own og.jpg, so only flag the manifest this render was made for. The
+  // PUT is conditional on the re-read's ETag, so a re-tile that lands between the
+  // re-read and the write can't be rolled back to the old tiles.
+  const changed = {
+    pano,
+    status: 'skipped',
+    detail: 'manifest changed while rendering; left as is',
+  } as const;
   const again = await store.get(keys.manifest(pano));
-  const current = again ? (decode(again) as Record<string, unknown>) : null;
-  if (!current || current.version !== json.version || current.og !== undefined)
-    return { pano, status: 'skipped', detail: 'manifest changed while rendering; left as is' };
-  await store.put(
+  const current = again ? (decode(again.body) as Record<string, unknown>) : null;
+  if (!again || !current || current.version !== json.version || current.og !== undefined)
+    return changed;
+  const written = await store.put(
     keys.manifest(pano),
     new TextEncoder().encode(JSON.stringify({ ...current, og: true }, null, 2)),
     'application/json',
     MANIFEST_CACHE,
+    again.etag,
   );
+  if (!written) return changed;
   return { pano, status: 'rendered', detail: `${plan}, ${(jpeg.length / 1024).toFixed(0)} KB` };
 }
 

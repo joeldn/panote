@@ -79,11 +79,19 @@ interface Put {
   body: Uint8Array;
   contentType: string;
   cacheControl: string;
+  ifMatch: string | undefined;
 }
 
 /** An in-memory bucket holding `panos` as the legacy tiler run left them. */
 function fakeStore(panos: string[] = [PANO]) {
   const objects = new Map<string, Uint8Array>();
+  // A fresh ETag per write, as R2 gives: the content hash would repeat across panos.
+  let writes = 0;
+  const etags = new Map<string, string>();
+  const etagOf = (key: string) => {
+    if (!etags.has(key)) etags.set(key, `"e${++writes}"`);
+    return etags.get(key)!;
+  };
   for (const p of panos)
     for (const [rel, body] of legacyObjects) {
       if (rel === 'manifest.json') {
@@ -96,16 +104,34 @@ function fakeStore(panos: string[] = [PANO]) {
   const store: OgStore = {
     get: vi.fn(async (key: string) => {
       gets.push(key);
-      return objects.get(key) ?? null;
+      const body = objects.get(key);
+      return body ? { body, etag: etagOf(key) } : null;
     }),
-    put: vi.fn(async (key: string, body: Uint8Array, contentType: string, cacheControl: string) => {
-      puts.push({ key, body, contentType, cacheControl });
-      objects.set(key, body);
-    }),
+    put: vi.fn(
+      async (
+        key: string,
+        body: Uint8Array,
+        contentType: string,
+        cacheControl: string,
+        ifMatch?: string,
+      ) => {
+        puts.push({ key, body, contentType, cacheControl, ifMatch });
+        // If-Match: written only while the object still has that ETag (R2 412s otherwise).
+        if (ifMatch !== undefined && (!objects.has(key) || etagOf(key) !== ifMatch)) return false;
+        objects.set(key, body);
+        etags.set(key, `"e${++writes}"`);
+        return true;
+      },
+    ),
   };
   const manifestOf = (p: string) =>
     JSON.parse(new TextDecoder().decode(objects.get(MANIFEST_KEY(p)))) as Record<string, unknown>;
-  return { store, objects, puts, gets, manifestOf };
+  /** Stands in for another writer: replaces the object and its ETag. */
+  const overwrite = (key: string, body: Uint8Array) => {
+    objects.set(key, body);
+    etags.set(key, `"e${++writes}"`);
+  };
+  return { store, objects, puts, gets, manifestOf, overwrite, etagOf };
 }
 
 const quiet = () => {};
@@ -215,12 +241,13 @@ describe('backfillOg', () => {
     const get = store.get;
     let manifestReads = 0;
     store.get = async (key) => {
-      const body = await get(key);
-      if (key === MANIFEST_KEY(PANO) && ++manifestReads === 2 && body) {
-        const m = JSON.parse(new TextDecoder().decode(body)) as object;
-        return new TextEncoder().encode(JSON.stringify({ ...m, version: 't1-newer' }));
+      const got = await get(key);
+      if (key === MANIFEST_KEY(PANO) && ++manifestReads === 2 && got) {
+        const m = JSON.parse(new TextDecoder().decode(got.body)) as object;
+        const body = new TextEncoder().encode(JSON.stringify({ ...m, version: 't1-newer' }));
+        return { body, etag: '"newer"' };
       }
-      return body;
+      return got;
     };
     const results = await backfillOg({ store, keys, panos: [PANO], dryRun: false, log: quiet });
     expect(results).toEqual([
@@ -228,6 +255,38 @@ describe('backfillOg', () => {
     ]);
     expect(puts.map((p) => p.key)).not.toContain(MANIFEST_KEY(PANO));
     expect(objects.has(MANIFEST_KEY(PANO))).toBe(true);
+  }, 30_000);
+
+  it('writes the manifest only if it still has the ETag it was re-read with', async () => {
+    const { store, puts, etagOf } = fakeStore();
+    const reread = etagOf(MANIFEST_KEY(PANO));
+    await backfillOg({ store, keys, panos: [PANO], dryRun: false, log: quiet });
+    const manifestPut = puts.find((p) => p.key === MANIFEST_KEY(PANO));
+    expect(manifestPut!.ifMatch).toBe(reread);
+    // og.jpg is new and immutable: no condition on it.
+    expect(puts.find((p) => p.key.endsWith('og.jpg'))!.ifMatch).toBeUndefined();
+  }, 30_000);
+
+  it('skips, leaving the newer manifest, when a re-tile writes it after the re-read', async () => {
+    const { store, puts, overwrite, manifestOf } = fakeStore();
+    const newer = new TextEncoder().encode(
+      JSON.stringify({ ...manifestOf(PANO), version: 't1-newer' }),
+    );
+    const get = store.get;
+    let manifestReads = 0;
+    store.get = async (key) => {
+      const got = await get(key);
+      // The re-tile lands right after the re-read, before the PUT: only If-Match catches it.
+      if (key === MANIFEST_KEY(PANO) && ++manifestReads === 2) overwrite(key, newer);
+      return got;
+    };
+    const results = await backfillOg({ store, keys, panos: [PANO], dryRun: false, log: quiet });
+    expect(results).toEqual([
+      { pano: PANO, status: 'skipped', detail: expect.stringMatching(/changed while rendering/) },
+    ]);
+    expect(puts.filter((p) => p.key === MANIFEST_KEY(PANO))).toHaveLength(1);
+    expect(manifestOf(PANO).version).toBe('t1-newer');
+    expect(manifestOf(PANO).og).toBeUndefined();
   }, 30_000);
 
   it('logs one line per pano', async () => {
