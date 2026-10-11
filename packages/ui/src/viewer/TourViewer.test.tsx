@@ -260,6 +260,21 @@ describe('TourViewer', () => {
     expect(onShare).toHaveBeenCalledOnce();
   });
 
+  it('shows Share busy, with a spinner, while the share sheet is on its way', () => {
+    renderViewer({ onShare: () => {}, sharePending: true });
+    const share = screen.getByRole('button', { name: 'Share' });
+    expect(share.getAttribute('aria-busy')).toBe('true');
+    expect(share.querySelector('.pn-btn__spinner')).toBeTruthy();
+    expect(share.querySelector('.fa-share-nodes')).toBeNull();
+    // Still pressable: disabling it would drop its focus.
+    expect((share as HTMLButtonElement).disabled).toBe(false);
+    cleanup();
+    renderViewer({ onShare: () => {} });
+    const idle = screen.getByRole('button', { name: 'Share' });
+    expect(idle.getAttribute('aria-busy')).toBeNull();
+    expect(idle.querySelector('.fa-share-nodes')).toBeTruthy();
+  });
+
   it('reports intent to share on pointer over, focus and touch of Share', () => {
     const onShareIntent = vi.fn();
     renderViewer({ onShare: () => {}, onShareIntent });
