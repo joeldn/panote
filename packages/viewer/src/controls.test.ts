@@ -1,10 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  Controls,
-  WHEEL_GESTURE_GAP_MS,
-  type ControlHost,
-  type ControlsOptions,
-} from './controls.js';
+import { Controls, WHEEL_GESTURE_GAP_MS, type ControlHost } from './controls.js';
+import { resolveViewerOptions } from './defaults.js';
+import type { InteractionOptions } from './types.js';
 
 /**
  * Controls only needs a small slice of HTMLElement, so these tests run in Node
@@ -65,10 +62,12 @@ function makeHost() {
 let el: FakeElement;
 let host: ReturnType<typeof makeHost>;
 
-function setup(opts?: ControlsOptions) {
+/** Controls with `opts` resolved over the defaults, as the viewer builds it. */
+function setup(opts: InteractionOptions = {}) {
   el = new FakeElement();
   host = makeHost();
-  return new Controls(el as unknown as HTMLElement, host, opts);
+  const { interaction } = resolveViewerOptions({ interaction: opts });
+  return new Controls(el as unknown as HTMLElement, host, interaction);
 }
 
 function pointer(

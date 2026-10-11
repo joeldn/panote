@@ -7,6 +7,7 @@ import {
   type CubeTileSource,
   type SourceResolver,
   type TileAddress,
+  type TileLoadInit,
 } from './source.js';
 
 // The viewer with nothing of panote's: no options, sources built here, and
@@ -114,7 +115,7 @@ function runFrames(rounds = 5): void {
 /** A generated source: every tile is a stub image made on the spot. */
 function generated(id = 'gen', maxLevel = 2) {
   const images: Array<{ close: ReturnType<typeof vi.fn> }> = [];
-  const loadTile = vi.fn((_tile: TileAddress, _signal: AbortSignal) => {
+  const loadTile = vi.fn((_tile: TileAddress, _init: TileLoadInit) => {
     const image = { close: vi.fn() };
     images.push(image);
     return Promise.resolve(image as unknown as ImageBitmap);
@@ -140,10 +141,11 @@ describe('PanoViewer with no options and a loadTile source', () => {
       FACES.map((face) => ({ face, level: 0, x: 0, y: 0 })),
     );
     expect(rendererOf(viewer).uploadTile).toHaveBeenCalledTimes(6);
-    expect(loading).toHaveBeenCalledWith('gen');
+    expect(loading).toHaveBeenCalledWith({ id: 'gen' });
     expect(ready).toHaveBeenCalledTimes(1);
-    expect(ready.mock.calls[0]![0]).toBe(source);
-    expect(sceneChange).toHaveBeenCalledWith('gen');
+    expect(ready.mock.calls[0]![0]).toEqual({ id: source.id, source });
+    expect(ready.mock.calls[0]![0].source).toBe(source);
+    expect(sceneChange).toHaveBeenCalledWith({ id: 'gen', kind: 'tiles' });
 
     // Frames ask for the finer levels through the same loadTile.
     runFrames();
@@ -159,15 +161,38 @@ describe('PanoViewer with no options and a loadTile source', () => {
     viewer.dispose();
   });
 
-  it('crossfades to a source with transitionTo', async () => {
+  it('stops calling a listener removed with off() or the function on() returned', async () => {
+    const a = generated('a');
+    const b = generated('b');
+    const viewer = new PanoViewer(container());
+    const byOff = vi.fn();
+    const byUnsubscribe = vi.fn();
+    const kept = vi.fn();
+    viewer.on('loading', byOff);
+    const unsubscribe = viewer.on('loading', byUnsubscribe);
+    viewer.on('loading', kept);
+    await viewer.load(a.source);
+    viewer.off('loading', byOff);
+    unsubscribe();
+    await viewer.load(b.source);
+    expect(byOff.mock.calls).toEqual([[{ id: 'a' }]]);
+    expect(byUnsubscribe.mock.calls).toEqual([[{ id: 'a' }]]);
+    expect(kept.mock.calls).toEqual([[{ id: 'a' }], [{ id: 'b' }]]);
+    viewer.dispose();
+  });
+
+  it('crossfades to a source with a transition load', async () => {
     const a = generated('a');
     const b = generated('b');
     const viewer = new PanoViewer(container());
     const sceneChange = vi.fn();
     viewer.on('scene-change', sceneChange);
     await viewer.load(a.source);
-    await viewer.transitionTo(b.source, { yaw: 1 });
-    expect(sceneChange.mock.calls).toEqual([['a'], ['b']]);
+    await expect(viewer.load(b.source, { view: { yaw: 1 }, transition: true })).resolves.toBe(true);
+    expect(sceneChange.mock.calls).toEqual([
+      [{ id: 'a', kind: 'tiles' }],
+      [{ id: 'b', kind: 'tiles' }],
+    ]);
     expect(viewer.getView().yaw).toBe(1);
     expect(fetchSpy).not.toHaveBeenCalled();
     viewer.dispose();
@@ -248,7 +273,8 @@ describe('resolveSource', () => {
     expect(id).toBe('hall');
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(hints).toBeUndefined();
-    expect(ready.mock.calls[0]![0]).toBe(source);
+    expect(ready.mock.calls[0]![0]).toEqual({ id: source.id, source });
+    expect(ready.mock.calls[0]![0].source).toBe(source);
     viewer.dispose();
   });
 

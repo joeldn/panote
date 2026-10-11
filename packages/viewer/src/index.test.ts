@@ -3,8 +3,10 @@ import {
   BaseTileLoadError,
   TileHttpError,
   WebGLUnavailableError,
+  faceUVToDir,
   isWebGL2Supported,
 } from './index.js';
+import * as cube from './cube.js';
 import * as webgl from './webgl-support.js';
 import { BaseTileLoadError as InternalBaseTileLoadError } from './tile-layer.js';
 import { TileHttpError as InternalTileHttpError } from './tile-retry.js';
@@ -51,6 +53,29 @@ describe('public entry point', () => {
     expect(notPublished.sourceId).toBe('pano-a');
     expect(notPublished.face).toBe('px');
     expect(notPublished.cause).toBeInstanceOf(InternalTileHttpError);
+  });
+
+  it('exports exactly this runtime surface, so a change to it is deliberate', async () => {
+    expect(Object.keys(await import('./index.js')).sort()).toEqual([
+      'BaseTileLoadError',
+      'FACES',
+      'MAX_SOURCE_LEVEL',
+      'PREVIEW_GUTTER_PX',
+      'PREVIEW_MAX_PATCH_PX',
+      'PanoViewer',
+      'TileHttpError',
+      'VIEWER_DEFAULTS',
+      'WebGLUnavailableError',
+      'faceUVToDir',
+      'isWebGL2Supported',
+      'mergeViewerOptions',
+      'resolveViewerOptions',
+      'urlTemplateSource',
+    ]);
+  });
+
+  it('exports faceUVToDir, the function the README defines the face convention by', () => {
+    expect(faceUVToDir).toBe(cube.faceUVToDir);
   });
 
   it('exports WebGLUnavailableError and isWebGL2Supported, for a host to show a fallback', () => {

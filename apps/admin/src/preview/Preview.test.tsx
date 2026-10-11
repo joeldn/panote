@@ -59,7 +59,9 @@ describe('owner preview', () => {
     expect(within(crumbs).getByText('Old town')).toBeTruthy();
     expect(within(crumbs).getByText('Church')).toBeTruthy();
     expect(server.requests.map((r) => r.path)).toEqual(['/api/admin/tours/t1?include=configs']);
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('church', { view: undefined }),
+    );
     expect(screen.getByText('Preview')).toBeTruthy();
     // Full-screen: the app shell's bar isn't rendered behind it.
     expect(document.querySelector('.app-shell__bar')).toBeNull();
@@ -82,13 +84,15 @@ describe('owner preview', () => {
     await shown();
     // The markers render before the stage hands its viewer to them; a click in between
     // opens the panel but has no viewer to report to. load() runs once it has.
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('church', { view: undefined }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Altar' }));
     expect(await screen.findByRole('complementary')).toBeTruthy();
     // The open is reported to the stage, as it is for visitors; Preview gives the
     // stage no onHotspotOpen, so it goes nowhere (nothing is sent, below).
     fireEvent.click(screen.getByRole('button', { name: 'Go to Square' }));
-    await waitFor(() => expect(lastViewer().transitionTo.mock.calls[0]?.[0]).toBe('square'));
+    await waitFor(() => expect(lastViewer().crossfade.mock.calls[0]?.[0]).toBe('square'));
     document.dispatchEvent(new Event('visibilitychange'));
     window.dispatchEvent(new Event('pagehide'));
     // The admin GET is the only request; nothing reached the public API.
@@ -134,7 +138,7 @@ describe('owner preview', () => {
     const failing = viewerFactory();
     create = (...args) => {
       const v = failing.create(...args) as unknown as FakeViewer;
-      v.transitionTo.mockRejectedValue(new Error('manifest 404'));
+      v.crossfade.mockRejectedValue(new Error('manifest 404'));
       v.load.mockRejectedValue(new Error('manifest 404'));
       viewers.push(v);
       return v as never;

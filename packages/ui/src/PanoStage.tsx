@@ -2,6 +2,7 @@ import {
   mergeViewerOptions,
   PanoViewer,
   WebGLUnavailableError,
+  type PanoViewerApi,
   type PreviewSource,
   type View,
   type ViewerOptions,
@@ -21,7 +22,7 @@ import { panoteViewerPreset } from './panote-viewer.js';
 import { StageEventsContext, type StageEvents } from './stage-events.js';
 import { PanoViewerContext } from './viewer-context.js';
 
-export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewer;
+export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewerApi;
 
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
@@ -100,7 +101,7 @@ export interface PanoStageProps {
    * viewer drops it when the context is lost.
    */
   preview?: StagePreview | null;
-  /** Crossfade between panos with `transitionTo` instead of a plain `load`. */
+  /** Crossfade between panos (a `load` with `transition`) instead of cutting. */
   transition?: boolean;
   /**
    * The stage sits in someone else's page (the website's /embed): a plain
@@ -110,7 +111,7 @@ export interface PanoStageProps {
   embed?: boolean;
   /** Read once when the viewer is created. */
   options?: StageViewerOptions;
-  onViewer?: (viewer: PanoViewer | null) => void;
+  onViewer?: (viewer: PanoViewerApi | null) => void;
   onSceneChange?: (panoId: string) => void;
   /** Chrome inside the stage opened a point (see `useStageEvents`). */
   onHotspotOpen?: (hotspotId: string) => void;
@@ -128,13 +129,13 @@ export interface PanoStageProps {
   style?: CSSProperties;
   /** The viewer canvas's accessible name; it is `role="application"`. */
   'aria-label'?: string;
-  /** Test seam: builds the viewer (defaults to `new PanoViewer`). */
+  /** Builds the viewer (defaults to `new PanoViewer`); a test passes a `PanoViewerApi` double. */
   createViewer?: ViewerFactory;
 }
 
 /** A load the stage started, and what it was given. */
 interface StageLoad {
-  viewer: PanoViewer;
+  viewer: PanoViewerApi;
   panoId: string;
   reloadKey: string | number | undefined;
   previewKey: string | null;
@@ -168,7 +169,7 @@ export function PanoStage({
   createViewer = defaultFactory,
 }: PanoStageProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const [viewer, setViewer] = useState<PanoViewer | null>(null);
+  const [viewer, setViewer] = useState<PanoViewerApi | null>(null);
   // Bumped on each WebGL context restore. The viewer drops a preview when the
   // context is lost and reloads only tiles, so the load effect puts the
   // preview back up.
@@ -233,42 +234,35 @@ export function PanoStage({
     const opts = mergeViewerOptions(
       panoteViewerPreset({ baseUrl, label: l.ariaLabel, embed }),
       l.options ?? {},
-      {
-        autoRotate: { enabled: l.autoRotate },
-        ...(l.north !== undefined && { camera: { north: l.north } }),
-      },
+      { autoRotate: { enabled: l.autoRotate }, camera: { north: l.north }, initialView: l.view },
     );
-    if (l.view) opts.initialView = l.view;
     const v = createOrNull(l.createViewer, host, opts);
     // No WebGL2: say so in place of the viewer rather than crash the tree.
     setUnsupported(v === null);
     if (!v) return;
-    const onScene = (id: string) => {
-      const cur = loaded.current;
-      // No load is current (the stage was emptied): this one is stale.
-      if (!cur) return;
-      landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
-      callbacks.current.onSceneChange?.(id);
-    };
-    const onRestored = () => setRestores((n) => n + 1);
-    // The viewer's own reload after a restore has no promise to reject.
-    const onReloadError = ({ error, id }: { error: unknown; id: string }) => {
-      // That pano is no longer on screen (the restore left the stage blank),
-      // so going back to it must load it.
-      if (landed.current?.panoId === id) landed.current = null;
-      callbacks.current.onLoadError?.(error, id);
-    };
-    v.on('scene-change', onScene);
-    v.on('context-restored', onRestored);
-    v.on('load-error', onReloadError);
+    const unsubscribe = [
+      v.on('scene-change', ({ id }) => {
+        const cur = loaded.current;
+        // No load is current (the stage was emptied): this one is stale.
+        if (!cur) return;
+        landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
+        callbacks.current.onSceneChange?.(id);
+      }),
+      v.on('context-restored', () => setRestores((n) => n + 1)),
+      // The viewer's own reload after a restore has no promise to reject.
+      v.on('load-error', ({ id, error }) => {
+        // That pano is no longer on screen (the restore left the stage blank),
+        // so going back to it must load it.
+        if (landed.current?.panoId === id) landed.current = null;
+        callbacks.current.onLoadError?.(error, id);
+      }),
+    ];
     setViewer(v);
     callbacks.current.onViewer?.(v);
     return () => {
       loaded.current = null;
       landed.current = null;
-      v.off('scene-change', onScene);
-      v.off('context-restored', onRestored);
-      v.off('load-error', onReloadError);
+      for (const off of unsubscribe) off();
       callbacks.current.onViewer?.(null);
       setViewer(null);
       v.dispose();
@@ -339,7 +333,7 @@ export function PanoStage({
       callbacks.current.onLoadError?.(err, panoId);
     };
     const load = (view?: Partial<View>) => {
-      (view ? viewer.load(panoId, { view }) : viewer.load(panoId)).catch(failed);
+      viewer.load(panoId, { view }).catch(failed);
     };
 
     // Only the first load on a viewer and a pano change move the camera; a
@@ -348,11 +342,11 @@ export function PanoStage({
     const crossfade = fade && !samePano && prev?.viewer === viewer && !newPreview;
 
     if (!newPreview) {
+      // The viewer applies the view as the pano swaps in, so neither scene
+      // swings round to it.
       if (crossfade) {
-        viewer.transitionTo(panoId, sceneView).catch(failed);
+        viewer.load(panoId, { view: sceneView, transition: true }).catch(failed);
       } else {
-        // The viewer applies the view as the pano swaps in, so neither scene
-        // swings round to it.
         load(sceneView);
       }
       return;
@@ -374,14 +368,11 @@ export function PanoStage({
       // The scene's view is cut to as the preview goes up, as a load cuts to
       // it as the tiles swap in, so the new scene does not swing round. Not
       // before: an async source may land late, or never.
-      const opts = {
-        ...(newPreview.replacesVersion !== undefined && {
-          replacesVersion: newPreview.replacesVersion,
-        }),
-        ...(sceneView && { view: sceneView }),
-      };
       try {
-        viewer.showPreview(panoId, source, opts);
+        viewer.showPreview(panoId, source, {
+          replacesVersion: newPreview.replacesVersion,
+          view: sceneView,
+        });
       } catch (err) {
         // The viewer closes a source it refuses, but make sure.
         closeSource(source);
@@ -456,7 +447,7 @@ function createOrNull(
   create: ViewerFactory,
   container: HTMLElement,
   options: ViewerOptions,
-): PanoViewer | null {
+): PanoViewerApi | null {
   try {
     return create(container, options);
   } catch (err) {

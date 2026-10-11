@@ -5,6 +5,15 @@ import type { CubeTileSource, TileAddress } from './source.js';
 import { effectiveVFovDeg, viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+/** The resolved defaults a viewer hands every layer it builds. */
+const LAYER_DEFAULTS = {
+  maxConcurrent: VIEWER_DEFAULTS.network.maxConcurrent,
+  minResidentTiles: VIEWER_DEFAULTS.memory.minResidentTiles,
+  lodBias: VIEWER_DEFAULTS.rendering.lodBias,
+  retry: VIEWER_DEFAULTS.network.retry,
+};
 
 // A view of many tiles on a slow link takes many rounds of requests. The
 // tiles nearest the centre go first; behind the first rounds of them, the
@@ -71,6 +80,7 @@ async function loadView(
   };
   const renderer = { uploadTile: vi.fn(() => 1), removeTile: vi.fn() };
   const layer = new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+    ...LAYER_DEFAULTS,
     textureBudgetMB: 256,
     maxConcurrent,
     now: () => clock,
@@ -183,7 +193,7 @@ describe('TileLayer: coarse fallback for a large view', () => {
       id: 'pano',
       tileSize: 512,
       maxLevel: 3,
-      loadTile: (t, signal) =>
+      loadTile: (t, { signal }) =>
         new Promise((resolve, reject) => {
           const bitmap = { width: 512, height: 512, close: vi.fn() } as unknown as ImageBitmap;
           if (t.level === 0) {
@@ -206,6 +216,7 @@ describe('TileLayer: coarse fallback for a large view', () => {
     };
     const renderer = { uploadTile: vi.fn(() => 1), removeTile: vi.fn() };
     const layer = new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 512,
       maxConcurrent: 8,
       now: () => clock,

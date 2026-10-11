@@ -1,7 +1,10 @@
 import {
   WebGLUnavailableError,
-  type PanoViewer,
+  type LoadOptions,
+  type PanoViewerApi,
+  type PanoViewerEvents,
   type PreviewSource,
+  type View,
   type ViewerOptions,
 } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -13,12 +16,10 @@ import { PanoStage, type StagePreview } from './PanoStage.js';
 import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
 
-type Handler = (payload: unknown) => void;
-
-class FakeViewer {
-  handlers = new Map<string, Set<Handler>>();
-  load = vi.fn(async (_pano: string, _opts?: unknown) => true);
-  transitionTo = vi.fn(async (_pano: string, _view?: unknown) => {});
+class FakeViewer implements PanoViewerApi {
+  load = vi.fn(async (_pano: string, _opts?: LoadOptions) => true);
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (_pano: string, _view?: Partial<View>) => true);
   showPreview = vi.fn((_pano: string, _source: PreviewSource, _opts?: unknown) => {});
   cancelLoad = vi.fn(() => {
     this.calls.push('cancel');
@@ -30,11 +31,23 @@ class FakeViewer {
   setAutoRotate = vi.fn();
   setLabel = vi.fn();
   dispose = vi.fn();
+  // Not used by the stage itself.
+  prefetch = vi.fn(async () => {});
+  getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
+  zoomBy = vi.fn();
+  heading = () => 0;
+  focus = vi.fn();
+  isSettled = () => false;
+  project = () => ({ x: 0, y: 0, behind: false });
+  directionAtPixel = () => ({ yaw: 0, pitch: 0 });
+  onRender = () => () => {};
+  requestRender = vi.fn();
   constructor(
     readonly container: HTMLElement,
     readonly options: ViewerOptions,
   ) {
-    this.load.mockImplementation(async (pano) => {
+    this.load.mockImplementation(async (pano, opts) => {
+      if (opts?.transition) return this.crossfade(pano, opts.view);
       this.calls.push(`load:${pano}`);
       return true;
     });
@@ -45,13 +58,20 @@ class FakeViewer {
       this.calls.push('setView');
     });
   }
-  on = (type: string, fn: Handler) => {
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload?: unknown) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+    return () => this.off(type, fn);
+  }
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 
@@ -60,7 +80,7 @@ function factory() {
   const createViewer = vi.fn((el: HTMLElement, opts: ViewerOptions) => {
     const v = new FakeViewer(el, opts);
     made.push(v);
-    return v as unknown as PanoViewer;
+    return v;
   });
   const last = () => {
     const v = made[made.length - 1];
@@ -223,8 +243,9 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.transitionTo).toHaveBeenCalledWith('crypt', { yaw: 3 });
-    expect(v.load).toHaveBeenCalledTimes(2);
+    expect(v.load).toHaveBeenLastCalledWith('crypt', { view: { yaw: 3 }, transition: true });
+    expect(v.crossfade).toHaveBeenCalledWith('crypt', { yaw: 3 });
+    expect(v.load).toHaveBeenCalledTimes(3);
     expect(f.createViewer).toHaveBeenCalledTimes(1);
   });
 
@@ -318,7 +339,7 @@ describe('PanoStage', () => {
     const v = f.last();
     expect(screen.getByText('chrome:ready')).toBeTruthy();
     expect(onViewer).toHaveBeenLastCalledWith(v);
-    v.emit('scene-change', 'hall');
+    v.emit('scene-change', { id: 'hall', kind: 'tiles' });
     fireEvent.click(screen.getByText('chrome:ready'));
     expect(onSceneChange).toHaveBeenCalledWith('hall');
     expect(onHotspotOpen).toHaveBeenCalledExactlyOnceWith('h1');
@@ -341,7 +362,7 @@ describe('PanoStage', () => {
     expect(f.made).toHaveLength(2);
     // The new viewer resolves against the new base.
     await resolvedUrl(f.last().options, 'hall', 'b/hall/manifest.json');
-    expect(f.last().load).toHaveBeenCalledWith('hall');
+    expect(f.last().load).toHaveBeenCalledWith('hall', { view: undefined });
   });
 
   it('builds the new viewer from the props of the render that changed baseUrl', () => {
@@ -370,7 +391,7 @@ describe('PanoStage', () => {
     );
     const live = f.made.filter((v) => v.dispose.mock.calls.length === 0);
     expect(live).toHaveLength(1);
-    expect(live[0]?.load).toHaveBeenCalledWith('hall');
+    expect(live[0]?.load).toHaveBeenCalledWith('hall', { view: undefined });
     // The viewer the remount threw away never fetched anything.
     expect(f.made.flatMap((v) => v.calls)).toEqual(['load:hall']);
   });
@@ -390,7 +411,7 @@ describe('PanoStage', () => {
       <PanoStage baseUrl="b/" panoId="hall" reloadKey="t1-new" createViewer={f.createViewer} />,
     );
     expect(v.load).toHaveBeenCalledTimes(2);
-    expect(v.load).toHaveBeenLastCalledWith('hall');
+    expect(v.load).toHaveBeenLastCalledWith('hall', { view: undefined });
     expect(f.createViewer).toHaveBeenCalledTimes(1);
   });
 
@@ -419,7 +440,7 @@ describe('PanoStage', () => {
       />,
     );
     expect(v.calls).toEqual(['load:hall', 'load:hall']);
-    expect(v.load).toHaveBeenLastCalledWith('hall');
+    expect(v.load).toHaveBeenLastCalledWith('hall', { view: undefined });
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -454,7 +475,7 @@ describe('PanoStage', () => {
         createViewer={f.createViewer}
       />,
     );
-    expect(v.transitionTo).not.toHaveBeenCalled();
+    expect(v.crossfade).not.toHaveBeenCalled();
     expect(v.load).toHaveBeenCalledTimes(2);
     expect(v.setView).not.toHaveBeenCalled();
   });
@@ -906,7 +927,7 @@ describe('PanoStage', () => {
     // Nothing is on stage, so the canvas is hidden (and out of Tab order).
     expect(host.style.visibility).toBe('hidden');
     // The hall load lands after the stage was emptied: stale, so not reported.
-    v.emit('scene-change', 'hall');
+    v.emit('scene-change', { id: 'hall', kind: 'tiles' });
     expect(onSceneChange).not.toHaveBeenCalled();
     rerender(
       <PanoStage
@@ -918,13 +939,13 @@ describe('PanoStage', () => {
     );
     expect(host.style.visibility).toBe('');
     expect(v.load).toHaveBeenCalledTimes(2);
-    v.emit('scene-change', 'hall');
+    v.emit('scene-change', { id: 'hall', kind: 'tiles' });
     expect(onSceneChange).toHaveBeenCalledExactlyOnceWith('hall');
   });
 
   describe('without WebGL2', () => {
     it('says the view cannot be shown, as an alert, instead of crashing', () => {
-      const createViewer = vi.fn((): PanoViewer => {
+      const createViewer = vi.fn((): PanoViewerApi => {
         throw new WebGLUnavailableError();
       });
       const onViewer = vi.fn();
@@ -947,7 +968,7 @@ describe('PanoStage', () => {
     });
 
     it('still throws any other failure to build the viewer', () => {
-      const createViewer = vi.fn((): PanoViewer => {
+      const createViewer = vi.fn((): PanoViewerApi => {
         throw new Error('boom');
       });
       vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -960,7 +981,7 @@ describe('PanoStage', () => {
     });
 
     it('says nothing on an empty stage, which is empty by design', () => {
-      const createViewer = vi.fn((): PanoViewer => {
+      const createViewer = vi.fn((): PanoViewerApi => {
         throw new WebGLUnavailableError();
       });
       const { rerender } = render(
@@ -996,7 +1017,7 @@ describe('PanoStage', () => {
       expect(v.showPreview).toHaveBeenLastCalledWith('hall', sources[1], { replacesVersion: 'v1' });
       // A preview is not a pano change: the camera stays where it is.
       expect(v.setView).not.toHaveBeenCalled();
-      expect(v.load).toHaveBeenLastCalledWith('hall');
+      expect(v.load).toHaveBeenLastCalledWith('hall', { view: undefined });
     });
 
     it('leaves the reload to the viewer without a preview', () => {
@@ -1019,7 +1040,7 @@ describe('PanoStage', () => {
         />,
       );
       const lost = new Error('manifest 503');
-      act(() => f.last().emit('load-error', { error: lost, id: 'hall' }));
+      act(() => f.last().emit('load-error', { id: 'hall', error: lost }));
       expect(onLoadError).toHaveBeenCalledWith(lost, 'hall');
     });
   });
@@ -1040,9 +1061,9 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       const err = new Error('manifest 500');
-      v.transitionTo.mockRejectedValueOnce(err);
+      v.crossfade.mockRejectedValueOnce(err);
       await act(async () => rerender(stage('nave')));
       expect(onLoadError).toHaveBeenCalledWith(err, 'nave');
       await act(async () => rerender(stage('hall', over.reloadKey)));
@@ -1051,17 +1072,17 @@ describe('PanoStage', () => {
 
     it('does not reload the pano the viewer still has on screen', async () => {
       const { v, rerender, stage } = await failedHop();
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave']);
       expect(v.calls).toEqual(['load:hall']);
 
       // It is the pano on stage again: the same link can be tried again.
       await act(async () => rerender(stage('nave')));
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
     });
 
     it('reloads it when its reloadKey changed meanwhile', async () => {
       const { v } = await failedHop({ reloadKey: 'v2' });
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
     it("loads it when the viewer's own reload of it after a context restore failed", async () => {
@@ -1077,17 +1098,17 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       act(() => {
         v.emit('context-lost');
         v.emit('context-restored');
-        v.emit('load-error', { error: new Error('manifest 503'), id: 'hall' });
+        v.emit('load-error', { id: 'hall', error: new Error('manifest 503') });
       });
-      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      v.crossfade.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('nave')));
       await act(async () => rerender(stage('hall')));
       // Nothing of hall is on screen any more: it has to be loaded.
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
     it('loads it again when its own load failed after it landed', async () => {
@@ -1109,7 +1130,7 @@ describe('PanoStage', () => {
       // failed to load: what the stage has for hall is not settled.
       v.showPreview.mockImplementation((pano) => {
         v.calls.push(`show:${pano}`);
-        v.emit('scene-change', pano);
+        v.emit('scene-change', { id: pano, kind: 'tiles' });
       });
       v.load.mockRejectedValueOnce(new Error('manifest 404'));
       act(() => {
@@ -1117,7 +1138,7 @@ describe('PanoStage', () => {
         v.emit('context-restored');
       });
       await act(async () => {});
-      v.transitionTo.mockRejectedValueOnce(new Error('manifest 500'));
+      v.crossfade.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('nave')));
       await act(async () => rerender(stage('hall')));
       expect(v.calls.filter((c) => c === 'show:hall')).toHaveLength(3);
@@ -1136,16 +1157,17 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       rerender(stage('nave'));
       rerender(stage(null));
       // The hop lands on the empty stage: nave, not hall, is what the viewer has now.
-      act(() => v.emit('scene-change', 'nave'));
+      act(() => v.emit('scene-change', { id: 'nave', kind: 'tiles' }));
       v.load.mockRejectedValueOnce(new Error('manifest 500'));
       await act(async () => rerender(stage('crypt')));
       await act(async () => rerender(stage('hall')));
-      expect(v.load.mock.calls.map((c) => c[0])).toEqual(['hall', 'crypt']);
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      const cuts = v.load.mock.calls.filter(([, opts]) => !opts?.transition);
+      expect(cuts.map((c) => c[0])).toEqual(['hall', 'crypt']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
 
     it('cancels a change still in flight instead of reloading the pano on screen', async () => {
@@ -1163,21 +1185,21 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall'));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
       let rejectHop!: (err: unknown) => void;
-      v.transitionTo.mockReturnValueOnce(new Promise((_, reject) => (rejectHop = reject)));
+      v.crossfade.mockReturnValueOnce(new Promise((_, reject) => (rejectHop = reject)));
       rerender(stage('nave'));
       rerender(stage('hall'));
       // Hall never left the screen: the hop is dropped, and hall keeps its tiles
       // and camera rather than crossfading down to its base again.
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave']);
       expect(v.calls).toEqual(['load:hall', 'cancel']);
       // The cancelled hop settling late is not reported.
       await act(async () => rejectHop(new Error('aborted')));
       expect(onLoadError).not.toHaveBeenCalled();
       // Hall is the pano on stage again: the same link can be tried again.
       rerender(stage('nave'));
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'nave']);
     });
 
     it('reloads the pano on screen, rather than cancel, when its reloadKey changed meanwhile', () => {
@@ -1193,12 +1215,12 @@ describe('PanoStage', () => {
       );
       const { rerender } = render(stage('hall', 1));
       const v = f.last();
-      act(() => v.emit('scene-change', 'hall'));
-      v.transitionTo.mockReturnValueOnce(new Promise(() => {}));
+      act(() => v.emit('scene-change', { id: 'hall', kind: 'tiles' }));
+      v.crossfade.mockReturnValueOnce(new Promise(() => {}));
       rerender(stage('nave', 1));
       rerender(stage('hall', 2));
       expect(v.cancelLoad).not.toHaveBeenCalled();
-      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+      expect(v.crossfade.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
     });
   });
 });

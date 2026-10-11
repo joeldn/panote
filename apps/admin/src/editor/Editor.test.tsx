@@ -425,7 +425,9 @@ describe('editor: points, connections, views and settings', () => {
   it('adds a point by clicking the pano and edits title, icon, size and media', async () => {
     const { ui } = openTab();
     await loaded(ui);
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
     lastViewer().pointAt = { yaw: -0.7, pitch: 0.3 };
     fireEvent.click(ui.getByText(/Click the pano to drop the point/).parentElement!);
@@ -469,7 +471,9 @@ describe('editor: points, connections, views and settings', () => {
   it('does not re-place the markers and chevrons on an unrelated editor render', async () => {
     const { ui } = openTab();
     await loaded(ui);
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     await waitFor(() => expect(document.querySelector('[data-hotspot-id="i1"]')).not.toBeNull());
     await ui.findByRole('button', { name: 'Go to Church' });
     const { project } = lastViewer();
@@ -509,7 +513,9 @@ describe('editor: points, connections, views and settings', () => {
   it('aims, nudges and removes connections; sets start view, north and the entry pano', async () => {
     const { ui } = openTab();
     await loaded(ui);
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     const church = within(ui.getByRole('group', { name: 'Connection to Church' }));
     expect(church.getByText('57°')).toBeTruthy();
     fireEvent.click(church.getByRole('button', { name: /Nudge right/ }));

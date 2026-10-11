@@ -1,4 +1,4 @@
-import type { ViewerFactory } from '@internal/ui';
+import type { PanoViewerEvents, ViewerFactory } from '@internal/ui';
 import type { FetchLike } from '@internal/web-kit';
 import { vi } from 'vitest';
 
@@ -179,11 +179,10 @@ export class FakeServer {
   });
 }
 
-type Handler = (payload: string) => void;
 type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 /** jsdom has no WebGL: a PanoViewer stand-in with a scriptable view. */
-export class FakeViewer {
+export class FakeViewer implements ReturnType<ViewerFactory> {
   /** Like the real viewer's canvas: in the host, and the named application landmark. */
   canvas = document.createElement('canvas');
   constructor(host?: HTMLElement, options?: Parameters<ViewerFactory>[1]) {
@@ -195,12 +194,16 @@ export class FakeViewer {
   view = { yaw: 0, pitch: 0, fov: 70 };
   /** What directionAtPixel returns (where a placed point lands). */
   pointAt = { yaw: 0.5, pitch: 0.1 };
-  handlers = new Map<string, Set<Handler>>();
-  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
-    this.emit('scene-change', pano);
+  load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
+    if (opts?.transition) return this.crossfade(pano);
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
     return true;
   });
-  transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (pano: string): Promise<boolean> => {
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
+    return true;
+  });
   setView = vi.fn((v: Partial<{ yaw: number; pitch: number; fov: number }>) => {
     this.view = { ...this.view, ...v };
   });
@@ -216,13 +219,23 @@ export class FakeViewer {
   project = vi.fn((_yaw: number, _pitch: number) => ({ x: 0, y: 0, behind: false }));
   heading = () => 0;
   prefetch = vi.fn(async () => {});
-  on = (type: string, fn: Handler) => {
+  cancelLoad = vi.fn();
+  zoomBy = vi.fn();
+  requestRender = vi.fn();
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+    return () => this.off(type, fn);
+  }
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 
@@ -231,7 +244,7 @@ export function viewerFactory(): { create: ViewerFactory; viewers: FakeViewer[] 
   const create: ViewerFactory = (host, options) => {
     const v = new FakeViewer(host, options);
     viewers.push(v);
-    return v as unknown as ReturnType<ViewerFactory>;
+    return v;
   };
   return { create, viewers };
 }

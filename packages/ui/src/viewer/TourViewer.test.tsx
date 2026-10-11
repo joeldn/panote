@@ -1,10 +1,14 @@
-import type { PanoViewer, ViewerOptions } from '@panote/viewer';
+import type {
+  LoadOptions,
+  PanoViewerApi,
+  PanoViewerEvents,
+  View,
+  ViewerOptions,
+} from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TourViewer, type TourViewerData, type TourViewerProps } from './TourViewer.js';
-
-type Handler = (payload: string) => void;
 
 interface PendingTransition {
   pano: string;
@@ -14,7 +18,7 @@ interface PendingTransition {
   cancel: () => void;
 }
 
-class FakeViewer {
+class FakeViewer implements PanoViewerApi {
   /** Like the real viewer's: in the host, focusable for its keys, and the named application. */
   canvas = document.createElement('canvas');
   constructor(
@@ -28,30 +32,35 @@ class FakeViewer {
   }
   setLabel = vi.fn((label: string) => this.canvas.setAttribute('aria-label', label));
   focus = vi.fn(() => this.canvas.focus({ preventScroll: true }));
-  handlers = new Map<string, Set<Handler>>();
   fail = false;
-  /** When set, transitionTo stays pending until the test settles it from `pending`. */
+  /** When set, a transition load stays pending until the test settles it from `pending`. */
   defer = false;
   pending: PendingTransition[] = [];
   /** Drops the transition in flight, as the real one does: it settles, nothing lands. */
   cancelLoad = vi.fn(() => {
     this.pending.splice(0).forEach((p) => p.cancel());
   });
-  load = vi.fn(async (pano: string) => {
+  load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
+    if (opts?.transition) return this.crossfade(pano, opts.view);
     if (this.fail) throw new Error('manifest 404');
-    this.emit('scene-change', pano);
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
+    return true;
   });
-  transitionTo = vi.fn(async (pano: string, _view?: unknown) => {
-    if (!this.defer) return this.emit('scene-change', pano);
-    return new Promise<void>((resolve, reject) => {
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (pano: string, _view?: Partial<View>): Promise<boolean> => {
+    if (!this.defer) {
+      this.emit('scene-change', { id: pano, kind: 'tiles' });
+      return true;
+    }
+    return new Promise<boolean>((resolve, reject) => {
       this.pending.push({
         pano,
         resolve: () => {
-          this.emit('scene-change', pano);
-          resolve();
+          this.emit('scene-change', { id: pano, kind: 'tiles' });
+          resolve(true);
         },
         reject,
-        cancel: () => resolve(),
+        cancel: () => resolve(false),
       });
     });
   });
@@ -67,13 +76,24 @@ class FakeViewer {
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
-  on = (type: string, fn: Handler) => {
+  showPreview = vi.fn();
+  zoomBy = vi.fn();
+  directionAtPixel = () => ({ yaw: 0, pitch: 0 });
+  requestRender = vi.fn();
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+    return () => this.off(type, fn);
+  }
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 
@@ -109,7 +129,7 @@ function renderViewer(props: Partial<TourViewerProps> = {}) {
   const createViewer = (el: HTMLElement, options: ViewerOptions) => {
     const v = new FakeViewer(el, options);
     viewers.push(v);
-    return v as unknown as PanoViewer;
+    return v;
   };
   render(
     <TourViewer
@@ -168,7 +188,7 @@ describe('TourViewer', () => {
     expect(screen.getByRole('complementary')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
     await waitFor(() => expect(onSceneChange).toHaveBeenCalledWith('church'));
-    expect(viewer().transitionTo.mock.calls[0]?.[0]).toBe('church');
+    expect(viewer().crossfade.mock.calls[0]?.[0]).toBe('church');
     // Moving on closes the open point.
     expect(screen.queryByRole('complementary')).toBeNull();
   });
@@ -334,7 +354,7 @@ describe('TourViewer', () => {
           const v = new FakeViewer();
           v.fail = true;
           viewers.push(v);
-          return v as unknown as PanoViewer;
+          return v;
         }}
       />,
     );
@@ -391,7 +411,7 @@ describe('TourViewer', () => {
         createViewer: (el, options) => {
           const v = new FakeViewer(el, options);
           v.defer = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       const chevron = await screen.findByRole('button', { name: 'Go to To the church' });
@@ -406,7 +426,7 @@ describe('TourViewer', () => {
         createViewer: (el, options) => {
           const v = new FakeViewer(el, options);
           v.defer = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await screen.findByRole('button', { name: 'Go to To the church' });
@@ -425,14 +445,15 @@ describe('TourViewer', () => {
       };
       // Already heading there.
       pick('Church, loading');
-      expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
+      expect(viewer().crossfade).toHaveBeenCalledTimes(1);
 
       pick('Square');
       // The square never left the screen, so the change is cancelled rather
       // than the square loaded again.
       expect(viewer().cancelLoad).toHaveBeenCalledOnce();
-      expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
-      expect(viewer().load).toHaveBeenCalledTimes(1);
+      expect(viewer().crossfade).toHaveBeenCalledTimes(1);
+      // The first load, and the hop.
+      expect(viewer().load).toHaveBeenCalledTimes(2);
       expect(await screen.findByRole('button', { name: 'Go to To the church' })).toBeTruthy();
       expect(crumb()).toBe('Square');
     });
@@ -449,13 +470,14 @@ describe('TourViewer', () => {
       expect(screen.getByRole('button', { name: 'Fountain' })).toBeTruthy();
       expect(crumb()).toBe('Square');
       // The pano on screen is still the one the viewer landed: no reload of it.
-      expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
-      expect(viewer().load).toHaveBeenCalledTimes(1);
+      expect(viewer().crossfade).toHaveBeenCalledTimes(1);
+      // The first load, and the hop.
+      expect(viewer().load).toHaveBeenCalledTimes(2);
       expect(onSceneChange.mock.calls).toEqual([['square']]);
 
       fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
       await waitFor(() => expect(viewer().pending.at(-1)!.pano).toBe('church'));
-      expect(viewer().transitionTo).toHaveBeenCalledTimes(2);
+      expect(viewer().crossfade).toHaveBeenCalledTimes(2);
     });
 
     it('stays put when the reload of a scene that never landed fails too', async () => {
@@ -468,7 +490,7 @@ describe('TourViewer', () => {
           v = new FakeViewer();
           // The start scene never loads, so nothing the stage asked for landed.
           v.fail = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await waitFor(() => expect(onLoadError).toHaveBeenCalledTimes(1));
@@ -490,7 +512,7 @@ describe('TourViewer', () => {
         [second, 'square'],
       ]);
       // No further loads: the failure of the scene on screen is not chased.
-      expect(v.transitionTo).toHaveBeenCalledTimes(2);
+      expect(v.crossfade).toHaveBeenCalledTimes(2);
       expect(crumb()).toBe('Square');
       expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
     });
@@ -515,7 +537,7 @@ describe('TourViewer', () => {
         // DOM: a click now reaches a point layer with no viewer yet.
         fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
         early = true;
-        return new FakeViewer(el, options) as unknown as PanoViewer;
+        return new FakeViewer(el, options);
       },
     });
     expect(early).toBe(true);
@@ -554,8 +576,7 @@ describe('TourViewer', () => {
         },
         titles: { square: 'Square', church: 'Church', tower: 'Tower', bridge: 'Bridge' },
       });
-    const settle = (v: FakeViewer) =>
-      act(() => v.emit('tiles-settled', undefined as unknown as string));
+    const settle = (v: FakeViewer) => act(() => v.emit('tiles-settled'));
 
     it('fetches up to three link targets, only once the scene on screen has settled', async () => {
       const prefetch = vi.fn(async () => {});
@@ -609,7 +630,7 @@ describe('TourViewer', () => {
           const v = new FakeViewer();
           // Its base was all it needed: settled by the time the scene is shown.
           v.settled = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await waitFor(() => expect(prefetch).toHaveBeenCalledTimes(3));
@@ -629,15 +650,15 @@ describe('TourViewer', () => {
         createViewer: () => {
           v = new FakeViewer();
           v.settled = true;
-          v.load.mockImplementation(() => new Promise<void>(() => {}));
-          return v as unknown as PanoViewer;
+          v.load.mockImplementation(() => new Promise<boolean>(() => {}));
+          return v;
         },
       });
       await waitFor(() => expect(v.load).toHaveBeenCalled());
       await act(async () => {});
       expect(prefetch).not.toHaveBeenCalled();
 
-      act(() => v.emit('scene-change', 'square'));
+      act(() => v.emit('scene-change', { id: 'square', kind: 'tiles' }));
       expect(prefetch).toHaveBeenCalledTimes(3);
     });
 
@@ -648,9 +669,9 @@ describe('TourViewer', () => {
         const v = new FakeViewer();
         v.settled = true;
         // The second viewer's load never lands.
-        if (made.length > 0) v.load.mockImplementation(() => new Promise<void>(() => {}));
+        if (made.length > 0) v.load.mockImplementation(() => new Promise<boolean>(() => {}));
         made.push(v);
-        return v as unknown as PanoViewer;
+        return v;
       };
       const props = {
         data: many(),
@@ -674,7 +695,7 @@ describe('TourViewer', () => {
       await act(async () => {});
       expect(prefetch).toHaveBeenCalledTimes(3);
 
-      act(() => made[2]!.emit('scene-change', 'square'));
+      act(() => made[2]!.emit('scene-change', { id: 'square', kind: 'tiles' }));
       expect(prefetch).toHaveBeenLastCalledWith(made[2], 'bridge', expect.anything());
       expect(prefetch).toHaveBeenCalledTimes(6);
     });

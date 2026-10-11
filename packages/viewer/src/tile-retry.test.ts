@@ -1,12 +1,15 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
-  DEFAULT_MAX_ATTEMPTS,
   TileHttpError,
   TileRetryBudget,
   classifyFailure,
   classifyStatus,
   isAbortError,
 } from './tile-retry.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+const RETRY = VIEWER_DEFAULTS.network.retry;
+const DEFAULT_MAX_ATTEMPTS = RETRY.maxAttempts;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -95,7 +98,7 @@ describe('TileRetryBudget', () => {
   it('measures cooldowns on the monotonic clock by default', () => {
     let t = 5_000;
     vi.spyOn(performance, 'now').mockImplementation(() => t);
-    const budget = new TileRetryBudget(undefined, { baseDelayMs: 1_000 });
+    const budget = new TileRetryBudget({ ...RETRY, baseDelayMs: 1_000 });
     budget.recordFailure('k', 'transient');
     expect(budget.waitMs('k')).toBe(1_000);
     t += 1_000;
@@ -104,14 +107,14 @@ describe('TileRetryBudget', () => {
 
   it('starts every tile eligible', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     expect(budget.eligible('2/px/0-0')).toBe(true);
     expect(budget.attemptsFor('2/px/0-0')).toBe(0);
   });
 
   it('makes a transiently-failed tile eligible again once its cooldown elapses', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     budget.recordFailure('k', 'transient');
     expect(budget.eligible('k')).toBe(false);
     clock.advance(999);
@@ -122,7 +125,7 @@ describe('TileRetryBudget', () => {
 
   it('doubles the cooldown on each successive transient failure', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     budget.recordFailure('k', 'transient');
     clock.advance(1_000);
     budget.recordFailure('k', 'transient');
@@ -134,7 +137,7 @@ describe('TileRetryBudget', () => {
 
   it('stops retrying once the attempt cap is spent', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     for (let i = 0; i < DEFAULT_MAX_ATTEMPTS; i++) {
       budget.recordFailure('k', 'transient');
       clock.advance(60_000);
@@ -145,7 +148,7 @@ describe('TileRetryBudget', () => {
 
   it('honours an overridden cap and base delay', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now, { maxAttempts: 1, baseDelayMs: 10 });
+    const budget = new TileRetryBudget({ ...RETRY, maxAttempts: 1, baseDelayMs: 10 }, clock.now);
     budget.recordFailure('k', 'transient');
     clock.advance(10_000);
     expect(budget.eligible('k')).toBe(false);
@@ -153,7 +156,7 @@ describe('TileRetryBudget', () => {
 
   it('never retries a permanent failure, however long it waits', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     budget.recordFailure('k', 'permanent');
     clock.advance(24 * 60 * 60 * 1_000);
     expect(budget.eligible('k')).toBe(false);
@@ -162,7 +165,7 @@ describe('TileRetryBudget', () => {
 
   it('forgets a tile that eventually loaded', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     budget.recordFailure('k', 'transient');
     budget.recordSuccess('k');
     expect(budget.eligible('k')).toBe(true);
@@ -171,7 +174,7 @@ describe('TileRetryBudget', () => {
 
   it('clear() drops both transient and permanent history', () => {
     const clock = fakeClock();
-    const budget = new TileRetryBudget(clock.now);
+    const budget = new TileRetryBudget(RETRY, clock.now);
     budget.recordFailure('a', 'transient');
     budget.recordFailure('b', 'permanent');
     budget.clear();
@@ -181,13 +184,13 @@ describe('TileRetryBudget', () => {
 
   describe('waitMs', () => {
     it('is 0 for a tile that has never failed', () => {
-      const budget = new TileRetryBudget(fakeClock().now);
+      const budget = new TileRetryBudget(RETRY, fakeClock().now);
       expect(budget.waitMs('k')).toBe(0);
     });
 
     it('counts down the cooldown, then reaches 0', () => {
       const clock = fakeClock();
-      const budget = new TileRetryBudget(clock.now, { baseDelayMs: 1_000 });
+      const budget = new TileRetryBudget({ ...RETRY, baseDelayMs: 1_000 }, clock.now);
       budget.recordFailure('k', 'transient');
       expect(budget.waitMs('k')).toBe(1_000);
       clock.advance(400);
@@ -197,14 +200,14 @@ describe('TileRetryBudget', () => {
     });
 
     it('is Infinity for a permanent failure — there is nothing to wait for', () => {
-      const budget = new TileRetryBudget(fakeClock().now);
+      const budget = new TileRetryBudget(RETRY, fakeClock().now);
       budget.recordFailure('k', 'permanent');
       expect(budget.waitMs('k')).toBe(Infinity);
     });
 
     it('is Infinity once the attempt cap is spent', () => {
       const clock = fakeClock();
-      const budget = new TileRetryBudget(clock.now);
+      const budget = new TileRetryBudget(RETRY, clock.now);
       for (let i = 0; i < DEFAULT_MAX_ATTEMPTS; i++) {
         budget.recordFailure('k', 'transient');
         clock.advance(60_000);
@@ -215,7 +218,7 @@ describe('TileRetryBudget', () => {
 
     it('agrees with eligible() at every step', () => {
       const clock = fakeClock();
-      const budget = new TileRetryBudget(clock.now, { baseDelayMs: 1_000 });
+      const budget = new TileRetryBudget({ ...RETRY, baseDelayMs: 1_000 }, clock.now);
       budget.recordFailure('k', 'transient');
       for (const step of [0, 500, 400, 100, 1_000]) {
         clock.advance(step);

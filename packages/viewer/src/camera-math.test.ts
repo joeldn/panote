@@ -12,12 +12,15 @@ import {
   compassHeading,
 } from './camera-math.js';
 import { viewProjection, projectDir, unprojectNDC, effectiveVFovDeg } from './render/projection.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+const { minPitch: MIN_PITCH, maxPitch: MAX_PITCH } = VIEWER_DEFAULTS.camera;
 
 describe('clampPitch', () => {
   it('clamps to just under ±90°', () => {
-    expect(clampPitch(Math.PI)).toBeCloseTo(Math.PI / 2 - 0.001, 3);
-    expect(clampPitch(-Math.PI)).toBeCloseTo(-(Math.PI / 2 - 0.001), 3);
-    expect(clampPitch(0.1)).toBeCloseTo(0.1, 5);
+    expect(clampPitch(Math.PI, MIN_PITCH, MAX_PITCH)).toBeCloseTo(Math.PI / 2 - 0.001, 3);
+    expect(clampPitch(-Math.PI, MIN_PITCH, MAX_PITCH)).toBeCloseTo(-(Math.PI / 2 - 0.001), 3);
+    expect(clampPitch(0.1, MIN_PITCH, MAX_PITCH)).toBeCloseTo(0.1, 5);
   });
 });
 

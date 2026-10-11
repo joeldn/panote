@@ -1,7 +1,6 @@
 import { FACES, faceUVInto, tilesPerEdge, type Face } from './cube.js';
 import type { Vec3 } from './project.js';
 import { LOD_TOLERANCE, selectLevel } from './lod.js';
-import { VIEWER_DEFAULTS } from './defaults.js';
 import { pickEvictions } from './tile-cache.js';
 import { maxTilesForBudget } from './texture-budget.js';
 import { RADIUS, buildTileGeometry } from './tile-geometry.js';
@@ -17,9 +16,8 @@ import {
   type GLRenderer,
   type DrawItem,
   type TileHandle,
-  type TileImage,
 } from './render/gl-renderer.js';
-import type { CubeTileSource } from './source.js';
+import type { CubeTileSource, TileImage } from './source.js';
 import { loadTileImage, releaseImage, type TileNetwork } from './tile-fetch.js';
 import {
   TileRetryBudget,
@@ -33,14 +31,14 @@ import {
 export interface TileLayerOptions {
   /** Resident tile textures, MB of VRAM. */
   textureBudgetMB: number;
-  /** Most requests in flight. Default `network.maxConcurrent`. */
-  maxConcurrent?: number;
-  /** Fewest tiles kept resident. Default `memory.minResidentTiles`. */
-  minResidentTiles?: number;
-  /** Added to the LOD tolerance; positive picks coarser levels. Default `rendering.lodBias`. */
-  lodBias?: number;
-  /** Per-tile retry budget. Default `network.retry`. */
-  retry?: TileRetryOptions;
+  /** Most requests in flight (`network.maxConcurrent`). */
+  maxConcurrent: number;
+  /** Fewest tiles kept resident (`memory.minResidentTiles`). */
+  minResidentTiles: number;
+  /** Added to the LOD tolerance; positive picks coarser levels (`rendering.lodBias`). */
+  lodBias: number;
+  /** Per-tile retry budget (`network.retry`). */
+  retry: TileRetryOptions;
   network?: TileNetwork;
   /** Most decoded tiles uploaded per frame. Default 8; the viewer passes 4 on a phone. */
   maxUploadsPerUpdate?: number;
@@ -384,20 +382,15 @@ export class TileLayer {
     private onInvalidate: () => void,
     opts: TileLayerOptions,
   ) {
-    const d = VIEWER_DEFAULTS;
-    this.maxTiles = maxTilesForBudget(
-      opts.textureBudgetMB,
-      source.tileSize,
-      opts.minResidentTiles ?? d.memory.minResidentTiles,
-    );
-    this.maxConcurrent = opts.maxConcurrent ?? d.network.maxConcurrent;
+    this.maxTiles = maxTilesForBudget(opts.textureBudgetMB, source.tileSize, opts.minResidentTiles);
+    this.maxConcurrent = opts.maxConcurrent;
     this.maxUploads = opts.maxUploadsPerUpdate ?? MAX_UPLOADS_PER_UPDATE;
-    this.lodTolerance = LOD_TOLERANCE + (opts.lodBias ?? d.rendering.lodBias);
+    this.lodTolerance = LOD_TOLERANCE + opts.lodBias;
     this.now = opts.now ?? (() => performance.now());
     this.sleep = opts.sleep ?? defaultSleep;
     this.network = opts.network ?? {};
     // Cooldowns and the wake timer share one clock (faked together in tests).
-    this.retry = new TileRetryBudget(this.now, opts.retry ?? d.network.retry);
+    this.retry = new TileRetryBudget(opts.retry, this.now);
     this.visible = new Int32Array(FACES.length * tilesPerEdge(source.maxLevel) ** 2);
     this.levelPrefix = Array.from({ length: source.maxLevel + 1 }, (_, l) => `${l}/`);
   }

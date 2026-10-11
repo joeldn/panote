@@ -1,4 +1,4 @@
-import { VIEWER_DEFAULTS } from './defaults.js';
+import type { ResolvedViewerOptions } from './types.js';
 
 /**
  * Tile fetch failure policy, free of any DOM or network dependency so it is
@@ -71,15 +71,8 @@ export function classifyFailure(err: unknown): FailureKind {
   return 'transient';
 }
 
-/** Total attempts allowed per tile per panorama load (1 initial + 2 retries). */
-export const DEFAULT_MAX_ATTEMPTS = VIEWER_DEFAULTS.network.retry.maxAttempts;
-/** First per-tile cooldown; doubles per attempt (1s, then 2s). */
-export const DEFAULT_TILE_DELAY_MS = VIEWER_DEFAULTS.network.retry.baseDelayMs;
-
-export interface TileRetryOptions {
-  maxAttempts?: number;
-  baseDelayMs?: number;
-}
+/** `network.retry`: attempts in all per tile, and the first cooldown, which doubles per attempt. */
+export type TileRetryOptions = ResolvedViewerOptions['network']['retry'];
 
 interface AttemptRecord {
   count: number;
@@ -107,11 +100,11 @@ export class TileRetryBudget {
   private readonly baseDelayMs: number;
 
   constructor(
+    options: TileRetryOptions,
     private readonly now: () => number = () => performance.now(),
-    options: TileRetryOptions = {},
   ) {
-    this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    this.baseDelayMs = options.baseDelayMs ?? DEFAULT_TILE_DELAY_MS;
+    this.maxAttempts = options.maxAttempts;
+    this.baseDelayMs = options.baseDelayMs;
   }
 
   /** May this tile be (re)queued right now? */

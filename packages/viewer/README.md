@@ -48,7 +48,7 @@ await viewer.load(
 }
 ```
 
-**Container requirements.** The container must be a positioned element (`relative`, `absolute` or `fixed`) with a size. The viewer adds a `<canvas>` to it, plus a full-size overlay during a `transitionTo` crossfade. It follows the container's size with a `ResizeObserver`, and it never styles the container. `dispose()` removes everything it added.
+**Container requirements.** The container must be a positioned element (`relative`, `absolute` or `fixed`) with a size. The viewer adds a `<canvas>` to it, plus a full-size overlay during a crossfade (`load` with `transition`). It follows the container's size with a `ResizeObserver`, and it never styles the container. `dispose()` removes everything it added.
 
 ## Example
 
@@ -62,14 +62,19 @@ pnpm --filter @panote/viewer example:cube   # regenerate the cube PNGs (checked 
 ## Tile sources
 
 ```ts
-interface CubeTileSource {
-  readonly id: string; // the payload of 'loading', 'scene-change' and 'load-error'
+// One of tileUrl or loadTile.
+type CubeTileSource = UrlTileSource | LoaderTileSource;
+interface UrlTileSource {
+  readonly id: string; // the id of every event about this source
   readonly tileSize: number; // px, every tile at every level
   readonly maxLevel: number; // 0 to MAX_SOURCE_LEVEL (10)
   readonly version?: string; // compared with showPreview's replacesVersion
-  tileUrl?(tile: TileAddress): string; // fetched with ViewerOptions.network
-  loadTile?(tile: TileAddress, signal: AbortSignal): Promise<TileImage>; // full control
   readonly meta?: unknown; // yours, handed back in 'ready'
+  tileUrl(tile: TileAddress): string; // fetched with ViewerOptions.network
+}
+interface LoaderTileSource {
+  // id, tileSize, maxLevel, version and meta as above
+  loadTile(tile: TileAddress, init: { signal; priority }): Promise<TileImage>; // full control
 }
 interface TileAddress {
   face: 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
@@ -83,7 +88,7 @@ The rules a source follows:
 
 - **Pyramid.** Each face is a square split into `2^level × 2^level` tiles of `tileSize` px, for every level from 0 to `maxLevel`. `x` and `y` count from the top left of the face. Level 0 is required. `load()` waits for the six level-0 tiles before the scene goes on screen, so every direction has at least a coarse texture, and a load whose base tiles can't be fetched rejects.
 - **Images are upright.** Row 0 is the top of the tile. Don't decode with `imageOrientation: 'flipY'`. A `TileImage` is an `ImageBitmap`, an `HTMLCanvasElement` or an `OffscreenCanvas`. The viewer closes each `ImageBitmap` once it has been uploaded.
-- **Face convention.** Texel `(u, v)` of a face, with `u` running left to right and `v` top to bottom (both 0 to 1), is shown in the direction `faceUVToDir(face, u, v)`. The camera at yaw 0 and pitch 0 looks at `-z` (the centre of `nz`), with `+x` to its right and `+y` up, and yaw grows to the right.
+- **Face convention.** Texel `(u, v)` of a face, with `u` running left to right and `v` top to bottom (both 0 to 1), is shown in the direction `faceUVToDir(face, u, v)` (exported, so a converter can use the same function). The camera at yaw 0 and pitch 0 looks at `-z` (the centre of `nz`), with `+x` to its right and `+y` up, and yaw grows to the right.
 
   | face | centre | `u` runs toward | `v` runs toward |
   |---|---|---|---|
@@ -95,12 +100,12 @@ The rules a source follows:
   | `nz` | `-z` | `-x` | `-y` |
 
   Under this convention a face image is the **mirror image** of what a camera at the centre sees: the side faces are flipped left to right. The example's `make-cube.ts` shows how to produce faces that read correctly. Cube tools that store each face as a photograph of that direction (krpano, Marzipano and Pannellum cubes, for example) need their faces flipped, which a `loadTile` can do while it draws them. Which flip each tool needs has not been verified.
-- **Abort.** `loadTile` gets a signal and must reject with an `AbortError` once that signal aborts. The viewer aborts tiles that have left the view for a moment, along with superseded loads and everything still in flight when the viewer is disposed.
+- **Abort.** `loadTile` gets a signal (and the request priority) and must reject with an `AbortError` once that signal aborts. The viewer aborts tiles that have left the view for a moment, along with superseded loads and everything still in flight when the viewer is disposed.
 - **Errors.** Reject with a `TileHttpError(status)` to get HTTP retry handling: 408, 425, 429 and 5xx are transient, and any other status (a 404, a 401) is permanent and never retried. Any other rejection (a network error, a failed decode) is transient. Transient failures are retried up to `network.retry.maxAttempts` times with a doubling wait. A `tileUrl` source gets this automatically.
 
 `urlTemplateSource({ id, template, tileSize, maxLevel, faceNames?, version?, meta? })` builds a source for the common static layout. It substitutes `{level}`, `{face}`, `{x}` and `{y}` into the template as given, without URL-encoding them. A cube with `maxLevel: 0` needs only `{face}`. Use `faceNames` to rename faces, e.g. `{ nz: 'front' }`.
 
-**Ids instead of sources.** `load`, `transitionTo` and `prefetch` also accept a string id when you set `resolveSource: (id, signal, hints) => Promise<CubeTileSource>`. The resolver is where a manifest gets fetched and parsed. It must reject with an `AbortError` once `signal` aborts. `hints.priority` is `'low'` for a prefetch.
+**Ids instead of sources.** `load` and `prefetch` also accept a string id when you set `resolveSource: (id, signal, hints) => Promise<CubeTileSource>`. The resolver is where a manifest gets fetched and parsed. It must reject with an `AbortError` once `signal` aborts. `hints.priority` is `'low'` for a prefetch.
 
 ## Options
 
@@ -145,7 +150,7 @@ The rules a source follows:
 | `network.retry.baseDelayMs` | `1000` | Wait before the first retry; it doubles each time. |
 | `memory.textureBudgetMB` | `"auto"` | VRAM for resident tiles. `"auto"` is 128 MB at DPR 1, scaled with the rendered pixel ratio up to 256 MB at DPR 2, and 128 MB on a phone-class device (a touch-first small screen, or 4 GB of memory or less). A number is used as given. |
 | `memory.minResidentTiles` | `24` | Fewest tiles kept resident, whatever the budget. |
-| `transition.durationMs` | `400` | `transitionTo()` crossfade, ms. |
+| `transition.durationMs` | `400` | Crossfade of a `load()` with `transition`, ms. |
 | `transition.respectReducedMotion` | `true` | Cut instead of crossfading when the visitor prefers reduced motion. |
 | `autoRotate.enabled` | `false` | Pan slowly when idle; `setAutoRotate()` toggles it. |
 | `autoRotate.speed` | `0.036` | Radians of yaw per second. |
@@ -153,10 +158,11 @@ The rules a source follows:
 
 ## Methods
 
+`PanoViewerApi` is the type of these methods: type references to a viewer, and test doubles of one, against it rather than the class.
+
 | Method | What it does |
 |---|---|
-| `load(source \| id, { view? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
-| `transitionTo(source \| id, view?)` | Like `load`, but crossfades from a snapshot of the old scene, taken at the swap: the old scene stays live until the new one is ready. |
+| `load(source \| id, { view?, transition? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. With `transition: true` it crossfades from a snapshot of the old scene, taken at the swap (the old scene stays live until the new one is ready), and settles once the fade is over. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
 | `cancelLoad()` | Cancels the load or transition in flight: its `load()` resolves `false` and the scene on screen stays as it is. |
 | `showPreview(id, preview, { replacesVersion?, view? })` | Shows an equirect preview of `id` now and cancels any load in flight. Call `load(id)` afterwards to get the tiles. `view` is cut to as the preview goes up. |
 | `prefetch(source \| id, { signal? })` | Warms the HTTP cache with the six base tiles of a scene the visitor may open next. Best effort: it never rejects. |
@@ -171,20 +177,20 @@ The rules a source follows:
 | `directionAtPixel(x, y)` | The direction under a container pixel. |
 | `onRender(cb)` | Calls `cb(view)` after each frame that moves things on screen (the camera, a resize, a scene change, `setNorth`), and on the next frame after subscribing or `requestRender()`; not on a frame drawn only because tiles landed. Returns an unsubscribe. Use it to place overlays. |
 | `requestRender()` | Asks for a frame, with the `onRender` callbacks run on it. |
-| `on(type, fn)` / `off(type, fn)` | Adds or removes an event listener. |
+| `on(type, fn)` / `off(type, fn)` | Adds or removes an event listener. `on` returns a function that removes it. |
 | `dispose()` | Stops everything and frees the WebGL context. |
 
 ## Events
 
 | Event | Payload | When |
 |---|---|---|
-| `loading` | source id | A load started. |
-| `ready` | the `CubeTileSource` | A load put the scene on screen. Read your own data from `source.meta`. |
-| `scene-change` | source id | A load or `showPreview` changed what is on screen. |
+| `loading` | `{ id }` | A load started. |
+| `ready` | `{ id, source }` | A load put the scene on screen. Read your own data from `source.meta`. |
+| `scene-change` | `{ id, kind }` | A load (`kind: 'tiles'`) or `showPreview` (`kind: 'preview'`) changed what is on screen. |
 | `tiles-settled` | none | Every tile the view needs is in. |
 | `context-lost` | none | The WebGL context was lost. Nothing draws until it is restored. |
 | `context-restored` | none | The context is back. The viewer reloads the scene by itself; a preview is not shown again. |
-| `load-error` | `{ error, id }` | A load the viewer started by itself (the reload after a restore) failed. |
+| `load-error` | `{ id, error }` | A load the viewer started by itself (the reload after a restore) failed. |
 
 A base tile that can't be loaded rejects `load()` with a `BaseTileLoadError` carrying `sourceId`, `face`, `permanent` and `cause`. When `cause` is a `TileHttpError`, its `status` tells you, for example, a 401 apart from a 404.
 

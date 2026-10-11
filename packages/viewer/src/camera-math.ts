@@ -1,13 +1,7 @@
-import { VIEWER_DEFAULTS } from './defaults.js';
-
 const TWO_PI = Math.PI * 2;
 
-/** `pitch` within [min, max]; the defaults stop just short of straight up and down. */
-export function clampPitch(
-  pitch: number,
-  min: number = VIEWER_DEFAULTS.camera.minPitch,
-  max: number = VIEWER_DEFAULTS.camera.maxPitch,
-): number {
+/** `pitch` within [min, max]. */
+export function clampPitch(pitch: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, pitch));
 }
 

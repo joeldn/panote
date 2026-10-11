@@ -1,7 +1,7 @@
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewerApi } from '@panote/viewer';
 import { createContext, useContext } from 'react';
 
-export const PanoViewerContext = createContext<PanoViewer | null>(null);
+export const PanoViewerContext = createContext<PanoViewerApi | null>(null);
 
 /** The stage's viewer, for chrome rendered as PanoStage children; null until mounted. */
-export const usePanoViewer = (): PanoViewer | null => useContext(PanoViewerContext);
+export const usePanoViewer = (): PanoViewerApi | null => useContext(PanoViewerContext);

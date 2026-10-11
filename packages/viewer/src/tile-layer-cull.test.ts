@@ -7,6 +7,15 @@ import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { RADIUS } from './tile-geometry.js';
 import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+/** The resolved defaults a viewer hands every layer it builds. */
+const LAYER_DEFAULTS = {
+  maxConcurrent: VIEWER_DEFAULTS.network.maxConcurrent,
+  minResidentTiles: VIEWER_DEFAULTS.memory.minResidentTiles,
+  lodBias: VIEWER_DEFAULTS.rendering.lodBias,
+  retry: VIEWER_DEFAULTS.network.retry,
+};
 
 // The cull's geometry and frustum calls are wrapped in spies, so these tests
 // can count the work a frame does: how many spheres it tests, whether it
@@ -104,7 +113,7 @@ describe('TileLayer cull', () => {
       { uploadTile: vi.fn(() => 1), removeTile: vi.fn() } as unknown as GLRenderer,
       source(),
       () => {},
-      { textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
+      { ...LAYER_DEFAULTS, textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
     );
   });
 
@@ -183,7 +192,7 @@ describe('TileLayer cull', () => {
         maxLevel: MAX_LEVEL,
       }),
       () => {},
-      { textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
+      { ...LAYER_DEFAULTS, textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
     );
     const table = (l: TileLayer, level: number): unknown =>
       (l as unknown as { table(level: number): unknown }).table(level);

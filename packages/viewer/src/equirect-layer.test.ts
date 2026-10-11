@@ -10,7 +10,6 @@ import {
   type PreviewSource,
 } from './equirect-layer.js';
 import type { TileGeometry } from './tile-geometry.js';
-import { sortDrawList } from './render/gl-renderer.js';
 import { dirFromYawPitch } from './project.js';
 
 const G = PREVIEW_GUTTER_PX;
@@ -245,13 +244,6 @@ describe('EquirectLayer', () => {
       { handle: 1, level: 1.5 },
       { handle: 2, level: 1.5 },
     ]);
-    const order = sortDrawList([
-      { handle: 10, level: 1 },
-      ...layer.drawList(),
-      { handle: 11, level: 0 },
-      { handle: 12, level: 2 },
-    ]).map((d) => d.handle);
-    expect(order).toEqual([11, 10, 1, 2, 12]);
   });
 
   it('closes each bitmap once it is uploaded', () => {

@@ -1,4 +1,4 @@
-import type { ViewerFactory } from '@internal/ui';
+import type { PanoViewerEvents, ViewerFactory } from '@internal/ui';
 import { loadConfig, type Auth, type Auth0Like } from '@internal/web-kit';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Profiler, StrictMode } from 'react';
@@ -70,17 +70,20 @@ const bundle = (over: Record<string, unknown> = {}) => ({
 });
 const live = { v: 1, kind: 'tour', tourId: 'tour-a' };
 
-type Handler = (payload: string) => void;
-class FakeViewer {
-  handlers = new Map<string, Set<Handler>>();
+class FakeViewer implements PanoViewer {
   failLoad = false;
   constructor(readonly options: ViewerOptions) {}
-  load = vi.fn(async (pano: string, _opts?: LoadOptions): Promise<boolean> => {
+  load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
+    if (opts?.transition) return this.crossfade(pano, opts.view);
     if (this.failLoad) throw new Error('manifest 404');
-    this.emit('scene-change', pano);
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
     return true;
   });
-  transitionTo = vi.fn(async (pano: string) => this.emit('scene-change', pano));
+  /** A load with a transition: `load` hands those here, so a test can script hops apart. */
+  crossfade = vi.fn(async (pano: string, _view?: unknown): Promise<boolean> => {
+    this.emit('scene-change', { id: pano, kind: 'tiles' });
+    return true;
+  });
   setView = vi.fn();
   getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
   isSettled = () => false;
@@ -93,13 +96,25 @@ class FakeViewer {
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
-  on = (type: string, fn: Handler) => {
+  cancelLoad = vi.fn();
+  showPreview = vi.fn();
+  zoomBy = vi.fn();
+  directionAtPixel = () => ({ yaw: 0, pitch: 0 });
+  requestRender = vi.fn();
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload: string) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+    return () => this.off(type, fn);
+  }
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 
@@ -111,7 +126,7 @@ const createViewer: ViewerFactory = (_el, options) => {
   const v = new FakeViewer(options);
   v.failLoad = failLoads;
   viewers.push(v);
-  return v as unknown as PanoViewer;
+  return v;
 };
 const lastViewer = () => viewers[viewers.length - 1]!;
 
@@ -184,7 +199,7 @@ const adminCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).startsWi
 
 const robots = () => document.head.querySelector('meta[name="robots"]')?.getAttribute('content');
 const shown = (panoId: string) =>
-  waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith(panoId));
+  waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith(panoId, { view: undefined }));
 const unavailable = () => screen.findByRole('heading', { name: "This tour isn't available" });
 // The stats hook and the beacon's listeners only mount in the commit after the first
 // scene-change, so `shown()` alone doesn't mean they exist yet. The view POST does.
@@ -243,9 +258,7 @@ describe('/s/:slug', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
     expect(screen.queryByRole('complementary', { name: 'Fountain' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
-    await waitFor(() =>
-      expect(lastViewer().transitionTo).toHaveBeenCalledWith('church', { yaw: 1 }),
-    );
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', { yaw: 1 }));
     expect(screen.queryByRole('complementary')).toBeNull();
     expect(screen.getByText('Church').getAttribute('aria-current')).toBe('location');
   });
@@ -336,13 +349,11 @@ describe('/s/:slug', () => {
     renderAt('/s/old-town');
     await screen.findByText('Old town');
     expect(screen.getByRole('img', { name: 'Compass' })).toBeTruthy();
-    // Picking a scene before the first load lands would `load` it instead of `transitionTo`.
+    // Picking a scene before the first load lands would cut to it instead of crossfading.
     await shown('square');
     fireEvent.click(screen.getByRole('button', { name: 'Map' }));
     fireEvent.click(screen.getByRole('button', { name: 'Church' }));
-    await waitFor(() =>
-      expect(lastViewer().transitionTo).toHaveBeenCalledWith('church', undefined),
-    );
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', undefined));
   });
 
   it('adds noindex for an unlisted tour', async () => {
@@ -441,7 +452,7 @@ describe('tour data inlined by the Worker', () => {
         atLoad ??= { commits, tasks };
         return load(pano, opts);
       });
-      return v as unknown as PanoViewer;
+      return v;
     };
     const host = document.body.appendChild(document.createElement('div'));
     const root = createRoot(host);
@@ -582,7 +593,9 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
         '/s/old-town/embed?pano=church',
       ),
     );
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('church', { view: undefined }),
+    );
   });
 
   it('never follows an alias onto another tour', async () => {
@@ -602,13 +615,17 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
 describe('/s/:slug/embed', () => {
   it('lets a plain wheel scroll the host page until the viewer is engaged', async () => {
     renderAt('/s/old-town/embed');
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     expect(lastViewer().options.interaction?.wheel).toBe('engaged');
   });
 
   it('has no site chrome and keeps whole-tour navigation', async () => {
     renderAt('/s/old-town/embed');
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     await viewRecorded();
     expect(screen.queryByRole('navigation', { name: 'Tour' })).toBeNull();
     expect(document.querySelector('.app-shell__bar')).toBeNull();
@@ -622,7 +639,9 @@ describe('/s/:slug/embed', () => {
 
   it('limits ?pano= to one scene with no nav links', async () => {
     renderAt('/s/old-town/embed?pano=square');
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     expect(screen.getByRole('button', { name: 'Fountain' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Go to/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Map' })).toBeNull();
@@ -1041,7 +1060,7 @@ describe('analytics beacon', () => {
     await shown('square');
     await viewRecorded();
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
-    await waitFor(() => expect(lastViewer().transitionTo.mock.calls.at(-1)?.[0]).toBe('church'));
+    await waitFor(() => expect(lastViewer().crossfade.mock.calls.at(-1)?.[0]).toBe('church'));
     fireEvent.click(await screen.findByRole('button', { name: 'Altar' }));
     window.dispatchEvent(new Event('pagehide'));
     expect(beacons()).toContainEqual({

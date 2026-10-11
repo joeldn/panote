@@ -1,5 +1,7 @@
 import { equirectUVToDir } from './cube.js';
 import type { DrawItem, GLRenderer, TileHandle } from './render/gl-renderer.js';
+import type { TileImage } from './source.js';
+import { releaseImage } from './tile-fetch.js';
 import { RADIUS, type TileGeometry } from './tile-geometry.js';
 
 /** One piece of a {@link PreviewSource}: an image covering a source-pixel rect. */
@@ -13,7 +15,7 @@ export interface PreviewPatch {
   /** Rect height in source pixels. */
   h: number;
   /** Pixels of the rect, top row first, at most {@link PREVIEW_MAX_PATCH_PX} on a side. */
-  image: ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
+  image: TileImage;
 }
 
 /**
@@ -163,13 +165,9 @@ export function buildEquirectPatchGeometry(
 
 type PreviewRenderer = Pick<GLRenderer, 'uploadTile' | 'removeTile' | 'maxTextureSize'>;
 
-function closeImage(image: PreviewPatch['image']): void {
-  if ('close' in image && typeof image.close === 'function') image.close();
-}
-
 /** Close every ImageBitmap in a source; canvases are left alone. */
 export function closePreviewSource(source: PreviewSource): void {
-  for (const p of source.patches) closeImage(p.image);
+  for (const p of source.patches) releaseImage(p.image);
 }
 
 function validate(source: PreviewSource, limit: number): void {

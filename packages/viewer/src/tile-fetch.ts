@@ -1,5 +1,4 @@
-import type { TileImage } from './render/gl-renderer.js';
-import type { CubeTileSource, TileAddress } from './source.js';
+import type { CubeTileSource, TileAddress, TileImage } from './source.js';
 import { TileHttpError } from './tile-retry.js';
 
 /** How tile requests go out; from ViewerOptions. */
@@ -18,7 +17,7 @@ export interface TileNetwork {
  * rel=preload crossorigin>`) depends on that: a preload is only reused by a
  * request with the same URL, mode and credentials.
  */
-export function requestTile(
+function requestTile(
   net: TileNetwork,
   url: string,
   signal: AbortSignal,
@@ -38,8 +37,8 @@ export async function loadTileImage(
   priority: RequestPriority,
   net: TileNetwork,
 ): Promise<TileImage> {
-  if (source.loadTile) return source.loadTile(tile, signal);
-  const res = await requestTile(net, source.tileUrl!(tile), signal, priority);
+  if (source.loadTile) return source.loadTile(tile, { signal, priority });
+  const res = await requestTile(net, source.tileUrl(tile), signal, priority);
   if (!res.ok) {
     // Unread, the body would hold its connection until GC.
     discardBody(res);
@@ -52,7 +51,7 @@ export async function loadTileImage(
 }
 
 /** Drop an error response's body unread, so its connection is freed rather than held. */
-export function discardBody(res: Response): void {
+function discardBody(res: Response): void {
   res.body?.cancel().catch(() => {});
 }
 
@@ -68,10 +67,10 @@ export async function warmTile(
   net: TileNetwork,
 ): Promise<void> {
   if (source.loadTile) {
-    releaseImage(await source.loadTile(tile, signal));
+    releaseImage(await source.loadTile(tile, { signal, priority: 'low' }));
     return;
   }
-  const res = await requestTile(net, source.tileUrl!(tile), signal, 'low');
+  const res = await requestTile(net, source.tileUrl(tile), signal, 'low');
   if (res.ok) await res.arrayBuffer();
   else discardBody(res);
 }

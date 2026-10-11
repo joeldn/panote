@@ -3,13 +3,15 @@ import { report } from './report.js';
 export class Emitter<Events extends Record<string, unknown>> {
   private listeners = new Map<keyof Events, Set<(payload: never) => void>>();
 
-  on<K extends keyof Events>(type: K, fn: (payload: Events[K]) => void): void {
+  /** Add a listener; returns a function that removes it. */
+  on<K extends keyof Events>(type: K, fn: (payload: Events[K]) => void): () => void {
     let set = this.listeners.get(type);
     if (!set) {
       set = new Set();
       this.listeners.set(type, set);
     }
     set.add(fn as (payload: never) => void);
+    return () => this.off(type, fn);
   }
 
   off<K extends keyof Events>(type: K, fn: (payload: Events[K]) => void): void {

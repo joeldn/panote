@@ -1,11 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
 import { BaseTileLoadError, TileLayer, type TileLayerOptions } from './tile-layer.js';
-import { urlTemplateSource, type CubeTileSource } from './source.js';
+import { urlTemplateSource, type CubeTileSource, type TileLoadInit } from './source.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
-import { ContextLostError, sortDrawList, type GLRenderer } from './render/gl-renderer.js';
+import { ContextLostError, type GLRenderer } from './render/gl-renderer.js';
 import { TileHttpError } from './tile-retry.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+/** The resolved defaults a viewer hands every layer it builds. */
+const LAYER_DEFAULTS = {
+  maxConcurrent: VIEWER_DEFAULTS.network.maxConcurrent,
+  minResidentTiles: VIEWER_DEFAULTS.memory.minResidentTiles,
+  lodBias: VIEWER_DEFAULTS.rendering.lodBias,
+  retry: VIEWER_DEFAULTS.network.retry,
+};
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -72,6 +81,7 @@ describe('TileLayer failure handling', () => {
     onInvalidate: () => void = () => {},
   ): TileLayer {
     return new TileLayer(renderer as unknown as GLRenderer, makeSource(pano), onInvalidate, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB,
       now: () => clock,
       // The injected sleep advances the same clock the retry budget measures
@@ -806,7 +816,7 @@ describe('TileLayer failure handling', () => {
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
         () => {},
-        { textureBudgetMB: 128, maxConcurrent: 3, now: () => clock },
+        { ...LAYER_DEFAULTS, textureBudgetMB: 128, maxConcurrent: 3, now: () => clock },
       );
       await layer.loadBase();
       requests = [];
@@ -824,7 +834,7 @@ describe('TileLayer failure handling', () => {
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
         () => {},
-        { textureBudgetMB: 128, maxConcurrent: 1, now: () => clock },
+        { ...LAYER_DEFAULTS, textureBudgetMB: 128, maxConcurrent: 1, now: () => clock },
       );
       await layer.loadBase();
       requests = [];
@@ -893,6 +903,7 @@ describe('TileLayer failure handling', () => {
       // children in flight and none still queued.
       const layer = await withLevel1(
         new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+          ...LAYER_DEFAULTS,
           textureBudgetMB: 128,
           maxConcurrent: 64,
           now: () => clock,
@@ -1116,6 +1127,7 @@ describe('TileLayer failure handling', () => {
     /** A layer with a slot for each of the 16 tiles in view, so all 16 decode together. */
     const wideLayer = (): TileLayer =>
       new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+        ...LAYER_DEFAULTS,
         textureBudgetMB: 128,
         maxConcurrent: 16,
         now: () => clock,
@@ -1158,7 +1170,13 @@ describe('TileLayer failure handling', () => {
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
         () => {},
-        { textureBudgetMB: 128, maxConcurrent: 16, maxUploadsPerUpdate: 4, now: () => clock },
+        {
+          ...LAYER_DEFAULTS,
+          textureBudgetMB: 128,
+          maxConcurrent: 16,
+          maxUploadsPerUpdate: 4,
+          now: () => clock,
+        },
       );
       frame(layer, 0);
       await flush();
@@ -1470,6 +1488,7 @@ describe('TileLayer failure handling', () => {
         makeSource('pano-a'),
         () => {},
         {
+          ...LAYER_DEFAULTS,
           textureBudgetMB: 128,
           now: () => clock,
           sleep: (ms: number, signal: AbortSignal) => {
@@ -1527,7 +1546,7 @@ describe('TileLayer failure handling', () => {
       // Painter's order: the base paints first and the finer levels over it, so
       // a hole at any deeper level shows soft base texels, never the clear
       // colour.
-      const levels = sortDrawList(list).map((d) => d.level);
+      const levels = list.map((d) => d.level).sort((a, b) => a - b);
       expect(levels[0]).toBe(0);
       expect(levels[levels.length - 1]).toBeGreaterThan(0);
     });
@@ -1748,6 +1767,7 @@ describe('tile sources', () => {
 
   const layerFor = (source: CubeTileSource, network = {}): TileLayer =>
     new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 128,
       now: () => clock,
       sleep: (ms: number) => {
@@ -1810,7 +1830,7 @@ describe('tile sources', () => {
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
     const decode = vi.mocked(createImageBitmap);
-    const loadTile = vi.fn((_t: unknown, _signal: AbortSignal) =>
+    const loadTile = vi.fn((_t: unknown, _init: TileLoadInit) =>
       Promise.resolve({ close: vi.fn() } as unknown as ImageBitmap),
     );
     const layer = layerFor({ id: 'gen', tileSize: 256, maxLevel: 1, loadTile });
@@ -1819,7 +1839,12 @@ describe('tile sources', () => {
     expect(loadTile.mock.calls.map(([t]) => t)).toEqual(
       FACES.map((face) => ({ face, level: 0, x: 0, y: 0 })),
     );
-    for (const [, signal] of loadTile.mock.calls) expect(signal).toBeInstanceOf(AbortSignal);
+    for (const [, init] of loadTile.mock.calls) {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(['high', 'low']).toContain(init.priority);
+    }
+    // The first tiles a view needs go out at high priority, as a fetch would.
+    expect(loadTile.mock.calls[0]![1].priority).toBe('high');
     expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length);
     expect(fetch).not.toHaveBeenCalled();
     expect(decode).not.toHaveBeenCalled();
@@ -1885,6 +1910,7 @@ describe('layer options', () => {
 
   const layerWith = (opts: Partial<TileLayerOptions>): TileLayer =>
     new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 128,
       now: () => 0,
       sleep: () => Promise.resolve(),

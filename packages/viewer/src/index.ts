@@ -1,18 +1,23 @@
 export * from './types.js';
 export { PanoViewer } from './PanoViewer.js';
+export type { PanoViewerApi } from './api.js';
 export { WebGLUnavailableError, isWebGL2Supported } from './webgl-support.js';
 export { VIEWER_DEFAULTS, mergeViewerOptions, resolveViewerOptions } from './defaults.js';
 export {
   MAX_SOURCE_LEVEL,
   urlTemplateSource,
   type CubeTileSource,
+  type LoaderTileSource,
   type ResolveHints,
   type SourceResolver,
   type TileAddress,
+  type TileImage,
+  type TileLoadInit,
   type UrlTemplateInit,
+  type UrlTileSource,
 } from './source.js';
-export { FACES, type Face } from './cube.js';
-export type { TileImage } from './render/gl-renderer.js';
+export { FACES, faceUVToDir, type Face } from './cube.js';
+export type { Vec3 } from './project.js';
 export {
   PREVIEW_GUTTER_PX,
   PREVIEW_MAX_PATCH_PX,
