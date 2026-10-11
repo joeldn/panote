@@ -130,11 +130,13 @@ Post-deploy checks (dev; production the same on `panote.io`):
 **Link previews (`/s/*`).** The same tail carries Open Graph and Twitter card tags, built in
 `apps/website/worker/og.ts`: `<meta name="description">`, `og:type` `website`, `og:site_name`
 `panote`, `og:title` (the tour title), `og:description`, `og:url` (`<origin>/s/<slug>`, no query
-and no `/embed`), and `twitter:card`. Published tours have no description field, so the text is
-generated: `A 360° virtual tour · N scenes`. The image is the start scene's own, so nothing new is
+and no `/embed`), and `twitter:card`. The description is the tour's published `description`
+(edited in the admin's tour settings, up to 300 characters, collapsed onto one line), else the
+generated `A 360° virtual tour · N scenes`. The image is the start scene's own, so nothing new is
 rendered: the tiler's `preview.webp` (1024×512 equirect, `og:image:type` `image/webp`, card
-`summary_large_image`) when the manifest has `preview: true`, else the level-0 front face
-(`0/pz/0-0.<format>`, square at `tileSize`, card `summary`), with `og:image:alt` set to the
+`summary_large_image`) when the manifest has `preview: true`, else the level-0 front face, the
+one ahead at yaw 0 (`0/nz/0-0.<format>`, `FRONT_FACE` in `@panote/core`; the viewer looks along
+−z), square at `tileSize`, card `summary`, with `og:image:alt` set to the
 scene title. No manifest, or a CDN root that isn't absolute `https://`, means no image and a
 `summary` card. Public and unlisted tours both get the tags: sharing the link is the point of
 unlisted, and its `noindex` stays. A page served plain (missing bundle, R2 error, budget) gets

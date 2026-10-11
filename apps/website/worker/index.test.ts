@@ -583,15 +583,66 @@ describe('link previews', () => {
     expect(html).toContain(tag('description', 'A 360° virtual tour · 1 scene'));
   });
 
+  it('describes a tour with no scenes without a count', async () => {
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ scenes: [] }));
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([
+      ...textTags('Old town', 'A 360° virtual tour'),
+      tag('twitter:card', 'summary'),
+    ]);
+  });
+
+  it("uses the tour's published description over the generated line", async () => {
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ description: 'Three squares at dusk.' }));
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([
+      ...textTags('Old town', 'Three squares at dusk.'),
+      ...previewTags(),
+    ]);
+  });
+
+  it('puts a multi-line description on one line, escaped', async () => {
+    const description = '  Tom\'s "Café"\n\n<b>Harbour</b> &\t walls \r\n ';
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ description }));
+    const html = await (await call('/s/new-name')).text();
+    const line = 'Tom&#39;s &quot;Café&quot; &lt;b&gt;Harbour&lt;/b&gt; &amp; walls';
+    expect(html).toContain(tag('description', line));
+    expect(html).toContain(tag('og:description', line));
+    expect(html).not.toContain('<b>');
+  });
+
+  it('falls back to the generated line for a blank description', async () => {
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ description: ' \n ' }));
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
+  });
+
   it('falls back to the square level-0 front face, as a summary card, without a preview', async () => {
     await putJson('tiles/pano-1/manifest.json', { ...manifest('pano-1'), format: 'jpg' });
     const html = await (await call('/s/new-name')).text();
     expect(metasOf(html)).toEqual([
       ...textTags(),
-      tag('og:image', `${CDN}tiles/pano-1/v7/0/pz/0-0.jpg`),
+      // nz: the face ahead at yaw 0 (FRONT_FACE in @panote/core).
+      tag('og:image', `${CDN}tiles/pano-1/v7/0/nz/0-0.jpg`),
       tag('og:image:type', 'image/jpeg'),
       tag('og:image:width', '512'),
       tag('og:image:height', '512'),
+      tag('og:image:alt', 'pano-1'),
+      tag('twitter:card', 'summary'),
+    ]);
+  });
+
+  it("sizes the fallback face from the manifest's tileSize", async () => {
+    // A one-level 1024 face: one tile, as big as the face.
+    const big = { ...manifest('pano-1'), tileSize: 1024, maxLevel: 0 };
+    await putJson('tiles/pano-1/manifest.json', big);
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([
+      ...textTags(),
+      tag('og:image', `${CDN}tiles/pano-1/v7/0/nz/0-0.webp`),
+      tag('og:image:type', 'image/webp'),
+      tag('og:image:width', '1024'),
+      tag('og:image:height', '1024'),
       tag('og:image:alt', 'pano-1'),
       tag('twitter:card', 'summary'),
     ]);
