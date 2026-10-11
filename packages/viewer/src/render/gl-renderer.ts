@@ -333,7 +333,12 @@ export class GLRenderer {
     gl.activeTexture(gl.TEXTURE0);
   }
 
-  /** useProgram() for a frame: false, reported once, if the program failed. */
+  /**
+   * useProgram() for a frame: false, reported once, if the program failed.
+   * A lost context fails the link check too (its status reads null) before
+   * the loss event has run; that is not reported, and the restore builds and
+   * checks a new program.
+   */
   private programReady(): boolean {
     if (this.programFailed) return false;
     try {
@@ -341,7 +346,7 @@ export class GLRenderer {
       return true;
     } catch (err) {
       this.programFailed = true;
-      report(err);
+      if (!this.gl.isContextLost()) report(err);
       return false;
     }
   }

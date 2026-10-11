@@ -666,6 +666,28 @@ describe('GLRenderer', () => {
       expect(report).toHaveBeenCalledTimes(1);
     });
 
+    it('does not report a link check that failed because the context was lost', () => {
+      const report = vi.fn();
+      vi.stubGlobal('reportError', report);
+      const { gl, renderer, fire } = parallelSetup();
+      renderer.setCamera(camera());
+      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      // Lost, and the loss event not dispatched yet: the status reads null.
+      gl.isContextLost.mockReturnValue(true);
+      gl.getProgramParameter.mockReturnValue(null);
+      renderer.render([{ handle, level: 2 }]);
+      expect(report).not.toHaveBeenCalled();
+      expect(gl.drawElements).not.toHaveBeenCalled();
+      fire('webglcontextlost');
+      gl.isContextLost.mockReturnValue(false);
+      gl.getProgramParameter.mockReturnValue(true);
+      fire('webglcontextrestored');
+      const after = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      renderer.render([{ handle: after, level: 2 }]);
+      expect(gl.drawElements).toHaveBeenCalledTimes(1);
+      expect(report).not.toHaveBeenCalled();
+    });
+
     it('compiles the new context in the background too after a restore', () => {
       const { gl, log, renderer, fire } = parallelSetup();
       renderer.setCamera(camera());
