@@ -37,7 +37,13 @@ const BootDataSchema = z.object({
   tour: PublishedTourSchema,
 });
 
-function tourFromBoot(boot: unknown, slug: string): PublishedTour | null {
+/**
+ * The tour in the website Worker's `#pn-boot` payload, if it is for `slug` and passes the
+ * same checks as the two CDN reads; otherwise null. Synchronous, so a page can render the
+ * tour on its first pass.
+ */
+export function publishedTourFromBoot(boot: unknown, slug: string): PublishedTour | null {
+  if (boot == null) return null;
   const parsed = BootDataSchema.safeParse(boot);
   if (!parsed.success) return null;
   const { slug: bootSlug, record, tour } = parsed.data;
@@ -57,7 +63,7 @@ export async function loadPublishedTour(
   slug: string,
   opts: LoadPublishedTourOptions = {},
 ): Promise<PublishedTourResult> {
-  const booted = opts.boot == null ? null : tourFromBoot(opts.boot, slug);
+  const booted = publishedTourFromBoot(opts.boot, slug);
   if (booted) return { kind: 'tour', tour: booted };
 
   const doFetch: FetchLike = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));

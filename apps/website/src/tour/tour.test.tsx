@@ -1,7 +1,8 @@
 import type { ViewerFactory } from '@internal/ui';
 import { loadConfig, type Auth, type Auth0Like } from '@internal/web-kit';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { StrictMode } from 'react';
+import { Profiler, StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import {
   afterEach,
@@ -419,6 +420,63 @@ describe('tour data inlined by the Worker', () => {
     expect(await screen.findByText('Inlined town')).toBeTruthy();
     await shown('square');
     expect(cdnReads()).toEqual([]);
+  });
+
+  // What the visitor waits on before the first tile request: React commits and
+  // scheduler tasks (each one a chance for the browser to paint a frame first).
+  it('asks the viewer for the start scene within two commits of the first render', async () => {
+    inline({ slug: 'old-town', record: live, tour: bundle() });
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const actEnv = env.IS_REACT_ACT_ENVIRONMENT;
+    // Rendered outside act(), which would flush every effect up front, so the
+    // count is the real one.
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    let commits = 0;
+    let atLoad: { commits: number; tasks: number } | null = null;
+    let tasks = 0;
+    const measured: ViewerFactory = (el, options) => {
+      const v = createViewer(el, options) as unknown as FakeViewer;
+      const load = v.load.getMockImplementation()!;
+      v.load.mockImplementation((pano, opts) => {
+        atLoad ??= { commits, tasks };
+        return load(pano, opts);
+      });
+      return v as unknown as PanoViewer;
+    };
+    const host = document.body.appendChild(document.createElement('div'));
+    const root = createRoot(host);
+    try {
+      root.render(
+        <StrictMode>
+          <Profiler id="tour" onRender={() => commits++}>
+            <ConfigContext value={config}>
+              <AuthEnvContext value={{ auth: fakeAuth(), origins: LOCAL }}>
+                <StageFactoryContext value={measured}>
+                  <RouterProvider
+                    router={createMemoryRouter(routes, { initialEntries: ['/s/old-town'] })}
+                  />
+                </StageFactoryContext>
+              </AuthEnvContext>
+            </ConfigContext>
+          </Profiler>
+        </StrictMode>,
+      );
+      while (!atLoad && tasks < 50) {
+        await new Promise((r) => setImmediate(r));
+        tasks++;
+      }
+      expect(atLoad).not.toBeNull();
+      expect(atLoad!.commits).toBeLessThanOrEqual(2);
+      // The load starts in the task that commits the tour, with no frame between.
+      expect(atLoad!.tasks).toBeLessThanOrEqual(1);
+      // Exactly one load, on the one viewer left standing after StrictMode's remount.
+      expect(viewers.filter((v) => v.load.mock.calls.length > 0)).toHaveLength(1);
+      expect(viewers.filter((v) => v.dispose.mock.calls.length === 0)).toHaveLength(1);
+    } finally {
+      root.unmount();
+      host.remove();
+      env.IS_REACT_ACT_ENVIRONMENT = actEnv;
+    }
   });
 
   it('fetches as usual when the inlined data is for another slug', async () => {

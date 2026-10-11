@@ -341,6 +341,23 @@ describe('PanoStage', () => {
     expect(f.last().load).toHaveBeenCalledWith('hall');
   });
 
+  it('builds the new viewer from the props of the render that changed baseUrl', () => {
+    const f = factory();
+    const stage = (baseUrl: string, label: string, north: number) => (
+      <PanoStage
+        baseUrl={baseUrl}
+        panoId="hall"
+        north={north}
+        aria-label={label}
+        createViewer={f.createViewer}
+      />
+    );
+    const { rerender } = render(stage('a/', 'Town hall', 0.1));
+    rerender(stage('b/', 'Town hall, new tiles', 0.7));
+    expect(f.last().options.interaction?.label).toBe('Town hall, new tiles');
+    expect(f.last().options.camera?.north).toBe(0.7);
+  });
+
   it('survives StrictMode double-mount with exactly one live viewer', () => {
     const f = factory();
     render(
@@ -351,6 +368,8 @@ describe('PanoStage', () => {
     const live = f.made.filter((v) => v.dispose.mock.calls.length === 0);
     expect(live).toHaveLength(1);
     expect(live[0]?.load).toHaveBeenCalledWith('hall');
+    // The viewer the remount threw away never fetched anything.
+    expect(f.made.flatMap((v) => v.calls)).toEqual(['load:hall']);
   });
 
   it('reloads the same pano when reloadKey changes (replace-image finished)', () => {

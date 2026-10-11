@@ -58,6 +58,7 @@ export {
 } from './api/public.js';
 export {
   loadPublishedTour,
+  publishedTourFromBoot,
   type LoadPublishedTourOptions,
   type PublishedTourResult,
 } from './api/published.js';

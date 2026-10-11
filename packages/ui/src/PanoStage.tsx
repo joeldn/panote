@@ -6,7 +6,15 @@ import {
   type View,
   type ViewerOptions,
 } from '@panote/viewer';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 
 import { cx } from './cx.js';
 import { panoteViewerPreset } from './panote-viewer.js';
@@ -186,7 +194,9 @@ export function PanoStage({
     onLoadError,
     onPreviewError,
   });
-  useEffect(() => {
+  // A layout effect, so the viewer effect below (a layout effect too) reads this
+  // render's props.
+  useLayoutEffect(() => {
     latest.current = {
       view,
       north,
@@ -212,7 +222,11 @@ export function PanoStage({
   const loaded = useRef<StageLoad | null>(null);
   // The load whose pano the viewer last reported on screen ('scene-change').
   const landed = useRef<StageLoad | null>(null);
-  useEffect(() => {
+  // A layout effect: React applies a state update made here at once, so the re-render
+  // with the viewer, and the load effect below that starts its first load, run in this
+  // same task, before the browser paints, rather than a frame or two later. StrictMode's
+  // remount disposes the first viewer before that re-render, so only the second loads.
+  useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const l = latest.current;

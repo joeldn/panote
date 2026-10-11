@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { json } from '../__fixtures__/helpers.js';
 import { ApiError, ApiSchemaError } from './http.js';
-import { loadPublishedTour } from './published.js';
+import { loadPublishedTour, publishedTourFromBoot } from './published.js';
 
 const CDN = 'https://cdn.test/';
 const NOW = Date.parse('2026-09-27T00:00:00Z');
@@ -156,5 +156,12 @@ describe('loadPublishedTour with worker boot data', () => {
     const result = await loadWith('old-town', fetch, data);
     expect(result).toMatchObject({ kind: 'tour', tour: { tourId: 'tour-a' } });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the same checks synchronously for a page to render from', () => {
+    expect(publishedTourFromBoot(boot(), 'old-town')).toMatchObject({ tourId: 'tour-a' });
+    expect(publishedTourFromBoot(boot(), 'elsewhere')).toBeNull();
+    expect(publishedTourFromBoot(boot({ tour: bundle('tour-b') }), 'old-town')).toBeNull();
+    expect(publishedTourFromBoot(undefined, 'old-town')).toBeNull();
   });
 });
