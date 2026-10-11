@@ -329,9 +329,9 @@ export class PanoViewer {
   /**
    * Load a source, or the id of one (resolved through `resolveSource`),
    * swapping it in once its low-resolution base is resident. Resolves true
-   * when it took effect and false when a newer load, a preview or dispose()
-   * superseded it; rejects only for a load that is still current, including
-   * a source that fails to resolve or is malformed. `options.view` is applied
+   * when it took effect and false when a newer load, a preview, cancelLoad()
+   * or dispose() superseded it; rejects only for a load that is still
+   * current, including a source that fails to resolve or is malformed. `options.view` is applied
    * at the swap, with no easing from the old camera.
    *
    * WebGL context loss: a load in flight when the context is lost resolves
@@ -384,6 +384,18 @@ export class PanoViewer {
     } finally {
       if (this.request === request) this.request = undefined;
     }
+  }
+
+  /**
+   * Cancel the load or transition in flight, if any: its pending `load()`
+   * resolves false, its fetches stop, and the scene on screen stays as it
+   * is, camera included. A crossfade still fading is cut short. A load that
+   * a context loss is holding for the restore is dropped too.
+   */
+  cancelLoad(): void {
+    if (this.disposed) return;
+    this.supersede();
+    this.lostRequest = undefined;
   }
 
   private resolve(id: string, signal: AbortSignal, hints?: ResolveHints): Promise<CubeTileSource> {

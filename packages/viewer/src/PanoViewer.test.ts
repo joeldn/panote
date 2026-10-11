@@ -2798,6 +2798,95 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    describe('cancelLoad', () => {
+      const layerId = (viewer: PanoViewer) =>
+        (internals(viewer).layer as { source: CubeTileSource } | undefined)?.source.id;
+
+      it('resolves a load waiting on its base to false and keeps the scene on screen', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        runUntilIdle();
+        const sceneChange = vi.fn();
+        viewer.on('scene-change', sceneChange);
+        const b = viewer.load('pano-b', { view: { yaw: 1 } });
+        await flush();
+        viewer.cancelLoad();
+        await expect(b).resolves.toBe(false);
+        expect(net.signalOf('/tiles/pano-b/0/pz/0-0.jpg')?.aborted).toBe(true);
+        net.release();
+        await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        expect(viewer.getView().yaw).toBe(0);
+        expect(sceneChange).not.toHaveBeenCalled();
+        expect(internals(viewer).pendingLayers.size).toBe(0);
+        viewer.dispose();
+      });
+
+      it('aborts a source resolve in flight', async () => {
+        const net = stubNet({ holdManifest: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const b = viewer.load('pano-b');
+        await flush();
+        viewer.cancelLoad();
+        expect(net.signalOf('/tiles/pano-b/manifest.json')?.aborted).toBe(true);
+        await expect(b).resolves.toBe(false);
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it('cancels a transition before its swap: no snapshot, no view change', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const { container, overlays } = stubOverlayDom();
+        const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
+        await viewer.load('pano-a');
+        runUntilIdle();
+        const t = viewer.transitionTo('pano-b', { yaw: 2 });
+        await flush();
+        viewer.cancelLoad();
+        await t;
+        net.release();
+        await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        expect(viewer.getView().yaw).toBe(0);
+        expect(overlays).toHaveLength(0);
+        viewer.dispose();
+      });
+
+      it('drops a load a context loss is holding, so the restore brings back the old scene', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const fake = internals(viewer).renderer as unknown as {
+          loseContext(): void;
+          restoreContext(): void;
+        };
+        const b = viewer.load('pano-b');
+        await flush();
+        fake.loseContext();
+        await expect(b).resolves.toBe(false);
+        viewer.cancelLoad();
+        fake.restoreContext();
+        net.release();
+        for (let i = 0; i < 10; i++) await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it('changes nothing with no load in flight, and after dispose', async () => {
+        stubNet();
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        viewer.cancelLoad();
+        expect(layerId(viewer)).toBe('pano-a');
+        // A later load still works.
+        await expect(viewer.load('pano-b')).resolves.toBe(true);
+        viewer.dispose();
+        expect(() => viewer.cancelLoad()).not.toThrow();
+      });
+    });
+
     it('does nothing when transitionTo is called after dispose', async () => {
       stubNet();
       const viewer = new PanoViewer(makeContainer(400, 800));

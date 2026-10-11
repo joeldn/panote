@@ -155,8 +155,9 @@ The rules a source follows:
 
 | Method | What it does |
 |---|---|
-| `load(source \| id, { view? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. Resolves `true` when the scene went on screen and `false` when a newer load, a preview or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
+| `load(source \| id, { view? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
 | `transitionTo(source \| id, view?)` | Like `load`, but crossfades from a snapshot of the old scene, taken at the swap: the old scene stays live until the new one is ready. |
+| `cancelLoad()` | Cancels the load or transition in flight: its `load()` resolves `false` and the scene on screen stays as it is. |
 | `showPreview(id, preview, { replacesVersion?, view? })` | Shows an equirect preview of `id` now and cancels any load in flight. Call `load(id)` afterwards to get the tiles. `view` is cut to as the preview goes up. |
 | `prefetch(source \| id, { signal? })` | Warms the HTTP cache with the six base tiles of a scene the visitor may open next. Best effort: it never rejects. |
 | `setView({ yaw?, pitch?, fov? })` / `getView()` | Eases the camera to a view, or reads the view it is moving to (yaw in (−π, π]). |
