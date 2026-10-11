@@ -126,6 +126,72 @@ describe.each([
   });
 });
 
+/**
+ * The viewer's camera basis, copied from cameraBasis in
+ * packages/viewer/src/render/projection.ts (the tiler can't import the viewer). Its
+ * camera z is -forward, x is right and y = z × x is up. If the viewer's basis changes,
+ * og.jpg stops matching the first frame it shows, and this copy has to change with it.
+ */
+function viewerBasis(yaw: number, pitch: number): { right: Vec3; up: Vec3; forward: Vec3 } {
+  const cy = Math.cos(yaw);
+  const sy = Math.sin(yaw);
+  const cp = Math.cos(pitch);
+  const zx = -sy * cp;
+  const zy = -Math.sin(pitch);
+  const zz = cy * cp;
+  const xx = cy;
+  const xz = sy;
+  return {
+    right: { x: xx, y: 0, z: xz },
+    up: { x: zy * xz, y: zz * xx - zx * xz, z: -zy * xx },
+    forward: { x: -zx, y: -zy, z: -zz },
+  };
+}
+
+describe("renderView's camera basis", () => {
+  it.each([
+    [0, 0],
+    [0.7, 0.3],
+    [-2.2, -0.8],
+    [Math.PI, 1.2],
+  ])("matches the viewer's at yaw %f, pitch %f", (yaw, pitch) => {
+    // A 3x3 render: the middle pixel's ray is the forward vector, and the pixels to its
+    // right and above step along the right and up vectors by 2/3 of the half-extent.
+    const hfovDeg = 90;
+    const rays: Vec3[] = [];
+    renderView(
+      (d, out) => {
+        rays.push({ ...d });
+        out.fill(0);
+      },
+      3,
+      3,
+      { yaw, pitch, hfovDeg },
+    );
+    const tx = Math.tan((hfovDeg * Math.PI) / 360);
+    const ray = (x: number, y: number) => rays[y * 3 + x]!;
+    const { right, up, forward } = viewerBasis(yaw, pitch);
+    const close = (a: Vec3, b: Vec3) => {
+      expect(a.x).toBeCloseTo(b.x, 9);
+      expect(a.y).toBeCloseTo(b.y, 9);
+      expect(a.z).toBeCloseTo(b.z, 9);
+    };
+    const step = (v: Vec3, k: number): Vec3 => ({
+      x: forward.x + k * v.x,
+      y: forward.y + k * v.y,
+      z: forward.z + k * v.z,
+    });
+    close(ray(1, 1), forward);
+    close(ray(2, 1), step(right, (2 / 3) * tx));
+    close(ray(1, 0), step(up, (2 / 3) * tx));
+    close(ray(0, 2), {
+      x: forward.x - (2 / 3) * tx * (right.x + up.x),
+      y: forward.y - (2 / 3) * tx * (right.y + up.y),
+      z: forward.z - (2 / 3) * tx * (right.z + up.z),
+    });
+  });
+});
+
 describe('equirectSampler', () => {
   it('wraps across the ±180° seam instead of clamping', () => {
     // A source whose left and right columns differ: looking straight back (yaw π)
