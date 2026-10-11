@@ -1,11 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { faceUVToDir, dirToEquirectUV, FACES } from './geometry.js';
+import { faceUVToDir, dirToEquirectUV, FACES, FRONT_FACE } from './geometry.js';
 
 const near = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
 
 describe('FACES', () => {
   it('lists the six faces in canonical order', () => {
     expect(FACES).toEqual(['px', 'nx', 'py', 'ny', 'pz', 'nz']);
+  });
+});
+
+describe('FRONT_FACE', () => {
+  it('is nz: its centre looks along -z, at the middle of the equirect the tiler samples', () => {
+    expect(FRONT_FACE).toBe('nz');
+    const centre = faceUVToDir(FRONT_FACE, 0.5, 0.5);
+    expect(centre).toEqual({ x: 0, y: 0, z: -1 });
+    const { u, v } = dirToEquirectUV(centre);
+    expect(near(u, 0.5) && near(v, 0.5)).toBe(true);
   });
 });
 

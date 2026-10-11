@@ -1,4 +1,6 @@
+import { faceUVToDir, FRONT_FACE } from '@panote/core';
 import { describe, it, expect } from 'vitest';
+
 import { dirFromYawPitch, dirInto, ndcToPixel, isBehind } from './project.js';
 
 describe('ndcToPixel', () => {
@@ -33,5 +35,15 @@ describe('out-params', () => {
     const out = { x: 0, y: 0, z: 0 };
     expect(dirInto(out, 0.7, -0.3)).toBe(out);
     expect(out).toEqual(dirFromYawPitch(0.7, -0.3));
+  });
+});
+
+describe('front face', () => {
+  it("is the face the camera sees at yaw 0, pitch 0 (@panote/core's FRONT_FACE)", () => {
+    const ahead = dirFromYawPitch(0, 0);
+    const centre = faceUVToDir(FRONT_FACE, 0.5, 0.5);
+    expect(ahead.x).toBeCloseTo(centre.x);
+    expect(ahead.y).toBeCloseTo(centre.y);
+    expect(ahead.z).toBeCloseTo(centre.z);
   });
 });
