@@ -17,7 +17,7 @@ export interface TileNetwork {
  * rel=preload crossorigin>`) depends on that: a preload is only reused by a
  * request with the same URL, mode and credentials.
  */
-export function requestTile(
+function requestTile(
   net: TileNetwork,
   url: string,
   signal: AbortSignal,
@@ -51,7 +51,7 @@ export async function loadTileImage(
 }
 
 /** Drop an error response's body unread, so its connection is freed rather than held. */
-export function discardBody(res: Response): void {
+function discardBody(res: Response): void {
   res.body?.cancel().catch(() => {});
 }
 

@@ -4,7 +4,7 @@ import { BaseTileLoadError, TileLayer, type TileLayerOptions } from './tile-laye
 import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
-import { ContextLostError, sortDrawList, type GLRenderer } from './render/gl-renderer.js';
+import { ContextLostError, type GLRenderer } from './render/gl-renderer.js';
 import { TileHttpError } from './tile-retry.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
 
@@ -1546,7 +1546,7 @@ describe('TileLayer failure handling', () => {
       // Painter's order: the base paints first and the finer levels over it, so
       // a hole at any deeper level shows soft base texels, never the clear
       // colour.
-      const levels = sortDrawList(list).map((d) => d.level);
+      const levels = list.map((d) => d.level).sort((a, b) => a - b);
       expect(levels[0]).toBe(0);
       expect(levels[levels.length - 1]).toBeGreaterThan(0);
     });

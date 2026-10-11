@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   effectiveVFovDeg,
-  viewMatrix,
   viewProjection,
   projectDir,
   unprojectNDC,
@@ -185,19 +184,32 @@ describe('unprojectNDC at corners', () => {
   });
 });
 
-describe('viewMatrix at the poles', () => {
+/**
+ * The camera's right, up and back axes, read from a view-projection with a
+ * 90° fov at aspect 1, where the projection scales x and y by 1: rows 0 and
+ * 1 are the right and up axes, and row 3 is the forward axis.
+ */
+function cameraAxes(yaw: number, pitch: number) {
+  const m = viewProjection({ yaw, pitch, fov: 90 }, 1, 179);
+  const row = (r: number, s = 1): [number, number, number] => [
+    s * m[r]!,
+    s * m[4 + r]!,
+    s * m[8 + r]!,
+  ];
+  return { m, axes: [row(0), row(1), row(3, -1)] as const };
+}
+
+describe('the camera basis at the poles', () => {
   // clampPitch keeps drag input inside ±(π/2 − 0.001), but an unclamped
-  // initialView can reach viewMatrix, so exactly ±π/2 must still give a
+  // initialView can reach the view matrix, so exactly ±π/2 must still give a
   // usable (finite, orthonormal, non-singular) basis.
   for (const pitch of [Math.PI / 2, -Math.PI / 2]) {
     for (const yaw of [0, 0.7, -2.5]) {
       it(`is finite and orthonormal at yaw=${yaw}, pitch=${pitch.toFixed(4)}`, () => {
-        const m = viewMatrix(yaw, pitch);
+        const { m, axes } = cameraAxes(yaw, pitch);
         expect(allFinite(m)).toBe(true);
-        // Rows 0..2 of the rotation part are the camera axes.
-        const row = (r: number): [number, number, number] => [m[r]!, m[4 + r]!, m[8 + r]!];
         const dot = (p: number[], q: number[]) => p[0]! * q[0]! + p[1]! * q[1]! + p[2]! * q[2]!;
-        const [a, b, c] = [row(0), row(1), row(2)];
+        const [a, b, c] = axes;
         for (const v of [a, b, c]) expect(Math.hypot(...v)).toBeCloseTo(1, 6);
         expect(dot(a, b)).toBeCloseTo(0, 6);
         expect(dot(a, c)).toBeCloseTo(0, 6);
@@ -214,14 +226,14 @@ describe('viewMatrix at the poles', () => {
   }
 });
 
-describe('viewMatrix right vector', () => {
+describe('the camera right vector', () => {
   // The right vector depends on yaw alone, so it cannot flip (and roll the
   // view upside down) when pitch crosses a pole.
   it('stays continuous across the pole', () => {
     for (const yaw of [0, 0.7, -2.5]) {
-      const below = viewMatrix(yaw, Math.PI / 2 - 0.01);
-      const above = viewMatrix(yaw, Math.PI / 2 + 0.01);
-      const dot = below[0]! * above[0]! + below[4]! * above[4]! + below[8]! * above[8]!;
+      const [below] = cameraAxes(yaw, Math.PI / 2 - 0.01).axes;
+      const [above] = cameraAxes(yaw, Math.PI / 2 + 0.01).axes;
+      const dot = below[0] * above[0] + below[1] * above[1] + below[2] * above[2];
       expect(dot).toBeCloseTo(1, 6);
     }
   });
@@ -244,13 +256,6 @@ describe('out-params', () => {
       const out = new Float32Array(24).fill(Number.NaN);
       const ret = frustumFromViewProj(vp, out);
       expect(ret).toBe(out);
-      expect([...out]).toEqual([...alloc]);
-    });
-
-    it(`viewMatrix writes the same values into out (yaw=${v.yaw})`, () => {
-      const alloc = viewMatrix(v.yaw, v.pitch);
-      const out = new Float32Array(16).fill(Number.NaN);
-      expect(viewMatrix(v.yaw, v.pitch, out)).toBe(out);
       expect([...out]).toEqual([...alloc]);
     });
   }

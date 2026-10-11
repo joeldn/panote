@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import type { Face } from '@panote/core';
 import {
   boundingSphere,
-  sortDrawList,
   mipLevels,
   GLRenderer,
   ContextLostError,
@@ -20,32 +19,6 @@ const rendering = (opts: Options = {}): GLRendererOptions => ({
   ...opts,
 });
 import { buildTileGeometry } from '../tile-geometry.js';
-
-describe('sortDrawList', () => {
-  it('orders coarse levels before finer levels (ascending, stable)', () => {
-    const list: DrawItem[] = [
-      { handle: 1, level: 2 },
-      { handle: 2, level: 0 },
-      { handle: 3, level: 1 },
-      { handle: 4, level: 0 },
-    ];
-    const sorted = sortDrawList(list);
-    expect(sorted.map((d) => d.handle)).toEqual([2, 4, 3, 1]);
-  });
-
-  it('is stable for equal levels', () => {
-    const list: DrawItem[] = [
-      { handle: 10, level: 3 },
-      { handle: 11, level: 3 },
-      { handle: 12, level: 3 },
-    ];
-    expect(sortDrawList(list).map((d) => d.handle)).toEqual([10, 11, 12]);
-  });
-
-  it('returns [] for an empty list', () => {
-    expect(sortDrawList([])).toEqual([]);
-  });
-});
 
 describe('boundingSphere', () => {
   it('centres on the vertex centroid and reaches the farthest vertex', () => {
@@ -430,7 +403,7 @@ describe('GLRenderer', () => {
       const onContextLost = vi.fn();
       const { renderer, fire } = setup({ onContextLost });
       expect(fire('webglcontextlost')).toBe(true);
-      expect(renderer.isContextLost()).toBe(true);
+      expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
       expect(onContextLost).toHaveBeenCalledTimes(1);
     });
 
@@ -465,7 +438,6 @@ describe('GLRenderer', () => {
       fire('webglcontextlost');
       expect(gl.createProgram).toHaveBeenCalledTimes(1);
       fire('webglcontextrestored');
-      expect(renderer.isContextLost()).toBe(false);
       expect(onContextRestored).toHaveBeenCalledTimes(1);
       expect(gl.createProgram).toHaveBeenCalledTimes(2);
       expect(gl.useProgram).toHaveBeenCalledTimes(2);
@@ -488,7 +460,7 @@ describe('GLRenderer', () => {
       gl.createProgram.mockReturnValue(null);
       expect(() => fire('webglcontextrestored')).not.toThrow();
       expect(report).toHaveBeenCalledTimes(1);
-      expect(renderer.isContextLost()).toBe(true);
+      expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
       expect(onContextRestored).not.toHaveBeenCalled();
       expect(() => renderer.uploadTile(grid(), image())).toThrow(ContextLostError);
     });

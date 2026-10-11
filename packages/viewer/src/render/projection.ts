@@ -7,8 +7,8 @@ export type Sphere = { cx: number; cy: number; cz: number; r: number };
 /** 6 planes × [a,b,c,d], each normalized so a²+b²+c²=1. */
 export type Frustum = Float32Array;
 
-export const NEAR = 0.1;
-export const FAR = 100;
+const NEAR = 0.1;
+const FAR = 100;
 
 const DEG2RAD = Math.PI / 180;
 
@@ -57,33 +57,6 @@ function cameraBasis(yaw: number, pitch: number, b: Float64Array): void {
 }
 
 const basis = new Float64Array(8);
-
-/**
- * View matrix for a camera at the origin looking along dirFromYawPitch(yaw,pitch),
- * up = +y. Column-major. Equivalent to three's lookAt(target)+matrixWorldInverse
- * when the camera is at the origin. Writes into `out` when given.
- */
-export function viewMatrix(yaw: number, pitch: number, out: Mat4 = new Float32Array(16)): Mat4 {
-  cameraBasis(yaw, pitch, basis);
-  // Inverse of the camera world matrix: rotation transposed, no translation.
-  out[0] = basis[0]!;
-  out[4] = 0;
-  out[8] = basis[1]!;
-  out[12] = 0;
-  out[1] = basis[2]!;
-  out[5] = basis[3]!;
-  out[9] = basis[4]!;
-  out[13] = 0;
-  out[2] = basis[5]!;
-  out[6] = basis[6]!;
-  out[10] = basis[7]!;
-  out[14] = 0;
-  out[3] = 0;
-  out[7] = 0;
-  out[11] = 0;
-  out[15] = 1;
-  return out;
-}
 
 /**
  * Projection · view, column-major. Writes into `out` when given, so a caller

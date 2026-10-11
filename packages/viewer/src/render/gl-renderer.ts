@@ -14,17 +14,9 @@ export interface DrawItem {
   level: number;
 }
 
-/**
- * The draw list in stacking order, back to front: coarse tiles (low level)
- * at the back, finer levels over them. Stable, pure. render() gets the same
- * result with the depth test while drawing in the reverse order.
- */
-export function sortDrawList(list: DrawItem[]): DrawItem[] {
-  return [...list].sort((a, b) => a.level - b.level);
-}
-
-// Finest level first. Array.prototype.sort is stable, so equal levels keep
-// their list order.
+// Coarse tiles (low level) stack at the back and finer levels over them;
+// render() gets that with the depth test while drawing the finest level
+// first. Array.prototype.sort is stable, so equal levels keep their order.
 function finestFirst(a: DrawItem, b: DrawItem): number {
   return b.level - a.level;
 }
@@ -204,11 +196,6 @@ export class GLRenderer {
     this.canvas.addEventListener('webglcontextlost', this.onLost);
     this.canvas.addEventListener('webglcontextrestored', this.onRestored);
     this.initGL();
-  }
-
-  /** True between a context loss and its restore. */
-  isContextLost(): boolean {
-    return this.lost;
   }
 
   // Without preventDefault the browser never restores the context. A loss
