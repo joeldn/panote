@@ -153,10 +153,14 @@ interface ReadyTile {
 
 /**
  * Uploads per update(). Each one is a texStorage2D, a texSubImage2D and a
- * mipmap generation, about 1-3 ms for a 512 px tile on a phone, so eight
- * decodes landing together would otherwise make one long frame.
+ * mipmap generation, about 1-3 ms for a 512 px tile on a phone, where
+ * UPLOAD_BUDGET_MS lets two or three go per frame. Tiles from the HTTP cache
+ * land in a burst, and on a desktop each upload is a fraction of a ms, so
+ * this cap is what paces them: eight a frame puts a 76-tile view up in ten
+ * frames rather than 26. It also bounds the texture data handed to the GPU
+ * in one frame, which the main-thread clock does not see.
  */
-const MAX_UPLOADS_PER_UPDATE = 3;
+const MAX_UPLOADS_PER_UPDATE = 8;
 /** Stop uploading for this update once this much time has gone. */
 const UPLOAD_BUDGET_MS = 4;
 /**

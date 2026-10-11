@@ -1109,27 +1109,50 @@ describe('TileLayer failure handling', () => {
       return { bitmaps, release: () => held.splice(0).forEach((r) => r()) };
     }
 
-    it('uploads at most three decoded tiles per frame', async () => {
+    /** A layer with a slot for each of the 16 tiles in view, so all 16 decode together. */
+    const wideLayer = (): TileLayer =>
+      new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+        textureBudgetMB: 128,
+        maxConcurrent: 16,
+        now: () => clock,
+      });
+
+    /** Uploads per frame while a burst of decoded tiles drains, each costing `ms`. */
+    async function drainBurst(ms: number): Promise<number[]> {
       const decodes = holdDecodes();
-      const layer = makeLayer();
+      const layer = wideLayer();
       frame(layer, 0);
       await flush();
-      expect(decodes.bitmaps).toHaveLength(8);
-      decodes.release(); // all eight land together
+      expect(decodes.bitmaps).toHaveLength(16);
+      decodes.release(); // all sixteen land together, as from the HTTP cache
       await flush();
       expect(renderer.uploadTile).not.toHaveBeenCalled();
-
+      renderer.uploadTile.mockImplementation(() => {
+        advance(ms);
+        return renderer.uploadTile.mock.calls.length;
+      });
       const perFrame: number[] = [];
-      for (let i = 0; i < 6; i++) {
+      while (readyCount(layer) > 0 && perFrame.length < 20) {
         const before = renderer.uploadTile.mock.calls.length;
+        advance(FRAME_MS);
         frame(layer, 0);
         perFrame.push(renderer.uploadTile.mock.calls.length - before);
-        decodes.release();
-        await flush();
       }
-      expect(perFrame[0]).toBe(3);
-      for (const n of perFrame) expect(n).toBeLessThanOrEqual(3);
       layer.dispose();
+      return perFrame;
+    }
+
+    it('uploads a burst of quick uploads eight per frame', async () => {
+      // 16 tiles from the HTTP cache at 0.3 ms each: two frames, not six.
+      expect(await drainBurst(0.3)).toEqual([8, 8]);
+    });
+
+    it('still holds slow uploads to the frame time budget', async () => {
+      // 1.5 ms each: the third starts at 3 ms, inside the 4 ms budget, and
+      // no fourth starts after it.
+      const perFrame = await drainBurst(1.5);
+      expect(perFrame.slice(0, 5)).toEqual([3, 3, 3, 3, 3]);
+      expect(perFrame.reduce((a, b) => a + b)).toBe(16);
     });
 
     it('stops uploading for the frame once the time budget is spent', async () => {

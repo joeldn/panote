@@ -2774,7 +2774,8 @@ describe('PanoViewer', () => {
       it('asks for another frame while decoded tiles are still queued', async () => {
         let holding = true;
         const net = stubNet({ holdTile: (url) => holding && !url.includes('/0/') });
-        const viewer = new PanoViewer(makeContainer(400, 800));
+        // Wide: a request slot for every tile in view, so they all decode at once.
+        const viewer = new PanoViewer(makeContainer(800, 800), { network: { maxConcurrent: 64 } });
         await viewer.load('pano-a');
         runUntilIdle();
         const base = uploads(viewer);
@@ -2782,7 +2783,7 @@ describe('PanoViewer', () => {
         net.release();
         await flush();
         const decoded = readyOf(viewer).size;
-        expect(decoded).toBeGreaterThan(3); // more than one frame uploads
+        expect(decoded).toBeGreaterThan(8); // more than one frame uploads
         expect(raf.pending).toBe(1);
 
         raf.step();
