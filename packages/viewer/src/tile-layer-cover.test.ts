@@ -81,11 +81,11 @@ describe('TileLayer: coarse tiles covered by finer ones', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  function makeLayer(maxConcurrent = 64): TileLayer {
+  function makeLayer(maxConcurrent = 64, maxLevel = 3): TileLayer {
     const source: CubeTileSource = {
       id: 'pano',
       tileSize: 512,
-      maxLevel: 3,
+      maxLevel,
       loadTile: (t, signal) =>
         new Promise((resolve, reject) => {
           const b = behave(t);
@@ -106,7 +106,7 @@ describe('TileLayer: coarse tiles covered by finer ones', () => {
 
   const tileId = (t: TileAddress): string => `${t.level}/${t.face}/${t.x}-${t.y}`;
 
-  /** A frame: 1600 px tall selects level 2, 3200 level 3, 800 level 1. */
+  /** A frame: 800 px tall selects level 1, and each doubling one level finer. */
   function frame(layer: TileLayer, yaw: number, height = 1600, pitch = 0): void {
     clock += FRAME_MS;
     const view = { yaw, pitch, fov: 70 };
@@ -247,6 +247,67 @@ describe('TileLayer: coarse tiles covered by finer ones', () => {
     for (const k of desired) expect(after.has(parentKey(k)!)).toBe(false);
     layer.dispose();
   });
+
+  it('evicts before it works out what is covered, so an evicted tile uncovers its parent', async () => {
+    const layer = makeLayer(64, 5);
+    await layer.loadBase();
+    await settle(layer, 0, 800);
+    await settle(layer, 0, 1600);
+    // Level 3 to the sides and behind: a cache bigger than the level-4 view,
+    // so the budget below has something to evict.
+    for (const yaw of [Math.PI / 2, Math.PI, -Math.PI / 2]) await settle(layer, yaw, 3200);
+    // Level 4 in view, nothing of it or of level 3 arriving: the finest
+    // resident tile over each is a level-2 one, which hides level 1.
+    behave = () => 'hold';
+    frame(layer, 0, 6400);
+    expectFinestDrawn(layer);
+    const { cache, desired } = internals(layer);
+    const level2 = [...cache.values()].filter((e) => e.level === 2);
+    const inView = level2.find((e) =>
+      [...desired].some((k) => parentKey(parentKey(k)!) === e.key),
+    ) as (Entry & { lastUsed: number }) | undefined;
+    expect(inView).toBeDefined();
+    // It is the oldest, and the budget is one short: the next frame evicts
+    // it. Covering first would hide its level-1 parent over a tile that is
+    // then gone.
+    for (const e of cache.values()) (e as Entry & { lastUsed: number }).lastUsed += 1;
+    inView!.lastUsed = 0;
+    internals(layer).maxTiles = cache.size - 1;
+    expect(internals(layer).maxTiles).toBeGreaterThan(desired.size + 6);
+    frame(layer, 0, 6400);
+    expect(cache.has(inView!.key)).toBe(false);
+    expectFinestDrawn(layer);
+    expect(drawnKeys(layer).has(parentKey(inView!.key)!)).toBe(true);
+    layer.dispose();
+  });
+
+  it('shows the finest resident tile at every level down to 5 through a random walk', async () => {
+    let seed = 7;
+    const random = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const layer = makeLayer(8, 5);
+    await layer.loadBase();
+    internals(layer).maxTiles = 80;
+    behave = () => {
+      const r = random();
+      return r < 0.1 ? 'missing' : r < 0.4 ? 'hold' : 'ok';
+    };
+    let yaw = 0;
+    let pitch = 0;
+    for (let i = 0; i < 200; i++) {
+      yaw += (random() - 0.5) * 0.4;
+      pitch = Math.max(-1.4, Math.min(1.4, pitch + (random() - 0.5) * 0.3));
+      const height = [800, 1600, 3200, 6400, 12800][Math.floor(random() * 5)]!;
+      uploadMs = random() < 0.3 ? 5 : 0;
+      frame(layer, yaw, height, pitch);
+      expectFinestDrawn(layer);
+      for (const release of held.splice(0, Math.floor(random() * held.length))) release();
+      await flush();
+    }
+    layer.dispose();
+  }, 30_000);
 
   it('shows the finest resident tile everywhere through a random walk', async () => {
     let seed = 42;
