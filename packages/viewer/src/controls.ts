@@ -39,8 +39,12 @@ interface PointerSlot {
   y: number;
 }
 
-// A release more than this long after the last move is a rest, not a fling.
-const FLING_STALE_MS = 60;
+// A pointer lets go a moment after it stops: a mouse button or a trackpad
+// click takes time to lift. A release up to FLING_HOLD_MS after the last move
+// flings at full speed, a later one more and more gently, and one
+// FLING_STALE_MS or more after it was a deliberate hold and does not fling.
+const FLING_HOLD_MS = 40;
+const FLING_STALE_MS = 100;
 // Release velocity is measured over the moves in this trailing window.
 const FLING_WINDOW_MS = 100;
 // The host's flick() takes px per 60 Hz frame.
@@ -128,7 +132,7 @@ export class Controls {
     el.addEventListener('pointercancel', this.onCancel);
     // Capture lost without a pointerup (the canvas re-parented, a browser or
     // OS takeover that sends a mouse no pointercancel) ends the drag too.
-    el.addEventListener('lostpointercapture', this.onCancel);
+    el.addEventListener('lostpointercapture', this.onUp);
     if (this.wheelMode !== 'off') el.addEventListener('wheel', this.onWheel, { passive: false });
     el.addEventListener('contextmenu', this.onContextMenu);
     if (this.opts.doubleClickZoom !== false) el.addEventListener('dblclick', this.onDblClick);
@@ -174,16 +178,19 @@ export class Controls {
   }
 
   /**
-   * Release velocity in px per 60 Hz frame, from the samples in the last
-   * FLING_WINDOW_MS. Zero if the pointer has rested for FLING_STALE_MS:
-   * no pointermove fires while a finger holds still, so without this check
-   * a pause before release would still fling with the old velocity.
+   * Release velocity in px per 60 Hz frame: the time-weighted mean over the
+   * samples in the last FLING_WINDOW_MS, faded by how long the pointer rested
+   * before `now`. No pointermove fires while a pointer holds still, so
+   * without the fade a pause before release would fling with the old speed.
    */
   private releaseVelocity(now: number): [number, number] {
     if (this.sampleCount < 2) return [0, 0];
     const newest = (this.sampleHead - 1 + SAMPLES) % SAMPLES;
     const tNew = this.sampleT[newest]!;
-    if (now - tNew > FLING_STALE_MS) return [0, 0];
+    const rest = now - tNew;
+    if (rest >= FLING_STALE_MS) return [0, 0];
+    const fade =
+      rest <= FLING_HOLD_MS ? 1 : (FLING_STALE_MS - rest) / (FLING_STALE_MS - FLING_HOLD_MS);
     let oldest = newest;
     for (let i = 1; i < this.sampleCount; i++) {
       const j = (newest - i + SAMPLES) % SAMPLES;
@@ -192,7 +199,7 @@ export class Controls {
     }
     const dt = tNew - this.sampleT[oldest]!;
     if (dt <= 0) return [0, 0];
-    const k = FRAME_MS / dt;
+    const k = (FRAME_MS / dt) * fade;
     return [
       (this.sampleX[newest]! - this.sampleX[oldest]!) * k,
       (this.sampleY[newest]! - this.sampleY[oldest]!) * k,
@@ -231,10 +238,14 @@ export class Controls {
   private onMove = (e: PointerEvent) => {
     const slot = this.slotFor(e.pointerId);
     if (!slot) return;
-    // A mouse moving with no button held missed its pointerup: a hover must
-    // not pan, and the slot must be free for the next press.
+    // A mouse moving with no button held has been released: a hover must not
+    // pan, and the slot must be free for the next press. macOS browsers read
+    // `buttons` from the live button state, so this can be the last move of
+    // a flick, handled just after the click lifted: it releases like the
+    // pointerup, which then finds no slot. A pointerup missed for good shows
+    // up long after the last move, and the rest fades its fling to nothing.
     if (e.pointerType === 'mouse' && e.buttons === 0) {
-      this.release(e, false);
+      this.release(e, true);
       return;
     }
     slot.x = e.clientX;
@@ -260,6 +271,9 @@ export class Controls {
     this.pushSample(e.timeStamp, e.clientX, e.clientY);
   };
 
+  // A pointerup, or the capture lost with the pointer still held: a
+  // pointercancel comes first when the browser takes the pointer over, so
+  // capture lost on a held pointer is a release.
   private onUp = (e: PointerEvent) => this.release(e, true);
 
   // A cancelled pointer (system gesture, browser takeover) never flings.
@@ -267,13 +281,16 @@ export class Controls {
 
   private release(e: PointerEvent, fling: boolean) {
     if (!this.slotFor(e.pointerId)) return;
+    // Free the slot first: a lostpointercapture fired from inside
+    // releasePointerCapture then finds no slot, and cannot end the drag
+    // again without its fling.
+    if (this.p0?.id === e.pointerId) this.p0 = null;
+    else this.p1 = null;
     try {
       this.el.releasePointerCapture(e.pointerId);
     } catch {
       // ignore — pointer may not be captured
     }
-    if (this.p0?.id === e.pointerId) this.p0 = null;
-    else this.p1 = null;
     this.pinchDist0 = 0;
     const left = this.p0 ?? this.p1;
     if (left) {
@@ -423,7 +440,7 @@ export class Controls {
     this.el.removeEventListener('pointermove', this.onMove);
     this.el.removeEventListener('pointerup', this.onUp);
     this.el.removeEventListener('pointercancel', this.onCancel);
-    this.el.removeEventListener('lostpointercapture', this.onCancel);
+    this.el.removeEventListener('lostpointercapture', this.onUp);
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.onContextMenu);
     this.el.removeEventListener('dblclick', this.onDblClick);

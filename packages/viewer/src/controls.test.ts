@@ -134,31 +134,33 @@ describe('Controls: pointer drag and release', () => {
   it('releases on lostpointercapture, so the next press starts a fresh drag', () => {
     pointer('pointerdown', { x: 100, y: 0, t: 0 });
     pointer('pointermove', { x: 120, y: 0, t: 16 });
-    // Capture lost (the canvas re-parented, a browser takeover) with no pointerup.
-    pointer('lostpointercapture', { x: 120, y: 0, t: 20 });
+    // Capture lost (the canvas re-parented, a browser takeover) with no
+    // pointerup, after the pointer had come to rest.
+    pointer('lostpointercapture', { x: 120, y: 0, t: 200 });
     // The next press starts a fresh drag from where it lands, with no jump.
-    pointer('pointerdown', { x: 600, y: 0, t: 60 });
-    pointer('pointermove', { x: 601, y: 0, t: 76 });
+    pointer('pointerdown', { x: 600, y: 0, t: 260 });
+    pointer('pointermove', { x: 601, y: 0, t: 276 });
     expect(host.panByPixels.mock.calls).toEqual([
       [20, 0],
       [1, 0],
     ]);
-    expect(host.flick).not.toHaveBeenCalled();
+    expect(host.flick.mock.calls).toEqual([[0, 0]]);
     expect(el.style['cursor']).toBe('grabbing');
   });
 
   it('treats a mouse move with no button held as a missed pointerup', () => {
     pointer('pointerdown', { x: 100, y: 0, t: 0 });
     pointer('pointermove', { x: 120, y: 0, t: 16 });
-    pointer('pointermove', { x: 400, y: 0, t: 40, buttons: 0 });
+    // A hover long after the last drag move: the pointerup went missing.
+    pointer('pointermove', { x: 400, y: 0, t: 400, buttons: 0 });
     expect(el.style['cursor']).toBe('grab');
-    pointer('pointerdown', { x: 600, y: 0, t: 60 });
-    pointer('pointermove', { x: 601, y: 0, t: 76 });
+    pointer('pointerdown', { x: 600, y: 0, t: 460 });
+    pointer('pointermove', { x: 601, y: 0, t: 476 });
     expect(host.panByPixels.mock.calls).toEqual([
       [20, 0],
       [1, 0],
     ]);
-    expect(host.flick).not.toHaveBeenCalled();
+    expect(host.flick.mock.calls).toEqual([[0, 0]]);
   });
 
   it.each(['touch', 'pen'])('keeps dragging a %s that reports no buttons', (pointerType) => {
@@ -734,5 +736,164 @@ describe('Controls: interaction options', () => {
     setup({ cursor: false });
     pointer('pointerdown', { x: 0, y: 0, t: 0 });
     expect(el.style.cursor).toBeUndefined();
+  });
+});
+
+/** The vx of the one flick so far, 0 when there was none. */
+function flickVx(): number {
+  expect(host.flick.mock.calls.length).toBeLessThanOrEqual(1);
+  return host.flick.mock.calls[0]?.[0] ?? 0;
+}
+
+describe('Controls: release velocity', () => {
+  beforeEach(() => {
+    setup();
+  });
+
+  it('still flings a gentle release that slowed to a stop just before letting go', () => {
+    // A mouse button or trackpad click takes a moment to lift after the hand
+    // stops; 70 ms is not a deliberate hold.
+    const t = drag(5);
+    pointer('pointerup', { x: 50, y: 0, t: t + 70 });
+    expect(flickVx()).toBeGreaterThan(1);
+  });
+
+  it('fades the fling with the rest before release, to none at 100 ms', () => {
+    const after = (rest: number) => {
+      setup();
+      const t = drag(5);
+      pointer('pointerup', { x: 50, y: 0, t: t + rest });
+      return flickVx();
+    };
+    const full = after(5);
+    expect(after(40)).toBeCloseTo(full, 6);
+    expect(after(60)).toBeLessThan(full);
+    expect(after(60)).toBeGreaterThan(after(80));
+    expect(after(80)).toBeGreaterThan(after(95));
+    expect(after(95)).toBeGreaterThan(0);
+    expect(after(100)).toBe(0);
+    expect(after(150)).toBe(0);
+  });
+
+  it('flings when the last drag move already reports the button up', () => {
+    // macOS browsers read `buttons` from the live button state, so a drag
+    // move handled just after the click lifted says no button is held.
+    const t = drag(5);
+    pointer('pointermove', { x: 60, y: 0, t: t + 8, buttons: 0 });
+    // The drag is over: the move does not pan and the pointerup is ignored.
+    pointer('pointerup', { x: 60, y: 0, t: t + 9 });
+    expect(host.panByPixels).toHaveBeenCalledTimes(5);
+    expect(host.flick).toHaveBeenCalledTimes(1);
+    expect(flickVx()).toBeGreaterThan(8);
+    expect(el.style['cursor']).toBe('grab');
+  });
+
+  it('flings when the capture is lost just ahead of the pointerup', () => {
+    const t = drag(5);
+    pointer('lostpointercapture', { x: 50, y: 0, t: t + 4 });
+    pointer('pointerup', { x: 50, y: 0, t: t + 4 });
+    expect(host.flick).toHaveBeenCalledTimes(1);
+    expect(flickVx()).toBeGreaterThan(8);
+  });
+
+  it('flings once when releasing the capture fires lostpointercapture at once', () => {
+    el.releasePointerCapture = () => {
+      pointer('lostpointercapture', { x: 50, y: 0, t: 85 });
+    };
+    const t = drag(5);
+    pointer('pointerup', { x: 50, y: 0, t: t + 5 });
+    expect(host.flick).toHaveBeenCalledTimes(1);
+    expect(flickVx()).toBeGreaterThan(8);
+  });
+
+  it('never flings on a pointercancel and the lostpointercapture after it', () => {
+    const t = drag(5);
+    pointer('pointercancel', { x: 50, y: 0, t: t + 5 });
+    pointer('lostpointercapture', { x: 50, y: 0, t: t + 5 });
+    expect(host.flick).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A drag with a realistic flick: it speeds up, peaks at 70% of the way and
+   * eases to `endFrac` of the peak at release. Hardware samples come at
+   * irregular `hw` intervals; Chrome hands them over once per display frame
+   * (`coalesceHz`), the last one in each frame, and flushes the rest before
+   * the pointerup; Safari sends each. Returns the true release speed in px
+   * per 60 Hz frame.
+   */
+  function flickTrace(o: {
+    peak: number; // px per ms
+    endFrac: number;
+    T: number;
+    rest: number;
+    hw: [number, number];
+    coalesceHz: number | null;
+    pointerType?: string;
+    seed?: number;
+  }): number {
+    let seed = o.seed ?? 7;
+    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const v = (t: number) => {
+      const tp = 0.7 * o.T;
+      if (t <= tp) return o.peak * Math.sin((Math.PI / 2) * (t / tp));
+      return o.peak * (1 - ((1 - o.endFrac) * (t - tp)) / (o.T - tp));
+    };
+    const pointerType = o.pointerType ?? 'mouse';
+    const t0 = 1000;
+    pointer('pointerdown', { x: 0, y: 0, t: t0, pointerType });
+    let t = 0;
+    let x = 0;
+    let frameEnd = o.coalesceHz ? rand() * (1000 / o.coalesceHz) : 0;
+    let pending: { t: number; x: number } | null = null;
+    const send = (s: { t: number; x: number }) =>
+      pointer('pointermove', { x: s.x, y: 0, t: t0 + s.t, pointerType });
+    while (t < o.T) {
+      const next = Math.min(o.T, t + o.hw[0] + rand() * (o.hw[1] - o.hw[0]));
+      for (; t < next - 1e-9; t = Math.min(next, t + 0.25)) {
+        x += v(t + Math.min(0.25, next - t) / 2) * Math.min(0.25, next - t);
+      }
+      const s = { t, x };
+      if (!o.coalesceHz) send(s);
+      else {
+        while (s.t > frameEnd) {
+          if (pending) send(pending);
+          pending = null;
+          frameEnd += 1000 / o.coalesceHz;
+        }
+        pending = s;
+      }
+    }
+    if (pending) send(pending);
+    pointer('pointerup', { x, y: 0, t: t0 + o.T + o.rest, pointerType });
+    pointer('lostpointercapture', { x, y: 0, t: t0 + o.T + o.rest, pointerType });
+    return v(o.T) * (1000 / 60);
+  }
+
+  const mouse = { endFrac: 0.85, T: 220, rest: 4, hw: [4, 12] as [number, number] };
+  it.each([
+    ['a gentle mouse flick at 60 Hz', { ...mouse, peak: 0.5, coalesceHz: 60 }],
+    ['a medium mouse flick at 60 Hz', { ...mouse, peak: 1.2, coalesceHz: 60 }],
+    ['a gentle mouse flick at 120 Hz', { ...mouse, peak: 0.5, coalesceHz: 120 }],
+    ['a medium mouse flick at 120 Hz', { ...mouse, peak: 1.2, coalesceHz: 120 }],
+    ['a release 30 ms after the last move', { ...mouse, peak: 1.2, coalesceHz: 60, rest: 30 }],
+    ['a gentle Safari flick, uncoalesced', { ...mouse, peak: 0.5, coalesceHz: null, hw: [4, 20] }],
+    [
+      'a trackpad click-drag that slows before the click lifts',
+      { peak: 0.8, endFrac: 0.6, T: 300, rest: 25, hw: [8, 16], coalesceHz: null },
+    ],
+    [
+      'a touch swipe',
+      { peak: 1, endFrac: 0.9, T: 160, rest: 6, hw: [4, 20], coalesceHz: 60, pointerType: 'touch' },
+    ],
+  ] as const)('flings %s at about its release speed', (_name, o) => {
+    const trueV = flickTrace({ ...o, hw: [...o.hw] });
+    const vx = flickVx();
+    expect(vx).toBeGreaterThan(trueV * 0.8);
+    expect(vx).toBeLessThan(trueV * 1.4);
+  });
+
+  it('does not fling a flick held still for 100 ms before release', () => {
+    flickTrace({ ...mouse, peak: 1.2, coalesceHz: 60, hw: [4, 12], rest: 100 });
+    expect(flickVx()).toBe(0);
   });
 });

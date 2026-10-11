@@ -758,6 +758,61 @@ describe('PanoViewer', () => {
       }
     });
 
+    it('glides a released drag smoothly from its first frame at 60, 120 and 144 Hz', () => {
+      // A drag at 0.6 px/ms, one move per display frame as Chrome sends them,
+      // released mid-move; then the camera's yaw speed frame by frame.
+      const glide = (hz: number) => {
+        const viewer = new PanoViewer(makeContainer(1422, 800));
+        runUntilIdle();
+        const period = 1000 / hz;
+        const ev = (x: number, t: number, buttons = 1) => ({
+          pointerId: 1,
+          pointerType: 'mouse',
+          button: 0,
+          buttons,
+          clientX: x,
+          clientY: 300,
+          timeStamp: t,
+        });
+        let x = 300;
+        canvasListener(viewer, 'pointerdown')(ev(x, raf.now));
+        for (let i = 0; i < 20; i++) {
+          x += 0.6 * period;
+          canvasListener(viewer, 'pointermove')(ev(x, raf.now + period));
+          raf.step(raf.now + period);
+        }
+        canvasListener(viewer, 'pointerup')(ev(x, raf.now + 2, 0));
+        const speeds: number[] = [];
+        const released = internals(viewer).view.yaw;
+        let yaw = released;
+        while (raf.pending > 0 && speeds.length < 5000) {
+          raf.step(raf.now + period);
+          const now = internals(viewer).view.yaw;
+          speeds.push(Math.abs(now - yaw) / period);
+          yaw = now;
+        }
+        const total = Math.abs(internals(viewer).view.yaw - released);
+        viewer.dispose();
+        return { speeds, total };
+      };
+      const at60 = glide(60);
+      expect(at60.speeds.length).toBeGreaterThan(30);
+      for (const hz of [60, 120, 144]) {
+        const { speeds, total } = hz === 60 ? at60 : glide(hz);
+        // Eases in: the first frame moves no faster than the next ones.
+        expect(speeds[0]!).toBeLessThan(speeds[1]!);
+        const peak = speeds.indexOf(Math.max(...speeds));
+        for (let i = 1; i <= peak; i++) expect(speeds[i]!).toBeGreaterThanOrEqual(speeds[i - 1]!);
+        // Then only slows, and never stalls, until it settles.
+        for (let i = peak + 1; i < speeds.length - 1; i++) {
+          expect(speeds[i]!).toBeLessThanOrEqual(speeds[i - 1]!);
+          expect(speeds[i]!).toBeGreaterThan(0);
+        }
+        expect(Math.abs(total / at60.total - 1)).toBeLessThan(0.05);
+        expect(Math.abs(Math.max(...speeds) / Math.max(...at60.speeds) - 1)).toBeLessThan(0.1);
+      }
+    });
+
     it('eases toward a new view at the same pace at 30 and 120 Hz', () => {
       const after100ms = (hz: number): number => {
         const viewer = new PanoViewer(makeContainer(400, 800));
