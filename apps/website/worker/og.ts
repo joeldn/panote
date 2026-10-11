@@ -1,4 +1,4 @@
-import { FRONT_FACE, ogImageUrl, previewUrl, tilePath } from '@panote/core';
+import { ogImageUrl, previewUrl } from '@panote/core';
 
 import type { TourBoot } from './boot.js';
 
@@ -24,13 +24,17 @@ interface PreviewImage {
 const OG_IMAGE = { width: 1200, height: 630, type: 'image/jpeg' } as const;
 // What the tiler writes next to the tiles when the manifest says `preview: true`.
 const EQUIRECT_PREVIEW = { width: 1024, height: 512, type: 'image/webp' } as const;
-const TILE_TYPES = { jpg: 'image/jpeg', webp: 'image/webp' } as const;
 
 /**
  * The start scene's own image: the tiler's 1200×630 og.jpg (a normal-camera view) when it
  * wrote one, else its 1024×512 equirect preview (2:1, close enough to the 1.91:1 large
- * cards), else the square level-0 front face (`nz`, ahead at yaw 0). Scrapers need an
- * absolute https URL, so a CDN root that isn't one gives no image.
+ * cards), else none. Scrapers need an absolute https URL, so a CDN root that isn't one
+ * gives no image either.
+ *
+ * There is deliberately no cube-face fallback: a face tile is stored mirrored left to right
+ * (faceUVToDir in @panote/core), and a scraper can't flip it back, so it would show the
+ * scene backwards. Only a pano tiled before preview.webp existed and never backfilled with
+ * og.jpg lands here, and a text-only card beats a mirrored one.
  */
 function previewImage(boot: TourBoot, tilesBase: string): PreviewImage | null {
   const { manifest, start } = boot;
@@ -46,21 +50,21 @@ function previewImage(boot: TourBoot, tilesBase: string): PreviewImage | null {
       ...EQUIRECT_PREVIEW,
     };
   }
-  return {
-    url: tilePath(tilesBase, manifest.pano, 0, FRONT_FACE, 0, 0, manifest.format, manifest.version),
-    type: TILE_TYPES[manifest.format],
-    width: manifest.tileSize,
-    height: manifest.tileSize,
-    alt,
-  };
+  return null;
 }
+
+// C0 controls, DEL and NEL (U+0085, a line break `\s` doesn't match).
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const CONTROL = /[\u0000-\u001f\u007f\u0085]/g;
 
 /**
  * The owner's description on one line (meta content has no line breaks), else a line
- * generated from the scene count for tours without one.
+ * generated from the scene count for tours without one. The admin API only stores plain
+ * text, but a hand-written bundle goes through a more lenient schema, so control
+ * characters become spaces here too.
  */
 export function tourDescription(description: string | undefined, sceneCount: number): string {
-  const line = description?.replace(/\s+/g, ' ').trim();
+  const line = description?.replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
   if (line) return line;
   if (sceneCount === 0) return 'A 360° virtual tour';
   return `A 360° virtual tour · ${sceneCount} ${sceneCount === 1 ? 'scene' : 'scenes'}`;
@@ -99,8 +103,7 @@ export function linkPreviewTags(
       meta('og:image:alt', image.alt),
     );
   }
-  // Only a wide image suits the large card; a square tile or none gets the small one.
-  const large = image !== null && image.width > image.height;
-  tags.push(meta('twitter:card', large ? 'summary_large_image' : 'summary'));
+  // Both images are wide, so they suit the large card; without one, the small one.
+  tags.push(meta('twitter:card', image ? 'summary_large_image' : 'summary'));
   return tags.join('');
 }

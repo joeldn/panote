@@ -5,7 +5,8 @@ export type Face = (typeof FACES)[number];
 
 /**
  * The face straight ahead at yaw 0, pitch 0: the viewer looks along -z there, which is
- * the middle column of the equirect. Link previews and covers use its level-0 tile.
+ * the middle column of the equirect. The admin's covers fall back to its level-0 tile,
+ * flipped left to right: a face laid out by faceUVToDir is mirrored when shown flat.
  */
 export const FRONT_FACE: Face = 'nz';
 
