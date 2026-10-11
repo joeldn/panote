@@ -1,4 +1,8 @@
-import { loadPublishedTour, type PublishedTourResult } from '@internal/web-kit';
+import {
+  loadPublishedTour,
+  publishedTourFromBoot,
+  type PublishedTourResult,
+} from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams, useRouteError } from 'react-router';
 
@@ -10,7 +14,7 @@ type Loaded = { status: 'error' } | Exclude<PublishedTourResult, { kind: 'redire
 
 /**
  * The tour data the website Worker inlined for the slug it served (`#pn-boot`), parsed but
- * unvalidated; loadPublishedTour checks the slug and schemas and otherwise fetches.
+ * unvalidated; publishedTourFromBoot checks the slug and schemas.
  */
 function workerBoot(): unknown {
   const text = document.getElementById('pn-boot')?.textContent;
@@ -31,14 +35,21 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
   const [attempt, setAttempt] = useState(0);
   // Results are keyed by request, so a new slug or retry reads as loading without a reset.
   const request = `${cdnBase}|${slug}|${embed}|${attempt}`;
-  const [loaded, setLoaded] = useState<{ request: string; state: Loaded } | null>(null);
+  // The tour the Worker inlined is read while rendering, so the first render is the tour
+  // and its viewer starts loading in that commit, not a loading div and an effect later.
+  // Only on mount: a retry always goes to the network, in case the inlined data is what
+  // failed, and a new slug was not the one the Worker served.
+  const [loaded, setLoaded] = useState<{ request: string; state: Loaded } | null>(() => {
+    const tour = publishedTourFromBoot(workerBoot(), slug);
+    return tour && { request, state: { kind: 'tour', tour } };
+  });
   const state = loaded?.request === request ? loaded.state : null;
+  const settled = state !== null;
 
   useEffect(() => {
+    if (settled) return;
     const ac = new AbortController();
-    // A retry always goes to the network, in case the inlined data is what failed.
-    const boot = attempt === 0 ? workerBoot() : null;
-    loadPublishedTour(cdnBase, slug, { signal: ac.signal, boot }).then(
+    loadPublishedTour(cdnBase, slug, { signal: ac.signal }).then(
       (result) => {
         if (ac.signal.aborted) return;
         // Only reached without the website Worker (local dev); it 308s aliases itself.
@@ -57,7 +68,7 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
     return () => ac.abort();
     // `search` is read only when following an alias; a ?pano= change doesn't reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cdnBase, slug, embed, navigate, request, attempt]);
+  }, [cdnBase, slug, embed, navigate, request, settled]);
 
   if (state && 'kind' in state && state.kind === 'tour') {
     return <TourView key={state.tour.tourId} tour={state.tour} embed={embed} />;

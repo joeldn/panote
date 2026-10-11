@@ -1,14 +1,15 @@
 import { useRef } from 'react';
 
 import type { ViewerLinkArrow } from './types.js';
-import { onStage, useStageBox, useViewerFrame } from './use-render.js';
+import { onStage, setShown, useStageBox, useViewerFrame } from './use-render.js';
 
 // Two floor points along the link's heading: near the feet and toward the horizon.
 const PITCH_NEAR = -0.6;
 const PITCH_FAR = -0.2;
-// Half the largest chevron (56 px at scale 1.5) plus its ring: a chevron
-// centred this far past the stage edge still shows a sliver.
-const EDGE_MARGIN = 44;
+// Half the largest chevron (56 px at scale 1.5) plus its ring, and the near
+// end the floor's perspective widens (about 47 px from the centre at 1.5): a
+// chevron centred this far past the stage edge still shows a sliver.
+const EDGE_MARGIN = 48;
 
 export interface FloorLinksProps {
   links: readonly ViewerLinkArrow[];
@@ -33,7 +34,7 @@ export function FloorLinks({ links, onGo }: FloorLinksProps) {
       const y = (near.y + far.y) / 2;
       // Off the stage, the button would still take Tab focus and be read out.
       const shown = !behind && onStage(box.current, x, y, EDGE_MARGIN);
-      el.style.visibility = shown ? 'visible' : 'hidden';
+      setShown(el, shown, v);
       if (!shown) continue;
       const dx = far.x - near.x;
       const dy = far.y - near.y;

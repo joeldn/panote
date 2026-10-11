@@ -74,6 +74,8 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
   const [sharing, setSharing] = useState(false);
   // Stays true after the first Share, so the sheet keeps its close transition.
   const [shareOpened, setShareOpened] = useState(false);
+  // The sheet's chunk is still on its way.
+  const [shareLoading, setShareLoading] = useState(false);
   // Set once a scene is on screen; a view is only counted from then on.
   const [shown, setShown] = useState(false);
   const surface = embed ? 'embed' : 'page';
@@ -111,6 +113,7 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
           setSharing(true);
         },
         onShareIntent: prefetchShareSheet,
+        sharePending: sharing && shareLoading,
       })}
       overlay={(panoId) =>
         embed && (
@@ -148,6 +151,7 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
         <LazyShareSheet
           open={sharing}
           onClose={() => setSharing(false)}
+          onPending={setShareLoading}
           variant="visitor"
           siteOrigin={config.siteOrigin}
           title={tour.title}

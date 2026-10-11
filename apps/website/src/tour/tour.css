@@ -90,7 +90,7 @@
 .tour-share-fallback a {
   color: inherit;
 }
-.tour-share-fallback__close {
+.tour-share-fallback__btn {
   flex: none;
   padding: 4px 10px;
   border: 0;
@@ -99,6 +99,10 @@
   color: #fff;
   font: inherit;
   cursor: pointer;
+}
+.tour-share-fallback__btn--quiet {
+  background: var(--ink-06);
+  color: var(--ink);
 }
 
 /* Unavailable placeholder (also the embed placeholder). */

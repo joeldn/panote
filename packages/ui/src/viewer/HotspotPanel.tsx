@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import { pointIcon } from '../icons/names.js';
 import { renderMarkdown } from '../markdown.js';
+import { usePanoViewer } from '../viewer-context.js';
 import type { ViewerHotspot, ViewerMedia } from './types.js';
 
 const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';
@@ -81,15 +82,25 @@ export function HotspotPanel({ hotspot, onClose, isAllowedMediaUrl = NONE }: Hot
   // go back to its marker when it closes. Switching points while open re-focuses
   // the panel and hands focus to the newer point's marker. The marker is looked up,
   // not taken from document.activeElement: Safari doesn't focus a tapped button.
+  // A marker the camera has turned away from is hidden and can't take focus, so
+  // the viewer takes it instead, as when a focused marker hides.
   const panel = useRef<HTMLElement>(null);
   const marker = useRef<HTMLElement | null>(null);
+  const stageViewer = usePanoViewer();
+  const viewer = useRef(stageViewer);
+  useEffect(() => {
+    viewer.current = stageViewer;
+  });
   useEffect(() => {
     marker.current = markerFor(panel.current, hotspot.id);
     panel.current?.focus({ preventScroll: true });
   }, [hotspot.id]);
   useEffect(
     () => () => {
-      if (marker.current?.isConnected) marker.current.focus({ preventScroll: true });
+      const el = marker.current;
+      if (!el?.isConnected) return;
+      if (viewer.current && getComputedStyle(el).visibility === 'hidden') viewer.current.focus();
+      else el.focus({ preventScroll: true });
     },
     [],
   );

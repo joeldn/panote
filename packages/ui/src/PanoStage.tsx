@@ -6,7 +6,15 @@ import {
   type View,
   type ViewerOptions,
 } from '@panote/viewer';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 
 import { cx } from './cx.js';
 import { panoteViewerPreset } from './panote-viewer.js';
@@ -186,7 +194,9 @@ export function PanoStage({
     onLoadError,
     onPreviewError,
   });
-  useEffect(() => {
+  // A layout effect, so the viewer effect below (a layout effect too) reads this
+  // render's props.
+  useLayoutEffect(() => {
     latest.current = {
       view,
       north,
@@ -212,7 +222,11 @@ export function PanoStage({
   const loaded = useRef<StageLoad | null>(null);
   // The load whose pano the viewer last reported on screen ('scene-change').
   const landed = useRef<StageLoad | null>(null);
-  useEffect(() => {
+  // A layout effect: React applies a state update made here at once, so the re-render
+  // with the viewer, and the load effect below that starts its first load, run in this
+  // same task, before the browser paints, rather than a frame or two later. StrictMode's
+  // remount disposes the first viewer before that re-render, so only the second loads.
+  useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const l = latest.current;
@@ -279,12 +293,14 @@ export function PanoStage({
     // counts as not shown: the preview path runs again and puts it back over
     // whatever tiles the viewer reloads (for a replace, the old ones).
     const shownKey = samePano && prev.restores === restores ? prev.previewKey : null;
-    // A failed change leaves the pano the viewer last landed on screen, so
-    // going back to it (TourViewer's snap-back) needs no load: one would only
-    // crossfade it down to its base level and fetch its manifest again.
+    // A change that failed, or is still in flight, leaves the pano the viewer
+    // last landed on screen, so going back to it (TourViewer's snap-back, or
+    // the visitor picking it again) needs no load: one would only crossfade it
+    // down to its base level and fetch its manifest again. A change in flight
+    // is cancelled instead, which keeps the camera too.
     const back = landed.current;
     if (
-      prev?.failed &&
+      prev !== null &&
       !samePano &&
       back?.viewer === viewer &&
       !back.failed &&
@@ -293,6 +309,7 @@ export function PanoStage({
       back.restores === restores &&
       (stagePreviewKey === null || stagePreviewKey === back.previewKey)
     ) {
+      if (!prev.failed) viewer.cancelLoad();
       loaded.current = { ...back, failed: false };
       return;
     }

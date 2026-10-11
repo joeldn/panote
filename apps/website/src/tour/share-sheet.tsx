@@ -1,5 +1,16 @@
+import { cx, useCopy, type CopyState } from '@internal/ui';
 import type { ShareModalProps } from '@internal/ui/share';
-import { Component, lazy, Suspense, useState, type ReactNode } from 'react';
+import {
+  Component,
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 
 import { isChunkLoadError } from '../chunk-reload.js';
 import { loadShare } from './share-chunk.js';
@@ -29,12 +40,29 @@ class SheetBoundary extends Component<
 type Attempt = 'first' | 'retry' | 'failed';
 
 /**
+ * Suspense's fallback: reports that the sheet is on its way for as long as it is mounted.
+ * A layout effect, so Share stops spinning in the same frame the sheet appears.
+ */
+function Pending({ onPending }: { onPending: ((pending: boolean) => void) | undefined }) {
+  useLayoutEffect(() => {
+    onPending?.(true);
+    return () => onPending?.(false);
+  }, [onPending]);
+  return null;
+}
+
+export interface LazyShareSheetProps extends ShareModalProps {
+  /** True while the sheet's chunk is loading, false once it is up or has failed. */
+  onPending?: (pending: boolean) => void;
+}
+
+/**
  * The visitor ShareModal, loaded on demand. A chunk that fails to load (say, gone after a
  * deploy) is retried once; if that fails too, or the sheet throws, a plain copyable link
  * shows instead. Unlike the lazy routes this never reloads the page: the visitor is in
  * the middle of a tour.
  */
-export function LazyShareSheet(props: ShareModalProps) {
+export function LazyShareSheet({ onPending, ...props }: LazyShareSheetProps) {
   const [attempt, setAttempt] = useState<Attempt>('first');
   const [sheets] = useState(lazySheets);
   if (attempt === 'failed') return props.open ? <ShareFallback {...props} /> : null;
@@ -51,7 +79,7 @@ export function LazyShareSheet(props: ShareModalProps) {
         setAttempt('failed');
       }}
     >
-      <Suspense fallback={null}>
+      <Suspense fallback={<Pending onPending={onPending} />}>
         <Sheet {...props} />
       </Suspense>
     </SheetBoundary>
@@ -62,10 +90,31 @@ export function LazyShareSheet(props: ShareModalProps) {
 const shareUrl = (siteOrigin: string, slug: string) =>
   `${siteOrigin.replace(/\/+$/, '')}/s/${encodeURIComponent(slug)}`;
 
+const copyLabel = (state: CopyState): string =>
+  state === 'copied' ? 'Copied ✓' : state === 'failed' ? 'Copy failed' : 'Copy link';
+
+/**
+ * The plain link, for when the sheet can't load. Focus moves in on open and goes back to
+ * what had it (the Share button) on close; Escape closes it.
+ */
 function ShareFallback({ onClose, siteOrigin, slug }: ShareModalProps) {
   const url = slug ? shareUrl(siteOrigin, slug) : null;
+  const [copied, copy] = useCopy();
+  const first = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    first.current?.focus();
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, []);
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    onClose();
+  };
   return (
-    <div className="tour-share-fallback" role="alert">
+    <div className="tour-share-fallback" role="alert" onKeyDown={onKeyDown}>
       <p>
         Couldn&apos;t open sharing. Reload the page to try again
         {url ? (
@@ -76,7 +125,22 @@ function ShareFallback({ onClose, siteOrigin, slug }: ShareModalProps) {
           '.'
         )}
       </p>
-      <button type="button" className="tour-share-fallback__close" onClick={onClose}>
+      {url && (
+        <button
+          ref={first}
+          type="button"
+          className="tour-share-fallback__btn"
+          onClick={() => void copy(url)}
+        >
+          {copyLabel(copied)}
+        </button>
+      )}
+      <button
+        ref={url ? undefined : first}
+        type="button"
+        className={cx('tour-share-fallback__btn', url && 'tour-share-fallback__btn--quiet')}
+        onClick={onClose}
+      >
         Close
       </button>
     </div>

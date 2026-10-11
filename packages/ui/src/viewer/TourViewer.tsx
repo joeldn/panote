@@ -65,6 +65,12 @@ export interface TourViewerProps {
    * For warming up a share sheet that loads on demand.
    */
   onShareIntent?: () => void;
+  /**
+   * Share was pressed and what it opens is still loading: Share shows a
+   * spinner and is `aria-busy`, and stays pressable (disabling it would drop
+   * its focus).
+   */
+  sharePending?: boolean;
   onSceneChange?: (panoId: string) => void;
   onHotspotOpen?: (panoId: string, hotspotId: string) => void;
   onLoadError?: (error: unknown, panoId: string) => void;
@@ -211,6 +217,7 @@ export function TourViewer({
   overlay,
   onShare,
   onShareIntent,
+  sharePending = false,
   onSceneChange,
   onHotspotOpen,
   onLoadError,
@@ -358,7 +365,8 @@ export function TourViewer({
             scenes={scenes}
             current={panoId}
             {...(moving && { pending: target.id })}
-            // Back to the scene on screen cancels a change and keeps the camera.
+            // Back to the scene on screen cancels the change in flight: PanoStage
+            // calls cancelLoad rather than load it again, so its tiles and camera stay.
             onSelect={(id) =>
               go(id, id === panoId ? undefined : data.tour?.scenes[id]?.initialView)
             }
@@ -376,6 +384,7 @@ export function TourViewer({
               className="pn-controls__btn"
               aria-label="Share"
               aria-haspopup="dialog"
+              aria-busy={sharePending || undefined}
               onPointerEnter={onShareIntent}
               onFocus={onShareIntent}
               onTouchStart={onShareIntent}
@@ -386,7 +395,11 @@ export function TourViewer({
                 onShare();
               }}
             >
-              <i className="fa-solid fa-share-nodes" aria-hidden="true" />
+              {sharePending ? (
+                <span className="pn-btn__spinner" aria-hidden="true" />
+              ) : (
+                <i className="fa-solid fa-share-nodes" aria-hidden="true" />
+              )}
             </button>
           )}
         </ViewerControls>
