@@ -133,6 +133,12 @@ export function viewProjection(
   return out;
 }
 
+/** Whether two matrices are equal, element by element. */
+export function sameMatrix(a: Mat4, b: Mat4): boolean {
+  for (let k = 0; k < 16; k++) if (a[k] !== b[k]) return false;
+  return true;
+}
+
 /** Transform a point/direction by a column-major matrix, returning w too. */
 function transform(
   m: Mat4,

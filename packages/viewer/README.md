@@ -169,8 +169,8 @@ The rules a source follows:
 | `isSettled()` | Whether every tile the view needs is in, as `tiles-settled` reports. |
 | `project(yaw, pitch)` | Screen position of a direction in the last frame, in CSS px from the container's top left, plus `behind`. |
 | `directionAtPixel(x, y)` | The direction under a container pixel. |
-| `onRender(cb)` | Calls `cb(view)` after every frame and returns an unsubscribe. Use it to place overlays. |
-| `requestRender()` | Asks for a frame. |
+| `onRender(cb)` | Calls `cb(view)` after each frame that moves things on screen (the camera, a resize, a scene change, `setNorth`), and on the next frame after subscribing or `requestRender()`; not on a frame drawn only because tiles landed. Returns an unsubscribe. Use it to place overlays. |
+| `requestRender()` | Asks for a frame, with the `onRender` callbacks run on it. |
 | `on(type, fn)` / `off(type, fn)` | Adds or removes an event listener. |
 | `dispose()` | Stops everything and frees the WebGL context. |
 

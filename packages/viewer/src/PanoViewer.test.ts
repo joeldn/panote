@@ -934,7 +934,8 @@ describe('PanoViewer', () => {
         (v as View).yaw = 9;
       });
       raf.step();
-      tick(viewer);
+      viewer.requestRender();
+      raf.step();
       expect(seen).toEqual([0.3, 0.3]);
       expect(internals(viewer).view.yaw).toBe(0.3);
       viewer.dispose();
@@ -1759,6 +1760,92 @@ describe('PanoViewer', () => {
         signalOf: (url: string) => signals.get(url),
       };
     }
+
+    describe('render callbacks', () => {
+      /** A viewer at rest with `cb` subscribed and its first call made. */
+      async function atRest(cb: ReturnType<typeof vi.fn<(view: Readonly<View>) => void>>) {
+        const net = stubNet({ holdTile: (url) => !url.includes('/0/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        viewer.onRender(cb);
+        runUntilIdle();
+        expect(cb).toHaveBeenCalled();
+        cb.mockClear();
+        return { viewer, net };
+      }
+
+      it('skip a frame that only a tile landing asked for', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer, net } = await atRest(cb);
+        const render = internals(viewer).renderer.render;
+        render.mockClear();
+        net.release();
+        await flush();
+        runUntilIdle();
+        expect(render).toHaveBeenCalled(); // the tiles were drawn
+        expect(cb).not.toHaveBeenCalled(); // nothing on screen moved
+        viewer.dispose();
+      });
+
+      it('run on every frame the camera moves', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        viewer.setView({ yaw: 1 });
+        const frames = runUntilIdle();
+        expect(frames).toBeGreaterThan(1);
+        expect(cb).toHaveBeenCalledTimes(frames);
+        expect(cb.mock.calls.at(-1)![0]).toMatchObject({ yaw: 1 });
+        viewer.dispose();
+      });
+
+      it('run when the host asks with requestRender', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        viewer.requestRender();
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run after a resize, even one that leaves the camera matrix as it was', async () => {
+        vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        // Twice the size, the same aspect: the same matrix, other pixels.
+        FakeResizeObserver.instances.at(-1)!.trigger(800, 1600);
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run when another scene swaps in under a still camera', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        await viewer.load('pano-b');
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run when north is set, which turns the compass', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        viewer.setNorth(1);
+        runUntilIdle();
+        expect(cb).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+
+      it('run a callback that just subscribed on the next frame', async () => {
+        const cb = vi.fn<(view: Readonly<View>) => void>();
+        const { viewer } = await atRest(cb);
+        const late = vi.fn();
+        viewer.onRender(late);
+        runUntilIdle();
+        expect(late).toHaveBeenCalledTimes(1);
+        viewer.dispose();
+      });
+    });
 
     /** A container and document that can take the transition overlay. */
     function stubOverlayDom() {

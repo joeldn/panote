@@ -4,6 +4,7 @@ import {
   effectiveVFovDeg,
   maxVFovDeg,
   projectDir,
+  sameMatrix,
   unprojectNDC,
   type Mat4,
 } from './render/projection.js';
@@ -163,6 +164,14 @@ export class PanoViewer {
   // What render callbacks are handed: a copy, so they cannot move the camera
   // by writing to it, reused so a frame allocates nothing.
   private frameView: View = { yaw: 0, pitch: 0, fov: 0 };
+  // Render callbacks run on the next frame whatever the camera does: set by a
+  // subscription, a resize, a scene change, a north change or requestRender().
+  private notifyRender = true;
+  // The view and view-projection matrix the render callbacks last ran for.
+  // A frame drawn for a tile landing leaves both unchanged, and they are
+  // skipped.
+  private notifiedView: View = { yaw: 0, pitch: 0, fov: 0 };
+  private notifiedViewProj: Mat4 = new Float32Array(16);
   private transitionOverlay: HTMLCanvasElement | undefined;
   private resizeObserver: ResizeObserver | undefined;
   // Matches only at the current device pixel ratio, so it fires when the
@@ -321,17 +330,23 @@ export class PanoViewer {
     }
   };
 
+  /** Ask for a frame, with the render callbacks run on it. */
   requestRender(): void {
+    this.notifyRender = true;
     this.invalidate();
   }
 
   /**
-   * Call `cb` after every frame drawn. The view it gets is a read-only copy,
-   * rewritten in place each frame: read it during the call, don't keep it.
+   * Call `cb` after each frame that changes where things are on screen: the
+   * camera moved, the viewer was resized, a scene swapped in or north was
+   * set. Also on the next frame after subscribing or a `requestRender()`. A
+   * frame drawn only because tiles landed does not call it. The view it gets
+   * is a read-only copy, rewritten in place each frame: read it during the
+   * call, don't keep it.
    */
   onRender(cb: (view: Readonly<View>) => void): () => void {
     this.renderCbs.add(cb);
-    this.invalidate();
+    this.requestRender();
     return () => this.renderCbs.delete(cb);
   }
 
@@ -504,7 +519,8 @@ export class PanoViewer {
       this.disposePreview();
     }
     this.wasPending = true;
-    this.invalidate();
+    // Hosts place their overlays for the new scene on its first frame.
+    this.requestRender();
     if (!req.announce) return true;
     this.emitter.emit('ready', source);
     // A ready listener may have started another load or disposed the viewer;
@@ -547,7 +563,7 @@ export class PanoViewer {
       (scene && { id: scene.id, view: undefined, source: scene, announce: false });
     this.lostRequest = undefined;
     this.disposePreview();
-    this.invalidate();
+    this.requestRender();
     if (next) this.reloadInBackground(next);
     this.emitter.emit('context-restored', undefined);
   };
@@ -652,7 +668,7 @@ export class PanoViewer {
     this.wasPending = false;
     if (options.view) this.cutTo(options.view);
     this.stopMomentumOnly();
-    this.invalidate();
+    this.requestRender();
     this.emitter.emit('scene-change', id);
   }
 
@@ -677,7 +693,7 @@ export class PanoViewer {
   /** Set the compass north offset (radians) for the currently loaded scene. */
   setNorth(radians: number): void {
     this.north = radians;
-    this.invalidate();
+    this.requestRender();
   }
 
   /** Current compass heading (radians): north relative to the rendered yaw. */
@@ -985,6 +1001,8 @@ export class PanoViewer {
     // last real one rather than make one up from a stand-in size.
     if (width > 0 && height > 0) this.aspect = width / height;
     if (!this.renderer.resize(this.cssW, this.cssH)) return;
+    // Overlays are placed in CSS pixels, which moved even if the matrix did not.
+    this.notifyRender = true;
     if (drawNow && this.onScreen && !this.disposed && !this.contextLost) {
       cancelAnimationFrame(this.raf);
       this.raf = 0;
@@ -1106,7 +1124,21 @@ export class PanoViewer {
       this.emitter.emit('tiles-settled', undefined);
       if (this.disposed) return;
     }
-    if (this.renderCbs.size > 0) {
+    // Only when something on screen moved: a frame drawn because a tile
+    // landed would have every callback re-place its overlays where they are.
+    const last = this.notifiedView;
+    const moved =
+      this.notifyRender ||
+      view.yaw !== last.yaw ||
+      view.pitch !== last.pitch ||
+      view.fov !== last.fov ||
+      !sameMatrix(this.viewProj, this.notifiedViewProj);
+    if (moved && this.renderCbs.size > 0) {
+      this.notifyRender = false;
+      this.notifiedViewProj.set(this.viewProj);
+      last.yaw = view.yaw;
+      last.pitch = view.pitch;
+      last.fov = view.fov;
       const out = this.frameView;
       for (const cb of this.renderCbs) {
         out.yaw = view.yaw;

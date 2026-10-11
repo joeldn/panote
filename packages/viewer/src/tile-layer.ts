@@ -8,6 +8,7 @@ import { RADIUS, buildTileGeometry } from './tile-geometry.js';
 import {
   frustumFromViewProj,
   intersectsSphere,
+  sameMatrix,
   type Frustum,
   type Mat4,
 } from './render/projection.js';
@@ -186,11 +187,6 @@ interface Candidate {
 
 function tileKey(level: number, face: string, x: number, y: number): string {
   return `${level}/${face}/${x}-${y}`;
-}
-
-function sameMatrix(a: Mat4, b: Float32Array): boolean {
-  for (let k = 0; k < 16; k++) if (a[k] !== b[k]) return false;
-  return true;
 }
 
 /** Floats per tile in a LevelTable: bounding sphere, then unit centre direction. */
