@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from './cube.js';
 import { PanoViewer as BasePanoViewer } from './PanoViewer.js';
 import { dirFromYawPitch } from './project.js';
+import { effectiveVFovDeg } from './render/projection.js';
 import type { CubeTileSource } from './source.js';
 import type { View, ViewerOptions } from './types.js';
 import { TileLayer } from './tile-layer.js';
@@ -2286,6 +2287,136 @@ describe('PanoViewer', () => {
         expect(Math.abs(view.yaw - before.yaw)).toBeGreaterThan(0);
         expect(Math.abs(view.yaw - before.yaw)).toBeLessThan(0.01);
         expect(view.pitch).toBeCloseTo(before.pitch, 12);
+        viewer.dispose();
+      });
+
+      /**
+       * Whether a pitch inside the limits shows the direction `dir` exactly
+       * at NDC (nx, ny) at `fov` without crossing to the other side of the
+       * pole from `was` (its angle above the horizon in the camera's vertical
+       * plane now). Scans for a root of the height match.
+       */
+      function exactOnSideExists(
+        dir: { pitch: number },
+        nx: number,
+        ny: number,
+        fov: number,
+        was: number,
+      ): boolean {
+        const limit = Math.PI / 2 - 0.001;
+        const ty = Math.tan((effectiveVFovDeg(fov, 100, W / H) * Math.PI) / 360);
+        const cx = nx * ty * (W / H);
+        const cy = ny * ty;
+        const r = Math.sqrt(cy * cy + 1) / Math.sqrt(cx * cx + cy * cy + 1);
+        const up = Math.atan(cy);
+        const side = (p: number) => (p + up > Math.PI / 2 ? 1 : p + up < -Math.PI / 2 ? 2 : 0);
+        const want = was > Math.PI / 2 ? 1 : was < -Math.PI / 2 ? 2 : 0;
+        const f = (p: number) => r * Math.sin(p + up) - Math.sin(dir.pitch);
+        for (let i = 0; i < 4000; i++) {
+          const a = -limit + (2 * limit * i) / 4000;
+          const b = -limit + (2 * limit * (i + 1)) / 4000;
+          if (f(a) * f(b) < 0 && side(a) === want && side(b) === want) return true;
+        }
+        return false;
+      }
+
+      /** The angle above the horizon, in the camera's vertical plane, of the point at NDC y. */
+      const wasAt = (viewer: PanoViewer, ny: number) => {
+        const { view } = internals(viewer);
+        const ty = Math.tan((effectiveVFovDeg(view.fov, 100, W / H) * Math.PI) / 360);
+        return view.pitch + Math.atan(ny * ty);
+      };
+
+      const nearPole: [number, number, number][] = [];
+      for (const pitch of [1.28, 1.36, 1.48, -1.28, -1.36, -1.48]) {
+        for (const x of [60, 360, 960])
+          for (const y of [8, 40, 760, 792]) nearPole.push([pitch, x, y]);
+      }
+
+      it.each([
+        {
+          name: 'a wheel notch',
+          fire: (v: PanoViewer, x: number, y: number) => wheelAt(v, x, y, -100),
+        },
+        {
+          name: 'a capped wheel event',
+          fire: (v: PanoViewer, x: number, y: number) => wheelAt(v, x, y, -300),
+        },
+        {
+          name: 'a double-click',
+          fire: (v: PanoViewer, x: number, y: number) =>
+            canvasListener(v, 'dblclick')({ clientX: x, clientY: y, preventDefault: vi.fn() }),
+        },
+      ])('keeps the anchor exact near the poles for $name whenever it can', ({ fire }) => {
+        let exact = 0;
+        for (const [pitch, x, y] of nearPole) {
+          const viewer = zoomViewer({ yaw: 0, pitch, fov: 78 });
+          const nx = (x / W) * 2 - 1;
+          const ny = -((y / H) * 2 - 1);
+          const anchor = viewer.directionAtPixel(x, y);
+          const was = wasAt(viewer, ny);
+          fire(viewer, x, y);
+          runUntilIdle();
+          const { view } = internals(viewer);
+          const drift = angleBetween(viewer.directionAtPixel(x, y), anchor);
+          const at = `pitch ${pitch} at (${x}, ${y})`;
+          if (exactOnSideExists(anchor, nx, ny, view.fov, was)) {
+            exact++;
+            expect(drift, at).toBeLessThan(TOL);
+          } else {
+            // Held at the limit: the point eases off, the camera never turns round.
+            expect(Math.abs(view.pitch), at).toBeCloseTo(Math.PI / 2 - 0.001, 9);
+          }
+          expect(Math.abs(view.yaw), at).toBeLessThan(Math.PI / 2);
+          viewer.dispose();
+        }
+        expect(exact).toBeGreaterThanOrEqual(nearPole.length / 2);
+      });
+
+      it('keeps a pinch exact toward the pitch limit, then eases off without a jump', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 1.3, fov: 70 });
+        const f = fingers(viewer, [560, 300], [640, 300]);
+        const anchor = viewer.directionAtPixel(...f.mid());
+        let exactSteps = 0;
+        let heldSteps = 0;
+        let prev = { ...internals(viewer).view };
+        // Drag the midpoint down while spreading: the camera has to pitch up
+        // to keep the start direction under it, until the limit holds it.
+        for (let i = 0; i < 40; i++) {
+          const id = i % 2 ? 2 : 1;
+          const [x, y] = f.at(id);
+          const [, my] = f.mid();
+          const was = wasAt(viewer, -((my / H) * 2 - 1));
+          f.move(id, x + (id === 1 ? -1 : 1), y + 24);
+          raf.step(raf.now + 8);
+          const [mx2, my2] = f.mid();
+          const { view } = internals(viewer);
+          const nx = (mx2 / W) * 2 - 1;
+          const ny = -((my2 / H) * 2 - 1);
+          if (exactOnSideExists(anchor, nx, ny, view.fov, was)) {
+            exactSteps++;
+            expect(angleBetween(viewer.directionAtPixel(mx2, my2), anchor)).toBeLessThan(TOL);
+          } else {
+            heldSteps++;
+            expect(view.pitch).toBeCloseTo(Math.PI / 2 - 0.001, 9);
+          }
+          // No step turns the camera round.
+          expect(angleBetween(view, prev)).toBeLessThan(0.1);
+          prev = { ...view };
+        }
+        expect(exactSteps).toBeGreaterThan(5);
+        expect(heldSteps).toBeGreaterThan(5);
+        viewer.dispose();
+      });
+
+      it('stops a fling glide when a Safari pinch starts', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0, fov: 70 });
+        internals(viewer).flick(25, 5);
+        canvasListener(
+          viewer,
+          'gesturestart',
+        )({ scale: 1, clientX: 300, clientY: 300, preventDefault: vi.fn() });
+        expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
         viewer.dispose();
       });
 

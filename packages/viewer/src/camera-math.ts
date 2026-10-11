@@ -46,14 +46,23 @@ export function rayAt(out: YawPitch, yaw: number, pitch: number, cx: number, cy:
 
 /**
  * The camera (yaw, pitch) that puts the world direction (rayYaw, rayPitch)
- * under the screen point at camera-space tangents (cx, cy). Of the cameras
- * that do (one each side of straight up or down), it takes the one nearest
- * the reference camera (yawRef, pitchRef), so a ray past the pole stays past
- * it rather than the camera flipping. The pitch is held to
- * [minPitch, maxPitch] and the yaw is then the best one for that pitch, so
- * the clamp eases the point off instead of jumping it. The yaw is the one
- * nearest yawRef, never wrapped across ±π (damping would swing the long way
- * round). Written into `out`.
+ * under the screen point at camera-space tangents (cx, cy).
+ *
+ * Two families of cameras do it, one each side of straight up or down. It
+ * stays with the family the ray is in for the reference camera (yawRef,
+ * pitchRef), the one on screen now: past the pole if the ray is past it,
+ * otherwise in front. That keeps every step continuous. The other family is
+ * exact too, but reaching it means turning the camera round (up to about
+ * 70° for one wheel notch near a pole), which is a worse jump than the
+ * point easing off.
+ *
+ * When that camera is exact and inside [minPitch, maxPitch] it is the
+ * answer. Otherwise (the pitch it needs is past a limit, or the point is too
+ * far off the vertical centre line to show a ray that near the pole) the
+ * pitch is held at a limit, taking the held camera that lands the ray
+ * nearest the point, so the point eases off instead of jumping. The yaw is
+ * the one nearest yawRef, never wrapped across ±π (damping would swing the
+ * long way round). Written into `out`.
  */
 export function aimRay(
   out: YawPitch,
@@ -66,24 +75,50 @@ export function aimRay(
   minPitch: number,
   maxPitch: number,
 ): YawPitch {
-  // (cy, 1) is at angle atan(cy) above ahead with length r; pitched by p it
-  // rises to r·sin(p + atan(cy)), which must match the ray's height.
-  const len = Math.sqrt(cx * cx + cy * cy + 1);
-  const r = Math.sqrt(cy * cy + 1) / len;
-  const s = Math.sin(rayPitch) / r;
-  const rise = Math.asin(s < -1 ? -1 : s > 1 ? 1 : s);
-  const up = Math.atan(cy);
+  const srp = Math.sin(rayPitch);
+  const crp = Math.cos(rayPitch);
+  // Which side of the pole the ray is on now: its angle above the horizon
+  // in the reference camera's vertical plane, past ±π/2 when past the pole.
+  // (The ray in the reference camera: unturned by its yaw, then its pitch.)
   const spr = Math.sin(pitchRef);
   const cpr = Math.cos(pitchRef);
-  let best = -Infinity;
+  const zr = -crp * Math.cos(rayYaw - yawRef);
+  const was = pitchRef + Math.atan2(srp * cpr + zr * spr, srp * spr - zr * cpr);
+  const side = was > Math.PI / 2 ? 1 : was < -Math.PI / 2 ? 2 : 0;
+  // (cy, 1) is at angle atan(cy) above ahead with length r; pitched by p it
+  // rises to r·sin(p + atan(cy)), which must match the ray's height. With
+  // |s| > 1 no pitch reaches it.
+  const len = Math.sqrt(cx * cx + cy * cy + 1);
+  const r = Math.sqrt(cy * cy + 1) / len;
+  const s = srp / r;
+  const rise = Math.asin(s < -1 ? -1 : s > 1 ? 1 : s);
+  const up = Math.atan(cy);
+  let bestFit = -Infinity;
   for (let i = 0; i < 3; i++) {
     const angle = i === 0 ? rise : i === 1 ? Math.PI - rise : -Math.PI - rise;
-    const pitch = Math.min(maxPitch, Math.max(minPitch, angle - up));
-    // Then yaw it so the ray's heading matches too.
+    const exact = angle - up;
+    const pitch = Math.min(maxPitch, Math.max(minPitch, exact));
+    const inexact = s < -1 || s > 1 || exact !== pitch;
+    // The other family's exact camera is a turn round: never taken.
+    if (i !== side && !inexact) continue;
+    // Then yaw it so the ray's heading matches too (for a held pitch, that
+    // is also the yaw that brings the ray nearest the point).
     const yaw = rayYaw - Math.atan2(cx, Math.cos(pitch) - cy * Math.sin(pitch));
-    const near = Math.cos(pitch) * cpr * Math.cos(yaw - yawRef) + Math.sin(pitch) * spr;
-    if (near > best) {
-      best = near;
+    if (i === side && !inexact) {
+      out.yaw = yawRef + normalizeAngle(yaw - yawRef);
+      out.pitch = pitch;
+      return out;
+    }
+    // How near the ray lands to the point: the ray in this camera against
+    // the point's direction.
+    const dyaw = rayYaw - yaw;
+    const x = crp * Math.sin(dyaw);
+    const z = -crp * Math.cos(dyaw);
+    const sp = Math.sin(pitch);
+    const cp = Math.cos(pitch);
+    const fit = (x * cx + (srp * cp + z * sp) * cy + (srp * sp - z * cp)) / len;
+    if (fit > bestFit) {
+      bestFit = fit;
       out.yaw = yawRef + normalizeAngle(yaw - yawRef);
       out.pitch = pitch;
     }
