@@ -26,6 +26,7 @@ function fakeViewer() {
       behind: yaw < 0,
     })),
     heading: vi.fn(() => 0.5),
+    requestRender: vi.fn(),
     getView: vi.fn(() => ({ yaw: 0, pitch: 0, fov: v.fov })),
     setView: vi.fn((view: { fov?: number }) => {
       if (view.fov !== undefined) v.fov = view.fov;
@@ -42,7 +43,37 @@ const withViewer = (viewer: ReturnType<typeof fakeViewer>, ui: ReactNode) =>
     </PanoViewerContext.Provider>,
   );
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+/** Gives every element a laid-out size (jsdom has no layout, so it reads 0×0). */
+function stageSize(width: number, height: number) {
+  vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(width);
+  vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(height);
+}
+
+/** A ResizeObserver whose callback the test fires with a new size. */
+function fakeResizeObserver() {
+  const observers: { cb: ResizeObserverCallback; self: ResizeObserver }[] = [];
+  class FakeResizeObserver {
+    constructor(cb: ResizeObserverCallback) {
+      observers.push({ cb, self: this as unknown as ResizeObserver });
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+  return (width: number, height: number) =>
+    act(() => {
+      for (const { cb, self } of observers) {
+        cb([{ contentRect: { width, height } } as ResizeObserverEntry], self);
+      }
+    });
+}
 
 describe('HotspotMarkers', () => {
   it('pins each marker to its projection, hides it behind the camera, and opens on click', () => {
@@ -65,6 +96,54 @@ describe('HotspotMarkers', () => {
     expect(kitchen.style.getPropertyValue('--pn-hs-scale')).toBe('2');
     fireEvent.click(kitchen);
     expect(onOpen).toHaveBeenCalledWith(spots[0]);
+  });
+
+  it('hides a marker whose point is in front of the camera but off the stage', () => {
+    stageSize(800, 600);
+    const v = fakeViewer();
+    const spots = [
+      { id: 'in', yaw: 1, pitch: 0.5, title: 'In view' },
+      // Within the margin (about half a marker) past the right edge: partly visible.
+      { id: 'edge', yaw: 8.1, pitch: 0, title: 'At the edge' },
+      { id: 'right', yaw: 9, pitch: 0, title: 'Off to the right' },
+      { id: 'below', yaw: 1, pitch: 7, title: 'Off below' },
+      { id: 'above', yaw: 1, pitch: -1, title: 'Off above' },
+      // A bigger marker reaches further, so its margin grows with it.
+      { id: 'big', yaw: 8.5, pitch: 0, title: 'Big at the edge', size: 3 },
+    ];
+    withViewer(v, <HotspotMarkers hotspots={spots} onOpen={() => {}} />);
+    v.frame();
+    const vis = (title: string) =>
+      document.querySelector(`[aria-label="${title}"]`)!.parentElement!.style.visibility;
+    expect(vis('In view')).toBe('visible');
+    expect(vis('At the edge')).toBe('visible');
+    expect(vis('Off to the right')).toBe('hidden');
+    expect(vis('Off below')).toBe('hidden');
+    expect(vis('Off above')).toBe('hidden');
+    expect(vis('Big at the edge')).toBe('visible');
+    // Hidden markers drop out of the accessibility tree (and so of Tab order).
+    expect(screen.queryByRole('button', { name: 'Off to the right' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'In view' })).toBeTruthy();
+  });
+
+  it('re-places markers when the stage is resized', () => {
+    stageSize(800, 600);
+    const resize = fakeResizeObserver();
+    const v = fakeViewer();
+    withViewer(
+      v,
+      <HotspotMarkers
+        hotspots={[{ id: 'r', yaw: 9, pitch: 0, title: 'Right' }]}
+        onOpen={() => {}}
+      />,
+    );
+    v.frame();
+    const anchor = document.querySelector('[aria-label="Right"]')!.parentElement!;
+    expect(anchor.style.visibility).toBe('hidden');
+    resize(1200, 600);
+    expect(v.requestRender).toHaveBeenCalled();
+    v.frame();
+    expect(anchor.style.visibility).toBe('visible');
   });
 
   it('groups the markers under one name', () => {
@@ -116,6 +195,27 @@ describe('FloorLinks', () => {
     v.frame();
     const anchor = document.querySelector('[aria-label="Go to Hall"]')!.parentElement!;
     expect(anchor.style.visibility).toBe('hidden');
+  });
+
+  it('hides a chevron whose points are in front of the camera but off the stage', () => {
+    stageSize(800, 600);
+    const v = fakeViewer();
+    withViewer(
+      v,
+      <FloorLinks
+        links={[
+          { to: 'hall', yaw: 1, label: 'Hall' },
+          { to: 'yard', yaw: 10, label: 'Yard' },
+        ]}
+        onGo={() => {}}
+      />,
+    );
+    v.frame();
+    const vis = (label: string) =>
+      document.querySelector(`[aria-label="Go to ${label}"]`)!.parentElement!.style.visibility;
+    expect(vis('Hall')).toBe('visible');
+    expect(vis('Yard')).toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Go to Yard' })).toBeNull();
   });
 
   it('groups the chevrons under one name', () => {

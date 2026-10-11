@@ -854,6 +854,47 @@ describe('PanoStage', () => {
     expect(v.load).toHaveBeenCalledTimes(2);
   });
 
+  it('empties the stage on a null panoId and drops the load still in flight', () => {
+    const f = factory();
+    const onSceneChange = vi.fn();
+    const { container, rerender } = render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        onSceneChange={onSceneChange}
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    const host = container.querySelector<HTMLElement>('.pn-stage__viewer')!;
+    expect(host.style.visibility).toBe('');
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId={null}
+        onSceneChange={onSceneChange}
+        createViewer={f.createViewer}
+      />,
+    );
+    // Nothing is on stage, so the canvas is hidden (and out of Tab order).
+    expect(host.style.visibility).toBe('hidden');
+    // The hall load lands after the stage was emptied: stale, so not reported.
+    v.emit('scene-change', 'hall');
+    expect(onSceneChange).not.toHaveBeenCalled();
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        onSceneChange={onSceneChange}
+        createViewer={f.createViewer}
+      />,
+    );
+    expect(host.style.visibility).toBe('');
+    expect(v.load).toHaveBeenCalledTimes(2);
+    v.emit('scene-change', 'hall');
+    expect(onSceneChange).toHaveBeenCalledExactlyOnceWith('hall');
+  });
+
   describe('after a WebGL context restore', () => {
     it('shows the preview again, with replacesVersion, then loads', () => {
       const f = factory();

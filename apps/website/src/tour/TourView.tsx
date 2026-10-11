@@ -1,5 +1,5 @@
 import type { PublishedTour, ViewBeacon } from '@internal/contracts';
-import { Logo, LogoMark, ShareModal, TourViewer } from '@internal/ui';
+import { Logo, LogoMark, TourViewer } from '@internal/ui';
 import { publishedToViewerTour, tilesBaseUrl } from '@internal/web-kit';
 import { useContext, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
@@ -9,6 +9,8 @@ import './tour.css';
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { useViewerAnalytics } from './analytics.js';
+import { prefetchShareSheet } from './share-chunk.js';
+import { LazyShareSheet } from './share-sheet.js';
 import { StageFactoryContext } from './stage-factory.js';
 import { StatsChips } from './StatsChips.js';
 import { Unavailable } from './Unavailable.js';
@@ -70,6 +72,8 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
 
   const [failed, setFailed] = useState(false);
   const [sharing, setSharing] = useState(false);
+  // Stays true after the first Share, so the sheet keeps its close transition.
+  const [shareOpened, setShareOpened] = useState(false);
   // Set once a scene is on screen; a view is only counted from then on.
   const [shown, setShown] = useState(false);
   const surface = embed ? 'embed' : 'page';
@@ -102,7 +106,11 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
           end: <OwnerEdit tourId={tour.tourId} />,
         },
         // Visitor share sheet (design README 7); the embed links back here instead.
-        onShare: () => setSharing(true),
+        onShare: () => {
+          setShareOpened(true);
+          setSharing(true);
+        },
+        onShareIntent: prefetchShareSheet,
       })}
       overlay={(panoId) =>
         embed && (
@@ -136,8 +144,8 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
     >
       {tour.visibility === 'unlisted' && <meta name="robots" content="noindex" />}
       <title>{`${tour.title} · panote`}</title>
-      {!embed && (
-        <ShareModal
+      {!embed && shareOpened && (
+        <LazyShareSheet
           open={sharing}
           onClose={() => setSharing(false)}
           variant="visitor"
