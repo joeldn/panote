@@ -389,6 +389,21 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('uploads four decoded tiles a frame on a phone, eight elsewhere', async () => {
+      const maxUploads = async (viewer: PanoViewer): Promise<number> => {
+        await viewer.load('pano-a');
+        return (viewer as unknown as { layer: { maxUploads: number } }).layer.maxUploads;
+      };
+      stubDisplay(3, true);
+      const phone = new PanoViewer(makeContainer(390, 844));
+      expect(await maxUploads(phone)).toBe(4);
+      phone.dispose();
+      stubDisplay(2);
+      const laptop = new PanoViewer(makeContainer(1422, 800));
+      expect(await maxUploads(laptop)).toBe(8);
+      laptop.dispose();
+    });
+
     it('gives a phone the budget its host names', async () => {
       stubDisplay(3, true);
       const viewer = new PanoViewer(makeContainer(390, 844), {

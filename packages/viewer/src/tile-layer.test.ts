@@ -1151,6 +1151,30 @@ describe('TileLayer failure handling', () => {
       expect(await drainBurst(0.3)).toEqual([8, 8]);
     });
 
+    it('uploads no more a frame than maxUploadsPerUpdate', async () => {
+      // As the viewer builds the layer on a phone.
+      const decodes = holdDecodes();
+      const layer = new TileLayer(
+        renderer as unknown as GLRenderer,
+        makeSource('pano-a'),
+        () => {},
+        { textureBudgetMB: 128, maxConcurrent: 16, maxUploadsPerUpdate: 4, now: () => clock },
+      );
+      frame(layer, 0);
+      await flush();
+      decodes.release();
+      await flush();
+      const perFrame: number[] = [];
+      while (readyCount(layer) > 0 && perFrame.length < 20) {
+        const before = renderer.uploadTile.mock.calls.length;
+        advance(FRAME_MS);
+        frame(layer, 0);
+        perFrame.push(renderer.uploadTile.mock.calls.length - before);
+      }
+      expect(perFrame).toEqual([4, 4, 4, 4]);
+      layer.dispose();
+    });
+
     it('still holds slow uploads to the frame time budget', async () => {
       // 1.5 ms each: the third starts at 3 ms, inside the 4 ms budget, and
       // no fourth starts after it.

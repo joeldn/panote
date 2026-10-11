@@ -56,6 +56,8 @@ const DEG2RAD = Math.PI / 180;
 const FRAME_MS = 1000 / 60;
 // A stalled or backgrounded tab must not spend its whole absence as one jump on resume.
 const MAX_FRAME_DT_MS = 100;
+/** Decoded tiles uploaded per frame on a phone or tablet; elsewhere the layer's default. */
+const CONSTRAINED_UPLOADS_PER_UPDATE = 4;
 // Momentum below this (rad/ms) is stopped: 1e-5 rad per 60 Hz frame.
 const MOMENTUM_EPS = 1e-5 / FRAME_MS;
 
@@ -155,6 +157,8 @@ export class PanoViewer {
   private opts: ResolvedViewerOptions;
   private camera: ResolvedViewerOptions['camera'];
   private textureBudgetMB: number;
+  // A phone or tablet (see isConstrainedDevice), read once at construction.
+  private constrained: boolean;
   private resolveSource: ViewerOptions['resolveSource'];
   private network: TileNetwork;
   private loadToken = 0;
@@ -228,13 +232,13 @@ export class PanoViewer {
     // ratio and capped. Read once,
     // here, so every panorama this viewer loads shares one budget — a window
     // dragged to a different-DPR monitor keeps the budget it was built with.
+    this.constrained = isConstrainedDevice(
+      window,
+      typeof navigator === 'undefined' ? undefined : navigator,
+    );
     this.textureBudgetMB =
       memory.textureBudgetMB === 'auto'
-        ? defaultTextureBudgetMB(
-            window.devicePixelRatio,
-            rendering.maxPixelRatio,
-            isConstrainedDevice(window, typeof navigator === 'undefined' ? undefined : navigator),
-          )
+        ? defaultTextureBudgetMB(window.devicePixelRatio, rendering.maxPixelRatio, this.constrained)
         : memory.textureBudgetMB;
     this.resolveSource = options.resolveSource;
     this.network = {
@@ -458,6 +462,8 @@ export class PanoViewer {
       lodBias: this.opts.rendering.lodBias,
       retry: this.opts.network.retry,
       network: this.network,
+      // A phone's GPU takes longer over each upload than the frame clock shows.
+      ...(this.constrained && { maxUploadsPerUpdate: CONSTRAINED_UPLOADS_PER_UPDATE }),
     });
     layer.setPaused(!this.onScreen);
 

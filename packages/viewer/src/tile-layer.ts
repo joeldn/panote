@@ -42,6 +42,8 @@ export interface TileLayerOptions {
   /** Per-tile retry budget. Default `network.retry`. */
   retry?: TileRetryOptions;
   network?: TileNetwork;
+  /** Most decoded tiles uploaded per frame. Default 8; the viewer passes 4 on a phone. */
+  maxUploadsPerUpdate?: number;
   /** Test seam: the clock retry cooldowns and the wake timer run on. */
   now?: () => number;
   /** Test seam: the wait between base-tile attempts. */
@@ -159,7 +161,8 @@ interface ReadyTile {
  * land in a burst, and on a desktop each upload is a fraction of a ms, so
  * this cap is what paces them: eight a frame puts a 76-tile view up in ten
  * frames rather than 26. It also bounds the texture data handed to the GPU
- * in one frame, which the main-thread clock does not see.
+ * in one frame, which the main-thread clock does not see; a phone, where the
+ * GPU's share of that is largest, is held to fewer (`maxUploadsPerUpdate`).
  */
 const MAX_UPLOADS_PER_UPDATE = 8;
 /** Stop uploading for this update once this much time has gone. */
@@ -309,6 +312,7 @@ export class TileLayer {
   private clock = 0;
   private maxTiles: number;
   private maxConcurrent: number;
+  private maxUploads: number;
   // The tolerance selectLevel gets: the viewer's own plus the host's lodBias.
   private lodTolerance: number;
   private now: () => number;
@@ -387,6 +391,7 @@ export class TileLayer {
       opts.minResidentTiles ?? d.memory.minResidentTiles,
     );
     this.maxConcurrent = opts.maxConcurrent ?? d.network.maxConcurrent;
+    this.maxUploads = opts.maxUploadsPerUpdate ?? MAX_UPLOADS_PER_UPDATE;
     this.lodTolerance = LOD_TOLERANCE + (opts.lodBias ?? d.rendering.lodBias);
     this.now = opts.now ?? (() => performance.now());
     this.sleep = opts.sleep ?? defaultSleep;
@@ -1025,7 +1030,7 @@ export class TileLayer {
 
   /**
    * Upload what has decoded since the last frame: at most
-   * MAX_UPLOADS_PER_UPDATE, and none once UPLOAD_BUDGET_MS has gone, so a
+   * maxUploads, and none once UPLOAD_BUDGET_MS has gone, so a
    * burst of decodes is spread over several frames instead of one long one.
    * A tile out of the view waits without uploading, and once it has been out
    * for ABORT_GRACE_MS it is dropped and its bitmap closed. Anything left
@@ -1045,7 +1050,7 @@ export class TileLayer {
         }
         continue;
       }
-      if (uploads >= MAX_UPLOADS_PER_UPDATE || this.now() - start >= UPLOAD_BUDGET_MS) continue;
+      if (uploads >= this.maxUploads || this.now() - start >= UPLOAD_BUDGET_MS) continue;
       this.ready.delete(key);
       uploads++;
       try {
