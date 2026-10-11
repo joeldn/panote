@@ -382,60 +382,80 @@ export class GLRenderer {
       interleaved[i * 5 + 3] = geom.uv[i * 2]!;
       interleaved[i * 5 + 4] = geom.uv[i * 2 + 1]!;
     }
-    // Record the vertex layout and index buffer in a VAO once, so a draw is
-    // just bindVertexArray + bindTexture + drawElements.
-    const vao = gl.createVertexArray();
-    if (!vao) throw this.createFailed('createVertexArray');
-    gl.bindVertexArray(vao);
-    const vbo = this.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, interleaved, gl.STATIC_DRAW);
-    const stride = 5 * 4; // 5 floats × 4 bytes
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
+    let vao: WebGLVertexArrayObject | null = null;
+    let vbo: WebGLBuffer | null = null;
     let ibo: WebGLBuffer | null = null;
-    if (count === 4 && isQuadIndex(geom.index)) {
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
-    } else {
-      ibo = this.createBuffer();
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.index, gl.STATIC_DRAW);
-    }
-    gl.bindVertexArray(null);
+    let tex: WebGLTexture | null = null;
+    try {
+      // Record the vertex layout and index buffer in a VAO once, so a draw is
+      // just bindVertexArray + bindTexture + drawElements.
+      vao = gl.createVertexArray();
+      if (!vao) throw this.createFailed('createVertexArray');
+      gl.bindVertexArray(vao);
+      vbo = this.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, interleaved, gl.STATIC_DRAW);
+      const stride = 5 * 4; // 5 floats × 4 bytes
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
+      gl.enableVertexAttribArray(1);
+      gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
+      if (count === 4 && isQuadIndex(geom.index)) {
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.quadIbo);
+      } else {
+        ibo = this.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geom.index, gl.STATIC_DRAW);
+      }
+      gl.bindVertexArray(null);
 
-    const tex = gl.createTexture();
-    if (!tex) throw this.createFailed('createTexture');
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texStorage2D(
-      gl.TEXTURE_2D,
-      mipLevels(bitmap.width, bitmap.height),
-      gl.RGBA8,
-      bitmap.width,
-      bitmap.height,
-    );
-    // UNPACK_FLIP_Y_WEBGL stays at its default (false). Tiles and preview
-    // patches are both decoded upright (row 0 = top) and their UVs address
-    // row 0 as v = 0, so nothing is flipped anywhere.
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      bitmap.width,
-      bitmap.height,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      bitmap,
-    );
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    if (this.anisoExt && this.maxAnisotropy > 1) {
-      gl.texParameterf(gl.TEXTURE_2D, this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, this.maxAnisotropy);
+      tex = gl.createTexture();
+      if (!tex) throw this.createFailed('createTexture');
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texStorage2D(
+        gl.TEXTURE_2D,
+        mipLevels(bitmap.width, bitmap.height),
+        gl.RGBA8,
+        bitmap.width,
+        bitmap.height,
+      );
+      // UNPACK_FLIP_Y_WEBGL stays at its default (false). Tiles and preview
+      // patches are both decoded upright (row 0 = top) and their UVs address
+      // row 0 as v = 0, so nothing is flipped anywhere.
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        bitmap.width,
+        bitmap.height,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        bitmap,
+      );
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      if (this.anisoExt && this.maxAnisotropy > 1) {
+        gl.texParameterf(
+          gl.TEXTURE_2D,
+          this.anisoExt.TEXTURE_MAX_ANISOTROPY_EXT,
+          this.maxAnisotropy,
+        );
+      }
+    } catch (err) {
+      // A throw part-way (a create under exhaustion, a texSubImage2D
+      // SecurityError from a tainted image) must not leak what was made, or
+      // leave it bound: the tile layer retries, and each attempt would leak.
+      gl.bindVertexArray(null);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      if (vao) gl.deleteVertexArray(vao);
+      if (vbo) gl.deleteBuffer(vbo);
+      if (ibo) gl.deleteBuffer(ibo);
+      if (tex) gl.deleteTexture(tex);
+      throw err;
     }
 
     const handle = this.nextHandle++;
