@@ -41,10 +41,24 @@ export function startScene(tour: PublishedTour, path: SlugPath, url: URL): strin
   return tour.scenes[0]?.panoId ?? null;
 }
 
+/** A scene's manifest, or null when it is missing, unreadable or corrupt. Never rejects. */
+async function readManifest(bucket: Reader, pano: string): Promise<Manifest | null> {
+  try {
+    return parseManifest(await readJson(bucket, manifestKey(pano)));
+  } catch {
+    // Not tiled yet, or corrupt: the viewer reports it itself; the tour data still helps.
+    return null;
+  }
+}
+
 /**
  * Reads `pub/tours/<tourId>.json`, then the start scene's manifest. Null when the bundle
  * is missing or invalid (the SPA then shows the same "unavailable" it would have).
  * Throws on R2 errors; the caller fails open.
+ *
+ * The start scene comes from the tour, so its manifest read waits for the tour read. A
+ * `?pano=` names it up front, though, so that manifest is read alongside the tour and used
+ * if the tour confirms it as the start scene.
  */
 export async function readTourBoot(
   bucket: Reader,
@@ -53,17 +67,16 @@ export async function readTourBoot(
   url: URL,
 ): Promise<TourBoot | null> {
   if (!PANO_PATTERN.test(record.tourId)) return null;
+  const requested = url.searchParams.get('pano');
+  const early =
+    requested !== null && PANO_PATTERN.test(requested) ? readManifest(bucket, requested) : null;
   const parsed = PublishedTourSchema.safeParse(await readJson(bucket, pubTourKey(record.tourId)));
   if (!parsed.success || parsed.data.tourId !== record.tourId) return null;
   const tour = parsed.data;
   const start = startScene(tour, path, url);
   let manifest: Manifest | null = null;
   if (start !== null && PANO_PATTERN.test(start)) {
-    try {
-      manifest = parseManifest(await readJson(bucket, manifestKey(start)));
-    } catch {
-      // Not tiled yet, or corrupt: the viewer reports it itself; the tour data still helps.
-    }
+    manifest = await (early && start === requested ? early : readManifest(bucket, start));
   }
   return { slug: path.slug, record, tour, start, manifest };
 }

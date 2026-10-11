@@ -29,6 +29,13 @@ const PAGE =
   `<link rel="preconnect" href="https://cdn.test" crossorigin data-cdn-base="${CDN}">` +
   '</head><body><div id="root"></div></body></html>';
 
+// What a live tour page streams when the R2 reads give nothing to inline: the plain page,
+// with its title moved to the end of the head (it is held back until the reads settle).
+const PLAIN = PAGE.replace('<title>panote</title>', '').replace(
+  '</head>',
+  '<title>panote</title></head>',
+);
+
 const assets = {
   fetch: vi.fn(
     async (_request: Request) =>
@@ -83,7 +90,7 @@ describe('slug alias redirects', () => {
     expect(res.status).toBe(308);
     expect(res.headers.get('Location')).toBe('/s/new-name');
     expect(res.headers.get('Cache-Control')).toBe('no-store');
-    expect(assets.fetch).not.toHaveBeenCalled();
+    expect(res.body).toBeNull();
   });
 
   it.each(['/s/old-name/embed', '/s/old-name/embed/'])(
@@ -109,16 +116,16 @@ describe('slug alias redirects', () => {
 });
 
 describe('falls through to the SPA', () => {
-  const fallsThrough = async (path: string) => {
+  const fallsThrough = async (path: string, body = PAGE) => {
     const res = await call(path);
     expect(res.status).toBe(200);
-    expect(await res.text()).toBe(PAGE);
+    expect(await res.text()).toBe(body);
     expect(assets.fetch).toHaveBeenCalledOnce();
   };
 
-  it('for a live pointer', async () => {
+  it('for a live pointer with nothing to inline', async () => {
     await putSlug('new-name', live(TOUR));
-    await fallsThrough('/s/new-name');
+    await fallsThrough('/s/new-name', PLAIN);
   });
 
   it('for a missing slug', () => fallsThrough('/s/nobody-here/embed'));
@@ -237,6 +244,15 @@ describe('primes a live tour page', () => {
     expect(html).not.toContain('name="robots"');
   });
 
+  it('writes each preload tag exactly as the viewer fetches it', async () => {
+    const html = await (await call('/s/new-name')).text();
+    expect(preloadsOf(html)).toEqual(
+      [`${CDN}tiles/pano-1/manifest.json`, ...l0('pano-1')].map(
+        (url) => `<link rel="preload" as="fetch" href="${url}" crossorigin>`,
+      ),
+    );
+  });
+
   it('preloads as CORS fetches, so the viewer reuses them', async () => {
     const preloads = preloadsOf(await (await call('/s/new-name')).text());
     expect(preloads).toHaveLength(7);
@@ -311,10 +327,10 @@ describe('primes a live tour page', () => {
       if (key.startsWith('pub/')) throw new Error('r2 down');
       return get(key);
     });
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await call('/s/new-name');
-    expect(await res.text()).toBe(PAGE);
-    expect(res.headers.get('ETag')).toBe('"abc"');
+    expect(await res.text()).toBe(PLAIN);
+    expect(error).toHaveBeenCalledWith('tour boot read failed', expect.any(Error));
   });
 
   it.each([
@@ -324,7 +340,7 @@ describe('primes a live tour page', () => {
   ])('serves the plain page when the bundle is %s', async (_name, body) => {
     if (body === null) await env.BUCKET.delete(`pub/tours/${TOUR}.json`);
     else await putJson(`pub/tours/${TOUR}.json`, body);
-    expect(await (await call('/s/new-name')).text()).toBe(PAGE);
+    expect(await (await call('/s/new-name')).text()).toBe(PLAIN);
   });
 
   it.each([
@@ -348,7 +364,7 @@ describe('primes a live tour page', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const started = Date.now();
     const res = await call('/s/new-name');
-    expect(await res.text()).toBe(PAGE);
+    expect(await res.text()).toBe(PLAIN);
     // A literal bound: one derived from the budget would pass however far it was raised.
     expect(BOOT_BUDGET_MS).toBeLessThanOrEqual(500);
     expect(Date.now() - started).toBeLessThan(2000);
@@ -365,6 +381,147 @@ describe('primes a live tour page', () => {
   });
 });
 
+const sleep = (ms: number) => new Promise<null>((resolve) => setTimeout(() => resolve(null), ms));
+
+async function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  const late = sleep(ms).then(() => {
+    throw new Error(`not settled within ${ms}ms`);
+  });
+  return Promise.race([promise, late]);
+}
+
+/** Holds every R2 read under `prefix` open until `release()`. */
+function holdReads(prefix: string) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const get = env.BUCKET.get.bind(env.BUCKET);
+  const spy = vi.spyOn(env.BUCKET, 'get').mockImplementation(async (key: string) => {
+    if (key.startsWith(prefix)) await released;
+    return get(key);
+  });
+  return { release, spy };
+}
+
+/** The body as two parts: what arrived before `release()` (once it stalls), and the rest. */
+async function readAround(body: ReadableStream<Uint8Array>, release: () => void) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let before = '';
+  let next = reader.read();
+  for (;;) {
+    const chunk = await Promise.race([next, sleep(100)]);
+    if (!chunk) break;
+    if (chunk.done) return { before, after: '' };
+    before += decoder.decode(chunk.value, { stream: true });
+    next = reader.read();
+  }
+  release();
+  let after = '';
+  for (let chunk = await next; !chunk.done; chunk = await reader.read()) {
+    after += decoder.decode(chunk.value, { stream: true });
+  }
+  return { before, after };
+}
+
+describe('streams the page around the R2 reads', () => {
+  beforeEach(() => publish());
+
+  it('sends the head with the app script and CDN preconnect before the tour read lands', async () => {
+    const held = holdReads('pub/');
+    const res = await within(call('/s/new-name'), 1000);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('ETag')).toBeNull();
+    const { before, after } = await readAround(res.body!, held.release);
+    expect(before).toContain(
+      '<script type="module" crossorigin src="/assets/index-x.js"></script>',
+    );
+    expect(before).toContain(`data-cdn-base="${CDN}">`);
+    for (const late of ['<title>', 'pn-boot', 'rel="preload"', '</head>']) {
+      expect(before).not.toContain(late);
+    }
+    const html = before + after;
+    expect(bootOf(html)).toEqual({ slug: 'new-name', record: live(TOUR), tour: bundle() });
+    expect(html.match(/<title>/g)).toEqual(['<title>']);
+    expect(html).toContain('<title>Old town · panote</title>');
+    expect(preloadsOf(html)).toHaveLength(7);
+  });
+
+  it('puts the boot data and preloads in the head, so they parse before the app script runs', async () => {
+    // A module script runs only once the whole document has parsed, and this is in <head>.
+    const html = await (await call('/s/new-name')).text();
+    const headEnd = html.indexOf('</head>');
+    const script = html.indexOf('<script type="module"');
+    for (const tag of [...preloadsOf(html), 'id="pn-boot"', '<title>']) {
+      const at = html.indexOf(tag);
+      expect(at).toBeGreaterThan(script);
+      expect(at).toBeLessThan(headEnd);
+    }
+  });
+
+  it('starts the HTML fetch while the slug is still being read', async () => {
+    const held = holdReads('slugs/');
+    const pending = call('/s/new-name');
+    await sleep(50);
+    expect(assets.fetch).toHaveBeenCalledOnce();
+    held.release();
+    expect(bootOf(await (await pending).text())).not.toBeNull();
+  });
+
+  it('reads the tour while the HTML is still being fetched', async () => {
+    let serve!: () => void;
+    const served = new Promise<void>((resolve) => (serve = resolve));
+    assets.fetch.mockImplementationOnce(async () => {
+      await served;
+      return new Response(PAGE, { status: 200, headers: { 'Content-Type': 'text/html' } });
+    });
+    const get = vi.spyOn(env.BUCKET, 'get');
+    const pending = call('/s/new-name');
+    await sleep(50);
+    expect(get).toHaveBeenCalledWith(`pub/tours/${TOUR}.json`);
+    serve();
+    expect(bootOf(await (await pending).text())).not.toBeNull();
+  });
+
+  it('reads a ?pano= scene manifest alongside the tour, once', async () => {
+    const held = holdReads('pub/');
+    const res = await within(call('/s/new-name/embed?pano=pano-2'), 1000);
+    await sleep(50);
+    expect(held.spy).toHaveBeenCalledWith('tiles/pano-2/manifest.json');
+    held.release();
+    const html = await res.text();
+    expect(preloadsOf(html).map(hrefOf)).toEqual([
+      `${CDN}tiles/pano-2/manifest.json`,
+      ...l0('pano-2'),
+    ]);
+    const reads = held.spy.mock.calls.filter(([key]) => key === 'tiles/pano-2/manifest.json');
+    expect(reads).toHaveLength(1);
+  });
+
+  it('serves the plain page when a read lands after the budget', async () => {
+    const get = env.BUCKET.get.bind(env.BUCKET);
+    vi.spyOn(env.BUCKET, 'get').mockImplementation(async (key: string) => {
+      if (key.startsWith('pub/')) await sleep(BOOT_BUDGET_MS + 150);
+      return get(key);
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await within(call('/s/new-name'), BOOT_BUDGET_MS - 100);
+    expect(await res.text()).toBe(PLAIN);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it('serves the plain page when priming throws mid-stream', async () => {
+    const stringify = JSON.stringify.bind(JSON);
+    vi.spyOn(JSON, 'stringify').mockImplementation((value: unknown, replacer, space) => {
+      if ((value as { slug?: unknown } | null)?.slug === 'new-name') throw new Error('boom');
+      return stringify(value, replacer as (string | number)[] | null, space);
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await call('/s/new-name');
+    expect(await res.text()).toBe(PLAIN);
+    expect(error).toHaveBeenCalledWith('tour page priming failed', expect.any(Error));
+  });
+});
+
 describe('X-Robots-Tag', () => {
   beforeEach(async () => {
     await putSlug('old-name', alias('new-name'));
@@ -375,7 +532,7 @@ describe('X-Robots-Tag', () => {
     expect(env.INDEXABLE).toBe('false');
     expect((await call('/s/old-name')).headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
     const page = await call('/s/new-name');
-    expect(await page.text()).toBe(PAGE);
+    expect(await page.text()).toBe(PLAIN);
     expect(page.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
   });
 

@@ -95,9 +95,11 @@ available" placeholder. `_headers` still applies to responses served through `en
 dev` omits the inherited `ASSETS` binding, so `worker/assets.d.ts` declares it.
 The `Location` is relative (`/s/<new-slug>`, query kept).
 
-**Tour page priming (`/s/*`, GET only).** For a live pointer the script also reads
-`pub/tours/<tourId>.json` and then the start scene's `tiles/<panoId>/manifest.json`, alongside
-the `index.html` fetch, and rewrites the page with `HTMLRewriter`: the real `<title>`
+**Tour page priming (`/s/*`, GET only).** The script fetches `index.html` while it reads the
+slug. For a live pointer it then reads `pub/tours/<tourId>.json` and the start scene's
+`tiles/<panoId>/manifest.json` (alongside the tour when `?pano=` names the scene), and streams
+the page through `HTMLRewriter`: the head up to `</head>` (module script, stylesheet, CDN
+preconnect) goes out at once, and at `</head>` it inserts, once the reads settle, the real `<title>`
 (`<tour> · panote`), `<meta name="robots" content="noindex">` for an unlisted tour, a
 `<script type="application/json" id="pn-boot">` holding `{slug, record, tour}` (with `<`
 escaped), and `<link rel="preload" as="fetch" crossorigin>` for the manifest and the six level-0
@@ -107,10 +109,13 @@ scene gets no preloads). The tile URLs come from core's `tilePath` and the CDN r
 script has no CDN var. `crossorigin` matters: it matches the viewer's CORS `fetch()`, so the
 browser reuses the preload. The SPA's `TourPage` passes `#pn-boot` to `loadPublishedTour` on its
 first attempt, which uses it only if it is for the same slug and passes the same schemas.
-The R2 reads get 300 ms (`BOOT_BUDGET_MS`); past that the script logs a warning and serves
-the plain page, so a slow R2 adds at most that much TTFB. A primed response has no `ETag` and is
-never a `304`. HEAD, a missing or invalid bundle, a
-non-HTML asset response and any R2 error serve the plain page, so the SPA fetches as before.
+The R2 reads get 300 ms (`BOOT_BUDGET_MS`); past that the script logs a warning and finishes
+the plain page, so a slow R2 holds back the rest of the page by at most that much, never the
+app's JS. A streamed response has no `ETag`, and a slug path is never a `304`. A missing or
+invalid bundle, an R2 error on the tour read or the budget running out finish the page plain
+(the original `<title>` moves to the end of the head, nothing else changes). HEAD, a non-HTML
+asset response and a failed slug read serve `index.html` untouched. Either way the SPA fetches
+as before.
 That is two extra R2 reads per tour page view; the browser makes three fewer CDN reads.
 Post-deploy checks (dev; production the same on `panote.io`):
 - `curl -sI https://panote.dev/s/<old-slug>` on a renamed tour: `308`,
