@@ -102,6 +102,8 @@ export const manifestKey = (p: string): string => `${tilesPrefix(p)}manifest.jso
 // Alongside the tiles in the version dir, not next to the unversioned manifest.
 export const previewKey = (p: string, v: string): string =>
   `${tileVersionPrefix(p, v)}preview.webp`;
+// The link-preview image, same dir as preview.webp.
+export const ogKey = (p: string, v: string): string => `${tileVersionPrefix(p, v)}og.jpg`;
 
 // Share links (plan 3.2): public and owner-free, same rule as tiles/ above.
 export const PUB_TOURS_ROOT = 'pub/tours/';

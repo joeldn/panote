@@ -33,17 +33,46 @@ export interface R2S3Client {
   get(key: string): Promise<Response>;
   /**
    * PUT. Throws on a non-2xx response. A thrown network error is retried
-   * twice with a short backoff; 4xx responses are never retried.
+   * twice with a short backoff; 4xx responses are never retried. With
+   * `ifMatch` (an ETag as `head`/`get` return it), R2 writes only while the
+   * object still has that ETag, and a mismatch throws R2PreconditionFailedError.
    */
   put(
     key: string,
     body: Uint8Array | string,
-    opts: { contentType: string; cacheControl?: string | undefined },
+    opts: {
+      contentType: string;
+      cacheControl?: string | undefined;
+      ifMatch?: string | undefined;
+    },
   ): Promise<void>;
   /** Signed HEAD. Never throws on a non-2xx - the caller checks `ok`. */
   head(key: string): Promise<R2HeadResult>;
   /** Signed DELETE. Throws on a non-2xx response. */
   deleteObject(key: string): Promise<void>;
+  /**
+   * The "folders" directly under `prefix` (ListObjectsV2 with a `/` delimiter),
+   * every page of them, each ending in `/`. Throws on a non-2xx response.
+   */
+  listPrefixes(prefix: string): Promise<string[]>;
+}
+
+const XML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+};
+const unescapeXml = (s: string): string =>
+  s.replace(/&(amp|lt|gt|quot|apos);/g, (e) => XML_ENTITIES[e] ?? e);
+
+/** A conditional PUT's If-Match no longer matched: someone else wrote the object first. */
+export class R2PreconditionFailedError extends Error {
+  constructor(key: string) {
+    super(`R2 PUT ${key} -> 412`);
+    this.name = 'R2PreconditionFailedError';
+  }
 }
 
 const DEFAULT_PRESIGN_EXPIRY_SECONDS = 900;
@@ -109,6 +138,29 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
       if (!res.ok) throw new Error(`R2 DELETE ${key} -> ${res.status}`);
     },
 
+    async listPrefixes(prefix) {
+      const found: string[] = [];
+      let token: string | undefined;
+      do {
+        const url = new URL(base);
+        url.searchParams.set('list-type', '2');
+        url.searchParams.set('prefix', prefix);
+        url.searchParams.set('delimiter', '/');
+        if (token !== undefined) url.searchParams.set('continuation-token', token);
+        const res = await aws.fetch(url.toString());
+        if (!res.ok) throw new Error(`R2 LIST ${prefix} -> ${res.status}`);
+        const xml = await res.text();
+        for (const m of xml.matchAll(
+          /<CommonPrefixes>\s*<Prefix>([^<]*)<\/Prefix>\s*<\/CommonPrefixes>/g,
+        ))
+          found.push(unescapeXml(m[1]!));
+        const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+        const next = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(xml)?.[1];
+        token = truncated && next ? unescapeXml(next) : undefined;
+      } while (token !== undefined);
+      return found;
+    },
+
     async put(key, body, opts) {
       // body is a Uint8Array or string, never a stream, so it is safe to
       // send again on a retry.
@@ -119,9 +171,11 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
           headers: {
             'content-type': opts.contentType,
             ...(opts.cacheControl ? { 'cache-control': opts.cacheControl } : {}),
+            ...(opts.ifMatch ? { 'if-match': opts.ifMatch } : {}),
           },
         }),
       );
+      if (res.status === 412) throw new R2PreconditionFailedError(key);
       if (!res.ok) throw new Error(`R2 PUT ${key} -> ${res.status}`);
     },
   };

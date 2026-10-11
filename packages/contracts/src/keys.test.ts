@@ -5,6 +5,7 @@ import {
   originalKey,
   manifestKey,
   previewKey,
+  ogKey,
   userPanosPrefix,
   tourKey,
   panoPrefix,
@@ -151,6 +152,15 @@ describe('keys', () => {
 
     it('previewKey throws on an invalid version', () => {
       expect(() => previewKey(panoId, 'v/1')).toThrow(/version must match/);
+    });
+
+    it('ogKey nests og.jpg under the version dir, alongside the tiles', () => {
+      expect(ogKey(panoId, 't1-abc123')).toBe(`tiles/${panoId}/t1-abc123/og.jpg`);
+    });
+
+    it('ogKey throws on an invalid panoId or version', () => {
+      expect(() => ogKey('a/b', 't1-abc123')).toThrow(/panoId must match/);
+      expect(() => ogKey(panoId, 'v/1')).toThrow(/version must match/);
     });
   });
 

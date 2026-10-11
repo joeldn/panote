@@ -726,6 +726,60 @@ describe('link previews', () => {
   });
 });
 
+// Kept apart from 'link previews' above: only the image tags, so the text tags can change freely.
+describe('link preview image (og.jpg)', () => {
+  const imageTags = (html: string) =>
+    metasOf(html).filter((m) => m.includes('"og:image') || m.includes('"twitter:card"'));
+  const ogTags = (url: string, alt: string) => [
+    tag('og:image', url),
+    tag('og:image:type', 'image/jpeg'),
+    tag('og:image:width', '1200'),
+    tag('og:image:height', '630'),
+    tag('og:image:alt', alt),
+    tag('twitter:card', 'summary_large_image'),
+  ];
+
+  beforeEach(async () => {
+    await publish();
+    for (const pano of ['pano-1', 'pano-2']) {
+      await putJson(`tiles/${pano}/manifest.json`, { ...manifest(pano), preview: true, og: true });
+    }
+  });
+
+  it('prefers the rendered 1200x630 JPEG over the equirect preview', async () => {
+    const html = await (await call('/s/new-name')).text();
+    expect(imageTags(html)).toEqual(ogTags(`${CDN}tiles/pano-1/v7/og.jpg`, 'pano-1'));
+  });
+
+  it('uses the scene a shared embed is pinned to', async () => {
+    const html = await (await call('/s/new-name/embed?pano=pano-2')).text();
+    expect(imageTags(html)).toEqual(ogTags(`${CDN}tiles/pano-2/v7/og.jpg`, 'pano-2'));
+  });
+
+  it('builds the og.jpg URL for an unversioned manifest', async () => {
+    const { version: _v, ...unversioned } = { ...manifest('pano-1'), og: true };
+    await putJson('tiles/pano-1/manifest.json', unversioned);
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain(tag('og:image', `${CDN}tiles/pano-1/og.jpg`));
+  });
+
+  it('keeps the equirect preview for a pano tiled before og.jpg existed', async () => {
+    await putJson('tiles/pano-1/manifest.json', { ...manifest('pano-1'), preview: true });
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain(tag('og:image', `${CDN}tiles/pano-1/v7/preview.webp`));
+    expect(html).toContain(tag('og:image:type', 'image/webp'));
+    expect(html).not.toContain('og.jpg');
+  });
+
+  it('escapes the scene title in its alt text', async () => {
+    const tour = bundle();
+    tour.scenes[0]!.config.title = `Hall "A" & <i>B</i>`;
+    await putJson(`pub/tours/${TOUR}.json`, tour);
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain(tag('og:image:alt', 'Hall &quot;A&quot; &amp; &lt;i&gt;B&lt;/i&gt;'));
+  });
+});
+
 describe('X-Robots-Tag', () => {
   beforeEach(async () => {
     await putSlug('old-name', alias('new-name'));

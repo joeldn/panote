@@ -1,4 +1,4 @@
-import { FRONT_FACE, previewUrl, tilePath } from '@panote/core';
+import { FRONT_FACE, ogImageUrl, previewUrl, tilePath } from '@panote/core';
 
 import type { TourBoot } from './boot.js';
 
@@ -19,20 +19,26 @@ interface PreviewImage {
   alt: string;
 }
 
+// What the tiler writes next to the tiles when the manifest says `og: true`: a
+// normal-camera view of the scene, the size and type the large cards want.
+const OG_IMAGE = { width: 1200, height: 630, type: 'image/jpeg' } as const;
 // What the tiler writes next to the tiles when the manifest says `preview: true`.
 const EQUIRECT_PREVIEW = { width: 1024, height: 512, type: 'image/webp' } as const;
 const TILE_TYPES = { jpg: 'image/jpeg', webp: 'image/webp' } as const;
 
 /**
- * The start scene's own image, so no new asset is needed: the tiler's 1024×512 equirect
- * preview when it wrote one (2:1, close enough to the 1.91:1 large cards), else the
- * square level-0 front face (`nz`, ahead at yaw 0). Scrapers need an absolute https URL, so a CDN root that
- * isn't one gives no image.
+ * The start scene's own image: the tiler's 1200×630 og.jpg (a normal-camera view) when it
+ * wrote one, else its 1024×512 equirect preview (2:1, close enough to the 1.91:1 large
+ * cards), else the square level-0 front face (`nz`, ahead at yaw 0). Scrapers need an
+ * absolute https URL, so a CDN root that isn't one gives no image.
  */
 function previewImage(boot: TourBoot, tilesBase: string): PreviewImage | null {
   const { manifest, start } = boot;
   if (!manifest || start === null || !tilesBase.startsWith('https://')) return null;
   const alt = boot.tour.scenes.find((s) => s.panoId === start)?.config.title ?? boot.tour.title;
+  if (manifest.og) {
+    return { url: ogImageUrl(tilesBase, manifest.pano, manifest.version), alt, ...OG_IMAGE };
+  }
   if (manifest.preview) {
     return {
       url: previewUrl(tilesBase, manifest.pano, manifest.version),

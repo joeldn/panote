@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tilePath, manifestUrl, previewUrl, parseManifest } from './manifest.js';
+import { tilePath, manifestUrl, previewUrl, ogImageUrl, parseManifest } from './manifest.js';
 
 describe('tilePath', () => {
   it('builds the tile URL from baseUrl, pano, level, face, x, y', () => {
@@ -32,6 +32,20 @@ describe('previewUrl', () => {
 
   it('encodes pano and version like tilePath', () => {
     expect(previewUrl('/tiles/', 'my pano', 'v 1')).toBe('/tiles/my%20pano/v%201/preview.webp');
+  });
+});
+
+describe('ogImageUrl', () => {
+  it('omits the version segment when absent', () => {
+    expect(ogImageUrl('/tiles/', 'church')).toBe('/tiles/church/og.jpg');
+  });
+
+  it('inserts the version between pano and og.jpg when present', () => {
+    expect(ogImageUrl('/tiles/', 'church', 't1-abc123')).toBe('/tiles/church/t1-abc123/og.jpg');
+  });
+
+  it('encodes pano and version like tilePath', () => {
+    expect(ogImageUrl('/tiles/', 'my pano', 'v 1')).toBe('/tiles/my%20pano/v%201/og.jpg');
   });
 });
 
@@ -276,6 +290,24 @@ describe('parseManifest', () => {
 
     it('rejects a non-boolean preview', () => {
       expect(() => parseManifest({ ...valid, preview: 'yes' })).toThrow(/manifest\.preview/);
+    });
+  });
+
+  describe('og', () => {
+    it('returns a manifest with no og field when absent (old manifests still parse)', () => {
+      expect(parseManifest(valid).og).toBeUndefined();
+    });
+
+    it('accepts og: true', () => {
+      expect(parseManifest({ ...valid, og: true }).og).toBe(true);
+    });
+
+    it('rejects og: false', () => {
+      expect(() => parseManifest({ ...valid, og: false })).toThrow(/manifest\.og/);
+    });
+
+    it('rejects a non-boolean og', () => {
+      expect(() => parseManifest({ ...valid, og: 'yes' })).toThrow(/manifest\.og/);
     });
   });
 });

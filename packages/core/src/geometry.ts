@@ -34,6 +34,50 @@ export function faceUVToDir(face: Face, u: number, v: number): Vec3 {
   }
 }
 
+/**
+ * The inverse of faceUVToDir: the face a direction (any length, not zero) hits and
+ * the image-space UV on it. Ties on a cube edge go to x, then y, then z.
+ */
+export function dirToFaceUV(dir: Vec3): { face: Face; u: number; v: number } {
+  const ax = Math.abs(dir.x);
+  const ay = Math.abs(dir.y);
+  const az = Math.abs(dir.z);
+  // Each case solves faceUVToDir's component formulas for sc and tc, after
+  // scaling the direction so its major axis is ±1.
+  let face: Face;
+  let sc: number;
+  let tc: number;
+  if (ax >= ay && ax >= az) {
+    if (dir.x > 0) {
+      face = 'px';
+      sc = -dir.z / ax;
+    } else {
+      face = 'nx';
+      sc = dir.z / ax;
+    }
+    tc = -dir.y / ax;
+  } else if (ay >= az) {
+    sc = dir.x / ay;
+    if (dir.y > 0) {
+      face = 'py';
+      tc = dir.z / ay;
+    } else {
+      face = 'ny';
+      tc = -dir.z / ay;
+    }
+  } else {
+    tc = -dir.y / az;
+    if (dir.z > 0) {
+      face = 'pz';
+      sc = dir.x / az;
+    } else {
+      face = 'nz';
+      sc = -dir.x / az;
+    }
+  }
+  return { face, u: (sc + 1) / 2, v: (tc + 1) / 2 };
+}
+
 const TAU = Math.PI * 2;
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 

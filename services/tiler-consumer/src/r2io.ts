@@ -9,7 +9,9 @@ const ctOf = (k: string): string =>
     ? 'application/json'
     : k.endsWith('.webp')
       ? 'image/webp'
-      : 'application/octet-stream';
+      : k.endsWith('.jpg')
+        ? 'image/jpeg'
+        : 'application/octet-stream';
 
 /** Uploads every tile (all keys but manifest.json) under `tilePrefix`, `concurrency` at a time.
  *  Resolves after all succeed; on a failure, drains in-flight PUTs and rejects with the first error. */

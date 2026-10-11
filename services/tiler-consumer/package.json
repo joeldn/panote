@@ -9,6 +9,7 @@
     "build": "tsc -b tsconfig.container.json",
     "dev": "wrangler dev --env dev",
     "deploy": "wrangler deploy --env dev",
+    "backfill:og": "node dist/backfill-og.js",
     "types": "wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
