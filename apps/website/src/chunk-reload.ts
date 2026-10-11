@@ -43,9 +43,27 @@ export function reloadOnce(now: number = Date.now()): boolean {
   return true;
 }
 
+// Dynamic imports in flight whose callers handle a failure themselves.
+let selfHandled = 0;
+
+/**
+ * Runs a dynamic import that handles its own failure (the share sheet's fallback), so a
+ * stale chunk there does not reload the page under the visitor. A route chunk that fails
+ * meanwhile still reaches its route's error element, which reloads once.
+ */
+export async function importWithoutReload<T>(load: () => Promise<T>): Promise<T> {
+  selfHandled++;
+  try {
+    return await load();
+  } finally {
+    selfHandled--;
+  }
+}
+
 /** Vite fires this when a dynamic import's preload fails; reload instead of throwing. */
 export function reloadOnPreloadError(target: Window = window): () => void {
   const onError = (event: Event) => {
+    if (selfHandled > 0) return;
     if (reloadOnce()) event.preventDefault();
   };
   target.addEventListener('vite:preloadError', onError);

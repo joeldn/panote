@@ -3,13 +3,24 @@ import { loadConfig, type Auth, type Auth0Like } from '@internal/web-kit';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from 'vitest';
 
 import { fakeAuth, LOCAL } from '../__fixtures__/auth.js';
 import { AuthEnvContext } from '../auth-context.js';
+import { page, reloadOnPreloadError } from '../chunk-reload.js';
 import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 import { createSiteAuth } from '../site-auth.js';
+import { shareChunk } from './share-chunk.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 type ViewerOptions = Parameters<ViewerFactory>[1];
@@ -580,11 +591,123 @@ describe('/s/:slug/embed', () => {
 });
 
 describe('visitor share', () => {
+  // How Chrome words a lazy chunk that 404s after a deploy.
+  const staleChunk = () =>
+    new TypeError('Failed to fetch dynamically imported module: https://panote.test/assets/x.js');
+  let load: MockInstance<typeof shareChunk.load>;
+  let reload: MockInstance<typeof page.reload>;
+  // The sheet is a lazy chunk: transform it once up front so the first test's query
+  // doesn't time out on it, and give the lazy render more than the default 1s on a
+  // loaded CI runner (as the lazy page tests do).
+  beforeAll(async () => {
+    await import('@internal/ui/share');
+  });
+  const LAZY = { timeout: 5000 };
+  beforeEach(() => {
+    shareChunk.pending = null;
+    load = vi.spyOn(shareChunk, 'load');
+    reload = vi.spyOn(page, 'reload').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    shareChunk.pending = null;
+  });
+  // The same viewer, never torn down: the tour did not unmount or remount.
+  const tourStillUp = (viewer: FakeViewer) => {
+    expect(lastViewer()).toBe(viewer);
+    expect(viewer.dispose).not.toHaveBeenCalled();
+    expect(screen.getByRole('toolbar', { name: 'View' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
+  };
+
+  it('loads the sheet on demand, warming it up when the visitor reaches for Share', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    expect(load).not.toHaveBeenCalled();
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Share' }));
+    expect(load).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY)).toBeTruthy();
+    // The warm-up's import is the one the sheet renders from.
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it('retries a chunk that failed to load once, then opens the sheet', async () => {
+    load.mockRejectedValueOnce(staleChunk());
+    renderAt('/s/old-town');
+    await shown('square');
+    const viewer = lastViewer();
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY)).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(2);
+    tourStillUp(viewer);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the plain link when the retry fails too, and keeps the tour up', async () => {
+    load.mockRejectedValue(staleChunk());
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderAt('/s/old-town');
+    await shown('square');
+    const viewer = lastViewer();
+    // A failed warm-up is swallowed (no unhandled rejection) and forgotten, so the
+    // click fetches again.
+    fireEvent.focus(screen.getByRole('button', { name: 'Share' }));
+    await waitFor(() => expect(shareChunk.pending).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    const fallback = await screen.findByRole('alert', {}, LAZY);
+    expect(fallback.textContent).toContain("Couldn't open sharing");
+    expect(within(fallback).getByRole('link').getAttribute('href')).toBe(
+      'https://panote.test/s/old-town',
+    );
+    // The warm-up, the click's import, then the one retry.
+    expect(load).toHaveBeenCalledTimes(3);
+    tourStillUp(viewer);
+    expect(screen.queryByRole('heading', { name: "This tour isn't available" })).toBeNull();
+    // The share button never reloads the page, even for a stale chunk.
+    expect(reload).not.toHaveBeenCalled();
+    fireEvent.click(within(fallback).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(await screen.findByRole('alert', {}, LAZY)).toBeTruthy();
+    tourStillUp(viewer);
+  });
+
+  it("does not let Vite's preload-error reload the page for the share chunk", async () => {
+    let event: Event | undefined;
+    load.mockImplementation(async () => {
+      // What Vite's preload helper does before it rejects.
+      event = new Event('vite:preloadError', { cancelable: true });
+      window.dispatchEvent(event);
+      throw staleChunk();
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    sessionStorage.clear();
+    // main.tsx installs this for the whole site.
+    const stop = reloadOnPreloadError();
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      expect(await screen.findByRole('alert', {}, LAZY)).toBeTruthy();
+      expect(event?.defaultPrevented).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+      // Any other chunk still reloads once.
+      const other = new Event('vite:preloadError', { cancelable: true });
+      window.dispatchEvent(other);
+      expect(other.defaultPrevented).toBe(true);
+      expect(reload).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+      sessionStorage.clear();
+    }
+  });
+
   it('opens the Link-only sheet with the canonical public URL', async () => {
     renderAt('/s/old-town');
     await shown('square');
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Share this tour' });
+    const dialog = await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY);
     expect(within(dialog).getByRole('status', { name: 'Share link' }).textContent).toBe(
       'panote.test/s/old-town',
     );
@@ -595,9 +718,9 @@ describe('visitor share', () => {
     expect(x.getAttribute('href')).toContain(encodeURIComponent('https://panote.test/s/old-town'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    // The sheet is part of the page from the start: closed, it opens again.
+    // Once loaded the sheet stays mounted: closed, it opens again.
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
-    expect(await screen.findByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
+    expect(await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY)).toBeTruthy();
   });
 
   it('is not offered in the embed', async () => {

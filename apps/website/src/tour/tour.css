@@ -64,6 +64,43 @@
   font-size: 14px;
 }
 
+/* Shown in place of the share sheet when its chunk can't be loaded. */
+.tour-share-fallback {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 10px 16px;
+  border-radius: var(--r-pill);
+  background: var(--cbg-solid);
+  color: var(--ink);
+  font-size: 13px;
+  box-shadow: var(--shadow-glass);
+  transform: translateX(-50%);
+}
+.tour-share-fallback p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.tour-share-fallback a {
+  color: inherit;
+}
+.tour-share-fallback__close {
+  flex: none;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
 /* Unavailable placeholder (also the embed placeholder). */
 .tour-unavailable {
   display: grid;
