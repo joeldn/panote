@@ -1,6 +1,6 @@
 import type { PanoViewer } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PanoViewerContext } from '../viewer-context.js';
@@ -27,6 +27,7 @@ function fakeViewer() {
     })),
     heading: vi.fn(() => 0.5),
     requestRender: vi.fn(),
+    focus: vi.fn(),
     getView: vi.fn(() => ({ yaw: 0, pitch: 0, fov: v.fov })),
     setView: vi.fn((view: { fov?: number }) => {
       if (view.fov !== undefined) v.fov = view.fov;
@@ -149,6 +150,70 @@ describe('HotspotMarkers', () => {
     expect(anchor.style.visibility).toBe('visible');
   });
 
+  describe('focus on a marker that hides', () => {
+    // Focused marker "a" at yaw 1; turning the camera puts it behind (negative yaw).
+    function focusedMarker() {
+      const v = fakeViewer();
+      let yaw = 1;
+      v.project.mockImplementation((_yaw: number, pitch: number) => ({
+        x: yaw * 100,
+        y: pitch * 100,
+        behind: yaw < 0,
+      }));
+      withViewer(
+        v,
+        <HotspotMarkers
+          hotspots={[{ id: 'a', yaw: 1, pitch: 0, title: 'Kitchen' }]}
+          onOpen={() => {}}
+        />,
+      );
+      v.frame();
+      const marker = screen.getByRole('button', { name: 'Kitchen' });
+      return { v, marker, turn: (to: number) => (yaw = to) };
+    }
+
+    it('hands focus to the viewer when the focused marker goes behind the camera', () => {
+      const { v, marker, turn } = focusedMarker();
+      marker.focus();
+      turn(-1);
+      v.frame();
+      expect(marker.parentElement!.style.visibility).toBe('hidden');
+      expect(v.focus).toHaveBeenCalledOnce();
+    });
+
+    it('hands focus to the viewer when the focused marker goes off the stage', () => {
+      stageSize(800, 600);
+      const { v, marker, turn } = focusedMarker();
+      marker.focus();
+      turn(9);
+      v.frame();
+      expect(marker.parentElement!.style.visibility).toBe('hidden');
+      expect(v.focus).toHaveBeenCalledOnce();
+    });
+
+    it('leaves focus alone when the marker that hides is not focused', () => {
+      const { v, marker, turn } = focusedMarker();
+      turn(-1);
+      v.frame();
+      expect(marker.parentElement!.style.visibility).toBe('hidden');
+      expect(v.focus).not.toHaveBeenCalled();
+    });
+
+    it('reads the focus only on frames where a marker shows or hides', () => {
+      const { v, marker, turn } = focusedMarker();
+      marker.focus();
+      const active = vi.spyOn(document, 'activeElement', 'get');
+      v.frame();
+      v.frame();
+      expect(active).not.toHaveBeenCalled();
+      turn(-1);
+      v.frame();
+      v.frame();
+      expect(active).toHaveBeenCalledOnce();
+      expect(v.focus).toHaveBeenCalledOnce();
+    });
+  });
+
   it('groups the markers under one name', () => {
     withViewer(fakeViewer(), <HotspotMarkers hotspots={[]} onOpen={() => {}} />);
     expect(screen.getByRole('group', { name: 'Points of interest' })).toBeTruthy();
@@ -219,6 +284,27 @@ describe('FloorLinks', () => {
     expect(vis('Hall')).toBe('visible');
     expect(vis('Yard')).toBe('hidden');
     expect(screen.queryByRole('button', { name: 'Go to Yard' })).toBeNull();
+  });
+
+  it('hands focus to the viewer when the focused chevron goes behind the camera, once', () => {
+    const v = fakeViewer();
+    withViewer(v, <FloorLinks links={[{ to: 'hall', yaw: 1, label: 'Hall' }]} onGo={() => {}} />);
+    v.frame();
+    const chevron = screen.getByRole('button', { name: 'Go to Hall' });
+    chevron.focus();
+    const active = vi.spyOn(document, 'activeElement', 'get');
+    v.frame();
+    expect(active).not.toHaveBeenCalled();
+    v.project.mockImplementation((yaw: number, pitch: number) => ({
+      x: yaw * 100,
+      y: pitch * 100,
+      behind: true,
+    }));
+    v.frame();
+    v.frame();
+    expect(chevron.parentElement!.style.visibility).toBe('hidden');
+    expect(v.focus).toHaveBeenCalledOnce();
+    expect(active).toHaveBeenCalledOnce();
   });
 
   it('groups the chevrons under one name', () => {
@@ -294,6 +380,62 @@ describe('HotspotPanel', () => {
     expect(panel.querySelector('script')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('hands focus to the viewer on close when its marker is now hidden', () => {
+    const v = fakeViewer();
+    let yaw = 1;
+    v.project.mockImplementation((_yaw: number, pitch: number) => ({
+      x: yaw * 100,
+      y: pitch * 100,
+      behind: yaw < 0,
+    }));
+    function Points() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <HotspotMarkers
+            hotspots={[base]}
+            activeId={open ? 'a' : null}
+            onOpen={() => setOpen(true)}
+          />
+          {open && <HotspotPanel hotspot={base} onClose={() => setOpen(false)} />}
+        </>
+      );
+    }
+    withViewer(v, <Points />);
+    v.frame();
+    fireEvent.click(screen.getByRole('button', { name: 'Kitchen' }));
+    // The camera turns away while the panel is open: the marker is behind it now.
+    yaw = -1;
+    v.frame();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(v.focus).toHaveBeenCalledOnce();
+  });
+
+  it('hands focus back to its marker on close while the marker is on stage', () => {
+    const v = fakeViewer();
+    function Points() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <HotspotMarkers
+            hotspots={[base]}
+            activeId={open ? 'a' : null}
+            onOpen={() => setOpen(true)}
+          />
+          {open && <HotspotPanel hotspot={base} onClose={() => setOpen(false)} />}
+        </>
+      );
+    }
+    withViewer(v, <Points />);
+    v.frame();
+    const marker = screen.getByRole('button', { name: 'Kitchen' });
+    fireEvent.click(marker);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(document.activeElement).toBe(marker);
+    expect(v.focus).not.toHaveBeenCalled();
   });
 
   it('embeds YouTube via youtube-nocookie', () => {

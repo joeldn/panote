@@ -23,7 +23,7 @@ export function HotspotMarkers({ hotspots, activeId, onOpen }: HotspotMarkersPro
   useViewerFrame((v) => {
     for (const h of hotspots) {
       const el = refs.current.get(h.id) ?? null;
-      placeAt(el, v.project(h.yaw, h.pitch), box.current, EDGE_MARGIN * (h.size ?? 1));
+      placeAt(v, el, v.project(h.yaw, h.pitch), box.current, EDGE_MARGIN * (h.size ?? 1));
     }
   }, hotspots);
 

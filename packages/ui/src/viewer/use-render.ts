@@ -77,11 +77,25 @@ export function onStage(box: StageBox, x: number, y: number, margin: number): bo
 }
 
 /**
- * Move `el` onto a projected point. It is hidden when the point is behind the
- * camera or off the stage `box` by more than `margin`: `visibility: hidden`
- * also takes its button out of Tab order and the accessibility tree.
+ * Show or hide a placed element with `visibility`, which also takes its button
+ * out of Tab order and the accessibility tree. Hiding the element that holds
+ * focus would drop focus to <body>, so the viewer takes it first, as on a scene
+ * change. Only a change touches the DOM or reads the focus: a frame where
+ * nothing shows or hides does neither.
+ */
+export function setShown(el: HTMLElement, shown: boolean, viewer: PanoViewer): void {
+  const visibility = shown ? 'visible' : 'hidden';
+  if (el.style.visibility === visibility) return;
+  if (!shown && el.contains(document.activeElement)) viewer.focus();
+  el.style.visibility = visibility;
+}
+
+/**
+ * Move `el` onto a projected point. It is hidden (see `setShown`) when the
+ * point is behind the camera or off the stage `box` by more than `margin`.
  */
 export function placeAt(
+  viewer: PanoViewer,
   el: HTMLElement | null,
   point: { x: number; y: number; behind: boolean },
   box: StageBox,
@@ -90,6 +104,6 @@ export function placeAt(
 ): void {
   if (!el) return;
   const shown = !point.behind && onStage(box, point.x, point.y, margin);
-  el.style.visibility = shown ? 'visible' : 'hidden';
+  setShown(el, shown, viewer);
   if (shown) el.style.transform = `translate(${point.x}px, ${point.y}px)${extra}`;
 }
