@@ -20,7 +20,7 @@ What it doesn't do (each of these would be an extension):
 - video;
 - WebGL1.
 
-**Browser floor:** WebGL2, ES2023 (the build is not transpiled down) and `createImageBitmap`. Any current Chrome, Edge, Firefox (ESR included) or Safari meets it.
+**Browser floor:** WebGL2, ES2023 (the build is not transpiled down) and `createImageBitmap`. Any current Chrome, Edge, Firefox (ESR included) or Safari meets it. Where WebGL2 is missing (disabled, or a blocklisted GPU), `new PanoViewer()` throws `WebGLUnavailableError`; check `isWebGL2Supported()` first, or catch it, to show a fallback.
 
 ## Quick start
 

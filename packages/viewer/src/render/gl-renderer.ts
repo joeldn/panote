@@ -2,6 +2,7 @@ import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from '.
 import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
 import { VIEWER_DEFAULTS } from '../defaults.js';
 import { report } from '../report.js';
+import { WebGLUnavailableError } from '../webgl-support.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
@@ -195,9 +196,7 @@ export class GLRenderer {
       stencil: false,
       // no preserveDrawingBuffer — snapshot() copies the frame in the same task instead.
     });
-    if (!gl) {
-      throw new Error('PanoViewer needs WebGL2, which this browser does not provide.');
-    }
+    if (!gl) throw new WebGLUnavailableError();
     this.gl = gl;
     container.appendChild(this.canvas);
     this.canvas.addEventListener('webglcontextlost', this.onLost);

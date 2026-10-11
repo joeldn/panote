@@ -9,6 +9,7 @@ import {
   type DrawItem,
 } from './gl-renderer.js';
 import { viewProjection } from './projection.js';
+import { WebGLUnavailableError } from '../webgl-support.js';
 import { buildTileGeometry } from '../tile-geometry.js';
 
 describe('sortDrawList', () => {
@@ -752,7 +753,15 @@ describe('GLRenderer options', () => {
 
   it('says what it needs when the browser has no WebGL2', () => {
     const { container } = makeFakeDocumentAndContainer(null);
-    expect(() => new GLRenderer(container as unknown as HTMLElement)).toThrow(
+    let err: unknown;
+    try {
+      new GLRenderer(container as unknown as HTMLElement);
+    } catch (e) {
+      err = e;
+    }
+    // A class of its own, so a host can tell it from any other failure.
+    expect(err).toBeInstanceOf(WebGLUnavailableError);
+    expect((err as Error).message).toBe(
       'PanoViewer needs WebGL2, which this browser does not provide.',
     );
   });
