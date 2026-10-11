@@ -1,6 +1,7 @@
 import {
   mergeViewerOptions,
   PanoViewer,
+  WebGLUnavailableError,
   type PreviewSource,
   type View,
   type ViewerOptions,
@@ -161,6 +162,8 @@ export function PanoStage({
   // context is lost and reloads only tiles, so the load effect puts the
   // preview back up.
   const [restores, setRestores] = useState(0);
+  // The browser has no WebGL2, so there is no viewer to show.
+  const [unsupported, setUnsupported] = useState(false);
 
   // Latest props for use inside long-lived effects without re-running them.
   const latest = useRef({
@@ -219,7 +222,10 @@ export function PanoStage({
       },
     );
     if (l.view) opts.initialView = l.view;
-    const v = l.createViewer(host, opts);
+    const v = createOrNull(l.createViewer, host, opts);
+    // No WebGL2: say so in place of the viewer rather than crash the tree.
+    setUnsupported(v === null);
+    if (!v) return;
     const onScene = (id: string) => {
       const cur = loaded.current;
       landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
@@ -395,6 +401,11 @@ export function PanoStage({
     <div className={cx('pn-stage', className)} style={style}>
       {/* The viewer's canvas is the application landmark, named by aria-label. */}
       <div ref={hostRef} className="pn-stage__viewer" />
+      {unsupported && (
+        <p className="pn-stage__unsupported" role="status">
+          Your browser can’t display this 360° view.
+        </p>
+      )}
       <PanoViewerContext.Provider value={viewer}>
         <StageEventsContext.Provider value={stageEvents}>
           <div className="pn-stage__overlay">{children}</div>
@@ -407,5 +418,19 @@ export function PanoStage({
 function closeSource(source: PreviewSource): void {
   for (const { image } of source.patches) {
     if ('close' in image && typeof image.close === 'function') image.close();
+  }
+}
+
+/** The viewer, or null where the browser has no WebGL2. Any other failure still throws. */
+function createOrNull(
+  create: ViewerFactory,
+  container: HTMLElement,
+  options: ViewerOptions,
+): PanoViewer | null {
+  try {
+    return create(container, options);
+  } catch (err) {
+    if (err instanceof WebGLUnavailableError) return null;
+    throw err;
   }
 }
