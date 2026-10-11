@@ -99,6 +99,8 @@ export const buildBundle = (
     v: 1,
     tourId: tour.tourId,
     title: tour.title,
+    // A blank description is no description: leave it out, so readers have one case.
+    ...(tour.description ? { description: tour.description } : {}),
     visibility: state.visibility,
     slug: state.slug,
     publishedAt: state.publishedAt,
