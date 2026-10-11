@@ -307,6 +307,32 @@ describe('FloorLinks', () => {
     expect(active).toHaveBeenCalledOnce();
   });
 
+  it('keeps a chevron about 47 px past the edge, its widened near end, on stage', () => {
+    stageSize(800, 600);
+    const v = fakeViewer();
+    // The chevron's centre lands 47 px right of the stage's right edge.
+    v.project.mockImplementation((yaw: number, pitch: number) => ({
+      x: yaw,
+      y: 300 + pitch * 100,
+      behind: false,
+    }));
+    withViewer(
+      v,
+      <FloorLinks
+        links={[
+          { to: 'hall', yaw: 847, label: 'Hall' },
+          { to: 'yard', yaw: 860, label: 'Yard' },
+        ]}
+        onGo={() => {}}
+      />,
+    );
+    v.frame();
+    const vis = (label: string) =>
+      document.querySelector(`[aria-label="Go to ${label}"]`)!.parentElement!.style.visibility;
+    expect(vis('Hall')).toBe('visible');
+    expect(vis('Yard')).toBe('hidden');
+  });
+
   it('groups the chevrons under one name', () => {
     withViewer(fakeViewer(), <FloorLinks links={[]} onGo={() => {}} />);
     expect(screen.getByRole('group', { name: 'Go to' })).toBeTruthy();

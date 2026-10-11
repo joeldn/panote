@@ -6,9 +6,10 @@ import { onStage, setShown, useStageBox, useViewerFrame } from './use-render.js'
 // Two floor points along the link's heading: near the feet and toward the horizon.
 const PITCH_NEAR = -0.6;
 const PITCH_FAR = -0.2;
-// Half the largest chevron (56 px at scale 1.5) plus its ring: a chevron
-// centred this far past the stage edge still shows a sliver.
-const EDGE_MARGIN = 44;
+// Half the largest chevron (56 px at scale 1.5) plus its ring, and the near
+// end the floor's perspective widens (about 47 px from the centre at 1.5): a
+// chevron centred this far past the stage edge still shows a sliver.
+const EDGE_MARGIN = 48;
 
 export interface FloorLinksProps {
   links: readonly ViewerLinkArrow[];
