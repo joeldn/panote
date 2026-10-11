@@ -2701,6 +2701,23 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('resolves true and still emits scene-change when a ready listener throws', async () => {
+      stubNet();
+      const reportError = vi.fn();
+      vi.stubGlobal('reportError', reportError);
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const boom = new Error('boom');
+      const sceneChange = vi.fn();
+      viewer.on('ready', () => {
+        throw boom;
+      });
+      viewer.on('scene-change', sceneChange);
+      await expect(viewer.load('pano-a')).resolves.toBe(true);
+      expect(sceneChange).toHaveBeenCalledExactlyOnceWith('pano-a');
+      expect(reportError).toHaveBeenCalledExactlyOnceWith(boom);
+      viewer.dispose();
+    });
+
     it('does not announce a scene change for a load a ready listener superseded', async () => {
       stubNet({ holdTile: (url) => url.includes('/pano-b/') });
       const viewer = new PanoViewer(makeContainer(400, 800));

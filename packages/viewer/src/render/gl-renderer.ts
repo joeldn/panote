@@ -1,6 +1,7 @@
 import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from './projection.js';
 import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
 import { VIEWER_DEFAULTS } from '../defaults.js';
+import { report } from '../report.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
@@ -101,12 +102,6 @@ export function boundingSphere(pos: Float32Array): Sphere {
     r2 = Math.max(r2, dx * dx + dy * dy + dz * dz);
   }
   return { cx, cy, cz, r: Math.sqrt(r2) };
-}
-
-/** Hand an error to the host's error reporting without throwing. */
-function report(err: unknown): void {
-  if (typeof reportError === 'function') reportError(err);
-  else console.error(err);
 }
 
 function isQuadIndex(index: Uint16Array): boolean {

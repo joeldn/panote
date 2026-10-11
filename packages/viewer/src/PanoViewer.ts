@@ -23,6 +23,7 @@ import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
 import { resolveViewerOptions } from './defaults.js';
 import { Emitter } from './emitter.js';
+import { report } from './report.js';
 import {
   clampPitch,
   clampFov,
@@ -59,12 +60,6 @@ const MOMENTUM_EPS = 1e-5 / FRAME_MS;
 /** `yaw` less its whole turns: the same rendered angle, kept within ±2π. */
 function unwound(yaw: number): number {
   return yaw - Math.trunc(yaw / TWO_PI) * TWO_PI;
-}
-
-/** Hand a listener's exception to the host's error reporting without unwinding the frame. */
-function report(err: unknown): void {
-  if (typeof reportError === 'function') reportError(err);
-  else console.error(err);
 }
 
 /**
@@ -524,13 +519,8 @@ export class PanoViewer {
     this.invalidate();
     if (next) {
       this.reload(next).catch((error: unknown) => {
-        // Nobody awaits this load, so the host hears about it as an event. A
-        // listener that throws here would be an unhandled rejection instead.
-        try {
-          this.emitter.emit('load-error', { error, id: next.id });
-        } catch (err) {
-          report(err);
-        }
+        // Nobody awaits this load, so the host hears about it as an event.
+        this.emitter.emit('load-error', { error, id: next.id });
       });
     }
     this.emitter.emit('context-restored', undefined);
@@ -1057,11 +1047,7 @@ export class PanoViewer {
     // or disposes the viewer must not cost this frame its render.
     this.renderer.render(this.drawList());
     if (tilesSettled) {
-      try {
-        this.emitter.emit('tiles-settled', undefined);
-      } catch (err) {
-        report(err);
-      }
+      this.emitter.emit('tiles-settled', undefined);
       if (this.disposed) return;
     }
     if (this.renderCbs.size > 0) {
