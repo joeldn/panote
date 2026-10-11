@@ -161,6 +161,26 @@ describe('PanoViewer with no options and a loadTile source', () => {
     viewer.dispose();
   });
 
+  it('stops calling a listener removed with off() or the function on() returned', async () => {
+    const a = generated('a');
+    const b = generated('b');
+    const viewer = new PanoViewer(container());
+    const byOff = vi.fn();
+    const byUnsubscribe = vi.fn();
+    const kept = vi.fn();
+    viewer.on('loading', byOff);
+    const unsubscribe = viewer.on('loading', byUnsubscribe);
+    viewer.on('loading', kept);
+    await viewer.load(a.source);
+    viewer.off('loading', byOff);
+    unsubscribe();
+    await viewer.load(b.source);
+    expect(byOff.mock.calls).toEqual([[{ id: 'a' }]]);
+    expect(byUnsubscribe.mock.calls).toEqual([[{ id: 'a' }]]);
+    expect(kept.mock.calls).toEqual([[{ id: 'a' }], [{ id: 'b' }]]);
+    viewer.dispose();
+  });
+
   it('crossfades to a source with a transition load', async () => {
     const a = generated('a');
     const b = generated('b');
