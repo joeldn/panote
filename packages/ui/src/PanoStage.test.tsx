@@ -1,4 +1,9 @@
-import type { PanoViewer, PreviewSource, ViewerOptions } from '@panote/viewer';
+import {
+  WebGLUnavailableError,
+  type PanoViewer,
+  type PreviewSource,
+  type ViewerOptions,
+} from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -893,6 +898,60 @@ describe('PanoStage', () => {
     expect(v.load).toHaveBeenCalledTimes(2);
     v.emit('scene-change', 'hall');
     expect(onSceneChange).toHaveBeenCalledExactlyOnceWith('hall');
+  });
+
+  describe('without WebGL2', () => {
+    it('says the view cannot be shown, as an alert, instead of crashing', () => {
+      const createViewer = vi.fn((): PanoViewer => {
+        throw new WebGLUnavailableError();
+      });
+      const onViewer = vi.fn();
+      render(
+        <PanoStage
+          baseUrl="https://cdn.test/tiles/"
+          panoId="hall"
+          createViewer={createViewer}
+          onViewer={onViewer}
+        >
+          <span>chrome</span>
+        </PanoStage>,
+      );
+      expect(createViewer).toHaveBeenCalledTimes(1);
+      // An alert, so it is announced as it appears: a status region is only
+      // announced when content changes inside one already on the page.
+      const alert = screen.getByRole('alert');
+      expect(alert.textContent).toBe('Your browser can’t display this 360° view.');
+      expect(onViewer).not.toHaveBeenCalled();
+    });
+
+    it('still throws any other failure to build the viewer', () => {
+      const createViewer = vi.fn((): PanoViewer => {
+        throw new Error('boom');
+      });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() =>
+        render(
+          <PanoStage baseUrl="https://cdn.test/tiles/" panoId="hall" createViewer={createViewer} />,
+        ),
+      ).toThrow('boom');
+      vi.mocked(console.error).mockRestore();
+    });
+
+    it('says nothing on an empty stage, which is empty by design', () => {
+      const createViewer = vi.fn((): PanoViewer => {
+        throw new WebGLUnavailableError();
+      });
+      const { rerender } = render(
+        <PanoStage baseUrl="https://cdn.test/tiles/" panoId={null} createViewer={createViewer} />,
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+      rerender(
+        <PanoStage baseUrl="https://cdn.test/tiles/" panoId="hall" createViewer={createViewer} />,
+      );
+      expect(screen.getByRole('alert').textContent).toBe(
+        'Your browser can’t display this 360° view.',
+      );
+    });
   });
 
   describe('after a WebGL context restore', () => {

@@ -20,7 +20,7 @@ What it doesn't do (each of these would be an extension):
 - video;
 - WebGL1.
 
-**Browser floor:** WebGL2, ES2023 (the build is not transpiled down) and `createImageBitmap`. Any current Chrome, Edge, Firefox (ESR included) or Safari meets it.
+**Browser floor:** WebGL2, ES2023 (the build is not transpiled down) and `createImageBitmap`. Any current Chrome, Edge, Firefox (ESR included) or Safari meets it. Where WebGL2 is missing (disabled, or a blocklisted GPU), `new PanoViewer()` throws `WebGLUnavailableError`; check `isWebGL2Supported()` first, or catch it, to show a fallback.
 
 ## Quick start
 
@@ -155,11 +155,13 @@ The rules a source follows:
 
 | Method | What it does |
 |---|---|
-| `load(source \| id, { view? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. Resolves `true` when the scene went on screen and `false` when a newer load, a preview or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
-| `transitionTo(source \| id, view?)` | Like `load`, but crossfades from a snapshot of the current frame. |
+| `load(source \| id, { view? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |
+| `transitionTo(source \| id, view?)` | Like `load`, but crossfades from a snapshot of the old scene, taken at the swap: the old scene stays live until the new one is ready. |
+| `cancelLoad()` | Cancels the load or transition in flight: its `load()` resolves `false` and the scene on screen stays as it is. |
 | `showPreview(id, preview, { replacesVersion?, view? })` | Shows an equirect preview of `id` now and cancels any load in flight. Call `load(id)` afterwards to get the tiles. `view` is cut to as the preview goes up. |
 | `prefetch(source \| id, { signal? })` | Warms the HTTP cache with the six base tiles of a scene the visitor may open next. Best effort: it never rejects. |
-| `setView({ yaw?, pitch?, fov? })` / `getView()` | Eases the camera to a view, or reads the view it is moving to (yaw in (−π, π]). |
+| `setView({ yaw?, pitch?, fov? })` / `getView()` | Eases the camera to a view, or reads the view it is moving to (yaw in (−π, π]). `getView().fov` is the fov requested, which on a wide viewport can be above what `camera.maxHorizontalFov` lets it draw. |
+| `zoomBy(factor)` | Zooms about the centre (below 1 zooms in), stepped from the fov on screen like the wheel and keys, so every step shows. For zoom buttons. |
 | `setNorth(rad)` / `heading()` | Sets the compass offset of the scene, or reads the heading the camera faces. |
 | `setAutoRotate(on)` | Turns idle auto-rotate on or off. |
 | `setLabel(label)` | Renames the canvas, e.g. for each scene. |

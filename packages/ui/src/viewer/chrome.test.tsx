@@ -31,6 +31,9 @@ function fakeViewer() {
     setView: vi.fn((view: { fov?: number }) => {
       if (view.fov !== undefined) v.fov = view.fov;
     }),
+    zoomBy: vi.fn((factor: number) => {
+      v.fov *= factor;
+    }),
     frame: () => act(() => frames.forEach((cb) => cb())),
   };
   return v;
@@ -253,10 +256,15 @@ describe('ViewerControls', () => {
     const v = fakeViewer();
     const onAuto = vi.fn();
     withViewer(v, <ViewerControls autoRotate={false} onAutoRotateChange={onAuto} />);
+    // Through zoomBy, which steps from the fov on screen: scaling
+    // getView().fov can sit above what a wide viewport draws.
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(v.zoomBy).toHaveBeenLastCalledWith(0.8);
     expect(v.fov).toBeCloseTo(56);
     fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+    expect(v.zoomBy).toHaveBeenLastCalledWith(1.25);
     expect(v.fov).toBeCloseTo(70);
+    expect(v.setView).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Auto-rotate' }));
     expect(onAuto).toHaveBeenCalledWith(true);
     expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();

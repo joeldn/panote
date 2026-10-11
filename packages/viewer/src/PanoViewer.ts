@@ -2,6 +2,7 @@ import { GLRenderer } from './render/gl-renderer.js';
 import {
   viewProjection,
   effectiveVFovDeg,
+  maxVFovDeg,
   projectDir,
   unprojectNDC,
   type Mat4,
@@ -22,6 +23,7 @@ import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
 import { resolveViewerOptions } from './defaults.js';
 import { Emitter } from './emitter.js';
+import { report } from './report.js';
 import {
   clampPitch,
   clampFov,
@@ -60,12 +62,6 @@ function unwound(yaw: number): number {
   return yaw - Math.trunc(yaw / TWO_PI) * TWO_PI;
 }
 
-/** Hand a listener's exception to the host's error reporting without unwinding the frame. */
-function report(err: unknown): void {
-  if (typeof reportError === 'function') reportError(err);
-  else console.error(err);
-}
-
 /**
  * Take a transition snapshot off the page, and free its backing store now
  * rather than at GC: Safari caps the memory all canvases may hold.
@@ -76,6 +72,13 @@ function dropOverlay(el: HTMLCanvasElement): void {
   el.height = 0;
 }
 
+/** A transitionTo's crossfade, shared between it and the swap it waits on. */
+interface Crossfade {
+  ms: number;
+  /** The snapshot of the old scene, put up at the swap. */
+  snap?: HTMLCanvasElement | undefined;
+}
+
 /** A load to finish after a context restore. */
 interface Reload {
   id: string;
@@ -84,6 +87,8 @@ interface Reload {
   source?: CubeTileSource;
   /** Emit ready and scene-change: false for the scene that was already on screen. */
   announce: boolean;
+  /** Crossfade from the old scene at the swap (transitionTo). */
+  crossfade?: Crossfade;
 }
 
 export class PanoViewer {
@@ -324,9 +329,9 @@ export class PanoViewer {
   /**
    * Load a source, or the id of one (resolved through `resolveSource`),
    * swapping it in once its low-resolution base is resident. Resolves true
-   * when it took effect and false when a newer load, a preview or dispose()
-   * superseded it; rejects only for a load that is still current, including
-   * a source that fails to resolve or is malformed. `options.view` is applied
+   * when it took effect and false when a newer load, a preview, cancelLoad()
+   * or dispose() superseded it; rejects only for a load that is still
+   * current, including a source that fails to resolve or is malformed. `options.view` is applied
    * at the swap, with no easing from the old camera.
    *
    * WebGL context loss: a load in flight when the context is lost resolves
@@ -336,12 +341,21 @@ export class PanoViewer {
    * is back, with the same view, and emits `ready` and `scene-change` for it;
    * if that reload fails it emits `load-error` instead.
    */
-  async load(source: CubeTileSource | string, options: LoadOptions = {}): Promise<boolean> {
+  load(source: CubeTileSource | string, options: LoadOptions = {}): Promise<boolean> {
+    return this.start(source, options.view);
+  }
+
+  private async start(
+    source: CubeTileSource | string,
+    view: Partial<View> | undefined,
+    crossfade?: Crossfade,
+  ): Promise<boolean> {
     const token = this.supersede();
     const stale = () => this.disposed || token !== this.loadToken;
     const id = typeof source === 'string' ? source : source.id;
-    const request: Reload = { id, view: options.view, announce: true };
+    const request: Reload = { id, view, announce: true };
     if (typeof source !== 'string') request.source = source;
+    if (crossfade) request.crossfade = crossfade;
     this.request = request;
     try {
       this.emitter.emit('loading', id);
@@ -369,6 +383,28 @@ export class PanoViewer {
       return await this.swapIn(token, { ...request, source: resolved });
     } finally {
       if (this.request === request) this.request = undefined;
+    }
+  }
+
+  /**
+   * Cancel the load or transition in flight, if any: its pending `load()`
+   * resolves false, its fetches stop, and the scene on screen stays as it
+   * is, camera included. A crossfade still fading is cut short. A load that
+   * a context loss is holding for the restore is dropped too.
+   *
+   * After a context restore the scene's tiles are being loaded again: that
+   * reload is left alone, and cancelling a load the restore was finishing
+   * in its place loads the scene back instead of leaving the stage blank.
+   */
+  cancelLoad(): void {
+    if (this.disposed) return;
+    // Only a restore's reload of the scene on screen goes unannounced.
+    if (this.request && !this.request.announce) return;
+    this.supersede();
+    this.lostRequest = undefined;
+    const scene = this.scene;
+    if (!this.layer && !this.contextLost && scene) {
+      this.reloadInBackground({ id: scene.id, view: undefined, source: scene, announce: false });
     }
   }
 
@@ -437,6 +473,7 @@ export class PanoViewer {
     // the viewer for the length of the fetch, and would leave it blank for good
     // if the fetch failed; this way a rejected load leaves exactly what was on
     // screen before it was called.
+    if (req.crossfade) this.raiseSnapshot(req.crossfade);
     this.layer?.dispose();
     this.layer = layer;
     this.scene = source;
@@ -502,25 +539,23 @@ export class PanoViewer {
     this.lostRequest = undefined;
     this.disposePreview();
     this.invalidate();
-    if (next) {
-      this.reload(next).catch((error: unknown) => {
-        // Nobody awaits this load, so the host hears about it as an event. A
-        // listener that throws here would be an unhandled rejection instead.
-        try {
-          this.emitter.emit('load-error', { error, id: next.id });
-        } catch (err) {
-          report(err);
-        }
-      });
-    }
+    if (next) this.reloadInBackground(next);
     this.emitter.emit('context-restored', undefined);
   };
+
+  /** reload() with nobody awaiting it: a failure reaches the host as `load-error`. */
+  private reloadInBackground(req: Reload): void {
+    this.reload(req).catch((error: unknown) => {
+      this.emitter.emit('load-error', { error, id: req.id });
+    });
+  }
 
   private async reload(req: Reload): Promise<boolean> {
     const { source } = req;
     if (!source) return this.load(req.id, req.view ? { view: req.view } : {});
     const token = this.supersede();
-    const request: Reload = { ...req, source };
+    // No crossfade: the transitionTo that asked for one has already given up.
+    const request: Reload = { id: req.id, view: req.view, source, announce: req.announce };
     this.request = request;
     try {
       return await this.swapIn(token, { ...request, source });
@@ -675,8 +710,26 @@ export class PanoViewer {
     return clampPitch(pitch, this.camera.minPitch, this.camera.maxPitch);
   }
 
+  /**
+   * `fov` within camera.minFov/maxFov. Independent of the aspect, so a
+   * requested fov survives a rotation, a resize or a zero-size blip.
+   */
   private clampFov(fov: number): number {
     return clampFov(fov, this.camera.minFov, this.camera.maxFov);
+  }
+
+  /**
+   * A user zoom step: `factor` applied to the fov drawn, not the one
+   * requested, and kept within what this aspect can draw. Above the
+   * horizontal fov cap a requested fov draws the same picture, so a step
+   * taken from it could change nothing on screen. Zooming out stops at the
+   * cap, which the user then has chosen.
+   */
+  private zoomStep(fromDeg: number, factor: number): number {
+    const { minFov, maxFov, maxHorizontalFov } = this.camera;
+    const cap = maxVFovDeg(maxHorizontalFov, this.aspect);
+    const max = Math.max(minFov, Math.min(maxFov, cap));
+    return clampFov(Math.min(fromDeg, cap) * factor, minFov, max);
   }
 
   /**
@@ -759,7 +812,7 @@ export class PanoViewer {
     this.stopMomentum();
     const { x: nx, y: ny } = this.toNdc(clientX, clientY);
     const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const newReqDeg = this.clampFov(this.target.fov * scaleFactor);
+    const newReqDeg = this.zoomStep(this.target.fov, scaleFactor);
     const vfov1 = this.effectiveVFovDeg(newReqDeg) * DEG2RAD;
     const ty0 = Math.tan(vfov0 / 2);
     const ty1 = Math.tan(vfov1 / 2);
@@ -812,7 +865,7 @@ export class PanoViewer {
   // step is solved from the start, so nothing builds up between events.
   private pinchTo(scale: number, clientX: number, clientY: number): void {
     this.stopMomentum();
-    const fov = this.clampFov(this.pinchFov * scale);
+    const fov = this.zoomStep(this.pinchFov, scale);
     const { x: nx, y: ny } = this.toNdc(clientX, clientY);
     const ty = Math.tan((this.effectiveVFovDeg(fov) * DEG2RAD) / 2);
     const { yaw, pitch } = aimRay(
@@ -843,6 +896,18 @@ export class PanoViewer {
       this.target.yaw = this.view.yaw + normalizeAngle(view.yaw - this.view.yaw);
     if (view.pitch !== undefined) this.target.pitch = this.clampPitch(view.pitch);
     if (view.fov !== undefined) this.target.fov = this.clampFov(view.fov);
+    this.stopMomentumOnly();
+    this.invalidate();
+  }
+
+  /**
+   * Zoom by `factor` about the centre (below 1 zooms in), easing like
+   * setView. Stepped from the fov on screen, like the viewer's own wheel and
+   * keys, so every step shows: for zoom buttons, rather than scaling
+   * `getView().fov`, which can sit above what a wide viewport draws.
+   */
+  zoomBy(factor: number): void {
+    this.target.fov = this.zoomStep(this.target.fov, factor);
     this.stopMomentumOnly();
     this.invalidate();
   }
@@ -907,7 +972,9 @@ export class PanoViewer {
   private resizeTo(width: number, height: number, drawNow = true): void {
     this.cssW = width || 1;
     this.cssH = height || 1;
-    this.aspect = this.cssW / this.cssH;
+    // A zero-size container (hidden, mid-layout) has no aspect: keep the
+    // last real one rather than make one up from a stand-in size.
+    if (width > 0 && height > 0) this.aspect = width / height;
     if (!this.renderer.resize(this.cssW, this.cssH)) return;
     if (drawNow && this.onScreen && !this.disposed && !this.contextLost) {
       cancelAnimationFrame(this.raf);
@@ -1026,11 +1093,7 @@ export class PanoViewer {
     // or disposes the viewer must not cost this frame its render.
     this.renderer.render(this.drawList());
     if (tilesSettled) {
-      try {
-        this.emitter.emit('tiles-settled', undefined);
-      } catch (err) {
-        report(err);
-      }
+      this.emitter.emit('tiles-settled', undefined);
       if (this.disposed) return;
     }
     if (this.renderCbs.size > 0) {
@@ -1138,53 +1201,53 @@ export class PanoViewer {
     }
   }
 
+  /**
+   * Put a copy of the frame on screen over the canvas, for transitionTo to
+   * fade out. Taken at the swap, while the old scene is still drawable, so
+   * the old scene stays live and interactive for the whole load and the
+   * snapshot is up only for the fade.
+   */
+  private raiseSnapshot(fade: Crossfade): void {
+    // Only snapshot when there is something to draw; snapshotting an empty
+    // draw list would crossfade from a black frame.
+    const drawList = this.drawList();
+    if (drawList.length === 0) return;
+    try {
+      // A copy of the frame, made on the GPU; null while the context is lost.
+      const snap = this.renderer.snapshot(drawList) ?? undefined;
+      if (!snap) return;
+      snap.style.cssText =
+        'position:absolute;inset:0;width:100%;height:100%;' +
+        'pointer-events:none;transition:opacity ' +
+        fade.ms +
+        'ms ease;opacity:1;z-index:5;';
+      this.container.appendChild(snap);
+      this.transitionOverlay = snap;
+      fade.snap = snap;
+    } catch {
+      // snapshot unavailable — fall back to a plain cut
+    }
+  }
+
   async transitionTo(source: CubeTileSource | string, view?: Partial<View>): Promise<void> {
     if (this.disposed) return;
     const { durationMs, respectReducedMotion } = this.opts.transition;
     const reduce =
       respectReducedMotion && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const ms = reduce ? 0 : durationMs;
-
-    // Only snapshot when there is something to draw; snapshotting an empty draw
-    // list would crossfade from a black frame.
-    const drawList = this.drawList();
-    // Started before the snapshot goes up: superseding the load in flight
-    // removes an older transition's overlay (one that may still be fading),
-    // and must not remove this one. Up to its first await, load() leaves the
-    // scene on screen alone, so drawList is still what is drawn.
-    const loading = this.load(source, view ? { view } : {});
-    let snap: HTMLCanvasElement | undefined;
-    if (drawList.length > 0) {
-      try {
-        // A copy of the frame, made on the GPU; null while the context is lost.
-        snap = this.renderer.snapshot(drawList) ?? undefined;
-        if (snap) {
-          snap.style.cssText =
-            'position:absolute;inset:0;width:100%;height:100%;' +
-            'pointer-events:none;transition:opacity ' +
-            ms +
-            'ms ease;opacity:1;z-index:5;';
-          this.container.appendChild(snap);
-          this.transitionOverlay = snap;
-        }
-      } catch {
-        // snapshot unavailable — fall back to a plain fade
-        snap = undefined;
-      }
-    }
-
+    const fade: Crossfade = { ms: reduce ? 0 : durationMs };
     try {
-      // Superseded: the newer call owns the camera and has already removed
-      // this snapshot, so there is nothing to fade.
-      const tookEffect = await loading;
-      if (snap && tookEffect) {
+      // Superseded: the newer call owns the camera, and no snapshot went up.
+      const tookEffect = await this.start(source, view, fade);
+      const snap = fade.snap;
+      if (snap && tookEffect && this.transitionOverlay === snap) {
         await new Promise((r) => requestAnimationFrame(() => r(null)));
         snap.style.opacity = '0';
-        await new Promise((r) => setTimeout(r, ms));
+        await new Promise((r) => setTimeout(r, fade.ms));
       }
     } finally {
       // Always tear the overlay down — even if load() rejected — but don't
       // clobber an overlay a newer transitionTo may have installed.
+      const snap = fade.snap;
       if (snap) {
         dropOverlay(snap);
         if (this.transitionOverlay === snap) this.transitionOverlay = undefined;

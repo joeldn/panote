@@ -9,6 +9,7 @@ import {
   type DrawItem,
 } from './gl-renderer.js';
 import { viewProjection } from './projection.js';
+import { WebGLUnavailableError } from '../webgl-support.js';
 import { buildTileGeometry } from '../tile-geometry.js';
 
 describe('sortDrawList', () => {
@@ -507,6 +508,44 @@ describe('GLRenderer', () => {
       expect(() => renderer.uploadTile(g, {} as ImageBitmap)).toThrow(/vertex counts/);
     });
 
+    it('frees what it created and unbinds when the texture upload throws', () => {
+      const { gl, renderer } = setup();
+      gl.texSubImage2D.mockImplementation(() => {
+        throw new DOMException('tainted', 'SecurityError');
+      });
+      expect(() => renderer.uploadTile(grid(), image())).toThrow('tainted');
+      const vao = gl.createVertexArray.mock.results[0]!.value as unknown;
+      const tex = gl.createTexture.mock.results[0]!.value as unknown;
+      // The VBO and the grid's own IBO: every buffer but the shared quad IBO.
+      const buffers = gl.createBuffer.mock.results.slice(1).map((r) => r.value as unknown);
+      expect(buffers).toHaveLength(2);
+      expect(gl.deleteVertexArray).toHaveBeenCalledExactlyOnceWith(vao);
+      expect(gl.deleteTexture).toHaveBeenCalledExactlyOnceWith(tex);
+      expect(gl.deleteBuffer.mock.calls.map((c) => c[0] as unknown)).toEqual(buffers);
+      expect(gl.bindVertexArray).toHaveBeenLastCalledWith(null);
+      expect(gl.bindTexture).toHaveBeenLastCalledWith(gl.TEXTURE_2D, null);
+      // Nothing was registered, so dispose frees only the shared IBO.
+      gl.deleteBuffer.mockClear();
+      renderer.dispose();
+      expect(gl.deleteBuffer).toHaveBeenCalledTimes(1);
+      expect(gl.deleteVertexArray).toHaveBeenCalledTimes(1);
+    });
+
+    it('frees the VAO and VBO, and unbinds the VAO, when a create fails part-way', () => {
+      const { gl, renderer } = setup();
+      gl.createTexture.mockImplementation(() => {
+        gl.__log.push('createTexture');
+        return null;
+      });
+      expect(() => renderer.uploadTile(buildTileGeometry('pz', 0, 0, 0), image())).toThrow();
+      const vao = gl.createVertexArray.mock.results[0]!.value as unknown;
+      const vbo = gl.createBuffer.mock.results[1]!.value as unknown;
+      expect(gl.deleteVertexArray).toHaveBeenCalledExactlyOnceWith(vao);
+      expect(gl.deleteBuffer).toHaveBeenCalledExactlyOnceWith(vbo);
+      expect(gl.deleteTexture).not.toHaveBeenCalled();
+      expect(gl.bindVertexArray).toHaveBeenLastCalledWith(null);
+    });
+
     it('frees the buffers, texture and VAO on removeTile', () => {
       const { gl, renderer } = setup();
       const h = renderer.uploadTile(grid(), image());
@@ -714,7 +753,15 @@ describe('GLRenderer options', () => {
 
   it('says what it needs when the browser has no WebGL2', () => {
     const { container } = makeFakeDocumentAndContainer(null);
-    expect(() => new GLRenderer(container as unknown as HTMLElement)).toThrow(
+    let err: unknown;
+    try {
+      new GLRenderer(container as unknown as HTMLElement);
+    } catch (e) {
+      err = e;
+    }
+    // A class of its own, so a host can tell it from any other failure.
+    expect(err).toBeInstanceOf(WebGLUnavailableError);
+    expect((err as Error).message).toBe(
       'PanoViewer needs WebGL2, which this browser does not provide.',
     );
   });

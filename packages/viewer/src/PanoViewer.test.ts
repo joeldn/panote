@@ -907,6 +907,203 @@ describe('PanoViewer', () => {
     });
   });
 
+  describe('fov limit at wide aspects', () => {
+    // The drawn vertical fov is capped by camera.maxHorizontalFov (100°), so
+    // on a wide viewport it tops out below camera.maxFov (80°). The requested
+    // fov stays what was asked for, whatever the aspect; user zoom steps are
+    // taken from the fov drawn, so none of them is lost above the cap.
+    const MAX_H = 100;
+    const cap = (w: number, h: number) => effectiveVFovDeg(80, MAX_H, w / h);
+
+    function sizedViewer(w: number, h: number, options: ViewerOptions = {}): PanoViewer {
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+      const viewer = new PanoViewer(makeContainer(w, h), options);
+      const canvas = internals(viewer).renderer.canvas as unknown as {
+        getBoundingClientRect: () => DOMRect;
+      };
+      canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: w, height: h }) as DOMRect;
+      runUntilIdle();
+      return viewer;
+    }
+
+    const resize = (w: number, h: number) => FakeResizeObserver.instances[0]!.trigger(w, h);
+
+    /** The vertical fov drawn this frame. */
+    const drawn = (viewer: PanoViewer, w: number, h: number) =>
+      effectiveVFovDeg(internals(viewer).view.fov, MAX_H, w / h);
+
+    const host = (viewer: PanoViewer) =>
+      internals(viewer) as unknown as {
+        pinchStart: (x: number, y: number) => void;
+        pinchTo: (s: number, x: number, y: number) => void;
+        zoomAt: (s: number, x: number, y: number) => void;
+      };
+
+    describe('keeps the requested fov through', () => {
+      it('a widen and back', () => {
+        const viewer = sizedViewer(1000, 1000);
+        resize(2100, 900);
+        resize(1000, 1000);
+        expect(viewer.getView().fov).toBe(70);
+        expect(internals(viewer).view.fov).toBe(70);
+        viewer.dispose();
+      });
+
+      it('a zero-height blip', () => {
+        const viewer = sizedViewer(1600, 900);
+        resize(800, 0);
+        runUntilIdle();
+        resize(1600, 900);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(70);
+        expect(internals(viewer).view.fov).toBe(70);
+        viewer.dispose();
+      });
+
+      it('a zoom during a zero-height blip, stepped from the last real aspect', () => {
+        const viewer = sizedViewer(1600, 900);
+        resize(800, 0);
+        viewer.zoomBy(0.8);
+        // Not minFov, as an aspect of 800:1 would give.
+        expect(viewer.getView().fov).toBeCloseTo(cap(1600, 900) * 0.8, 6);
+        viewer.dispose();
+      });
+
+      it('construction in a zero-height container', () => {
+        const viewer = sizedViewer(800, 0);
+        expect(viewer.getView().fov).toBe(70);
+        resize(800, 600);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(70);
+        viewer.dispose();
+      });
+
+      it('an initialView above the cap, then a turn to portrait', () => {
+        const viewer = sizedViewer(1600, 900, { initialView: { fov: 75 } });
+        expect(viewer.getView().fov).toBe(75);
+        resize(900, 1600);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(75);
+        expect(internals(viewer).view.fov).toBe(75);
+        viewer.dispose();
+      });
+
+      it('setView, so a host persists what it set (admin "Start here" at 16:9)', () => {
+        const viewer = sizedViewer(1600, 900);
+        expect(viewer.getView().fov).toBe(70);
+        viewer.setView({ fov: 78 });
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(78);
+        viewer.dispose();
+      });
+    });
+
+    /** Every user zoom input, one step in (toward a smaller fov) at the centre. */
+    const stepsIn: [string, (viewer: PanoViewer, w: number, h: number) => void][] = [
+      [
+        'wheel',
+        (viewer, w, h) =>
+          canvasListener(
+            viewer,
+            'wheel',
+          )({
+            deltaY: -100,
+            deltaX: 0,
+            deltaMode: 0,
+            ctrlKey: false,
+            metaKey: false,
+            clientX: w / 2,
+            clientY: h / 2,
+            timeStamp: raf.now,
+            preventDefault: vi.fn(),
+          }),
+      ],
+      [
+        'pinch',
+        (viewer, w, h) => {
+          host(viewer).pinchStart(w / 2, h / 2);
+          host(viewer).pinchTo(0.9, w / 2, h / 2);
+        },
+      ],
+      ['zoomBy (the zoom buttons)', (viewer) => viewer.zoomBy(0.8)],
+      [
+        'key',
+        (viewer) =>
+          canvasListener(
+            viewer,
+            'keydown',
+          )({
+            key: '=',
+            ctrlKey: false,
+            altKey: false,
+            metaKey: false,
+            preventDefault: vi.fn(),
+          }),
+      ],
+      [
+        'double-click',
+        (viewer, w, h) =>
+          canvasListener(
+            viewer,
+            'dblclick',
+          )({ clientX: w / 2, clientY: h / 2, preventDefault: vi.fn() }),
+      ],
+    ];
+
+    describe.each([
+      { name: '16:9', w: 1600, h: 900 },
+      { name: '21:9', w: 2100, h: 900 },
+    ])('at $name', ({ w, h }) => {
+      it.each(stepsIn)('changes the drawn fov on every %s step in from fully out', (_, step) => {
+        const viewer = sizedViewer(w, h);
+        // Fully out, asked for by a host: above what the aspect can draw.
+        viewer.setView({ fov: 80 });
+        runUntilIdle();
+        let prev = drawn(viewer, w, h);
+        expect(prev).toBeCloseTo(cap(w, h), 6);
+        // Three steps: a double-click's 0.6 reaches minFov on the fourth.
+        for (let i = 0; i < 3; i++) {
+          step(viewer, w, h);
+          runUntilIdle();
+          const now = drawn(viewer, w, h);
+          expect(now).toBeLessThan(prev - 0.5);
+          prev = now;
+        }
+        viewer.dispose();
+      });
+
+      it('stops a zoom out at the cap, so the next zoom in is seen at once', () => {
+        const viewer = sizedViewer(w, h);
+        for (let i = 0; i < 5; i++) viewer.zoomBy(1 / 0.8);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBeCloseTo(cap(w, h), 6);
+        viewer.zoomBy(0.8);
+        runUntilIdle();
+        expect(drawn(viewer, w, h)).toBeCloseTo(cap(w, h) * 0.8, 6);
+        viewer.dispose();
+      });
+    });
+
+    it('never stores a fov under minFov, even where the cap is under it', () => {
+      // 10:1: the cap (13.6°) is narrower than minFov (15°).
+      const viewer = sizedViewer(2000, 200);
+      viewer.zoomBy(0.5);
+      expect(viewer.getView().fov).toBe(15);
+      host(viewer).zoomAt(0.5, 1000, 100);
+      expect(viewer.getView().fov).toBe(15);
+      viewer.dispose();
+    });
+
+    it('zooms from the requested fov where it is under the cap', () => {
+      const viewer = sizedViewer(1000, 1000);
+      viewer.zoomBy(0.5);
+      expect(viewer.getView().fov).toBe(35);
+      viewer.zoomBy(10);
+      expect(viewer.getView().fov).toBe(80);
+      viewer.dispose();
+    });
+  });
+
   describe('compass north offset and heading', () => {
     it('defaults to north=0 and heading tracking the initial yaw', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: 0.4 } });
@@ -1662,7 +1859,7 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
-    it('never applies a superseded transition view, and drops its overlay at once', async () => {
+    it('never applies a superseded transition view, and puts up no overlay for it', async () => {
       const net = stubNet({ holdTile: (url) => /\/pano-[ab]\//.test(url) });
       const { container, overlays } = stubOverlayDom();
       const viewer = new PanoViewer(container);
@@ -1671,12 +1868,7 @@ describe('PanoViewer', () => {
 
       const a = viewer.transitionTo('pano-a', { yaw: 2 });
       await flush();
-      expect(overlays).toHaveLength(1);
-      expect(overlays[0]!.remove).not.toHaveBeenCalled();
-
-      // Gone as soon as B starts, not when A's load finally gives up.
       const b = viewer.load('pano-b', { view: { yaw: -1 } });
-      expect(overlays[0]!.remove).toHaveBeenCalled();
 
       // A settles first, while B is still loading: the camera stays put.
       await a;
@@ -1685,22 +1877,27 @@ describe('PanoViewer', () => {
       net.release();
       await expect(b).resolves.toBe(true);
       expect(viewer.getView().yaw).toBe(-1);
+      // A never swapped, and a plain load does not crossfade.
+      expect(overlays).toHaveLength(0);
       viewer.dispose();
     });
 
-    it('drops a transition overlay when a preview supersedes it', async () => {
-      stubNet({ holdTile: (url) => url.includes('/pano-a/') });
+    it('drops a transition overlay at once when a preview supersedes its fade', async () => {
+      stubNet();
       const { container, overlays } = stubOverlayDom();
-      const viewer = new PanoViewer(container);
+      const viewer = new PanoViewer(container, { transition: { durationMs: 30 } });
       await viewer.load('pano-0');
       tick(viewer);
 
       const a = viewer.transitionTo('pano-a', { yaw: 2 });
-      await flush();
+      for (let i = 0; i < 50 && overlays[0]?.style['opacity'] !== '0'; i++) {
+        await flush();
+        raf.step();
+      }
+      expect(overlays[0]!.remove).not.toHaveBeenCalled();
       viewer.showPreview('pano-c', source());
       expect(overlays[0]!.remove).toHaveBeenCalled();
       await a;
-      expect(viewer.getView().yaw).toBe(0);
       viewer.dispose();
     });
 
@@ -2592,6 +2789,23 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('resolves true and still emits scene-change when a ready listener throws', async () => {
+      stubNet();
+      const reportError = vi.fn();
+      vi.stubGlobal('reportError', reportError);
+      const viewer = new PanoViewer(makeContainer(400, 800));
+      const boom = new Error('boom');
+      const sceneChange = vi.fn();
+      viewer.on('ready', () => {
+        throw boom;
+      });
+      viewer.on('scene-change', sceneChange);
+      await expect(viewer.load('pano-a')).resolves.toBe(true);
+      expect(sceneChange).toHaveBeenCalledExactlyOnceWith('pano-a');
+      expect(reportError).toHaveBeenCalledExactlyOnceWith(boom);
+      viewer.dispose();
+    });
+
     it('does not announce a scene change for a load a ready listener superseded', async () => {
       stubNet({ holdTile: (url) => url.includes('/pano-b/') });
       const viewer = new PanoViewer(makeContainer(400, 800));
@@ -2606,6 +2820,231 @@ describe('PanoViewer', () => {
       expect(sceneChange).not.toHaveBeenCalled();
       viewer.dispose();
       await expect(b).resolves.toBe(false);
+    });
+
+    it('keeps the old scene live and uncovered while a transition loads, and snapshots it at the swap', async () => {
+      const net = stubNet({ holdTile: (url) => url.includes('/pano-a/') });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
+      await viewer.load('pano-0');
+      runUntilIdle();
+      const fake = internals(viewer).renderer as unknown as {
+        render: ReturnType<typeof vi.fn>;
+        snapshot: ReturnType<typeof vi.fn>;
+      };
+
+      const done = viewer.transitionTo('pano-a');
+      await flush();
+      // Nothing covers the old scene while the new one loads.
+      expect(overlays).toHaveLength(0);
+      expect(container.appendChild).not.toHaveBeenCalled();
+
+      // A drag still moves what the visitor sees.
+      const yaw0 = internals(viewer).view.yaw;
+      fake.render.mockClear();
+      internals(viewer).panByPixels(300, 0);
+      raf.step();
+      expect(internals(viewer).view.yaw).not.toBeCloseTo(yaw0, 3);
+      expect(fake.render).toHaveBeenCalledTimes(1);
+      const drawn = fake.render.mock.calls[0]![0] as unknown[];
+      expect(drawn.length).toBeGreaterThan(0);
+      expect(fake.snapshot).not.toHaveBeenCalled();
+
+      // The snapshot goes up at the swap, of the old scene where it was left.
+      net.release();
+      await finish(done);
+      expect(fake.snapshot).toHaveBeenCalledTimes(1);
+      expect(fake.snapshot.mock.calls[0]![0]).toHaveLength(drawn.length);
+      expect(overlays).toHaveLength(1);
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect((internals(viewer).layer as { source: CubeTileSource }).source.id).toBe('pano-a');
+      viewer.dispose();
+    });
+
+    it('does not fade a snapshot that a ready listener has already dropped', async () => {
+      const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
+      await viewer.load('pano-0');
+      runUntilIdle();
+      // Moving on as soon as A is ready supersedes the transition's fade.
+      viewer.on('ready', (src) => {
+        if (src.id === 'pano-a') void viewer.load('pano-b');
+      });
+      let done = false;
+      const t = viewer.transitionTo('pano-a').then(() => (done = true));
+      for (let i = 0; i < 10 && !done; i++) await flush();
+      // Settled with no frame drawn: nothing waited on a fade.
+      expect(done).toBe(true);
+      await t;
+      expect(overlays).toHaveLength(1);
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect(overlays[0]!.style['opacity']).toBeUndefined();
+      net.release();
+      viewer.dispose();
+    });
+
+    it('puts up no snapshot when a context restore finishes a transition that has given up', async () => {
+      const net = stubNet({ holdTile: (url) => url.includes('/pano-a/') });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
+      await viewer.load('pano-0');
+      runUntilIdle();
+      const fake = internals(viewer).renderer as unknown as {
+        loseContext(): void;
+        restoreContext(): void;
+      };
+      const done = viewer.transitionTo('pano-a');
+      await flush();
+      fake.loseContext();
+      await done;
+      fake.restoreContext();
+      net.release();
+      for (let i = 0; i < 20; i++) {
+        await flush();
+        raf.step();
+      }
+      expect((internals(viewer).layer as { source: CubeTileSource }).source.id).toBe('pano-a');
+      expect(overlays).toHaveLength(0);
+      viewer.dispose();
+    });
+
+    describe('cancelLoad', () => {
+      const layerId = (viewer: PanoViewer) =>
+        (internals(viewer).layer as { source: CubeTileSource } | undefined)?.source.id;
+
+      it('resolves a load waiting on its base to false and keeps the scene on screen', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        runUntilIdle();
+        const sceneChange = vi.fn();
+        viewer.on('scene-change', sceneChange);
+        const b = viewer.load('pano-b', { view: { yaw: 1 } });
+        await flush();
+        viewer.cancelLoad();
+        await expect(b).resolves.toBe(false);
+        expect(net.signalOf('/tiles/pano-b/0/pz/0-0.jpg')?.aborted).toBe(true);
+        net.release();
+        await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        expect(viewer.getView().yaw).toBe(0);
+        expect(sceneChange).not.toHaveBeenCalled();
+        expect(internals(viewer).pendingLayers.size).toBe(0);
+        viewer.dispose();
+      });
+
+      it('aborts a source resolve in flight', async () => {
+        const net = stubNet({ holdManifest: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const b = viewer.load('pano-b');
+        await flush();
+        viewer.cancelLoad();
+        expect(net.signalOf('/tiles/pano-b/manifest.json')?.aborted).toBe(true);
+        await expect(b).resolves.toBe(false);
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it('cancels a transition before its swap: no snapshot, no view change', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const { container, overlays } = stubOverlayDom();
+        const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
+        await viewer.load('pano-a');
+        runUntilIdle();
+        const t = viewer.transitionTo('pano-b', { yaw: 2 });
+        await flush();
+        viewer.cancelLoad();
+        await t;
+        net.release();
+        await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        expect(viewer.getView().yaw).toBe(0);
+        expect(overlays).toHaveLength(0);
+        viewer.dispose();
+      });
+
+      it('drops a load a context loss is holding, so the restore brings back the old scene', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const fake = internals(viewer).renderer as unknown as {
+          loseContext(): void;
+          restoreContext(): void;
+        };
+        const b = viewer.load('pano-b');
+        await flush();
+        fake.loseContext();
+        await expect(b).resolves.toBe(false);
+        viewer.cancelLoad();
+        fake.restoreContext();
+        net.release();
+        for (let i = 0; i < 10; i++) await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it("leaves a context restore's reload of the scene on screen alone", async () => {
+        let hold = false;
+        const net = stubNet({ holdTile: (url) => hold && url.includes('/pano-a/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const fake = internals(viewer).renderer as unknown as {
+          loseContext(): void;
+          restoreContext(): void;
+        };
+        fake.loseContext();
+        hold = true;
+        fake.restoreContext();
+        await flush();
+        const baseFetches = () =>
+          vi.mocked(fetch).mock.calls.filter(([url]) => url === '/tiles/pano-a/0/pz/0-0.jpg')
+            .length;
+        const before = baseFetches();
+        viewer.cancelLoad();
+        // Not cancelled and fetched again: left to finish.
+        expect(net.signalOf('/tiles/pano-a/0/pz/0-0.jpg')?.aborted).toBe(false);
+        net.release();
+        for (let i = 0; i < 10; i++) await flush();
+        expect(baseFetches()).toBe(before);
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it('brings the scene back when it cancels the load a restore was finishing', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const fake = internals(viewer).renderer as unknown as {
+          loseContext(): void;
+          restoreContext(): void;
+        };
+        const b = viewer.load('pano-b');
+        await flush();
+        fake.loseContext();
+        await expect(b).resolves.toBe(false);
+        // The restore loads B again; cancelling it must not leave the stage blank.
+        fake.restoreContext();
+        await flush();
+        viewer.cancelLoad();
+        net.release();
+        for (let i = 0; i < 10; i++) await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it('changes nothing with no load in flight, and after dispose', async () => {
+        stubNet();
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        viewer.cancelLoad();
+        expect(layerId(viewer)).toBe('pano-a');
+        // A later load still works.
+        await expect(viewer.load('pano-b')).resolves.toBe(true);
+        viewer.dispose();
+        expect(() => viewer.cancelLoad()).not.toThrow();
+      });
     });
 
     it('does nothing when transitionTo is called after dispose', async () => {
@@ -2627,17 +3066,17 @@ describe('PanoViewer', () => {
       const a = viewer.transitionTo('pano-a', { yaw: 2 });
       await flush();
       const b = viewer.transitionTo('pano-b', { yaw: -1 });
-      expect(overlays).toHaveLength(2);
-      expect(overlays[0]!.remove).toHaveBeenCalled();
-      expect(overlays[1]!.remove).not.toHaveBeenCalled();
       await a;
       expect(viewer.getView().yaw).toBe(0);
+      expect(overlays).toHaveLength(0);
 
       net.release();
       await finish(b);
       expect(viewer.getView().yaw).toBe(-1);
-      expect(overlays[1]!.style['opacity']).toBe('0');
-      expect(overlays[1]!.remove).toHaveBeenCalled();
+      // One snapshot, B's, at its swap.
+      expect(overlays).toHaveLength(1);
+      expect(overlays[0]!.style['opacity']).toBe('0');
+      expect(overlays[0]!.remove).toHaveBeenCalled();
       viewer.dispose();
     });
 
@@ -2677,18 +3116,16 @@ describe('PanoViewer', () => {
       const b = viewer.transitionTo('pano-b', { yaw: 2 });
       await flush();
       const c = viewer.transitionTo('pano-c', { yaw: -1 });
-      expect(overlays).toHaveLength(3);
-      expect(overlays[0]!.remove).toHaveBeenCalled();
-      expect(overlays[1]!.remove).toHaveBeenCalled();
-      expect(overlays[2]!.remove).not.toHaveBeenCalled();
       await Promise.all([a, b]);
       expect(viewer.getView().yaw).toBe(0);
+      expect(overlays).toHaveLength(0);
 
       net.release();
       await finish(c);
       expect(viewer.getView().yaw).toBe(-1);
       expect(sceneChange.mock.calls).toEqual([['pano-c']]);
-      expect(overlays[2]!.remove).toHaveBeenCalled();
+      expect(overlays).toHaveLength(1);
+      expect(overlays[0]!.remove).toHaveBeenCalled();
       const layer = internals(viewer).layer as { source: CubeTileSource };
       expect(layer.source.id).toBe('pano-c');
       viewer.dispose();
@@ -3034,13 +3471,12 @@ describe('PanoViewer', () => {
         await viewer.load('pano-0');
         tick(viewer);
         const fake = fakeOf(viewer);
-        const done = viewer.transitionTo('pano-a');
+        await finish(viewer.transitionTo('pano-a'));
         expect(fake.snapshot).toHaveBeenCalledTimes(1);
         const overlay = overlays[0]!;
         expect(fake.snapshot.mock.results[0]!.value).toBe(overlay);
         expect(container.appendChild).toHaveBeenCalledWith(overlay);
         expect(overlay.style['cssText']).toContain('width:100%');
-        await finish(done);
         expect(overlay.remove).toHaveBeenCalled();
         // Its backing store is released at once, not left for GC.
         expect([

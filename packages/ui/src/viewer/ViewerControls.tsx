@@ -41,9 +41,8 @@ export function ViewerControls({
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
-  const zoom = (factor: number) => {
-    if (viewer) viewer.setView({ fov: viewer.getView().fov * factor });
-  };
+  // Stepped from the fov on screen, so no press is lost above the horizontal cap.
+  const zoom = (factor: number) => viewer?.zoomBy(factor);
   const toggleFullscreen = () => {
     const el = fullscreenTarget?.current;
     // Either can still reject (permissions, no user gesture); nothing to do then.
@@ -57,6 +56,8 @@ export function ViewerControls({
         type="button"
         className="pn-controls__btn"
         aria-label="Zoom out"
+        // Nothing to zoom without a viewer (none yet, or no WebGL2).
+        disabled={!viewer}
         onClick={() => zoom(1 / ZOOM_STEP)}
       >
         <i className="fa-solid fa-minus" aria-hidden="true" />
@@ -65,6 +66,7 @@ export function ViewerControls({
         type="button"
         className="pn-controls__btn"
         aria-label="Zoom in"
+        disabled={!viewer}
         onClick={() => zoom(ZOOM_STEP)}
       >
         <i className="fa-solid fa-plus" aria-hidden="true" />

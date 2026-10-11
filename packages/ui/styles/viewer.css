@@ -139,6 +139,11 @@
 .pn-controls__btn:hover {
   background: var(--ink-06);
 }
+.pn-controls__btn:disabled {
+  background: transparent;
+  color: var(--ink-40);
+  cursor: default;
+}
 .pn-controls__btn--accent {
   border: 2px solid var(--accent);
   color: var(--accent);

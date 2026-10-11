@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { BaseTileLoadError, TileHttpError } from './index.js';
+import {
+  BaseTileLoadError,
+  TileHttpError,
+  WebGLUnavailableError,
+  isWebGL2Supported,
+} from './index.js';
+import * as webgl from './webgl-support.js';
 import { BaseTileLoadError as InternalBaseTileLoadError } from './tile-layer.js';
 import { TileHttpError as InternalTileHttpError } from './tile-retry.js';
 
@@ -45,5 +51,10 @@ describe('public entry point', () => {
     expect(notPublished.sourceId).toBe('pano-a');
     expect(notPublished.face).toBe('px');
     expect(notPublished.cause).toBeInstanceOf(InternalTileHttpError);
+  });
+
+  it('exports WebGLUnavailableError and isWebGL2Supported, for a host to show a fallback', () => {
+    expect(WebGLUnavailableError).toBe(webgl.WebGLUnavailableError);
+    expect(isWebGL2Supported).toBe(webgl.isWebGL2Supported);
   });
 });
