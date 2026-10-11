@@ -293,12 +293,14 @@ export function PanoStage({
     // counts as not shown: the preview path runs again and puts it back over
     // whatever tiles the viewer reloads (for a replace, the old ones).
     const shownKey = samePano && prev.restores === restores ? prev.previewKey : null;
-    // A failed change leaves the pano the viewer last landed on screen, so
-    // going back to it (TourViewer's snap-back) needs no load: one would only
-    // crossfade it down to its base level and fetch its manifest again.
+    // A change that failed, or is still in flight, leaves the pano the viewer
+    // last landed on screen, so going back to it (TourViewer's snap-back, or
+    // the visitor picking it again) needs no load: one would only crossfade it
+    // down to its base level and fetch its manifest again. A change in flight
+    // is cancelled instead, which keeps the camera too.
     const back = landed.current;
     if (
-      prev?.failed &&
+      prev !== null &&
       !samePano &&
       back?.viewer === viewer &&
       !back.failed &&
@@ -307,6 +309,7 @@ export function PanoStage({
       back.restores === restores &&
       (stagePreviewKey === null || stagePreviewKey === back.previewKey)
     ) {
+      if (!prev.failed) viewer.cancelLoad();
       loaded.current = { ...back, failed: false };
       return;
     }

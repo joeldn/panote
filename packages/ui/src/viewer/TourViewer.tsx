@@ -358,7 +358,8 @@ export function TourViewer({
             scenes={scenes}
             current={panoId}
             {...(moving && { pending: target.id })}
-            // Back to the scene on screen cancels a change and keeps the camera.
+            // Back to the scene on screen cancels the change in flight: PanoStage
+            // calls cancelLoad rather than load it again, so its tiles and camera stay.
             onSelect={(id) =>
               go(id, id === panoId ? undefined : data.tour?.scenes[id]?.initialView)
             }

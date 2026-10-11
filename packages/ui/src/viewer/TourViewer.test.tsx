@@ -11,6 +11,7 @@ interface PendingTransition {
   /** Lands the pano: emits scene-change, as the viewer does once it is drawable, then resolves. */
   resolve: () => void;
   reject: (err: unknown) => void;
+  cancel: () => void;
 }
 
 class FakeViewer {
@@ -32,6 +33,10 @@ class FakeViewer {
   /** When set, transitionTo stays pending until the test settles it from `pending`. */
   defer = false;
   pending: PendingTransition[] = [];
+  /** Drops the transition in flight, as the real one does: it settles, nothing lands. */
+  cancelLoad = vi.fn(() => {
+    this.pending.splice(0).forEach((p) => p.cancel());
+  });
   load = vi.fn(async (pano: string) => {
     if (this.fail) throw new Error('manifest 404');
     this.emit('scene-change', pano);
@@ -46,6 +51,7 @@ class FakeViewer {
           resolve();
         },
         reject,
+        cancel: () => resolve(),
       });
     });
   });
@@ -407,10 +413,12 @@ describe('TourViewer', () => {
       expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
 
       pick('Square');
-      await waitFor(() => expect(viewer().pending).toHaveLength(2));
-      expect(viewer().transitionTo).toHaveBeenLastCalledWith('square', undefined);
-      await act(async () => viewer().pending[1]!.resolve());
-      expect(screen.getByRole('button', { name: 'Go to To the church' })).toBeTruthy();
+      // The square never left the screen, so the change is cancelled rather
+      // than the square loaded again.
+      expect(viewer().cancelLoad).toHaveBeenCalledOnce();
+      expect(viewer().transitionTo).toHaveBeenCalledTimes(1);
+      expect(viewer().load).toHaveBeenCalledTimes(1);
+      expect(await screen.findByRole('button', { name: 'Go to To the church' })).toBeTruthy();
       expect(crumb()).toBe('Square');
     });
 
