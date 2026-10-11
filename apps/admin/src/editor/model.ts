@@ -57,7 +57,20 @@ export const docLabel = (docs: EditorDocs, key: DocKey): string => {
   return s?.kind === 'config' ? `Pano “${s.current.title}”` : 'A missing pano';
 };
 
+/**
+ * A tour doc as the editor holds it: a blank description is no description, the same
+ * rule the description edit applies. Without this a doc stored with `description: ""`
+ * (possible through the raw API) would turn dirty the moment the field was touched,
+ * even when it ends up blank again.
+ */
+export function normalizeTour(tour: TourDoc): TourDoc {
+  if (tour.description === undefined || tour.description.trim()) return tour;
+  const { description: _blank, ...rest } = tour;
+  return rest;
+}
+
 export function fromServer(res: TourWithConfigsOk): EditorDocs {
+  const tour = normalizeTour(res.tour);
   const scenes: Record<string, SceneState> = {};
   for (const { panoId } of res.tour.scenes) {
     const entry = res.configs[panoId];
@@ -78,7 +91,7 @@ export function fromServer(res: TourWithConfigsOk): EditorDocs {
   }
   return {
     tourId: res.tour.tourId,
-    tour: { etag: res.etag, base: res.tour, current: res.tour },
+    tour: { etag: res.etag, base: tour, current: tour },
     scenes,
   };
 }
