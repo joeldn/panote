@@ -909,12 +909,15 @@ describe('PanoViewer', () => {
 
   describe('fov limit at wide aspects', () => {
     // The drawn vertical fov is capped by camera.maxHorizontalFov (100°), so
-    // on a wide viewport it tops out below camera.maxFov (80°). A requested
-    // fov above that cap would be a band where zoom steps change nothing.
+    // on a wide viewport it tops out below camera.maxFov (80°). The requested
+    // fov stays what was asked for, whatever the aspect; user zoom steps are
+    // taken from the fov drawn, so none of them is lost above the cap.
     const MAX_H = 100;
+    const cap = (w: number, h: number) => effectiveVFovDeg(80, MAX_H, w / h);
 
-    function wideViewer(w: number, h: number): PanoViewer {
-      const viewer = new PanoViewer(makeContainer(w, h));
+    function sizedViewer(w: number, h: number, options: ViewerOptions = {}): PanoViewer {
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+      const viewer = new PanoViewer(makeContainer(w, h), options);
       const canvas = internals(viewer).renderer.canvas as unknown as {
         getBoundingClientRect: () => DOMRect;
       };
@@ -923,95 +926,180 @@ describe('PanoViewer', () => {
       return viewer;
     }
 
+    const resize = (w: number, h: number) => FakeResizeObserver.instances[0]!.trigger(w, h);
+
     /** The vertical fov drawn this frame. */
-    const drawn = (viewer: PanoViewer, aspect: number) =>
-      effectiveVFovDeg(internals(viewer).view.fov, MAX_H, aspect);
+    const drawn = (viewer: PanoViewer, w: number, h: number) =>
+      effectiveVFovDeg(internals(viewer).view.fov, MAX_H, w / h);
 
-    /** One mouse wheel notch at the centre, then frames until the camera settles. */
-    function notch(viewer: PanoViewer, w: number, h: number, deltaY: number): void {
-      canvasListener(
-        viewer,
-        'wheel',
-      )({
-        deltaY,
-        deltaX: 0,
-        deltaMode: 0,
-        ctrlKey: false,
-        metaKey: false,
-        clientX: w / 2,
-        clientY: h / 2,
-        timeStamp: raf.now,
-        preventDefault: vi.fn(),
-      });
-      runUntilIdle();
-    }
-
-    it.each([
-      { name: '16:9', w: 1600, h: 900 },
-      { name: '21:9', w: 2100, h: 900 },
-    ])('changes the drawn fov on every wheel notch in from fully out at $name', ({ w, h }) => {
-      const viewer = wideViewer(w, h);
-      for (let i = 0; i < 10; i++) notch(viewer, w, h, 100);
-      let prev = drawn(viewer, w / h);
-      expect(prev).toBeCloseTo(effectiveVFovDeg(80, MAX_H, w / h), 6);
-      for (let i = 0; i < 6; i++) {
-        notch(viewer, w, h, -100);
-        const now = drawn(viewer, w / h);
-        expect(now).toBeLessThan(prev - 0.5);
-        prev = now;
-      }
-      viewer.dispose();
-    });
-
-    it('reports and starts at the fov drawn, not one above the cap', () => {
-      const viewer = wideViewer(1600, 900);
-      const cap = effectiveVFovDeg(80, MAX_H, 1600 / 900);
-      expect(viewer.getView().fov).toBeCloseTo(cap, 6);
-      viewer.setView({ fov: 80 });
-      expect(viewer.getView().fov).toBeCloseTo(cap, 6);
-      viewer.dispose();
-    });
-
-    it('leaves no dead zone after a zoom-out button press at the default view on 16:9', () => {
-      // What ViewerControls' buttons do: scale getView().fov by 0.8 or 1/0.8.
-      const viewer = wideViewer(1600, 900);
-      viewer.setView({ fov: viewer.getView().fov / 0.8 });
-      runUntilIdle();
-      const before = drawn(viewer, 1600 / 900);
-      // No hidden band above what is drawn for the next press to climb out of.
-      expect(viewer.getView().fov).toBeCloseTo(before, 6);
-      viewer.setView({ fov: viewer.getView().fov * 0.8 });
-      runUntilIdle();
-      expect(drawn(viewer, 1600 / 900)).toBeLessThan(before - 0.5);
-      viewer.dispose();
-    });
-
-    it('clamps a pinch and a wheel or double-click zoom to the cap', () => {
-      const viewer = wideViewer(1600, 900);
-      const cap = effectiveVFovDeg(80, MAX_H, 1600 / 900);
-      const host = internals(viewer) as unknown as {
+    const host = (viewer: PanoViewer) =>
+      internals(viewer) as unknown as {
         pinchStart: (x: number, y: number) => void;
         pinchTo: (s: number, x: number, y: number) => void;
         zoomAt: (s: number, x: number, y: number) => void;
       };
-      host.pinchStart(800, 450);
-      host.pinchTo(2, 800, 450);
-      expect(viewer.getView().fov).toBeCloseTo(cap, 6);
-      host.zoomAt(2, 800, 450);
-      expect(viewer.getView().fov).toBeCloseTo(cap, 6);
+
+    describe('keeps the requested fov through', () => {
+      it('a widen and back', () => {
+        const viewer = sizedViewer(1000, 1000);
+        resize(2100, 900);
+        resize(1000, 1000);
+        expect(viewer.getView().fov).toBe(70);
+        expect(internals(viewer).view.fov).toBe(70);
+        viewer.dispose();
+      });
+
+      it('a zero-height blip', () => {
+        const viewer = sizedViewer(1600, 900);
+        resize(800, 0);
+        runUntilIdle();
+        resize(1600, 900);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(70);
+        expect(internals(viewer).view.fov).toBe(70);
+        viewer.dispose();
+      });
+
+      it('a zoom during a zero-height blip, stepped from the last real aspect', () => {
+        const viewer = sizedViewer(1600, 900);
+        resize(800, 0);
+        viewer.zoomBy(0.8);
+        // Not minFov, as an aspect of 800:1 would give.
+        expect(viewer.getView().fov).toBeCloseTo(cap(1600, 900) * 0.8, 6);
+        viewer.dispose();
+      });
+
+      it('construction in a zero-height container', () => {
+        const viewer = sizedViewer(800, 0);
+        expect(viewer.getView().fov).toBe(70);
+        resize(800, 600);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(70);
+        viewer.dispose();
+      });
+
+      it('an initialView above the cap, then a turn to portrait', () => {
+        const viewer = sizedViewer(1600, 900, { initialView: { fov: 75 } });
+        expect(viewer.getView().fov).toBe(75);
+        resize(900, 1600);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(75);
+        expect(internals(viewer).view.fov).toBe(75);
+        viewer.dispose();
+      });
+
+      it('setView, so a host persists what it set (admin "Start here" at 16:9)', () => {
+        const viewer = sizedViewer(1600, 900);
+        expect(viewer.getView().fov).toBe(70);
+        viewer.setView({ fov: 78 });
+        runUntilIdle();
+        expect(viewer.getView().fov).toBe(78);
+        viewer.dispose();
+      });
+    });
+
+    /** Every user zoom input, one step in (toward a smaller fov) at the centre. */
+    const stepsIn: [string, (viewer: PanoViewer, w: number, h: number) => void][] = [
+      [
+        'wheel',
+        (viewer, w, h) =>
+          canvasListener(
+            viewer,
+            'wheel',
+          )({
+            deltaY: -100,
+            deltaX: 0,
+            deltaMode: 0,
+            ctrlKey: false,
+            metaKey: false,
+            clientX: w / 2,
+            clientY: h / 2,
+            timeStamp: raf.now,
+            preventDefault: vi.fn(),
+          }),
+      ],
+      [
+        'pinch',
+        (viewer, w, h) => {
+          host(viewer).pinchStart(w / 2, h / 2);
+          host(viewer).pinchTo(0.9, w / 2, h / 2);
+        },
+      ],
+      ['zoomBy (the zoom buttons)', (viewer) => viewer.zoomBy(0.8)],
+      [
+        'key',
+        (viewer) =>
+          canvasListener(
+            viewer,
+            'keydown',
+          )({
+            key: '=',
+            ctrlKey: false,
+            altKey: false,
+            metaKey: false,
+            preventDefault: vi.fn(),
+          }),
+      ],
+      [
+        'double-click',
+        (viewer, w, h) =>
+          canvasListener(
+            viewer,
+            'dblclick',
+          )({ clientX: w / 2, clientY: h / 2, preventDefault: vi.fn() }),
+      ],
+    ];
+
+    describe.each([
+      { name: '16:9', w: 1600, h: 900 },
+      { name: '21:9', w: 2100, h: 900 },
+    ])('at $name', ({ w, h }) => {
+      it.each(stepsIn)('changes the drawn fov on every %s step in from fully out', (_, step) => {
+        const viewer = sizedViewer(w, h);
+        // Fully out, asked for by a host: above what the aspect can draw.
+        viewer.setView({ fov: 80 });
+        runUntilIdle();
+        let prev = drawn(viewer, w, h);
+        expect(prev).toBeCloseTo(cap(w, h), 6);
+        // Three steps: a double-click's 0.6 reaches minFov on the fourth.
+        for (let i = 0; i < 3; i++) {
+          step(viewer, w, h);
+          runUntilIdle();
+          const now = drawn(viewer, w, h);
+          expect(now).toBeLessThan(prev - 0.5);
+          prev = now;
+        }
+        viewer.dispose();
+      });
+
+      it('stops a zoom out at the cap, so the next zoom in is seen at once', () => {
+        const viewer = sizedViewer(w, h);
+        for (let i = 0; i < 5; i++) viewer.zoomBy(1 / 0.8);
+        runUntilIdle();
+        expect(viewer.getView().fov).toBeCloseTo(cap(w, h), 6);
+        viewer.zoomBy(0.8);
+        runUntilIdle();
+        expect(drawn(viewer, w, h)).toBeCloseTo(cap(w, h) * 0.8, 6);
+        viewer.dispose();
+      });
+    });
+
+    it('never stores a fov under minFov, even where the cap is under it', () => {
+      // 10:1: the cap (13.6°) is narrower than minFov (15°).
+      const viewer = sizedViewer(2000, 200);
+      viewer.zoomBy(0.5);
+      expect(viewer.getView().fov).toBe(15);
+      host(viewer).zoomAt(0.5, 1000, 100);
+      expect(viewer.getView().fov).toBe(15);
       viewer.dispose();
     });
 
-    it('clamps the target and the view again when the viewport widens', () => {
-      vi.stubGlobal('ResizeObserver', FakeResizeObserver);
-      const viewer = wideViewer(1000, 1000);
-      viewer.setView({ fov: 80 });
-      runUntilIdle();
+    it('zooms from the requested fov where it is under the cap', () => {
+      const viewer = sizedViewer(1000, 1000);
+      viewer.zoomBy(0.5);
+      expect(viewer.getView().fov).toBe(35);
+      viewer.zoomBy(10);
       expect(viewer.getView().fov).toBe(80);
-      FakeResizeObserver.instances[0]!.trigger(2100, 900);
-      const cap = effectiveVFovDeg(80, MAX_H, 2100 / 900);
-      expect(viewer.getView().fov).toBeCloseTo(cap, 6);
-      expect(internals(viewer).view.fov).toBeCloseTo(cap, 6);
       viewer.dispose();
     });
   });

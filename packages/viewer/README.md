@@ -160,7 +160,8 @@ The rules a source follows:
 | `cancelLoad()` | Cancels the load or transition in flight: its `load()` resolves `false` and the scene on screen stays as it is. |
 | `showPreview(id, preview, { replacesVersion?, view? })` | Shows an equirect preview of `id` now and cancels any load in flight. Call `load(id)` afterwards to get the tiles. `view` is cut to as the preview goes up. |
 | `prefetch(source \| id, { signal? })` | Warms the HTTP cache with the six base tiles of a scene the visitor may open next. Best effort: it never rejects. |
-| `setView({ yaw?, pitch?, fov? })` / `getView()` | Eases the camera to a view, or reads the view it is moving to (yaw in (−π, π]). |
+| `setView({ yaw?, pitch?, fov? })` / `getView()` | Eases the camera to a view, or reads the view it is moving to (yaw in (−π, π]). `getView().fov` is the fov requested, which on a wide viewport can be above what `camera.maxHorizontalFov` lets it draw. |
+| `zoomBy(factor)` | Zooms about the centre (below 1 zooms in), stepped from the fov on screen like the wheel and keys, so every step shows. For zoom buttons. |
 | `setNorth(rad)` / `heading()` | Sets the compass offset of the scene, or reads the heading the camera faces. |
 | `setAutoRotate(on)` | Turns idle auto-rotate on or off. |
 | `setLabel(label)` | Renames the canvas, e.g. for each scene. |

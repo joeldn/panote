@@ -699,14 +699,25 @@ export class PanoViewer {
   }
 
   /**
-   * `fov` within the camera's limits, and no wider than the horizontal fov
-   * cap allows at the current aspect: past that, a requested fov draws the
-   * same picture, so zoom steps in that band would change nothing on screen.
+   * `fov` within camera.minFov/maxFov. Independent of the aspect, so a
+   * requested fov survives a rotation, a resize or a zero-size blip.
    */
   private clampFov(fov: number): number {
+    return clampFov(fov, this.camera.minFov, this.camera.maxFov);
+  }
+
+  /**
+   * A user zoom step: `factor` applied to the fov drawn, not the one
+   * requested, and kept within what this aspect can draw. Above the
+   * horizontal fov cap a requested fov draws the same picture, so a step
+   * taken from it could change nothing on screen. Zooming out stops at the
+   * cap, which the user then has chosen.
+   */
+  private zoomStep(fromDeg: number, factor: number): number {
     const { minFov, maxFov, maxHorizontalFov } = this.camera;
-    const max = Math.max(minFov, Math.min(maxFov, maxVFovDeg(maxHorizontalFov, this.aspect)));
-    return clampFov(fov, minFov, max);
+    const cap = maxVFovDeg(maxHorizontalFov, this.aspect);
+    const max = Math.max(minFov, Math.min(maxFov, cap));
+    return clampFov(Math.min(fromDeg, cap) * factor, minFov, max);
   }
 
   /**
@@ -789,7 +800,7 @@ export class PanoViewer {
     this.stopMomentum();
     const { x: nx, y: ny } = this.toNdc(clientX, clientY);
     const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const newReqDeg = this.clampFov(this.target.fov * scaleFactor);
+    const newReqDeg = this.zoomStep(this.target.fov, scaleFactor);
     const vfov1 = this.effectiveVFovDeg(newReqDeg) * DEG2RAD;
     const ty0 = Math.tan(vfov0 / 2);
     const ty1 = Math.tan(vfov1 / 2);
@@ -842,7 +853,7 @@ export class PanoViewer {
   // step is solved from the start, so nothing builds up between events.
   private pinchTo(scale: number, clientX: number, clientY: number): void {
     this.stopMomentum();
-    const fov = this.clampFov(this.pinchFov * scale);
+    const fov = this.zoomStep(this.pinchFov, scale);
     const { x: nx, y: ny } = this.toNdc(clientX, clientY);
     const ty = Math.tan((this.effectiveVFovDeg(fov) * DEG2RAD) / 2);
     const { yaw, pitch } = aimRay(
@@ -873,6 +884,18 @@ export class PanoViewer {
       this.target.yaw = this.view.yaw + normalizeAngle(view.yaw - this.view.yaw);
     if (view.pitch !== undefined) this.target.pitch = this.clampPitch(view.pitch);
     if (view.fov !== undefined) this.target.fov = this.clampFov(view.fov);
+    this.stopMomentumOnly();
+    this.invalidate();
+  }
+
+  /**
+   * Zoom by `factor` about the centre (below 1 zooms in), easing like
+   * setView. Stepped from the fov on screen, like the viewer's own wheel and
+   * keys, so every step shows: for zoom buttons, rather than scaling
+   * `getView().fov`, which can sit above what a wide viewport draws.
+   */
+  zoomBy(factor: number): void {
+    this.target.fov = this.zoomStep(this.target.fov, factor);
     this.stopMomentumOnly();
     this.invalidate();
   }
@@ -937,10 +960,9 @@ export class PanoViewer {
   private resizeTo(width: number, height: number, drawNow = true): void {
     this.cssW = width || 1;
     this.cssH = height || 1;
-    this.aspect = this.cssW / this.cssH;
-    // A wider viewport lowers the fov cap: keep the camera inside it.
-    this.target.fov = this.clampFov(this.target.fov);
-    this.view.fov = this.clampFov(this.view.fov);
+    // A zero-size container (hidden, mid-layout) has no aspect: keep the
+    // last real one rather than make one up from a stand-in size.
+    if (width > 0 && height > 0) this.aspect = width / height;
     if (!this.renderer.resize(this.cssW, this.cssH)) return;
     if (drawNow && this.onScreen && !this.disposed && !this.contextLost) {
       cancelAnimationFrame(this.raf);
