@@ -127,6 +127,28 @@ Post-deploy checks (dev; production the same on `panote.io`):
   title in `<title>` and a `pn-boot` script. (panote.dev is behind Access, so pass the Access
   cookie or check from a signed-in browser's view-source.)
 
+**Link previews (`/s/*`).** The same tail carries Open Graph and Twitter card tags, built in
+`apps/website/worker/og.ts`: `<meta name="description">`, `og:type` `website`, `og:site_name`
+`panote`, `og:title` (the tour title), `og:description`, `og:url` (`<origin>/s/<slug>`, no query
+and no `/embed`), and `twitter:card`. Published tours have no description field, so the text is
+generated: `A 360° virtual tour · N scenes`. The image is the start scene's own, so nothing new is
+rendered: the tiler's `preview.webp` (1024×512 equirect, `og:image:type` `image/webp`, card
+`summary_large_image`) when the manifest has `preview: true`, else the level-0 front face
+(`0/pz/0-0.<format>`, square at `tileSize`, card `summary`), with `og:image:alt` set to the
+scene title. No manifest, or a CDN root that isn't absolute `https://`, means no image and a
+`summary` card. Public and unlisted tours both get the tags: sharing the link is the point of
+unlisted, and its `noindex` stays. A page served plain (missing bundle, R2 error, budget) gets
+none, the same as a slug with no live tour. With `?pano=` the image is that scene's, while
+`og:url` stays the canonical page.
+
+Scrapers fetch the page and the image anonymously. On dev, `panote.dev/s/*` is behind Cloudflare
+Access (below), so every scraper gets a `302` to the Access login and shows at most the bare URL;
+`cdn.panote.dev` is public, so the image URLs themselves resolve (checked with the Facebook,
+Twitterbot, Slackbot, WhatsApp and LinkedInBot user agents: `200 image/webp`). Previews only work
+on production, which has no Access, once `cdn.panote.io` is attached with the same WAF rule. To
+check a page's tags on dev, view source in a signed-in browser; on production, use the Facebook
+Sharing Debugger, LinkedIn Post Inspector or a Slack DM.
+
 **Admin's assets layout.** Assets build into `dist/app/` so `/app/assets/…` maps onto files, but
 the Worker's assets root is `dist/`. Workers' SPA fallback always serves the *root*
 `/index.html`, and `_headers` must sit in the root, so admin's Vite config also writes

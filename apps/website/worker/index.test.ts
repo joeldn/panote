@@ -224,6 +224,10 @@ const bootOf = (html: string): unknown => {
 };
 const preloadsOf = (html: string): string[] =>
   [...html.matchAll(/<link rel="preload"[^>]*>/g)].map((m) => m[0]);
+const metasOf = (html: string): string[] =>
+  [...html.matchAll(/<meta (?:property|name)="(?:og:|twitter:|description")[^>]*>/g)].map(
+    (m) => m[0],
+  );
 const hrefOf = (tag: string): string => /href="([^"]*)"/.exec(tag)![1]!;
 const l0 = (pano: string) =>
   ['px', 'nx', 'py', 'ny', 'pz', 'nz'].map((f) => `${CDN}tiles/${pano}/v7/0/${f}/0-0.webp`);
@@ -436,7 +440,7 @@ describe('streams the page around the R2 reads', () => {
       '<script type="module" crossorigin src="/assets/index-x.js"></script>',
     );
     expect(before).toContain(`data-cdn-base="${CDN}">`);
-    for (const late of ['<title>', 'pn-boot', 'rel="preload"', '</head>']) {
+    for (const late of ['<title>', 'og:', 'twitter:', 'pn-boot', 'rel="preload"', '</head>']) {
       expect(before).not.toContain(late);
     }
     const html = before + after;
@@ -444,6 +448,7 @@ describe('streams the page around the R2 reads', () => {
     expect(html.match(/<title>/g)).toEqual(['<title>']);
     expect(html).toContain('<title>Old town · panote</title>');
     expect(preloadsOf(html)).toHaveLength(7);
+    expect(metasOf(html)).toHaveLength(12);
   });
 
   it('puts the boot data and preloads in the head, so they parse before the app script runs', async () => {
@@ -451,7 +456,7 @@ describe('streams the page around the R2 reads', () => {
     const html = await (await call('/s/new-name')).text();
     const headEnd = html.indexOf('</head>');
     const script = html.indexOf('<script type="module"');
-    for (const tag of [...preloadsOf(html), 'id="pn-boot"', '<title>']) {
+    for (const tag of [...preloadsOf(html), ...metasOf(html), 'id="pn-boot"', '<title>']) {
       const at = html.indexOf(tag);
       expect(at).toBeGreaterThan(script);
       expect(at).toBeLessThan(headEnd);
@@ -519,6 +524,154 @@ describe('streams the page around the R2 reads', () => {
     const res = await call('/s/new-name');
     expect(await res.text()).toBe(PLAIN);
     expect(error).toHaveBeenCalledWith('tour page priming failed', expect.any(Error));
+  });
+});
+
+const tag = (key: string, content: string) =>
+  `<meta ${key.startsWith('og:') ? 'property' : 'name'}="${key}" content="${content}">`;
+const DESCRIPTION = 'A 360° virtual tour · 2 scenes';
+const textTags = (title = 'Old town', description = DESCRIPTION, url = `${ORIGIN}/s/new-name`) => [
+  tag('description', description),
+  tag('og:type', 'website'),
+  tag('og:site_name', 'panote'),
+  tag('og:title', title),
+  tag('og:description', description),
+  tag('og:url', url),
+];
+const previewTags = (pano = 'pano-1', alt = pano) => [
+  tag('og:image', `${CDN}tiles/${pano}/v7/preview.webp`),
+  tag('og:image:type', 'image/webp'),
+  tag('og:image:width', '1024'),
+  tag('og:image:height', '512'),
+  tag('og:image:alt', alt),
+  tag('twitter:card', 'summary_large_image'),
+];
+
+describe('link previews', () => {
+  beforeEach(async () => {
+    await publish();
+    for (const pano of ['pano-1', 'pano-2']) {
+      await putJson(`tiles/${pano}/manifest.json`, { ...manifest(pano), preview: true });
+    }
+  });
+
+  it('describes a full tour with its equirect preview as a large image', async () => {
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
+  });
+
+  it('writes the tags right after the title, ahead of the preloads and boot data', async () => {
+    const html = await (await call('/s/new-name')).text();
+    const tail = html.slice(html.indexOf('<title>'), html.indexOf('</head>'));
+    expect(tail).toBe(
+      '<title>Old town · panote</title>' +
+        [...textTags(), ...previewTags()].join('') +
+        preloadsOf(html).join('') +
+        tail.slice(tail.indexOf('<script type="application/json"')),
+    );
+  });
+
+  it('points og:url at the canonical page, without the query or the embed suffix', async () => {
+    const html = await (await call('/s/new-name/embed/?pano=pano-2&utm_source=x')).text();
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags('pano-2')]);
+  });
+
+  it('counts a single scene in the singular', async () => {
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ scenes: bundle().scenes.slice(0, 1) }));
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain(tag('og:description', 'A 360° virtual tour · 1 scene'));
+    expect(html).toContain(tag('description', 'A 360° virtual tour · 1 scene'));
+  });
+
+  it('falls back to the square level-0 front face, as a summary card, without a preview', async () => {
+    await putJson('tiles/pano-1/manifest.json', { ...manifest('pano-1'), format: 'jpg' });
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([
+      ...textTags(),
+      tag('og:image', `${CDN}tiles/pano-1/v7/0/pz/0-0.jpg`),
+      tag('og:image:type', 'image/jpeg'),
+      tag('og:image:width', '512'),
+      tag('og:image:height', '512'),
+      tag('og:image:alt', 'pano-1'),
+      tag('twitter:card', 'summary'),
+    ]);
+  });
+
+  it('builds the preview URL for an unversioned manifest', async () => {
+    const { version: _v, ...unversioned } = { ...manifest('pano-1'), preview: true };
+    await putJson('tiles/pano-1/manifest.json', unversioned);
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain(tag('og:image', `${CDN}tiles/pano-1/preview.webp`));
+  });
+
+  it('keeps the text tags but drops the image without a manifest', async () => {
+    await env.BUCKET.delete('tiles/pano-1/manifest.json');
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([...textTags(), tag('twitter:card', 'summary')]);
+  });
+
+  it('drops the image for an embed pinned to an unknown scene', async () => {
+    const html = await (await call('/s/new-name/embed?pano=nope')).text();
+    expect(metasOf(html)).toEqual([...textTags(), tag('twitter:card', 'summary')]);
+  });
+
+  it.each([
+    ['not https', 'http://cdn.test/'],
+    ['relative', '/cdn/'],
+  ])('drops the image when the CDN root is %s', async (_name, base) => {
+    assets.fetch.mockResolvedValueOnce(
+      new Response(PAGE.replace(`data-cdn-base="${CDN}"`, `data-cdn-base="${base}"`), {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([...textTags(), tag('twitter:card', 'summary')]);
+  });
+
+  it('keeps the previews on an unlisted tour, alongside its noindex', async () => {
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ visibility: 'unlisted' }));
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain('<meta name="robots" content="noindex">');
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
+  });
+
+  it('escapes quotes, markup, ampersands and keeps unicode in every value', async () => {
+    const title = `Tom's "Café" <b>&amp;</b> 東京 🏠`;
+    const scene = `Hall "A" & <i>B</i>`;
+    const tour = bundle({ title });
+    tour.scenes[0]!.config.title = scene;
+    await putJson(`pub/tours/${TOUR}.json`, tour);
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toContain(
+      tag('og:title', 'Tom&#39;s &quot;Café&quot; &lt;b&gt;&amp;amp;&lt;/b&gt; 東京 🏠'),
+    );
+    expect(html).toContain(tag('og:image:alt', 'Hall &quot;A&quot; &amp; &lt;i&gt;B&lt;/i&gt;'));
+    expect(html).not.toContain('<b>');
+    expect(html).not.toContain('<i>');
+  });
+
+  it('adds nothing when the page is served plain', async () => {
+    await env.BUCKET.delete(`pub/tours/${TOUR}.json`);
+    const html = await (await call('/s/new-name')).text();
+    expect(html).toBe(PLAIN);
+    expect(metasOf(html)).toEqual([]);
+  });
+
+  it('adds nothing when the reads outlast the budget', async () => {
+    const get = env.BUCKET.get.bind(env.BUCKET);
+    vi.spyOn(env.BUCKET, 'get').mockImplementation(async (key: string) => {
+      if (key.startsWith('pub/')) await sleep(BOOT_BUDGET_MS + 150);
+      return get(key);
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await within(call('/s/new-name'), BOOT_BUDGET_MS - 100);
+    expect(await res.text()).toBe(PLAIN);
+  });
+
+  it('adds nothing for a slug with no live tour', async () => {
+    const html = await (await call('/s/nobody-here')).text();
+    expect(html).toBe(PAGE);
   });
 });
 

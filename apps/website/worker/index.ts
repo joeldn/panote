@@ -1,4 +1,5 @@
 import { preloadLinks, preloadUrls, readTourBoot, scriptJson, type TourBoot } from './boot.js';
+import { linkPreviewTags } from './og.js';
 import { parseSlugPath, resolveSlug, type SlugResolution } from './redirect.js';
 
 // Same value as NOINDEX in @internal/web-kit, kept local so the script bundles nothing else.
@@ -20,18 +21,24 @@ const escapeText = (value: string): string =>
 
 /**
  * What goes at the end of the head once the R2 reads settle: for a tour, its title, robots
- * meta, preloads and boot data; without one, just the page's own title, back as it was.
+ * meta, link preview tags, preloads and boot data; without one, just the page's own title,
+ * back as it was (no preview tags, the same as any page the script doesn't prime).
  */
-function headTail(boot: TourBoot | null, plainTitle: string | null, cdnBase: string): string {
+function headTail(
+  boot: TourBoot | null,
+  plainTitle: string | null,
+  cdnBase: string,
+  canonical: string,
+): string {
   if (!boot) return plainTitle === null ? '' : `<title>${plainTitle}</title>`;
   const data = scriptJson({ slug: boot.slug, record: boot.record, tour: boot.tour });
+  const tilesBase = CDN_BASE.test(cdnBase) ? `${cdnBase}tiles/` : null;
   const preloads =
-    boot.manifest && CDN_BASE.test(cdnBase)
-      ? preloadLinks(preloadUrls(`${cdnBase}tiles/`, boot.manifest))
-      : '';
+    boot.manifest && tilesBase !== null ? preloadLinks(preloadUrls(tilesBase, boot.manifest)) : '';
   return (
     `<title>${escapeText(`${boot.tour.title} · panote`)}</title>` +
     (boot.tour.visibility === 'unlisted' ? '<meta name="robots" content="noindex">' : '') +
+    linkPreviewTags(boot, canonical, tilesBase) +
     preloads +
     `<script type="application/json" id="pn-boot">${data}</script>`
   );
@@ -50,9 +57,10 @@ function htmlStream(html: Promise<string>): ReadableStream<Uint8Array> {
 /**
  * Primes the SPA's HTML for one tour, streaming: everything up to `</head>` (the app's
  * module script, stylesheet and CDN preconnect) goes out at once, and the rest waits for
- * the R2 reads. At `</head>` it inserts the real title, the data the SPA would fetch
- * (`#pn-boot`, which TourPage hands to loadPublishedTour on its first attempt, used only
- * for the same slug and after the same schema checks; a retry always fetches), and
+ * the R2 reads. At `</head>` it inserts the real title, link preview tags (og:, twitter:,
+ * see og.ts), the data the SPA would fetch (`#pn-boot`, which TourPage hands to
+ * loadPublishedTour on its first attempt, used only for the same slug and after the same
+ * schema checks; a retry always fetches), and
  * preloads for the start scene's manifest and level-0 tiles so they download alongside
  * the JS. The CDN root comes from the preconnect link the Vite build adds
  * (`data-cdn-base`), so the Worker needs no var.
@@ -64,7 +72,11 @@ function htmlStream(html: Promise<string>): ReadableStream<Uint8Array> {
  * `#pn-boot` lands inside `<head>`, and a module script runs only after the whole document
  * has parsed, so the app always finds it.
  */
-function primeHtml(response: Response, boot: Promise<TourBoot | null>): Response {
+function primeHtml(
+  response: Response,
+  boot: Promise<TourBoot | null>,
+  canonical: string,
+): Response {
   let plainTitle: string | null = null;
   let cdnBase = '';
   const rewritten = new HTMLRewriter()
@@ -88,10 +100,10 @@ function primeHtml(response: Response, boot: Promise<TourBoot | null>): Response
           // Everything the tail needs from the head has been seen by now.
           const [title, base] = [plainTitle, cdnBase];
           const tail = boot
-            .then((b) => headTail(b, title, base))
+            .then((b) => headTail(b, title, base, canonical))
             .catch((err: unknown) => {
               console.error('tour page priming failed', err);
-              return headTail(null, title, base);
+              return headTail(null, title, base, canonical);
             });
           end.before(htmlStream(tail), { html: true });
         });
@@ -158,7 +170,9 @@ async function tourPage(
   // Covers the synchronous rewriter setup only. Once streaming, a failure while building
   // the head's tail falls back to the plain title inside primeHtml.
   try {
-    return primeHtml(html, boot);
+    // og:url: the tour's own page, never the embed or a query variant.
+    const canonical = `${new URL(request.url).origin}/s/${live.path.slug}`;
+    return primeHtml(html, boot, canonical);
   } catch (err) {
     console.error('tour page priming failed', err);
     return html;
