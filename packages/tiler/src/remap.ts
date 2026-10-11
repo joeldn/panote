@@ -7,15 +7,27 @@ export interface RgbImage {
   channels: 3;
 }
 
-function sampleBilinear(src: RgbImage, u: number, v: number, out: [number, number, number]): void {
-  // u in [0,1) wraps horizontally; v in [0,1] clamps vertically.
+/**
+ * Bilinear sample at image UV (u left→right, v top→bottom, pixel centres at
+ * (i + 0.5) / size). v always clamps at the edges; u wraps when `wrapU` (an
+ * equirect's ±180° seam) and clamps otherwise (a cube face).
+ */
+export function sampleBilinear(
+  src: RgbImage,
+  u: number,
+  v: number,
+  out: [number, number, number],
+  wrapU = true,
+): void {
   const fx = u * src.width - 0.5;
   const fy = v * src.height - 0.5;
   const x0 = Math.floor(fx);
   const y0 = Math.floor(fy);
   const dx = fx - x0;
   const dy = fy - y0;
-  const wrapX = (x: number) => ((x % src.width) + src.width) % src.width;
+  const wrapX = wrapU
+    ? (x: number) => ((x % src.width) + src.width) % src.width
+    : (x: number) => Math.min(src.width - 1, Math.max(0, x));
   const clampY = (y: number) => Math.min(src.height - 1, Math.max(0, y));
   const [px0, px1] = [wrapX(x0), wrapX(x0 + 1)];
   const [py0, py1] = [clampY(y0), clampY(y0 + 1)];

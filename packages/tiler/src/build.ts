@@ -10,6 +10,7 @@ import {
   tilesPerEdge,
 } from '@panote/core';
 import { renderFace, type RgbImage } from './remap.js';
+import { equirectSampler, OG_FILE, ogImage } from './og.js';
 import {
   assertPyramidBounds,
   computeFaceSize,
@@ -166,6 +167,12 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     .webp({ quality })
     .toFile(join(panoDir, 'preview.webp'));
 
+  // The link-preview image: a normal-camera view of the default start direction,
+  // sampled from the full-resolution source rather than the 1024px preview.
+  const ogT0 = performance.now();
+  await ogImage(equirectSampler(srcImg)).toFile(join(panoDir, OG_FILE));
+  log(`rendered ${OG_FILE} in ${Math.round(performance.now() - ogT0)}ms`);
+
   const manifest: Manifest = {
     pano: opts.pano,
     faceSize,
@@ -175,6 +182,7 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
     quality,
     format: fmt,
     preview: true,
+    og: true,
     ...(opts.version !== undefined
       ? { version: opts.version, tilerVersion: TILER_OUTPUT_VERSION }
       : {}),

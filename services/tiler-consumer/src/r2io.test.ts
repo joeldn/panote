@@ -32,7 +32,7 @@ describe('uploadDir', () => {
     expect(put).toHaveBeenCalledWith('tiles/p2/v1/0/px/0-0.webp', expect.anything(), 'image/webp');
   });
 
-  it('picks content-type by extension: .json, .webp, and other', async () => {
+  it('picks content-type by extension: .json, .webp, .jpg, and other', async () => {
     const calls: Array<{ key: string; contentType: string }> = [];
     const put = vi.fn(async (key: string, _body: Uint8Array, contentType: string) => {
       calls.push({ key, contentType });
@@ -40,6 +40,7 @@ describe('uploadDir', () => {
     await uploadDir(
       {
         'level0/0-0.webp': new Uint8Array(),
+        'og.jpg': new Uint8Array(),
         'other.bin': new Uint8Array(),
         'sub/data.json': new Uint8Array(),
       },
@@ -48,6 +49,8 @@ describe('uploadDir', () => {
     );
     expect(calls).toEqual([
       { key: 'tiles/p3/v1/level0/0-0.webp', contentType: 'image/webp' },
+      // Link-preview scrapers go by content-type; og.jpg must not be octet-stream.
+      { key: 'tiles/p3/v1/og.jpg', contentType: 'image/jpeg' },
       { key: 'tiles/p3/v1/other.bin', contentType: 'application/octet-stream' },
       { key: 'tiles/p3/v1/sub/data.json', contentType: 'application/json' },
     ]);

@@ -318,6 +318,10 @@ describe('build', () => {
         return opts?.raw?.width === WIDTH && opts.raw.height === HEIGHT;
       });
       expect(previewSharpCall).toBeDefined();
+      // The link-preview image: a 1200x630 JPEG next to preview.webp, flagged in the manifest.
+      expect(manifest.og).toBe(true);
+      expect(toFileCalls.some((p) => p.endsWith('ok-pano/og.jpg'))).toBe(true);
+      expect(resizeCalls).toContainEqual([1200, 630, { fit: 'fill', kernel: 'lanczos3' }]);
     }, 20_000);
 
     // Same real rendering pipeline as above; same timeout treatment.
@@ -335,6 +339,7 @@ describe('build', () => {
       expect(manifest.version).toBeUndefined();
       expect(manifest.tilerVersion).toBeUndefined();
       expect(manifest.preview).toBe(true);
+      expect(manifest.og).toBe(true);
     }, 20_000);
   });
 
