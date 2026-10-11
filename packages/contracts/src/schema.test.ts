@@ -7,6 +7,7 @@ import {
   MAX_ID_LENGTH,
   MAX_SCENE_DESCRIPTION_LENGTH,
   MAX_TITLE_LENGTH,
+  MAX_TOUR_DESCRIPTION_LENGTH,
   MAX_TOUR_SCENES,
   SceneConfigSchema,
   TourDocSchema,
@@ -302,6 +303,53 @@ describe('TourDocSchema', () => {
     expect(() =>
       TourDocSchema.parse({ tourId: 't1', title: 'x'.repeat(MAX_TITLE_LENGTH), scenes: [] }),
     ).not.toThrow();
+  });
+
+  describe('description', () => {
+    const tour = (description: unknown) => ({ tourId: 't1', title: 'WWII', description });
+
+    it('is optional, so tours saved before it still parse', () => {
+      const r = TourDocSchema.parse({ tourId: 't1', title: 'WWII' });
+      expect(r).not.toHaveProperty('description');
+    });
+
+    it('trims the ends and keeps inner line breaks', () => {
+      expect(TourDocSchema.parse(tour('  Old town\nat dusk \n')).description).toBe(
+        'Old town\nat dusk',
+      );
+    });
+
+    it(`accepts MAX_TOUR_DESCRIPTION_LENGTH (${MAX_TOUR_DESCRIPTION_LENGTH}) characters after trimming`, () => {
+      const text = 'x'.repeat(MAX_TOUR_DESCRIPTION_LENGTH);
+      expect(TourDocSchema.parse(tour(` ${text} `)).description).toBe(text);
+    });
+
+    it('rejects one character more', () => {
+      const text = 'x'.repeat(MAX_TOUR_DESCRIPTION_LENGTH + 1);
+      expect(TourDocSchema.safeParse(tour(text)).success).toBe(false);
+    });
+
+    it('caps at 300, enough for two sentences past what previews show', () => {
+      expect(MAX_TOUR_DESCRIPTION_LENGTH).toBe(300);
+    });
+
+    it.each([
+      ['a NUL', 'a\u0000b'],
+      ['an escape', 'a\u001bb'],
+      ['a DEL', 'a\u007fb'],
+      ['a vertical tab', 'a\u000bb'],
+    ])('rejects %s, since it is plain text', (_name, text) => {
+      expect(TourDocSchema.safeParse(tour(text)).success).toBe(false);
+    });
+
+    it('keeps tabs, unicode and characters that look like markup as text', () => {
+      const text = 'Tom\'s "Café"\t<b>&amp;</b> 東京 🏠';
+      expect(TourDocSchema.parse(tour(text)).description).toBe(text);
+    });
+
+    it('rejects a non-string', () => {
+      expect(TourDocSchema.safeParse(tour(42)).success).toBe(false);
+    });
   });
 });
 

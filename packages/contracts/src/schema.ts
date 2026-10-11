@@ -49,6 +49,9 @@ export const MAX_HOTSPOT_BODY_LENGTH = 20_000;
 // Shared by scene/hotspot/tour titles - the same kind of short display field.
 export const MAX_TITLE_LENGTH = 200;
 export const MAX_SCENE_DESCRIPTION_LENGTH = 2000;
+// A tour's description is its link-preview and search snippet. Previews show
+// roughly the first 155-200 characters; 300 leaves room for a second sentence.
+export const MAX_TOUR_DESCRIPTION_LENGTH = 300;
 export const MAX_HOTSPOT_ID_LENGTH = 64;
 // A doc already over a cap (legacy or hand-written) fails to parse on
 // load; admin-api does not truncate on read to make it fit.
@@ -132,6 +135,22 @@ export type TourScene = z.infer<typeof TourSceneSchema>;
 // scene fan-out); also used as a defensive cap on the read side.
 export const MAX_TOUR_SCENES = 100;
 
+// Plain text: C0 control characters and DEL are refused, except tab and line breaks.
+const isPlainText = (s: string): boolean => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if ((c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) || c === 0x7f) return false;
+  }
+  return true;
+};
+
+/** Trimmed plain text, shown as-is (never as markup) in link previews and the admin. */
+export const TourDescriptionSchema = z
+  .string()
+  .trim()
+  .max(MAX_TOUR_DESCRIPTION_LENGTH)
+  .refine(isPlainText, 'description must be plain text');
+
 // Tour-wide viewer chrome (design README:113-114). Not i18n - deferred to
 // Wave 7 (Q4) - and not per-scene, since it applies across the whole tour.
 export const TourSettingsSchema = z.object({
@@ -146,6 +165,8 @@ export type TourSettings = z.infer<typeof TourSettingsSchema>;
 export const TourDocSchema = z.object({
   tourId: z.string().regex(PANO_PATTERN, `tourId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
   title: z.string().min(1).max(MAX_TITLE_LENGTH),
+  // Optional, so tours saved before it existed still parse; published on the next publish.
+  description: TourDescriptionSchema.optional(),
   scenes: z.array(TourSceneSchema).max(MAX_TOUR_SCENES).default([]),
   // Entry scene (design README:113-114); same pattern as TourSceneSchema.panoId.
   // Consumers fall back to scenes[0] when startPanoId isn't in scenes.
