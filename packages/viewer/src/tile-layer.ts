@@ -2,7 +2,7 @@ import { FACES, faceUVInto, tilesPerEdge, type Face } from './cube.js';
 import type { Vec3 } from './project.js';
 import { LOD_TOLERANCE, selectLevel } from './lod.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
-import { selectEvictions } from './tile-cache.js';
+import { pickEvictions } from './tile-cache.js';
 import { maxTilesForBudget } from './texture-budget.js';
 import { RADIUS, buildTileGeometry } from './tile-geometry.js';
 import {
@@ -338,6 +338,8 @@ export class TileLayer {
   // `candidates.length` of them.
   private candidatePool: Candidate[] = [];
   private _drawList: DrawItem[] = [];
+  // What evict() is removing this frame.
+  private evicting: TileEntry[] = [];
   // Tile indices at `visibleLevel` that passed the cull, `visibleCount` long.
   private visible: Int32Array;
   private visibleCount = 0;
@@ -384,7 +386,7 @@ export class TileLayer {
    * the whole panorama.
    *
    * Blocking and fatal by design. Once these six are resident every direction
-   * has *some* texture, `selectEvictions()` pins them against LRU eviction, and
+   * has *some* texture, `pickEvictions()` pins them against LRU eviction, and
    * `update()` keeps them visible at every level — so a high-resolution tile
    * that 404s, times out or exhausts its retries degrades to soft detail
    * instead of leaving a black patch. That guarantee only holds if the base is
@@ -563,7 +565,7 @@ export class TileLayer {
     // own depth, finer in front (see render() in render/gl-renderer.ts), so a
     // coarser tile only shows where no finer tile covers it, and a finer tile
     // that is absent simply leaves its ancestor's texels on screen. loadBase()
-    // guarantees the level-0 ancestor is resident and selectEvictions() never
+    // guarantees the level-0 ancestor is resident and pickEvictions() never
     // evicts it, so that floor always exists. cover() then leaves out the
     // coarser tiles nothing of which would show.
     for (const entry of this.cache.values()) {
@@ -967,27 +969,23 @@ export class TileLayer {
   }
 
   private evict(): void {
-    // selectEvictions() keeps every tile on screen and the six base tiles
+    // pickEvictions() keeps every tile on screen and the six base tiles
     // whatever the budget, so the cache may overshoot up to that many. Inside
-    // that bound there is nothing to do: skip the O(cacheSize) candidate
-    // array, which a view wider than the budget would otherwise build every
-    // frame for nothing.
+    // that bound there is nothing to do: skip the O(cacheSize) scan, which a
+    // view wider than the budget would otherwise run every frame for nothing.
     if (this.cache.size <= Math.max(this.maxTiles, this.desired.size + FACES.length)) return;
-    const keysToRemove = selectEvictions(
-      [...this.cache.values()].map((e) => ({
-        key: e.key,
-        lastUsed: e.lastUsed,
-      })),
-      this.maxTiles,
+    const evicting = pickEvictions(
+      this.cache.values(),
+      this.cache.size - this.maxTiles,
       this.clock,
+      this.evicting,
     );
-    for (const key of keysToRemove) {
-      const e = this.cache.get(key);
-      if (!e) continue;
+    for (const e of evicting) {
       this.renderer.removeTile(e.handle);
-      this.cache.delete(key);
+      this.cache.delete(e.key);
     }
-    if (keysToRemove.length > 0) {
+    if (evicting.length > 0) {
+      evicting.length = 0;
       this.onInvalidate();
     }
   }

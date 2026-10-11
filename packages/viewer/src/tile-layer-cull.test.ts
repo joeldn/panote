@@ -21,7 +21,7 @@ vi.mock('./cube.js', async (importOriginal) => {
 });
 vi.mock('./tile-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof tileCache>();
-  return { ...actual, selectEvictions: vi.fn(actual.selectEvictions) };
+  return { ...actual, pickEvictions: vi.fn(actual.pickEvictions) };
 });
 vi.mock('./render/projection.js', async (importOriginal) => {
   const actual = await importOriginal<typeof projection>();
@@ -267,14 +267,14 @@ describe('TileLayer cull', () => {
     };
     expect(cache.size).toBeGreaterThan(4);
     expect(cache.size).toBeLessThanOrEqual(desired.size + 6);
-    vi.mocked(tileCache.selectEvictions).mockClear();
+    vi.mocked(tileCache.pickEvictions).mockClear();
     frame(0, 0, 70, 16 / 9, 3);
-    expect(tileCache.selectEvictions).not.toHaveBeenCalled();
+    expect(tileCache.pickEvictions).not.toHaveBeenCalled();
     // Past the overshoot (here: a turn to the side) eviction runs again.
     for (let i = 0; i < 100 && (i === 0 || layer.hasPending()); i++) {
       frame(Math.PI / 2, 0, 70, 16 / 9, 3);
       await flush();
     }
-    expect(tileCache.selectEvictions).toHaveBeenCalled();
+    expect(tileCache.pickEvictions).toHaveBeenCalled();
   });
 });
