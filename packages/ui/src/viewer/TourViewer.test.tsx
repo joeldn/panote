@@ -254,6 +254,16 @@ describe('TourViewer', () => {
     expect(onShare).toHaveBeenCalledOnce();
   });
 
+  it('reports intent to share on pointer over, focus and touch of Share', () => {
+    const onShareIntent = vi.fn();
+    renderViewer({ onShare: () => {}, onShareIntent });
+    const share = screen.getByRole('button', { name: 'Share' });
+    fireEvent.pointerEnter(share);
+    fireEvent.focus(share);
+    fireEvent.touchStart(share);
+    expect(onShareIntent).toHaveBeenCalledTimes(3);
+  });
+
   it('leaves fullscreen before sharing, and handles a refused exit', () => {
     const onShare = vi.fn();
     // A rejection with no handler attached is an unhandled rejection in the page.
