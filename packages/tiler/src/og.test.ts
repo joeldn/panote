@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { FACES, faceUVToDir, type Face, type Vec3 } from '@panote/core';
+import { FACES, faceUVToDir, FRONT_FACE, type Face, type Vec3 } from '@panote/core';
 import {
   cubeSampler,
   equirectSampler,
@@ -164,8 +164,9 @@ describe('cubeSampler', () => {
 
 // A few million rays or a full-size encode each: quick normally, slow under coverage.
 describe('facesInView', () => {
-  it('needs only nz, px and nx for the default view', () => {
-    expect(facesInView(OG_VIEW)).toEqual(['px', 'nx', 'nz']);
+  it('needs only the front face (nz), px and nx for the default view', () => {
+    expect(FRONT_FACE).toBe('nz');
+    expect(facesInView(OG_VIEW)).toEqual(['px', 'nx', FRONT_FACE]);
   }, 20_000);
 
   it('adds py when the view tilts up far enough to see it', () => {
