@@ -28,9 +28,10 @@ export interface View {
 export const OG_VIEW: View = { yaw: 0, pitch: 0, hfovDeg: 100 };
 
 /**
- * Rendered at this multiple of the output size, then area-filtered down by libvips:
- * each output pixel averages 4 bilinear samples, so fine detail in a large source
- * turns to its average colour instead of moiré.
+ * Rendered at this multiple of the output size, then downscaled by libvips with a
+ * lanczos3 kernel (a low-pass resample, not a plain box average): each output pixel
+ * draws on several bilinear samples, so fine detail in a large source softens to
+ * its average colour instead of turning into moiré.
  */
 const SUPERSAMPLE = 2;
 
