@@ -126,6 +126,9 @@ describe('Dashboard', () => {
     expect(img('No preview')?.getAttribute('src')).toBe(
       'https://cdn.panote.dev/tiles/p2/0/nz/0-0.jpg',
     );
+    // A cube face is stored mirrored; the equirect preview isn't.
+    expect(img('No preview')?.style.transform).toBe('scaleX(-1)');
+    expect(img('St Lawrence Jewry')?.style.transform).toBe('');
     expect(within(card('Gone pano')).getByTestId('cover-fallback')).toBeTruthy();
     expect(within(card('Empty')).getByTestId('cover-fallback')).toBeTruthy();
 

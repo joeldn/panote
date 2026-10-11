@@ -560,6 +560,26 @@ describe('editor: points, connections, views and settings', () => {
     expect(server.tour!.body.description).toBe('Three squares and a harbour.');
   });
 
+  it('reloads a tour stored with a blank description as having none', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Mine');
+    // Another writer, through the raw API, stores an empty description.
+    server.setTour({ ...server.tour!.body, description: '' });
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    const banner = await ui.findByRole('alert');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Reload' }));
+    await ui.findByText('Saved');
+    fireEvent.click(ui.getByRole('button', { name: 'Tour settings' }));
+    const settings = within(ui.getByRole('dialog', { name: 'Tour settings' }));
+    const field = settings.getByRole('textbox', { name: 'Description' });
+    fireEvent.change(field, { target: { value: 'x' } });
+    fireEvent.change(field, { target: { value: '' } });
+    // Back to blank: nothing to save.
+    expect(ui.getByText('Saved')).toBeTruthy();
+    expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
   it('removes a pano from the tour via the confirm modal', async () => {
     const { ui } = openTab();
     await loaded(ui);

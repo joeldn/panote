@@ -20,7 +20,7 @@ export interface View {
 
 /**
  * The first frame the viewer shows a scene with no start view on a wide screen: yaw 0,
- * facing -z (FRONT_FACE in @panote/core, the face the website falls back to), level,
+ * facing -z (FRONT_FACE in @panote/core), level,
  * and the viewer's default 70° vertical fov, which at 1200x630 hits the viewer's 100°
  * horizontal cap (packages/viewer/src/defaults.ts: defaultFov 70, maxHorizontalFov 100).
  * The start view is set later in the editor, so the tiler can't know it.

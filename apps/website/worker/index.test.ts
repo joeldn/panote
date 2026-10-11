@@ -55,6 +55,13 @@ async function call(path: string, init?: RequestInit, vars: Partial<Env> = {}): 
   });
 }
 
+/**
+ * An ASSETS binding whose fetch fails. Not a vi.fn: a mock attaches its own handler to
+ * every promise it returns, which would hide an unhandled rejection from the test.
+ */
+const failingAssets = () =>
+  ({ fetch: () => Promise.reject(new Error('assets down')) }) as unknown as Fetcher;
+
 async function clearBucket() {
   const listed = await env.BUCKET.list();
   await Promise.all(listed.objects.map((o) => env.BUCKET.delete(o.key)));
@@ -106,6 +113,36 @@ describe('slug alias redirects', () => {
   it('redirects HEAD too (curl -I)', async () => {
     const res = await call('/s/old-name', { method: 'HEAD' });
     expect(res.status).toBe(308);
+  });
+
+  it('cancels the HTML it started fetching for the slug', async () => {
+    const cancel = vi.fn();
+    assets.fetch.mockResolvedValueOnce(
+      new Response(new ReadableStream({ cancel }), {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+    const res = await call('/s/old-name');
+    expect(res.status).toBe(308);
+    expect(assets.fetch).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+  });
+
+  it('still redirects, with nothing left unhandled, when that HTML fetch fails', async () => {
+    const unhandled = vi.fn();
+    addEventListener('unhandledrejection', unhandled);
+    try {
+      const held = holdReads('slugs/');
+      const pending = call('/s/old-name', undefined, { ASSETS: failingAssets() });
+      await sleep(20);
+      held.release();
+      expect((await pending).status).toBe(308);
+      await sleep(20);
+    } finally {
+      removeEventListener('unhandledrejection', unhandled);
+    }
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
   it('never redirects a non-GET request', async () => {
@@ -448,7 +485,7 @@ describe('streams the page around the R2 reads', () => {
     expect(html.match(/<title>/g)).toEqual(['<title>']);
     expect(html).toContain('<title>Old town · panote</title>');
     expect(preloadsOf(html)).toHaveLength(7);
-    expect(metasOf(html)).toHaveLength(12);
+    expect(metasOf(html)).toHaveLength(7);
   });
 
   it('puts the boot data and preloads in the head, so they parse before the app script runs', async () => {
@@ -611,41 +648,30 @@ describe('link previews', () => {
     expect(html).not.toContain('<b>');
   });
 
+  it('turns control characters and NEL in a hand-written description into spaces', async () => {
+    const description = 'Old\u0000town\u0085at\u001bdusk\u007f\u000b\u0085';
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ description }));
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([...textTags('Old town', 'Old town at dusk'), ...previewTags()]);
+  });
+
+  it('falls back to the generated line for a description of only control characters', async () => {
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ description: '\u0001\u0085\u0000' }));
+    const html = await (await call('/s/new-name')).text();
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
+  });
+
   it('falls back to the generated line for a blank description', async () => {
     await putJson(`pub/tours/${TOUR}.json`, bundle({ description: ' \n ' }));
     const html = await (await call('/s/new-name')).text();
     expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
   });
 
-  it('falls back to the square level-0 front face, as a summary card, without a preview', async () => {
+  it('gives no image, never the mirrored cube face, without og.jpg or a preview', async () => {
     await putJson('tiles/pano-1/manifest.json', { ...manifest('pano-1'), format: 'jpg' });
     const html = await (await call('/s/new-name')).text();
-    expect(metasOf(html)).toEqual([
-      ...textTags(),
-      // nz: the face ahead at yaw 0 (FRONT_FACE in @panote/core).
-      tag('og:image', `${CDN}tiles/pano-1/v7/0/nz/0-0.jpg`),
-      tag('og:image:type', 'image/jpeg'),
-      tag('og:image:width', '512'),
-      tag('og:image:height', '512'),
-      tag('og:image:alt', 'pano-1'),
-      tag('twitter:card', 'summary'),
-    ]);
-  });
-
-  it("sizes the fallback face from the manifest's tileSize", async () => {
-    // A one-level 1024 face: one tile, as big as the face.
-    const big = { ...manifest('pano-1'), tileSize: 1024, maxLevel: 0 };
-    await putJson('tiles/pano-1/manifest.json', big);
-    const html = await (await call('/s/new-name')).text();
-    expect(metasOf(html)).toEqual([
-      ...textTags(),
-      tag('og:image', `${CDN}tiles/pano-1/v7/0/nz/0-0.webp`),
-      tag('og:image:type', 'image/webp'),
-      tag('og:image:width', '1024'),
-      tag('og:image:height', '1024'),
-      tag('og:image:alt', 'pano-1'),
-      tag('twitter:card', 'summary'),
-    ]);
+    expect(metasOf(html)).toEqual([...textTags(), tag('twitter:card', 'summary')]);
+    expect(html).not.toContain('og:image');
   });
 
   it('builds the preview URL for an unversioned manifest', async () => {
@@ -777,6 +803,30 @@ describe('link preview image (og.jpg)', () => {
     await putJson(`pub/tours/${TOUR}.json`, tour);
     const html = await (await call('/s/new-name')).text();
     expect(html).toContain(tag('og:image:alt', 'Hall &quot;A&quot; &amp; &lt;i&gt;B&lt;/i&gt;'));
+  });
+});
+
+describe('a failed HTML fetch', () => {
+  it('is never left unhandled while the slug is still being read', async () => {
+    await putSlug('new-name', live(TOUR));
+    const unhandled = vi.fn();
+    addEventListener('unhandledrejection', unhandled);
+    try {
+      const held = holdReads('slugs/');
+      const settled = call('/s/new-name', undefined, { ASSETS: failingAssets() }).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      // The fetch has already failed; the slug read is still out.
+      await sleep(20);
+      held.release();
+      // Nothing to serve without the page: the request fails as an asset fetch would.
+      expect(await settled).toEqual(new Error('assets down'));
+      await sleep(20);
+    } finally {
+      removeEventListener('unhandledrejection', unhandled);
+    }
+    expect(unhandled).not.toHaveBeenCalled();
   });
 });
 

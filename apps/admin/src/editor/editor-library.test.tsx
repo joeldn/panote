@@ -87,6 +87,8 @@ describe('editor: add from library', () => {
     ]);
     expect(within(rows[2]!).getByText('In this tour')).toBeTruthy();
     expect(within(rows[2]!).queryByRole('button')).toBeNull();
+    // No preview.webp in these manifests: the face fallback, flipped back.
+    expect(rows[0]!.querySelector('img')?.style.transform).toBe('scaleX(-1)');
     // Processing and failed panos are counted, not listed; one being deleted isn't either.
     expect(dialog.getByText(/2 panos aren’t shown/)).toBeTruthy();
     expect(dialog.queryByText('Cellar')).toBeNull();

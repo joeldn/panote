@@ -132,6 +132,21 @@ describe('editor model', () => {
     expect(dirtyKeys(docs)).not.toContain('tour');
   });
 
+  it('loads a stored blank description as none, so clearing the field leaves nothing to save', () => {
+    for (const description of ['', '  ']) {
+      const loaded = fromServer({ ...server, tour: { ...server.tour, description } });
+      expect(loaded.tour.base).not.toHaveProperty('description');
+      expect(dirtyKeys(loaded)).toEqual([]);
+      const touched = [
+        { type: 'tour/description', description: 'x' },
+        { type: 'tour/description', description: '' },
+      ] as const;
+      expect(dirtyKeys(touched.reduce<EditorDocs | null>(editorReducer, loaded)!)).toEqual([]);
+    }
+    const kept = fromServer({ ...server, tour: { ...server.tour, description: 'Old town' } });
+    expect(kept.tour.base.description).toBe('Old town');
+  });
+
   it('a save sets base to what was sent, so edits made meanwhile stay dirty', () => {
     const sent = run({ type: 'tour/title', title: 'Sent' }).tour.current;
     const docs = run(

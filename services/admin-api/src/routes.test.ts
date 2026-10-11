@@ -22,6 +22,7 @@ import { RECENT_UPLOAD_MS } from './delete-owned-pano.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
+const PAGER_SUB = 'auth0|pager';
 
 // Test seam: authenticate() reads globalThis.__verifyJwt when it is set.
 // Installed here through setTestJwtVerifier - the only sanctioned way to reach
@@ -37,6 +38,7 @@ beforeAll(() => {
     if (t === 'good') return { sub: 'auth0|me' };
     if (t === 'good-other') return { sub: 'auth0|other' };
     if (t === 'good-describer') return { sub: 'auth0|describer' };
+    if (t === 'good-pager') return { sub: PAGER_SUB };
     return Promise.reject(new Error('bad'));
   });
 });
@@ -1721,6 +1723,8 @@ describe('review fix: ?limit and ?cursor validation on both list routes', () => 
 });
 
 describe('review fix: tours list page boundary never splits a tour from its publish.json', () => {
+  // Its own user, so the walk covers just these two tours whatever else the file creates.
+  const auth = { headers: { Authorization: 'Bearer good-pager' } };
   it('limit=1 across two tours, one with a publish.json sidecar, visits each tour exactly once', async () => {
     const createA = await SELF.fetch('https://x/api/admin/tours', {
       method: 'POST',
@@ -1736,27 +1740,29 @@ describe('review fix: tours list page boundary never splits a tour from its publ
     const { tourId: tourIdB } = (await createB.json()) as { tourId: string };
     // Hand-written, forward-compat with unit B2's future publish.json writer.
     await env.BUCKET.put(
-      `tours/${encodeId(MY_SUB)}/${tourIdA}/publish.json`,
+      `tours/${encodeId(PAGER_SUB)}/${tourIdA}/publish.json`,
       JSON.stringify({ slug: 'boundary-a', visibility: 'public' }),
       { customMetadata: { slug: 'boundary-a', visibility: 'public' } },
     );
 
     const seen: string[] = [];
-    let cursor: string | undefined;
-    for (let page = 0; page < 20; page++) {
-      const url = cursor
-        ? `https://x/api/admin/tours?limit=1&cursor=${encodeURIComponent(cursor)}`
-        : 'https://x/api/admin/tours?limit=1';
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      // Each page lists at most one tour (or none, after a publish.json-only page), so this
+      // is far past any honest walk over two tours: hitting it means the cursor loops.
+      expect(++pages).toBeLessThanOrEqual(10);
+      const url: string =
+        cursor === null
+          ? 'https://x/api/admin/tours?limit=1'
+          : `https://x/api/admin/tours?limit=1&cursor=${encodeURIComponent(cursor)}`;
       const r = await SELF.fetch(url, auth);
       const body = (await r.json()) as { tours: Array<{ tourId: string }>; cursor: string | null };
       expect(body.tours.length).toBeLessThanOrEqual(1);
       seen.push(...body.tours.map((t) => t.tourId));
-      if (body.cursor === null) break;
       cursor = body.cursor;
-    }
-    expect(seen).toContain(tourIdA);
-    expect(seen).toContain(tourIdB);
-    expect(new Set(seen).size).toBe(seen.length);
+    } while (cursor !== null);
+    expect(seen.sort()).toEqual([tourIdA, tourIdB].sort());
   });
 });
 

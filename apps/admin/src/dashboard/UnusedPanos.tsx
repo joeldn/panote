@@ -8,21 +8,22 @@ import { Link } from 'react-router';
 
 import { useConfig } from '../config-context.js';
 import { useSession } from '../session.js';
-import { coverUrl } from './cover.js';
+import { coverImage, coverStyle, type Cover } from './cover.js';
 import { plural, relativeTime } from './format.js';
 import { isProcessing, panoTitle, useUnusedPanos } from './use-unused-panos.js';
 
-function Thumb({ src }: { src: string | null }) {
+function Thumb({ cover }: { cover: Cover | null }) {
   const [failed, setFailed] = useState<string | null>(null);
-  if (src && src !== failed) {
+  if (cover && cover.src !== failed) {
     return (
       <img
         className="unused__thumb"
-        src={src}
+        src={cover.src}
+        style={coverStyle(cover)}
         alt=""
         loading="lazy"
         decoding="async"
-        onError={() => setFailed(src)}
+        onError={() => setFailed(cover.src)}
       />
     );
   }
@@ -40,7 +41,7 @@ function Row({
   onDelete,
 }: {
   pano: PanoSummary;
-  thumb: string | null;
+  thumb: Cover | null;
   now: number;
   onDelete(p: PanoSummary): void;
 }) {
@@ -48,7 +49,7 @@ function Row({
   const processing = isProcessing(pano);
   return (
     <li className="unused__row">
-      <Thumb src={thumb} />
+      <Thumb cover={thumb} />
       <div className="unused__text">
         <span className="unused__title">{title}</span>
         <span className="unused__meta">
@@ -130,7 +131,7 @@ export function UnusedPanos() {
                 <Row
                   key={pano.panoId}
                   pano={pano}
-                  thumb={coverUrl(tilesBase, pano)}
+                  thumb={coverImage(tilesBase, pano)}
                   now={now}
                   onDelete={setConfirm}
                 />

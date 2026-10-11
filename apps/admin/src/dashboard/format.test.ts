@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { coverUrl } from './cover.js';
+import { coverImage } from './cover.js';
 import { formatCount, relativeTime } from './format.js';
 import { copyTitle } from './use-dashboard.js';
 
@@ -35,13 +35,31 @@ describe('dashboard formatting', () => {
       updatedAt: '',
     } as const;
     const manifest = { format: 'webp', tileSize: 512 } as const;
-    expect(coverUrl('t/', undefined)).toBeNull();
-    expect(coverUrl('t/', { ...base, deleting: true, tiling: 'ready', manifest })).toBeNull();
+    expect(coverImage('t/', undefined)).toBeNull();
+    expect(coverImage('t/', { ...base, deleting: true, tiling: 'ready', manifest })).toBeNull();
     expect(
-      coverUrl('t/', { ...base, deleting: false, tiling: 'pending', manifest: null }),
+      coverImage('t/', { ...base, deleting: false, tiling: 'pending', manifest: null }),
     ).toBeNull();
-    expect(coverUrl('t/', { ...base, deleting: false, tiling: 'ready', manifest })).toBe(
-      't/p1/0/nz/0-0.webp',
-    );
+    expect(coverImage('t/', { ...base, deleting: false, tiling: 'ready', manifest })).toEqual({
+      src: 't/p1/0/nz/0-0.webp',
+      mirrored: true,
+    });
+  });
+
+  it('mirrors only the face fallback, never the equirect preview', () => {
+    const pano = {
+      panoId: 'p1',
+      title: null,
+      hasConfig: true,
+      hasOriginal: true,
+      updatedAt: '',
+      deleting: false,
+      tiling: 'ready',
+    } as const;
+    const preview = { format: 'jpg', tileSize: 512, preview: true, version: 'v1' } as const;
+    expect(coverImage('t/', { ...pano, manifest: preview })).toEqual({
+      src: 't/p1/v1/preview.webp',
+      mirrored: false,
+    });
   });
 });

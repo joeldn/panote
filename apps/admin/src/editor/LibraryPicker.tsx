@@ -3,7 +3,7 @@ import { tilesBaseUrl } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 
 import { useConfig } from '../config-context.js';
-import { coverUrl } from '../dashboard/cover.js';
+import { coverImage, coverStyle, type Cover } from '../dashboard/cover.js';
 import { relativeTime } from '../dashboard/format.js';
 import type { PanoSummary } from '../dashboard/types.js';
 import { listAllPanos, type LoadStatus } from '../dashboard/use-dashboard.js';
@@ -24,17 +24,18 @@ export interface LibraryPickerProps {
   onAdded(panoId: string, title: string): Promise<void>;
 }
 
-function Thumb({ src }: { src: string | null }) {
+function Thumb({ cover }: { cover: Cover | null }) {
   const [failed, setFailed] = useState<string | null>(null);
-  if (src && src !== failed) {
+  if (cover && cover.src !== failed) {
     return (
       <img
         className="ed-lib__thumb"
-        src={src}
+        src={cover.src}
+        style={coverStyle(cover)}
         alt=""
         loading="lazy"
         decoding="async"
-        onError={() => setFailed(src)}
+        onError={() => setFailed(cover.src)}
       />
     );
   }
@@ -141,7 +142,7 @@ export function LibraryPicker({ tourId, tourPanoIds, full, onClose, onAdded }: L
               const title = panoTitle(pano);
               return (
                 <li key={pano.panoId} className="ed-lib__row">
-                  <Thumb src={coverUrl(tilesBase, pano)} />
+                  <Thumb cover={coverImage(tilesBase, pano)} />
                   <span className="ed-lib__text">
                     <span className="ed-lib__title">{title}</span>
                     <span className="ed-lib__meta">

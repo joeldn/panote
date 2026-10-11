@@ -111,7 +111,10 @@ browser reuses the preload. The SPA's `TourPage` passes `#pn-boot` to `loadPubli
 first attempt, which uses it only if it is for the same slug and passes the same schemas.
 The R2 reads get 300 ms (`BOOT_BUDGET_MS`); past that the script logs a warning and finishes
 the plain page, so a slow R2 holds back the rest of the page by at most that much, never the
-app's JS. A streamed response has no `ETag`, and a slug path is never a `304`. A missing or
+app's JS. A streamed response has no `ETag`. A GET for a slug path is never a `304`: the
+script drops `If-None-Match` and `If-Modified-Since` before it fetches `index.html`, so a cached
+plain page can't stand in for a primed one. A HEAD keeps them and goes straight to
+`env.ASSETS.fetch`, so a conditional HEAD can still get the asset's `304`. A missing or
 invalid bundle, an R2 error on the tour read or the budget running out finish the page plain
 (the original `<title>` moves to the end of the head, nothing else changes). HEAD, a non-HTML
 asset response and a failed slug read serve `index.html` untouched. Either way the SPA fetches
@@ -132,13 +135,14 @@ Post-deploy checks (dev; production the same on `panote.io`):
 `panote`, `og:title` (the tour title), `og:description`, `og:url` (`<origin>/s/<slug>`, no query
 and no `/embed`), and `twitter:card`. The description is the tour's published `description`
 (edited in the admin's tour settings, up to 300 characters, collapsed onto one line), else the
-generated `A 360° virtual tour · N scenes`. The image is the start scene's own, so nothing new is
-rendered: the tiler's `preview.webp` (1024×512 equirect, `og:image:type` `image/webp`, card
-`summary_large_image`) when the manifest has `preview: true`, else the level-0 front face, the
-one ahead at yaw 0 (`0/nz/0-0.<format>`, `FRONT_FACE` in `@panote/core`; the viewer looks along
-−z), square at `tileSize`, card `summary`, with `og:image:alt` set to the
-scene title. No manifest, or a CDN root that isn't absolute `https://`, means no image and a
-`summary` card. Public and unlisted tours both get the tags: sharing the link is the point of
+generated `A 360° virtual tour · N scenes`; control characters (C0, DEL, U+0085) become spaces,
+since a hand-written bundle goes through a looser schema than the admin API. The image is the
+start scene's own: the tiler's `og.jpg` (1200×630, `image/jpeg`) when the manifest has `og: true`
+(see "Link-preview image" below), else its `preview.webp` (1024×512 equirect, `image/webp`) when
+it has `preview: true`, with card `summary_large_image` and `og:image:alt` set to the scene title.
+There is no cube-face fallback: face tiles are stored mirrored left to right (`faceUVToDir` in
+`@panote/core`) and a scraper can't flip them back. No og.jpg or preview, no manifest, or a CDN
+root that isn't absolute `https://` means no image and a `summary` card. Public and unlisted tours both get the tags: sharing the link is the point of
 unlisted, and its `noindex` stays. A page served plain (missing bundle, R2 error, budget) gets
 none, the same as a slug with no live tour. With `?pano=` the image is that scene's, while
 `og:url` stays the canonical page.

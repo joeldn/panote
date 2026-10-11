@@ -9,7 +9,7 @@ import { Link, Outlet } from 'react-router';
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { useSession } from '../session.js';
-import { coverUrl } from './cover.js';
+import { coverImage } from './cover.js';
 import { readCurrentTour } from './current-tour.js';
 import { formatCount, plural } from './format.js';
 import { TourCard } from './TourCard.js';
@@ -157,8 +157,8 @@ export function Dashboard() {
               <TourCard
                 key={tour.tourId}
                 tour={tour}
-                coverSrc={
-                  tour.coverPanoId ? coverUrl(tilesBase, dash.panos?.get(tour.coverPanoId)) : null
+                cover={
+                  tour.coverPanoId ? coverImage(tilesBase, dash.panos?.get(tour.coverPanoId)) : null
                 }
                 views={dash.views[tour.tourId]}
                 current={tour.tourId === currentTour}
