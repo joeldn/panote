@@ -391,11 +391,21 @@ export class PanoViewer {
    * resolves false, its fetches stop, and the scene on screen stays as it
    * is, camera included. A crossfade still fading is cut short. A load that
    * a context loss is holding for the restore is dropped too.
+   *
+   * After a context restore the scene's tiles are being loaded again: that
+   * reload is left alone, and cancelling a load the restore was finishing
+   * in its place loads the scene back instead of leaving the stage blank.
    */
   cancelLoad(): void {
     if (this.disposed) return;
+    // Only a restore's reload of the scene on screen goes unannounced.
+    if (this.request && !this.request.announce) return;
     this.supersede();
     this.lostRequest = undefined;
+    const scene = this.scene;
+    if (!this.layer && !this.contextLost && scene) {
+      this.reloadInBackground({ id: scene.id, view: undefined, source: scene, announce: false });
+    }
   }
 
   private resolve(id: string, signal: AbortSignal, hints?: ResolveHints): Promise<CubeTileSource> {
@@ -529,14 +539,16 @@ export class PanoViewer {
     this.lostRequest = undefined;
     this.disposePreview();
     this.invalidate();
-    if (next) {
-      this.reload(next).catch((error: unknown) => {
-        // Nobody awaits this load, so the host hears about it as an event.
-        this.emitter.emit('load-error', { error, id: next.id });
-      });
-    }
+    if (next) this.reloadInBackground(next);
     this.emitter.emit('context-restored', undefined);
   };
+
+  /** reload() with nobody awaiting it: a failure reaches the host as `load-error`. */
+  private reloadInBackground(req: Reload): void {
+    this.reload(req).catch((error: unknown) => {
+      this.emitter.emit('load-error', { error, id: req.id });
+    });
+  }
 
   private async reload(req: Reload): Promise<boolean> {
     const { source } = req;

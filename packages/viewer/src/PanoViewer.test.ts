@@ -2861,6 +2861,29 @@ describe('PanoViewer', () => {
       viewer.dispose();
     });
 
+    it('does not fade a snapshot that a ready listener has already dropped', async () => {
+      const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+      const { container, overlays } = stubOverlayDom();
+      const viewer = new PanoViewer(container, { transition: { durationMs: 0 } });
+      await viewer.load('pano-0');
+      runUntilIdle();
+      // Moving on as soon as A is ready supersedes the transition's fade.
+      viewer.on('ready', (src) => {
+        if (src.id === 'pano-a') void viewer.load('pano-b');
+      });
+      let done = false;
+      const t = viewer.transitionTo('pano-a').then(() => (done = true));
+      for (let i = 0; i < 10 && !done; i++) await flush();
+      // Settled with no frame drawn: nothing waited on a fade.
+      expect(done).toBe(true);
+      await t;
+      expect(overlays).toHaveLength(1);
+      expect(overlays[0]!.remove).toHaveBeenCalled();
+      expect(overlays[0]!.style['opacity']).toBeUndefined();
+      net.release();
+      viewer.dispose();
+    });
+
     it('puts up no snapshot when a context restore finishes a transition that has given up', async () => {
       const net = stubNet({ holdTile: (url) => url.includes('/pano-a/') });
       const { container, overlays } = stubOverlayDom();
@@ -2956,6 +2979,55 @@ describe('PanoViewer', () => {
         await expect(b).resolves.toBe(false);
         viewer.cancelLoad();
         fake.restoreContext();
+        net.release();
+        for (let i = 0; i < 10; i++) await flush();
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it("leaves a context restore's reload of the scene on screen alone", async () => {
+        let hold = false;
+        const net = stubNet({ holdTile: (url) => hold && url.includes('/pano-a/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const fake = internals(viewer).renderer as unknown as {
+          loseContext(): void;
+          restoreContext(): void;
+        };
+        fake.loseContext();
+        hold = true;
+        fake.restoreContext();
+        await flush();
+        const baseFetches = () =>
+          vi.mocked(fetch).mock.calls.filter(([url]) => url === '/tiles/pano-a/0/pz/0-0.jpg')
+            .length;
+        const before = baseFetches();
+        viewer.cancelLoad();
+        // Not cancelled and fetched again: left to finish.
+        expect(net.signalOf('/tiles/pano-a/0/pz/0-0.jpg')?.aborted).toBe(false);
+        net.release();
+        for (let i = 0; i < 10; i++) await flush();
+        expect(baseFetches()).toBe(before);
+        expect(layerId(viewer)).toBe('pano-a');
+        viewer.dispose();
+      });
+
+      it('brings the scene back when it cancels the load a restore was finishing', async () => {
+        const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
+        const viewer = new PanoViewer(makeContainer(400, 800));
+        await viewer.load('pano-a');
+        const fake = internals(viewer).renderer as unknown as {
+          loseContext(): void;
+          restoreContext(): void;
+        };
+        const b = viewer.load('pano-b');
+        await flush();
+        fake.loseContext();
+        await expect(b).resolves.toBe(false);
+        // The restore loads B again; cancelling it must not leave the stage blank.
+        fake.restoreContext();
+        await flush();
+        viewer.cancelLoad();
         net.release();
         for (let i = 0; i < 10; i++) await flush();
         expect(layerId(viewer)).toBe('pano-a');
