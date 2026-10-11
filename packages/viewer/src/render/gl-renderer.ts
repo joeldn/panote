@@ -1,8 +1,8 @@
 import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from './projection.js';
 import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
-import { VIEWER_DEFAULTS } from '../defaults.js';
 import { report } from '../report.js';
 import type { TileImage } from '../source.js';
+import type { ResolvedViewerOptions } from '../types.js';
 import { CONTEXT_ATTRIBUTES, WebGLUnavailableError } from '../webgl-support.js';
 
 /** Opaque per-tile id. */
@@ -50,15 +50,11 @@ export class ContextLostError extends Error {
   }
 }
 
-export interface GLRendererOptions {
-  antialias?: boolean;
-  maxPixelRatio?: number;
-  /** Cap on backbuffer pixels; the pixel ratio drops to stay under it. */
-  maxPixels?: number;
-  /** Anisotropic filtering samples, or the device's maximum. */
-  anisotropy?: number | 'max';
-  /** Clear colour, 0..1 per channel. */
-  background?: readonly [r: number, g: number, b: number];
+/** The resolved `rendering` options the renderer reads, and its context callbacks. */
+export interface GLRendererOptions extends Pick<
+  ResolvedViewerOptions['rendering'],
+  'antialias' | 'maxPixelRatio' | 'maxPixels' | 'anisotropy' | 'background'
+> {
   /** The context was lost. Drawing and uploads are no-ops until it is restored. */
   onContextLost?: () => void;
   /**
@@ -187,12 +183,11 @@ export class GLRenderer {
   private onContextLost: (() => void) | undefined;
   private onContextRestored: (() => void) | undefined;
 
-  constructor(container: HTMLElement, opts: GLRendererOptions = {}) {
-    const d = VIEWER_DEFAULTS.rendering;
-    this.maxPixelRatio = opts.maxPixelRatio ?? d.maxPixelRatio;
-    this.maxPixels = opts.maxPixels ?? d.maxPixels;
-    this.anisotropy = opts.anisotropy ?? d.anisotropy;
-    this.background = opts.background ?? d.background;
+  constructor(container: HTMLElement, opts: GLRendererOptions) {
+    this.maxPixelRatio = opts.maxPixelRatio;
+    this.maxPixels = opts.maxPixels;
+    this.anisotropy = opts.anisotropy;
+    this.background = opts.background;
     this.onContextLost = opts.onContextLost;
     this.onContextRestored = opts.onContextRestored;
     this.canvas = document.createElement('canvas');
@@ -201,7 +196,7 @@ export class GLRenderer {
     this.canvas.style.display = 'block';
     const gl = this.canvas.getContext('webgl2', {
       ...CONTEXT_ATTRIBUTES,
-      antialias: opts.antialias ?? d.antialias,
+      antialias: opts.antialias,
     });
     if (!gl) throw new WebGLUnavailableError();
     this.gl = gl;

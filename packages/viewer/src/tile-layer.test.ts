@@ -6,6 +6,15 @@ import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import { ContextLostError, sortDrawList, type GLRenderer } from './render/gl-renderer.js';
 import { TileHttpError } from './tile-retry.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+/** The resolved defaults a viewer hands every layer it builds. */
+const LAYER_DEFAULTS = {
+  maxConcurrent: VIEWER_DEFAULTS.network.maxConcurrent,
+  minResidentTiles: VIEWER_DEFAULTS.memory.minResidentTiles,
+  lodBias: VIEWER_DEFAULTS.rendering.lodBias,
+  retry: VIEWER_DEFAULTS.network.retry,
+};
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
@@ -72,6 +81,7 @@ describe('TileLayer failure handling', () => {
     onInvalidate: () => void = () => {},
   ): TileLayer {
     return new TileLayer(renderer as unknown as GLRenderer, makeSource(pano), onInvalidate, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB,
       now: () => clock,
       // The injected sleep advances the same clock the retry budget measures
@@ -806,7 +816,7 @@ describe('TileLayer failure handling', () => {
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
         () => {},
-        { textureBudgetMB: 128, maxConcurrent: 3, now: () => clock },
+        { ...LAYER_DEFAULTS, textureBudgetMB: 128, maxConcurrent: 3, now: () => clock },
       );
       await layer.loadBase();
       requests = [];
@@ -824,7 +834,7 @@ describe('TileLayer failure handling', () => {
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
         () => {},
-        { textureBudgetMB: 128, maxConcurrent: 1, now: () => clock },
+        { ...LAYER_DEFAULTS, textureBudgetMB: 128, maxConcurrent: 1, now: () => clock },
       );
       await layer.loadBase();
       requests = [];
@@ -893,6 +903,7 @@ describe('TileLayer failure handling', () => {
       // children in flight and none still queued.
       const layer = await withLevel1(
         new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+          ...LAYER_DEFAULTS,
           textureBudgetMB: 128,
           maxConcurrent: 64,
           now: () => clock,
@@ -1116,6 +1127,7 @@ describe('TileLayer failure handling', () => {
     /** A layer with a slot for each of the 16 tiles in view, so all 16 decode together. */
     const wideLayer = (): TileLayer =>
       new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+        ...LAYER_DEFAULTS,
         textureBudgetMB: 128,
         maxConcurrent: 16,
         now: () => clock,
@@ -1158,7 +1170,13 @@ describe('TileLayer failure handling', () => {
         renderer as unknown as GLRenderer,
         makeSource('pano-a'),
         () => {},
-        { textureBudgetMB: 128, maxConcurrent: 16, maxUploadsPerUpdate: 4, now: () => clock },
+        {
+          ...LAYER_DEFAULTS,
+          textureBudgetMB: 128,
+          maxConcurrent: 16,
+          maxUploadsPerUpdate: 4,
+          now: () => clock,
+        },
       );
       frame(layer, 0);
       await flush();
@@ -1470,6 +1488,7 @@ describe('TileLayer failure handling', () => {
         makeSource('pano-a'),
         () => {},
         {
+          ...LAYER_DEFAULTS,
           textureBudgetMB: 128,
           now: () => clock,
           sleep: (ms: number, signal: AbortSignal) => {
@@ -1748,6 +1767,7 @@ describe('tile sources', () => {
 
   const layerFor = (source: CubeTileSource, network = {}): TileLayer =>
     new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 128,
       now: () => clock,
       sleep: (ms: number) => {
@@ -1885,6 +1905,7 @@ describe('layer options', () => {
 
   const layerWith = (opts: Partial<TileLayerOptions>): TileLayer =>
     new TileLayer(renderer as unknown as GLRenderer, makeSource('pano-a'), () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 128,
       now: () => 0,
       sleep: () => Promise.resolve(),

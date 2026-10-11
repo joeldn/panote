@@ -1,8 +1,5 @@
 import { pinchFactor } from './camera-math.js';
-import { VIEWER_DEFAULTS } from './defaults.js';
-import type { InteractionOptions, ResolvedViewerOptions, WheelMode } from './types.js';
-
-export type { WheelMode };
+import type { ResolvedViewerOptions, WheelMode } from './types.js';
 
 export interface ControlHost {
   /** Move the camera now: a drag follows the pointer exactly. */
@@ -21,13 +18,8 @@ export interface ControlHost {
   stopMomentum(): void;
 }
 
-/** The input half of InteractionOptions; unset fields take VIEWER_DEFAULTS.interaction. */
+/** The input half of the resolved interaction options. */
 export type ControlsOptions = Pick<
-  InteractionOptions,
-  'cursor' | 'wheel' | 'wheelGain' | 'pinchGain' | 'keyboard' | 'doubleClickZoom' | 'inertia'
->;
-
-type ResolvedControls = Pick<
   ResolvedViewerOptions['interaction'],
   'cursor' | 'wheel' | 'wheelGain' | 'pinchGain' | 'keyboard' | 'doubleClickZoom' | 'inertia'
 >;
@@ -98,7 +90,7 @@ export class Controls {
   private wheelAxis: 'zoom' | 'pan' | null = null;
   private wheelT = -Infinity;
   private wheelCtrl = false;
-  private readonly opts: ResolvedControls;
+  private readonly opts: ControlsOptions;
   private readonly wheelMode: WheelMode;
   // Whether the user has engaged the viewer (see WheelMode 'engaged').
   private engaged = false;
@@ -106,19 +98,9 @@ export class Controls {
   constructor(
     private el: HTMLElement,
     private host: ControlHost,
-    opts: ControlsOptions = {},
+    opts: ControlsOptions,
   ) {
-    const d = VIEWER_DEFAULTS.interaction;
-    const keyboard = opts.keyboard ?? d.keyboard;
-    this.opts = {
-      cursor: opts.cursor ?? d.cursor,
-      wheel: opts.wheel ?? d.wheel,
-      wheelGain: opts.wheelGain ?? d.wheelGain,
-      pinchGain: opts.pinchGain ?? d.pinchGain,
-      keyboard: keyboard && { ...d.keyboard, ...keyboard },
-      doubleClickZoom: opts.doubleClickZoom ?? d.doubleClickZoom,
-      inertia: opts.inertia ?? d.inertia,
-    };
+    this.opts = opts;
     el.style.touchAction = 'none';
     this.setCursor('grab');
     // Focusable for its keys; without them it stays out of the tab order.

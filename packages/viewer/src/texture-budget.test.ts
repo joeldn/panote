@@ -118,15 +118,17 @@ describe('the phone cap', () => {
 });
 
 describe('maxTilesForBudget', () => {
+  const MIN_TILES = VIEWER_DEFAULTS.memory.minResidentTiles;
+
   it('counts the mip chain, so a tile costs 4/3 of its base level', () => {
     // 512² × 4 bytes is 1 MiB at the base level and 1.33 MiB with mips.
-    expect(maxTilesForBudget(256, 512)).toBe(192);
-    expect(maxTilesForBudget(128, 512)).toBe(96);
-    expect(maxTilesForBudget(256, 1024)).toBe(48);
+    expect(maxTilesForBudget(256, 512, MIN_TILES)).toBe(192);
+    expect(maxTilesForBudget(128, 512, MIN_TILES)).toBe(96);
+    expect(maxTilesForBudget(256, 1024, MIN_TILES)).toBe(48);
   });
 
   it('never goes below the resident-tile floor', () => {
-    expect(maxTilesForBudget(1, 512)).toBe(VIEWER_DEFAULTS.memory.minResidentTiles);
-    expect(maxTilesForBudget(0, 1024)).toBe(VIEWER_DEFAULTS.memory.minResidentTiles);
+    expect(maxTilesForBudget(1, 512, MIN_TILES)).toBe(MIN_TILES);
+    expect(maxTilesForBudget(0, 1024, MIN_TILES)).toBe(MIN_TILES);
   });
 });

@@ -5,6 +5,15 @@ import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import { ContextLostError, type DrawItem, type GLRenderer } from './render/gl-renderer.js';
 import { TileHttpError } from './tile-retry.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+/** The resolved defaults a viewer hands every layer it builds. */
+const LAYER_DEFAULTS = {
+  maxConcurrent: VIEWER_DEFAULTS.network.maxConcurrent,
+  minResidentTiles: VIEWER_DEFAULTS.memory.minResidentTiles,
+  lodBias: VIEWER_DEFAULTS.rendering.lodBias,
+  retry: VIEWER_DEFAULTS.network.retry,
+};
 
 // A coarse tile whose every visible part is under resident finer tiles is
 // left out of the draw list. The picture must stay exactly what drawing every
@@ -103,6 +112,7 @@ describe('TileLayer: coarse tiles covered by finer ones', () => {
         }),
     };
     return new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 512,
       maxConcurrent,
       now: () => clock,

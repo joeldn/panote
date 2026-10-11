@@ -7,6 +7,15 @@ import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
+import { VIEWER_DEFAULTS } from './defaults.js';
+
+/** The resolved defaults a viewer hands every layer it builds. */
+const LAYER_DEFAULTS = {
+  maxConcurrent: VIEWER_DEFAULTS.network.maxConcurrent,
+  minResidentTiles: VIEWER_DEFAULTS.memory.minResidentTiles,
+  lodBias: VIEWER_DEFAULTS.rendering.lodBias,
+  retry: VIEWER_DEFAULTS.network.retry,
+};
 
 // What this file measures, and why it is a separate harness from
 // tile-layer.test.ts: nothing here fails, so there is no scripted status, no
@@ -137,6 +146,7 @@ describe('texture budget while panning', () => {
    */
   async function sweep(budgetMB: number, viewportHeight: number): Promise<SweepResult> {
     const layer = new TileLayer(renderer as unknown as GLRenderer, deepSource(), () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: budgetMB,
       now: () => 0,
       sleep: () => Promise.resolve(),
@@ -197,6 +207,7 @@ describe('texture budget while panning', () => {
     // overflow alone would drop visible tiles, refetch them next frame and
     // drop them again, forever, with the camera standing still.
     const layer = new TileLayer(renderer as unknown as GLRenderer, deepSource(), () => {}, {
+      ...LAYER_DEFAULTS,
       textureBudgetMB: 1,
       now: () => 0,
       sleep: () => Promise.resolve(),

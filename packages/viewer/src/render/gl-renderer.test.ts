@@ -7,9 +7,18 @@ import {
   GLRenderer,
   ContextLostError,
   type DrawItem,
+  type GLRendererOptions,
 } from './gl-renderer.js';
 import { viewProjection } from './projection.js';
 import { WebGLUnavailableError } from '../webgl-support.js';
+import { VIEWER_DEFAULTS } from '../defaults.js';
+
+type Options = Partial<GLRendererOptions>;
+/** The resolved rendering defaults, with `opts` over them. */
+const rendering = (opts: Options = {}): GLRendererOptions => ({
+  ...VIEWER_DEFAULTS.rendering,
+  ...opts,
+});
 import { buildTileGeometry } from '../tile-geometry.js';
 
 describe('sortDrawList', () => {
@@ -246,12 +255,12 @@ function makeFakeDocumentAndContainer(gl: unknown) {
   return { canvas, container, fire, sizeWrites, copies };
 }
 
-function setup(opts: ConstructorParameters<typeof GLRenderer>[1] = {}) {
+function setup(opts: Options = {}) {
   const fake = makeFakeGl();
   const dom = makeFakeDocumentAndContainer(fake.gl);
   // The real WEBGL_lose_context dispatches the loss at the canvas.
   fake.loseContext.mockImplementation(() => dom.fire('webglcontextlost'));
-  const renderer = new GLRenderer(dom.container as unknown as HTMLElement, opts);
+  const renderer = new GLRenderer(dom.container as unknown as HTMLElement, rendering(opts));
   return { ...fake, ...dom, renderer };
 }
 
@@ -611,12 +620,12 @@ describe('GLRenderer', () => {
     ] as const;
 
     /** A renderer on a context that has the extension. */
-    function parallelSetup(opts: ConstructorParameters<typeof GLRenderer>[1] = {}) {
+    function parallelSetup(opts: Options = {}) {
       const fake = makeFakeGl();
       fake.extensions['KHR_parallel_shader_compile'] = { COMPLETION_STATUS_KHR: 0x91b1 };
       const dom = makeFakeDocumentAndContainer(fake.gl);
       fake.loseContext.mockImplementation(() => dom.fire('webglcontextlost'));
-      const renderer = new GLRenderer(dom.container as unknown as HTMLElement, opts);
+      const renderer = new GLRenderer(dom.container as unknown as HTMLElement, rendering(opts));
       return { ...fake, ...dom, renderer };
     }
 
@@ -709,7 +718,9 @@ describe('GLRenderer', () => {
       fake.gl.getShaderParameter.mockReturnValue(false);
       fake.gl.getShaderInfoLog.mockReturnValue('bad shader');
       const dom = makeFakeDocumentAndContainer(fake.gl);
-      expect(() => new GLRenderer(dom.container as unknown as HTMLElement)).toThrow(/bad shader/);
+      expect(() => new GLRenderer(dom.container as unknown as HTMLElement, rendering())).toThrow(
+        /bad shader/,
+      );
     });
 
     it('deletes a program it never checked on dispose', () => {
@@ -868,7 +879,7 @@ describe('GLRenderer options', () => {
   });
 
   /** A renderer on a device whose anisotropic filtering goes up to `deviceMax`. */
-  function withAnisotropy(deviceMax: number, opts: ConstructorParameters<typeof GLRenderer>[1]) {
+  function withAnisotropy(deviceMax: number, opts: Options) {
     const fake = makeFakeGl();
     fake.extensions['EXT_texture_filter_anisotropic'] = ANISO;
     fake.gl.getParameter.mockImplementation((p: number) =>
@@ -879,7 +890,7 @@ describe('GLRenderer options', () => {
           : 1,
     );
     const dom = makeFakeDocumentAndContainer(fake.gl);
-    const renderer = new GLRenderer(dom.container as unknown as HTMLElement, opts);
+    const renderer = new GLRenderer(dom.container as unknown as HTMLElement, rendering(opts));
     renderer.uploadTile(grid(), image());
     const set = fake.gl.texParameterf.mock.calls.find(
       (c) => c[1] === ANISO.TEXTURE_MAX_ANISOTROPY_EXT,
@@ -911,7 +922,7 @@ describe('GLRenderer options', () => {
     const { container } = makeFakeDocumentAndContainer(null);
     let err: unknown;
     try {
-      new GLRenderer(container as unknown as HTMLElement);
+      new GLRenderer(container as unknown as HTMLElement, rendering());
     } catch (e) {
       err = e;
     }
