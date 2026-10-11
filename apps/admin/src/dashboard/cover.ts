@@ -2,6 +2,9 @@ import type { PanoSummary } from './types.js';
 
 const seg = (s: string): string => encodeURIComponent(s);
 
+// FRONT_FACE in @panote/core: the face ahead at yaw 0 (the viewer looks along -z).
+const FRONT_FACE = 'nz';
+
 /**
  * A card cover from the pano's tiles: the equirect preview when the tiler wrote one,
  * else the level-0 front face. Mirrors previewUrl/tilePath in @panote/core.
@@ -10,7 +13,7 @@ export function coverUrl(tilesBase: string, pano: PanoSummary | undefined): stri
   if (!pano || pano.deleting || !pano.manifest) return null;
   const { version, format, preview } = pano.manifest;
   const dir = `${tilesBase}${seg(pano.panoId)}/${version !== undefined ? `${seg(version)}/` : ''}`;
-  return preview ? `${dir}preview.webp` : `${dir}0/pz/0-0.${format}`;
+  return preview ? `${dir}preview.webp` : `${dir}0/${FRONT_FACE}/0-0.${format}`;
 }
 
 /** A stable hue per tour for the no-cover fallback, like the design's placeholder covers. */

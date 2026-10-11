@@ -124,7 +124,7 @@ describe('Dashboard', () => {
       'https://cdn.panote.dev/tiles/p1/t1-abc/preview.webp',
     );
     expect(img('No preview')?.getAttribute('src')).toBe(
-      'https://cdn.panote.dev/tiles/p2/0/pz/0-0.jpg',
+      'https://cdn.panote.dev/tiles/p2/0/nz/0-0.jpg',
     );
     expect(within(card('Gone pano')).getByTestId('cover-fallback')).toBeTruthy();
     expect(within(card('Empty')).getByTestId('cover-fallback')).toBeTruthy();

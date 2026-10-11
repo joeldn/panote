@@ -1,4 +1,4 @@
-import { previewUrl, tilePath } from '@panote/core';
+import { FRONT_FACE, previewUrl, tilePath } from '@panote/core';
 
 import type { TourBoot } from './boot.js';
 
@@ -26,7 +26,7 @@ const TILE_TYPES = { jpg: 'image/jpeg', webp: 'image/webp' } as const;
 /**
  * The start scene's own image, so no new asset is needed: the tiler's 1024×512 equirect
  * preview when it wrote one (2:1, close enough to the 1.91:1 large cards), else the
- * square level-0 front face. Scrapers need an absolute https URL, so a CDN root that
+ * square level-0 front face (`nz`, ahead at yaw 0). Scrapers need an absolute https URL, so a CDN root that
  * isn't one gives no image.
  */
 function previewImage(boot: TourBoot, tilesBase: string): PreviewImage | null {
@@ -41,7 +41,7 @@ function previewImage(boot: TourBoot, tilesBase: string): PreviewImage | null {
     };
   }
   return {
-    url: tilePath(tilesBase, manifest.pano, 0, 'pz', 0, 0, manifest.format, manifest.version),
+    url: tilePath(tilesBase, manifest.pano, 0, FRONT_FACE, 0, 0, manifest.format, manifest.version),
     type: TILE_TYPES[manifest.format],
     width: manifest.tileSize,
     height: manifest.tileSize,
@@ -49,8 +49,13 @@ function previewImage(boot: TourBoot, tilesBase: string): PreviewImage | null {
   };
 }
 
-/** Published tours have no description field yet, so the line is generated. */
-export function tourDescription(sceneCount: number): string {
+/**
+ * The owner's description on one line (meta content has no line breaks), else a line
+ * generated from the scene count for tours without one.
+ */
+export function tourDescription(description: string | undefined, sceneCount: number): string {
+  const line = description?.replace(/\s+/g, ' ').trim();
+  if (line) return line;
   if (sceneCount === 0) return 'A 360° virtual tour';
   return `A 360° virtual tour · ${sceneCount} ${sceneCount === 1 ? 'scene' : 'scenes'}`;
 }
@@ -69,7 +74,7 @@ export function linkPreviewTags(
   canonical: string,
   tilesBase: string | null,
 ): string {
-  const description = tourDescription(boot.tour.scenes.length);
+  const description = tourDescription(boot.tour.description, boot.tour.scenes.length);
   const image = tilesBase === null ? null : previewImage(boot, tilesBase);
   const tags = [
     meta('description', description),

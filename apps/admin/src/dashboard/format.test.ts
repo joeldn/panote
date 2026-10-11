@@ -41,7 +41,7 @@ describe('dashboard formatting', () => {
       coverUrl('t/', { ...base, deleting: false, tiling: 'pending', manifest: null }),
     ).toBeNull();
     expect(coverUrl('t/', { ...base, deleting: false, tiling: 'ready', manifest })).toBe(
-      't/p1/0/pz/0-0.webp',
+      't/p1/0/nz/0-0.webp',
     );
   });
 });

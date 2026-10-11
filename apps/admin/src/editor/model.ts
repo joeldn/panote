@@ -155,6 +155,7 @@ export const findLink = (config: SceneConfig, to: string): Hotspot | undefined =
 export type EditorAction =
   | { type: 'load'; docs: EditorDocs }
   | { type: 'tour/title'; title: string }
+  | { type: 'tour/description'; description: string }
   | { type: 'tour/settings'; settings: Partial<TourSettings> }
   | { type: 'tour/start'; panoId: string }
   | { type: 'tour/remove-scene'; panoId: string }
@@ -216,6 +217,13 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
   switch (action.type) {
     case 'tour/title':
       return withTour(docs, (t) => ({ ...t, title: action.title }));
+    case 'tour/description':
+      // Stored trimmed, like the server does; blank means no description.
+      return withTour(docs, (t) => {
+        const { description: _old, ...rest } = t;
+        const description = action.description.trim();
+        return description ? { ...rest, description } : rest;
+      });
     case 'tour/settings':
       return withTour(docs, (t) => ({
         ...t,

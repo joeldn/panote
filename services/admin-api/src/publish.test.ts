@@ -418,6 +418,57 @@ describe('PUT /api/admin/tours/:tourId/slug', () => {
   });
 });
 
+describe('tour description in the published bundle', () => {
+  const editTour = async (tourId: string, body: object) => {
+    const head = await env.BUCKET.head(tourKey(MY_SUB, tourId));
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...bearer('me'), 'If-Match': head!.etag },
+      body: JSON.stringify(body),
+    });
+    expect(r.status).toBe(200);
+  };
+  const bundleOf = async (tourId: string) =>
+    PublishedTourSchema.parse(await readJson(pubTourKey(tourId)));
+
+  it('publishes the description, and later edits only on the next publish', async () => {
+    await readyPano('desc-pub-p1');
+    const tourId = await createTour('Described Tour', ['desc-pub-p1']);
+    const scenes = [{ panoId: 'desc-pub-p1' }];
+    await editTour(tourId, { title: 'Described Tour', scenes, description: 'First words' });
+    expect((await publish(tourId)).status).toBe(200);
+    expect((await bundleOf(tourId)).description).toBe('First words');
+
+    // A saved, unpublished edit stays private, through slug and visibility changes too.
+    await editTour(tourId, { title: 'Described Tour', scenes, description: 'Draft words' });
+    expect((await patchVisibility(tourId, 'public')).status).toBe(200);
+    expect((await putSlug(tourId, 'desc-pub-renamed')).status).toBe(200);
+    const live = await bundleOf(tourId);
+    expect(live.description).toBe('First words');
+    expect(JSON.stringify(live)).not.toContain('Draft words');
+
+    expect((await publish(tourId)).status).toBe(200);
+    expect((await bundleOf(tourId)).description).toBe('Draft words');
+
+    // Clearing it and re-publishing removes it from the bundle.
+    await editTour(tourId, { title: 'Described Tour', scenes });
+    expect((await publish(tourId)).status).toBe(200);
+    expect(await bundleOf(tourId)).not.toHaveProperty('description');
+  });
+
+  it('leaves an empty description out of the bundle', async () => {
+    await readyPano('desc-empty-p1');
+    const tourId = await createTour('Blank Description', ['desc-empty-p1']);
+    await editTour(tourId, {
+      title: 'Blank Description',
+      scenes: [{ panoId: 'desc-empty-p1' }],
+      description: '   ',
+    });
+    expect((await publish(tourId)).status).toBe(200);
+    expect(await bundleOf(tourId)).not.toHaveProperty('description');
+  });
+});
+
 describe('PATCH /api/admin/tours/:tourId/visibility', () => {
   it('updates the bundle and publish.json; 409 when unpublished', async () => {
     const tourId = await publishedTour('vis-patch', 'vis-patch-slug');

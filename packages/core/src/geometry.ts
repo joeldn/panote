@@ -4,6 +4,12 @@ export const FACES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'] as const;
 export type Face = (typeof FACES)[number];
 
 /**
+ * The face straight ahead at yaw 0, pitch 0: the viewer looks along -z there, which is
+ * the middle column of the equirect. Link previews and covers use its level-0 tile.
+ */
+export const FRONT_FACE: Face = 'nz';
+
+/**
  * Map a face UV (u,v in [0,1], image-space: u left→right, v top→bottom) to a
  * direction on the unit cube. Convention is shared by the tiler and the viewer
  * so generated faces and rendered faces always agree.

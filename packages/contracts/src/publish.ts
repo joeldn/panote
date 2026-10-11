@@ -40,6 +40,9 @@ export const PublishedTourSchema = z.object({
   v: z.literal(1),
   tourId: publicId(),
   title: z.string(),
+  // Optional: bundles published before tours had one still parse. Not re-validated
+  // against the TourDoc limits, like title, so a stricter cap can't break a live tour.
+  description: z.string().optional(),
   visibility: VisibilitySchema,
   slug: z.string(),
   publishedAt: z.string(),

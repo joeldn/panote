@@ -5,6 +5,7 @@ import {
   manifestKey,
   MAX_HOTSPOTS,
   MAX_TITLE_LENGTH,
+  MAX_TOUR_DESCRIPTION_LENGTH,
   MAX_TOUR_SCENES,
   originalKey,
   PanoConfigOkSchema,
@@ -35,6 +36,7 @@ beforeAll(() => {
   setTestJwtVerifier(async (t) => {
     if (t === 'good') return { sub: 'auth0|me' };
     if (t === 'good-other') return { sub: 'auth0|other' };
+    if (t === 'good-describer') return { sub: 'auth0|describer' };
     return Promise.reject(new Error('bad'));
   });
 });
@@ -413,6 +415,66 @@ describe('admin panos routes', () => {
       headers: auth.headers,
     });
     expect(r.status).toBe(400);
+  });
+});
+
+describe('tour description', () => {
+  // Its own user, so these tours don't lengthen the paging walks over auth0|me's list.
+  const auth = { headers: { Authorization: 'Bearer good-describer' } };
+  const create = (body: object) =>
+    SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({ title: 'Described', scenes: [], ...body }),
+    });
+  const read = async (tourId: string) =>
+    (
+      (await (await SELF.fetch(`https://x/api/admin/tours/${tourId}`, auth)).json()) as {
+        tour: { description?: string };
+      }
+    ).tour;
+
+  it('stores a trimmed description on create and returns it', async () => {
+    const r = await create({ description: '  Old town at dusk.\nThree squares.  ' });
+    expect(r.status).toBe(201);
+    const { tourId } = (await r.json()) as { tourId: string };
+    expect((await read(tourId)).description).toBe('Old town at dusk.\nThree squares.');
+  });
+
+  it('updates and clears it with PUT', async () => {
+    const { tourId } = (await (await create({})).json()) as { tourId: string };
+    expect(await read(tourId)).not.toHaveProperty('description');
+    const put = (body: object) =>
+      SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+        method: 'PUT',
+        headers: { ...auth.headers, 'If-Match': '*' },
+        body: JSON.stringify({ title: 'Described', scenes: [], ...body }),
+      });
+    expect((await put({ description: 'Harbour walk' })).status).toBe(200);
+    expect((await read(tourId)).description).toBe('Harbour walk');
+    expect((await put({})).status).toBe(200);
+    expect(await read(tourId)).not.toHaveProperty('description');
+  });
+
+  it(`accepts MAX_TOUR_DESCRIPTION_LENGTH (${MAX_TOUR_DESCRIPTION_LENGTH}) characters`, async () => {
+    const r = await create({ description: 'é'.repeat(MAX_TOUR_DESCRIPTION_LENGTH) });
+    expect(r.status).toBe(201);
+  });
+
+  it.each([
+    ['too long', 'x'.repeat(MAX_TOUR_DESCRIPTION_LENGTH + 1)],
+    ['not plain text', 'bell\u0007'],
+    ['not a string', ['a']],
+  ])('400s a description that is %s, on create and update', async (_name, description) => {
+    expect((await create({ description })).status).toBe(400);
+    const { tourId } = (await (await create({})).json()) as { tourId: string };
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ title: 'Described', scenes: [], description }),
+    });
+    expect(r.status).toBe(400);
+    expect(await read(tourId)).not.toHaveProperty('description');
   });
 });
 

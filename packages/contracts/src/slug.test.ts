@@ -137,6 +137,24 @@ describe('share-link documents', () => {
     expect(PublishedTourSchema.parse(bundle).scenes).toHaveLength(1);
   });
 
+  it('parses a bundle with a description, and one published before descriptions existed', () => {
+    const bundle = {
+      v: 1,
+      tourId: 't1',
+      title: 'Tour',
+      visibility: 'unlisted',
+      slug: 'tour',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      settings: { controls: 'bottom', showMap: true, showCompass: true, autoRotate: false },
+      startPanoId: 'p1',
+      scenes: [],
+    };
+    expect(PublishedTourSchema.parse(bundle)).not.toHaveProperty('description');
+    const described = PublishedTourSchema.parse({ ...bundle, description: 'Old town at dusk' });
+    expect(described.description).toBe('Old town at dusk');
+    expect(PublishedTourSchema.safeParse({ ...bundle, description: 7 }).success).toBe(false);
+  });
+
   it("rejects a bundle with unsafe ids or a scene carrying another pano's config", () => {
     const bundle = {
       v: 1,

@@ -207,6 +207,26 @@
   font-weight: 600;
 }
 
+.ed-popover__description {
+  padding-bottom: 12px;
+}
+
+.ed-popover__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-50);
+}
+
+.ed-popover__count {
+  flex: none;
+  font: 400 11px var(--fmono);
+  color: var(--ink-45);
+}
+
 .ed-toggle {
   display: flex;
   justify-content: space-between;

@@ -39,6 +39,15 @@ describe('TourOkSchema publish field', () => {
   });
 });
 
+describe('TourOkSchema tour description', () => {
+  it('carries the description when the tour has one, and parses tours without', () => {
+    const tour = { tourId: 't1', title: 'T', scenes: [] };
+    expect(TourOkSchema.parse({ tour, etag: 'e' }).tour.description).toBeUndefined();
+    const described = { ...tour, description: 'Old town' };
+    expect(TourOkSchema.parse({ tour: described, etag: 'e' }).tour.description).toBe('Old town');
+  });
+});
+
 describe('PanoSummarySchema referenced field', () => {
   const pano = {
     panoId: 'p1',
