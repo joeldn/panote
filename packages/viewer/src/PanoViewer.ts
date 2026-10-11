@@ -18,7 +18,7 @@ import {
   type PreviewSource,
 } from './equirect-layer.js';
 import type { DrawItem } from './render/gl-renderer.js';
-import { defaultTextureBudgetMB } from './texture-budget.js';
+import { defaultTextureBudgetMB, isConstrainedDevice } from './texture-budget.js';
 import { Controls } from './controls.js';
 import type { ControlHost } from './controls.js';
 import { resolveViewerOptions } from './defaults.js';
@@ -211,14 +211,19 @@ export class PanoViewer {
     const camera = opts.camera;
     this.camera = camera;
     const { memory, rendering, interaction } = opts;
-    // Only 'auto' scales with the display: a caller who names a budget is
-    // naming an absolute one, and gets exactly that. See texture-budget.ts
-    // for why the scale is linear in the pixel ratio and capped. Read once,
+    // Only 'auto' scales with the display, and is held lower on a phone: a
+    // caller who names a budget is naming an absolute one, and gets exactly
+    // that. See texture-budget.ts for why the scale is linear in the pixel
+    // ratio and capped. Read once,
     // here, so every panorama this viewer loads shares one budget — a window
     // dragged to a different-DPR monitor keeps the budget it was built with.
     this.textureBudgetMB =
       memory.textureBudgetMB === 'auto'
-        ? defaultTextureBudgetMB(window.devicePixelRatio, rendering.maxPixelRatio)
+        ? defaultTextureBudgetMB(
+            window.devicePixelRatio,
+            rendering.maxPixelRatio,
+            isConstrainedDevice(window, typeof navigator === 'undefined' ? undefined : navigator),
+          )
         : memory.textureBudgetMB;
     this.resolveSource = options.resolveSource;
     this.network = {

@@ -143,7 +143,7 @@ The rules a source follows:
 | `network.decode` | none | `(blob) => Promise<TileImage>`; `createImageBitmap(blob)` when unset. |
 | `network.retry.maxAttempts` | `3` | Attempts per tile, counting the first, for a transient failure. |
 | `network.retry.baseDelayMs` | `1000` | Wait before the first retry; it doubles each time. |
-| `memory.textureBudgetMB` | `"auto"` | VRAM for resident tiles. `"auto"` is 128 MB at DPR 1, scaled with the rendered pixel ratio up to 256 MB at DPR 2. A number is used as given. |
+| `memory.textureBudgetMB` | `"auto"` | VRAM for resident tiles. `"auto"` is 128 MB at DPR 1, scaled with the rendered pixel ratio up to 256 MB at DPR 2, and 128 MB on a phone-class device (a touch-first small screen, or 4 GB of memory or less). A number is used as given. |
 | `memory.minResidentTiles` | `24` | Fewest tiles kept resident, whatever the budget. |
 | `transition.durationMs` | `400` | `transitionTo()` crossfade, ms. |
 | `transition.respectReducedMotion` | `true` | Cut instead of crossfading when the visitor prefers reduced motion. |

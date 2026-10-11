@@ -136,7 +136,9 @@ export interface MemoryOptions {
    * devicePixelRatio-1 display, scaled linearly with the ratio the viewer
    * renders at and capped at 2x (256): a finer display selects a finer
    * level and so needs more tiles resident to pan without re-decoding them.
-   * A number is used as given, unscaled and uncapped.
+   * On a phone-class device (a touch-first small screen, or 4 GB of memory
+   * or less) it stays at 128. A number is used as given, unscaled and
+   * uncapped.
    */
   textureBudgetMB?: number | 'auto';
   /** Fewest tiles kept resident, however small the budget. */

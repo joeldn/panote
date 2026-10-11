@@ -322,12 +322,16 @@ describe('PanoViewer', () => {
       format: 'jpg',
     };
 
-    /** Stub a host whose display reports `dpr`, with every fetch succeeding. */
-    function stubDisplay(dpr: number | undefined): void {
+    /**
+     * Stub a host whose display reports `dpr`, with every fetch succeeding;
+     * `phone` makes it a touch-first 390 × 844 screen.
+     */
+    function stubDisplay(dpr: number | undefined, phone = false): void {
       vi.stubGlobal('window', {
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
-        matchMedia: vi.fn(() => ({ matches: false })),
+        matchMedia: vi.fn((q: string) => ({ matches: phone && q === '(pointer: coarse)' })),
+        screen: phone ? { width: 390, height: 844 } : { width: 1512, height: 982 },
         ...(dpr === undefined ? {} : { devicePixelRatio: dpr }),
       });
       vi.stubGlobal(
@@ -374,6 +378,22 @@ describe('PanoViewer', () => {
     it('does not scale past the cap on a devicePixelRatio-3 display', async () => {
       stubDisplay(3);
       const viewer = new PanoViewer(makeContainer(1422, 800));
+      expect(await loadedMaxTiles(viewer)).toBe(192);
+      viewer.dispose();
+    });
+
+    it('holds a phone to the base budget whatever its pixel ratio', async () => {
+      stubDisplay(3, true);
+      const viewer = new PanoViewer(makeContainer(390, 844));
+      expect(await loadedMaxTiles(viewer)).toBe(96);
+      viewer.dispose();
+    });
+
+    it('gives a phone the budget its host names', async () => {
+      stubDisplay(3, true);
+      const viewer = new PanoViewer(makeContainer(390, 844), {
+        memory: { textureBudgetMB: 256 },
+      });
       expect(await loadedMaxTiles(viewer)).toBe(192);
       viewer.dispose();
     });

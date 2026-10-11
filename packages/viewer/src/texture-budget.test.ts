@@ -2,8 +2,10 @@ import { VIEWER_DEFAULTS } from './defaults.js';
 import { describe, it, expect } from 'vitest';
 import {
   BASE_TEXTURE_BUDGET_MB,
+  CONSTRAINED_TEXTURE_BUDGET_MB,
   MAX_BUDGET_PIXEL_RATIO,
   defaultTextureBudgetMB,
+  isConstrainedDevice,
   maxTilesForBudget,
 } from './texture-budget.js';
 
@@ -63,6 +65,55 @@ describe('defaultTextureBudgetMB', () => {
     expect(defaultTextureBudgetMB(0.5, 2)).toBe(BASE_TEXTURE_BUDGET_MB);
     expect(defaultTextureBudgetMB(2, Number.NaN)).toBe(256);
     expect(defaultTextureBudgetMB(2, 0)).toBe(256);
+  });
+});
+
+describe('the phone cap', () => {
+  it('holds a constrained device to 128 MB whatever its pixel ratio', () => {
+    expect(CONSTRAINED_TEXTURE_BUDGET_MB).toBe(128);
+    expect(defaultTextureBudgetMB(3, 2, true)).toBe(128);
+    expect(defaultTextureBudgetMB(2, 2, true)).toBe(128);
+    expect(defaultTextureBudgetMB(1, 2, true)).toBe(128);
+    expect(defaultTextureBudgetMB(3, 2, false)).toBe(256);
+  });
+
+  /** A window with a `coarse` or fine pointer and a `w` × `h` screen. */
+  const win = (coarse: boolean, w: number, h: number) => ({
+    matchMedia: (q: string) => ({ matches: coarse && q === '(pointer: coarse)' }),
+    screen: { width: w, height: h },
+  });
+
+  it('counts a small touch-first screen, or a low memory hint, as constrained', () => {
+    // Phones, portrait or landscape, and a small tablet or a folded phone.
+    expect(isConstrainedDevice(win(true, 390, 844), {})).toBe(true);
+    expect(isConstrainedDevice(win(true, 844, 390), {})).toBe(true);
+    expect(isConstrainedDevice(win(true, 744, 1133), {})).toBe(true);
+    // Chrome's navigator.deviceMemory, in GB: 4 or less.
+    expect(isConstrainedDevice(undefined, { deviceMemory: 4 })).toBe(true);
+    expect(isConstrainedDevice(win(false, 1920, 1080), { deviceMemory: 2 })).toBe(true);
+  });
+
+  it('leaves desktops, laptops and full-size tablets their full budget', () => {
+    expect(isConstrainedDevice(win(false, 1512, 982), {})).toBe(false);
+    // A small screen with a fine pointer is not a phone.
+    expect(isConstrainedDevice(win(false, 600, 800), {})).toBe(false);
+    // A touch laptop or a full-size tablet.
+    expect(isConstrainedDevice(win(true, 820, 1180), {})).toBe(false);
+    expect(isConstrainedDevice(win(true, 1366, 1024), {})).toBe(false);
+    expect(isConstrainedDevice(win(false, 1512, 982), { deviceMemory: 8 })).toBe(false);
+  });
+
+  it('counts a host that says nothing, or throws, as unconstrained', () => {
+    expect(isConstrainedDevice(undefined, undefined)).toBe(false);
+    expect(isConstrainedDevice({}, {})).toBe(false);
+    expect(isConstrainedDevice({ screen: { width: 390, height: 844 } }, {})).toBe(false);
+    const throwing = {
+      screen: { width: 390, height: 844 },
+      matchMedia: () => {
+        throw new Error('nope');
+      },
+    };
+    expect(isConstrainedDevice(throwing, {})).toBe(false);
   });
 });
 
