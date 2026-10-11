@@ -11,10 +11,58 @@ export interface TileAddress {
   y: number;
 }
 
+/** What a `loadTile` source is handed with each tile. */
+export interface TileLoadInit {
+  /** Aborted once the tile is no longer wanted; the load must then reject with an AbortError. */
+  signal: AbortSignal;
+  /** 'high' for the first tiles a view needs, 'low' for the rest and for a prefetch. */
+  priority: RequestPriority;
+}
+
+/** What every tile source has, however its tiles are fetched. */
+interface TileSourceInfo {
+  /** Stable id: the `id` of every event about this source, and used in errors. */
+  readonly id: string;
+  /** Edge of every tile at every level, px. */
+  readonly tileSize: number;
+  /** Finest level, 0 to MAX_SOURCE_LEVEL. */
+  readonly maxLevel: number;
+  /** Opaque content version; `showPreview`'s `replacesVersion` is compared against it ('' when absent). */
+  readonly version?: string | undefined;
+  /**
+   * Reserved: px of neighbour gutter on every tile edge. Not supported yet;
+   * a source that sets it to anything but 0 is refused.
+   */
+  readonly tileBorder?: number | undefined;
+  /** Host data, passed through untouched (and handed back in 'ready'). */
+  readonly meta?: unknown;
+}
+
+/** A source whose tiles the viewer fetches from URLs. */
+export interface UrlTileSource extends TileSourceInfo {
+  /**
+   * URL of one tile, fetched with the viewer's fetch and `requestInit` and
+   * decoded with `network.decode` (`createImageBitmap` by default).
+   */
+  tileUrl(tile: TileAddress): string;
+  loadTile?: never;
+}
+
+/** A source that loads its own tiles. */
+export interface LoaderTileSource extends TileSourceInfo {
+  /**
+   * Full control over one tile: fetch, decode, auth, a worker, a canvas.
+   * Must reject with an AbortError once `init.signal` aborts. Reject with a
+   * `TileHttpError` to get the transient or permanent retry classification;
+   * anything else counts as transient.
+   */
+  loadTile(tile: TileAddress, init: TileLoadInit): Promise<TileImage>;
+}
+
 /**
- * Where a panorama's tiles come from. The viewer knows nothing about URLs or
- * manifests: a host hands it one of these, directly or through
- * `ViewerOptions.resolveSource`.
+ * Where a panorama's tiles come from: URLs (`tileUrl`) or a loader of its
+ * own (`loadTile`). The viewer knows nothing about URLs or manifests: a host
+ * hands it one of these, directly or through `ViewerOptions.resolveSource`.
  *
  * The pyramid: every face is the same square, split into `2^level` ×
  * `2^level` tiles of `tileSize` px at each level from 0 to `maxLevel`. Level 0
@@ -26,35 +74,7 @@ export interface TileAddress {
  * the centre of `nz`. Images are upright: their first row is the top of the
  * tile.
  */
-export interface CubeTileSource {
-  /** Stable id: the `id` of every event about this source, and used in errors. */
-  readonly id: string;
-  /** Edge of every tile at every level, px. */
-  readonly tileSize: number;
-  /** Finest level, 0 to MAX_SOURCE_LEVEL. */
-  readonly maxLevel: number;
-  /** Opaque content version; `showPreview`'s `replacesVersion` is compared against it ('' when absent). */
-  readonly version?: string | undefined;
-  /**
-   * URL of one tile, fetched with the viewer's fetch and `requestInit` and
-   * decoded with `createImageBitmap`. Ignored when `loadTile` is set.
-   */
-  tileUrl?(tile: TileAddress): string;
-  /**
-   * Full control over one tile: fetch, decode, auth, a worker, a canvas.
-   * Must reject with an AbortError once `signal` aborts. Reject with a
-   * `TileHttpError` to get the transient or permanent retry classification;
-   * anything else counts as transient.
-   */
-  loadTile?(tile: TileAddress, signal: AbortSignal): Promise<TileImage>;
-  /**
-   * Reserved: px of neighbour gutter on every tile edge. Not supported yet;
-   * a source that sets it to anything but 0 is refused.
-   */
-  readonly tileBorder?: number | undefined;
-  /** Host data, passed through untouched (and handed back in 'ready'). */
-  readonly meta?: unknown;
-}
+export type CubeTileSource = UrlTileSource | LoaderTileSource;
 
 /** Hints for a resolver; it may ignore them. */
 export interface ResolveHints {
@@ -117,7 +137,7 @@ export interface UrlTemplateInit {
 const TILE_PLACEHOLDERS = ['{level}', '{x}', '{y}'] as const;
 
 /** A source for the common static layout: one URL template for every tile. */
-export function urlTemplateSource(init: UrlTemplateInit): CubeTileSource {
+export function urlTemplateSource(init: UrlTemplateInit): UrlTileSource {
   const { id, template, tileSize, maxLevel, faceNames = {}, version, meta } = init;
   const required = maxLevel > 0 ? ['{face}', ...TILE_PLACEHOLDERS] : ['{face}'];
   for (const p of required) {
@@ -127,7 +147,7 @@ export function urlTemplateSource(init: UrlTemplateInit): CubeTileSource {
     Face,
     string
   >;
-  const source: CubeTileSource = {
+  const source: UrlTileSource = {
     id,
     tileSize,
     maxLevel,

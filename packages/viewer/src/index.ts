@@ -7,11 +7,14 @@ export {
   MAX_SOURCE_LEVEL,
   urlTemplateSource,
   type CubeTileSource,
+  type LoaderTileSource,
   type ResolveHints,
   type SourceResolver,
   type TileAddress,
   type TileImage,
+  type TileLoadInit,
   type UrlTemplateInit,
+  type UrlTileSource,
 } from './source.js';
 export { FACES, type Face } from './cube.js';
 export {

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
 import { BaseTileLoadError, TileLayer, type TileLayerOptions } from './tile-layer.js';
-import { urlTemplateSource, type CubeTileSource } from './source.js';
+import { urlTemplateSource, type CubeTileSource, type TileLoadInit } from './source.js';
 import { viewProjection } from './render/projection.js';
 import { dirFromYawPitch } from './project.js';
 import { ContextLostError, type GLRenderer } from './render/gl-renderer.js';
@@ -1830,7 +1830,7 @@ describe('tile sources', () => {
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
     const decode = vi.mocked(createImageBitmap);
-    const loadTile = vi.fn((_t: unknown, _signal: AbortSignal) =>
+    const loadTile = vi.fn((_t: unknown, _init: TileLoadInit) =>
       Promise.resolve({ close: vi.fn() } as unknown as ImageBitmap),
     );
     const layer = layerFor({ id: 'gen', tileSize: 256, maxLevel: 1, loadTile });
@@ -1839,7 +1839,12 @@ describe('tile sources', () => {
     expect(loadTile.mock.calls.map(([t]) => t)).toEqual(
       FACES.map((face) => ({ face, level: 0, x: 0, y: 0 })),
     );
-    for (const [, signal] of loadTile.mock.calls) expect(signal).toBeInstanceOf(AbortSignal);
+    for (const [, init] of loadTile.mock.calls) {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(['high', 'low']).toContain(init.priority);
+    }
+    // The first tiles a view needs go out at high priority, as a fetch would.
+    expect(loadTile.mock.calls[0]![1].priority).toBe('high');
     expect(renderer.uploadTile).toHaveBeenCalledTimes(FACES.length);
     expect(fetch).not.toHaveBeenCalled();
     expect(decode).not.toHaveBeenCalled();

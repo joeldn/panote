@@ -46,7 +46,7 @@ describe('panoteSource', () => {
       for (const face of FACES) {
         for (let y = 0; y < n; y++) {
           for (let x = 0; x < n; x++) {
-            expect(s.tileUrl!({ face, level, x, y })).toBe(
+            expect(s.tileUrl({ face, level, x, y })).toBe(
               tilePath(BASE, m.pano, level, face, x, y, m.format, m.version),
             );
           }
@@ -57,10 +57,10 @@ describe('panoteSource', () => {
 
   it('pins the exact level-0 URL shape the preloads use', () => {
     const s = panoteSource(BASE, manifest({ version: 't1-abc' }));
-    expect(s.tileUrl!({ face: 'nz', level: 0, x: 0, y: 0 })).toBe(
+    expect(s.tileUrl({ face: 'nz', level: 0, x: 0, y: 0 })).toBe(
       'https://cdn.test/tiles/church/t1-abc/0/nz/0-0.webp',
     );
-    expect(panoteSource(BASE, manifest()).tileUrl!({ face: 'px', level: 2, x: 3, y: 1 })).toBe(
+    expect(panoteSource(BASE, manifest()).tileUrl({ face: 'px', level: 2, x: 3, y: 1 })).toBe(
       'https://cdn.test/tiles/church/2/px/3-1.webp',
     );
   });
@@ -92,7 +92,8 @@ describe('panoteSourceResolver', () => {
     expect(url).toBe('https://cdn.test/tiles/church/manifest.json');
     expect(init).toEqual({ mode: 'cors', credentials: 'same-origin', signal });
     expect(s.id).toBe('church');
-    expect(s.tileUrl!({ face: 'px', level: 0, x: 0, y: 0 })).toBe(
+    if (s.loadTile) throw new Error('a panote source fetches its tiles from URLs');
+    expect(s.tileUrl({ face: 'px', level: 0, x: 0, y: 0 })).toBe(
       'https://cdn.test/tiles/church/v1/0/px/0-0.webp',
     );
   });

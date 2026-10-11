@@ -101,7 +101,7 @@ describe('TileLayer: coarse tiles covered by finer ones', () => {
       id: 'pano',
       tileSize: 512,
       maxLevel,
-      loadTile: (t, signal) =>
+      loadTile: (t, { signal }) =>
         new Promise((resolve, reject) => {
           const b = behave(t);
           const bitmap = { width: 512, height: 512, close: vi.fn(), key: tileId(t) };

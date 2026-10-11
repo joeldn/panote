@@ -37,8 +37,8 @@ export async function loadTileImage(
   priority: RequestPriority,
   net: TileNetwork,
 ): Promise<TileImage> {
-  if (source.loadTile) return source.loadTile(tile, signal);
-  const res = await requestTile(net, source.tileUrl!(tile), signal, priority);
+  if (source.loadTile) return source.loadTile(tile, { signal, priority });
+  const res = await requestTile(net, source.tileUrl(tile), signal, priority);
   if (!res.ok) {
     // Unread, the body would hold its connection until GC.
     discardBody(res);
@@ -67,10 +67,10 @@ export async function warmTile(
   net: TileNetwork,
 ): Promise<void> {
   if (source.loadTile) {
-    releaseImage(await source.loadTile(tile, signal));
+    releaseImage(await source.loadTile(tile, { signal, priority: 'low' }));
     return;
   }
-  const res = await requestTile(net, source.tileUrl!(tile), signal, 'low');
+  const res = await requestTile(net, source.tileUrl(tile), signal, 'low');
   if (res.ok) await res.arrayBuffer();
   else discardBody(res);
 }

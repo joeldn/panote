@@ -7,6 +7,7 @@ import {
   type CubeTileSource,
   type SourceResolver,
   type TileAddress,
+  type TileLoadInit,
 } from './source.js';
 
 // The viewer with nothing of panote's: no options, sources built here, and
@@ -114,7 +115,7 @@ function runFrames(rounds = 5): void {
 /** A generated source: every tile is a stub image made on the spot. */
 function generated(id = 'gen', maxLevel = 2) {
   const images: Array<{ close: ReturnType<typeof vi.fn> }> = [];
-  const loadTile = vi.fn((_tile: TileAddress, _signal: AbortSignal) => {
+  const loadTile = vi.fn((_tile: TileAddress, _init: TileLoadInit) => {
     const image = { close: vi.fn() };
     images.push(image);
     return Promise.resolve(image as unknown as ImageBitmap);

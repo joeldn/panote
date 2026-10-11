@@ -62,14 +62,19 @@ pnpm --filter @panote/viewer example:cube   # regenerate the cube PNGs (checked 
 ## Tile sources
 
 ```ts
-interface CubeTileSource {
-  readonly id: string; // the payload of 'loading', 'scene-change' and 'load-error'
+// One of tileUrl or loadTile.
+type CubeTileSource = UrlTileSource | LoaderTileSource;
+interface UrlTileSource {
+  readonly id: string; // the id of every event about this source
   readonly tileSize: number; // px, every tile at every level
   readonly maxLevel: number; // 0 to MAX_SOURCE_LEVEL (10)
   readonly version?: string; // compared with showPreview's replacesVersion
-  tileUrl?(tile: TileAddress): string; // fetched with ViewerOptions.network
-  loadTile?(tile: TileAddress, signal: AbortSignal): Promise<TileImage>; // full control
   readonly meta?: unknown; // yours, handed back in 'ready'
+  tileUrl(tile: TileAddress): string; // fetched with ViewerOptions.network
+}
+interface LoaderTileSource {
+  // id, tileSize, maxLevel, version and meta as above
+  loadTile(tile: TileAddress, init: { signal; priority }): Promise<TileImage>; // full control
 }
 interface TileAddress {
   face: 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
@@ -95,7 +100,7 @@ The rules a source follows:
   | `nz` | `-z` | `-x` | `-y` |
 
   Under this convention a face image is the **mirror image** of what a camera at the centre sees: the side faces are flipped left to right. The example's `make-cube.ts` shows how to produce faces that read correctly. Cube tools that store each face as a photograph of that direction (krpano, Marzipano and Pannellum cubes, for example) need their faces flipped, which a `loadTile` can do while it draws them. Which flip each tool needs has not been verified.
-- **Abort.** `loadTile` gets a signal and must reject with an `AbortError` once that signal aborts. The viewer aborts tiles that have left the view for a moment, along with superseded loads and everything still in flight when the viewer is disposed.
+- **Abort.** `loadTile` gets a signal (and the request priority) and must reject with an `AbortError` once that signal aborts. The viewer aborts tiles that have left the view for a moment, along with superseded loads and everything still in flight when the viewer is disposed.
 - **Errors.** Reject with a `TileHttpError(status)` to get HTTP retry handling: 408, 425, 429 and 5xx are transient, and any other status (a 404, a 401) is permanent and never retried. Any other rejection (a network error, a failed decode) is transient. Transient failures are retried up to `network.retry.maxAttempts` times with a doubling wait. A `tileUrl` source gets this automatically.
 
 `urlTemplateSource({ id, template, tileSize, maxLevel, faceNames?, version?, meta? })` builds a source for the common static layout. It substitutes `{level}`, `{face}`, `{x}` and `{y}` into the template as given, without URL-encoding them. A cube with `maxLevel: 0` needs only `{face}`. Use `faceNames` to rename faces, e.g. `{ nz: 'front' }`.

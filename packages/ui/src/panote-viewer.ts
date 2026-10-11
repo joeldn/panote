@@ -1,5 +1,11 @@
 import { manifestUrl, parseManifest, tilePath, type Manifest } from '@panote/core';
-import type { CubeTileSource, PanoViewerApi, SourceResolver, ViewerOptions } from '@panote/viewer';
+import type {
+  CubeTileSource,
+  PanoViewerApi,
+  SourceResolver,
+  UrlTileSource,
+  ViewerOptions,
+} from '@panote/viewer';
 
 /**
  * panote's side of `@panote/viewer`: where panote keeps its tiles and how its
@@ -20,7 +26,7 @@ export const PANOTE_REQUEST_INIT: Readonly<Pick<RequestInit, 'mode' | 'credentia
   Object.freeze({ mode: 'cors', credentials: 'same-origin' });
 
 /** The tile source for a parsed manifest, with tiles under `baseUrl` in panote's layout. */
-export function panoteSource(baseUrl: string, m: Manifest): CubeTileSource {
+export function panoteSource(baseUrl: string, m: Manifest): UrlTileSource {
   return {
     id: m.pano,
     tileSize: m.tileSize,

@@ -193,7 +193,7 @@ describe('TileLayer: coarse fallback for a large view', () => {
       id: 'pano',
       tileSize: 512,
       maxLevel: 3,
-      loadTile: (t, signal) =>
+      loadTile: (t, { signal }) =>
         new Promise((resolve, reject) => {
           const bitmap = { width: 512, height: 512, close: vi.fn() } as unknown as ImageBitmap;
           if (t.level === 0) {
