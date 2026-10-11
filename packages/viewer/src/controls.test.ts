@@ -267,6 +267,35 @@ describe('Controls: wheel and trackpad', () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
+  it('zooms only on a mostly vertical scroll, dropping its sideways jitter', () => {
+    setup();
+    wheel({ deltaY: -40, deltaX: 12 });
+    wheel({ deltaY: 6, deltaX: -6 }); // a tie goes to the zoom
+    expect(host.zoomAt).toHaveBeenCalledTimes(2);
+    expect(host.panByPixels).not.toHaveBeenCalled();
+  });
+
+  it('pans only on a mostly horizontal swipe, without zooming', () => {
+    setup();
+    wheel({ deltaX: 30, deltaY: 8 });
+    expect(host.panByPixels).toHaveBeenCalledWith(-30, 0);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('compares the axes in pixels, after line and page deltas are scaled', () => {
+    setup();
+    wheel({ deltaX: 3, deltaY: 1, deltaMode: 1 });
+    expect(host.panByPixels).toHaveBeenCalledWith(-48, 0);
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('zooms on a ctrl-wheel pinch whatever its deltaX, and never pans', () => {
+    setup();
+    wheel({ deltaX: 30, deltaY: 5, ctrlKey: true });
+    expect(host.zoomAt).toHaveBeenCalledTimes(1);
+    expect(host.panByPixels).not.toHaveBeenCalled();
+  });
+
   it('zooms on a Safari pinch gesture and stops the page zooming', () => {
     setup();
     const start = el.dispatch('gesturestart', { scale: 1, clientX: 400, clientY: 300 });

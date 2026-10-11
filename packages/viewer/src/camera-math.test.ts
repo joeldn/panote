@@ -4,7 +4,7 @@ import {
   clampFov,
   damp,
   anglePerPixel,
-  zoomAnchorDelta,
+  zoomAnchorView,
   pinchFactor,
   normalizeAngle,
   compassHeading,
@@ -45,27 +45,93 @@ describe('anglePerPixel', () => {
   });
 });
 
-describe('zoomAnchorDelta', () => {
-  it('returns 0 when ndc=0 (centre never shifts)', () => {
-    expect(zoomAnchorDelta(0, Math.PI / 3, Math.PI / 6)).toBe(0);
+describe('zoomAnchorView', () => {
+  const D = Math.PI / 180;
+  const LIMIT = Math.PI / 2 - 0.001;
+  const tan = (fovDeg: number) => Math.tan((fovDeg * D) / 2);
+
+  it('leaves the camera alone for the centre of the screen', () => {
+    const out = zoomAnchorView({ yaw: 0, pitch: 0 }, 0.4, 0.3, 0, 0, 1, 1, 0.5, 0.5, -LIMIT, LIMIT);
+    expect(out.yaw).toBeCloseTo(0.4, 12);
+    expect(out.pitch).toBeCloseTo(0.3, 12);
   });
 
-  // The point of the function: the world direction under the cursor keeps
-  // its screen position through the zoom. Square aspect, so the horizontal
-  // fov equals the vertical one, and pitch 0 keeps the axes independent.
+  // The world direction under the point keeps its screen position through
+  // the zoom: off the centre lines and pitched, where treating yaw and pitch
+  // as two independent screen axes drifts.
   it.each([
-    { ndc: 0.5, fov0: 60, fov1: 30 },
-    { ndc: -0.8, fov0: 90, fov1: 40 },
-    { ndc: 0.9, fov0: 30, fov1: 75 },
-  ])('keeps the cursor at ndc x=$ndc when zooming $fov0°→$fov1°', ({ ndc, fov0, fov1 }) => {
-    const yaw0 = 0.4;
-    const vp0 = viewProjection({ yaw: yaw0, pitch: 0, fov: fov0 }, 1, 179);
-    const world = unprojectNDC(ndc, 0, vp0);
-    const yaw1 = yaw0 + zoomAnchorDelta(ndc, (fov0 * Math.PI) / 180, (fov1 * Math.PI) / 180);
-    const vp1 = viewProjection({ yaw: yaw1, pitch: 0, fov: fov1 }, 1, 179);
-    const p = projectDir(world, vp1);
-    expect(p.x).toBeCloseTo(ndc, 6);
-    expect(p.y).toBeCloseTo(0, 6);
+    { nx: 0.5, ny: 0, pitch: 0, aspect: 1, fov0: 60, fov1: 30 },
+    { nx: -0.8, ny: 0, pitch: 0, aspect: 1, fov0: 90, fov1: 40 },
+    { nx: 0.9, ny: 0, pitch: 0, aspect: 1, fov0: 30, fov1: 75 },
+    { nx: 0.75, ny: 0.7, pitch: 0, aspect: 1.5, fov0: 70, fov1: 50 },
+    { nx: 0.75, ny: 0.7, pitch: 0.6, aspect: 1.5, fov0: 70, fov1: 50 },
+    { nx: -0.9, ny: -0.8, pitch: -0.7, aspect: 0.5, fov0: 25, fov1: 70 },
+    { nx: 0.2, ny: 0.5, pitch: 1.2, aspect: 2, fov0: 60, fov1: 20 },
+  ])(
+    'keeps ndc ($nx, $ny) still at pitch $pitch, $fov0° → $fov1°',
+    ({ nx, ny, pitch, aspect, fov0, fov1 }) => {
+      const yaw0 = 0.4;
+      const vp0 = viewProjection({ yaw: yaw0, pitch, fov: fov0 }, aspect, 179);
+      const world = unprojectNDC(nx, ny, vp0);
+      const { yaw, pitch: pitch1 } = zoomAnchorView(
+        { yaw: 0, pitch: 0 },
+        yaw0,
+        pitch,
+        nx,
+        ny,
+        tan(fov0) * aspect,
+        tan(fov0),
+        tan(fov1) * aspect,
+        tan(fov1),
+        -LIMIT,
+        LIMIT,
+      );
+      const p = projectDir(world, viewProjection({ yaw, pitch: pitch1, fov: fov1 }, aspect, 179));
+      // The matrices are float32.
+      expect(p.x).toBeCloseTo(nx, 6);
+      expect(p.y).toBeCloseTo(ny, 6);
+    },
+  );
+
+  it.each([
+    { yaw0: Math.PI - 0.05, nx: 0.9 },
+    { yaw0: -Math.PI + 0.05, nx: -0.9 },
+    { yaw0: 7, nx: 0.8 },
+  ])('gives the yaw nearest $yaw0, unwrapped across ±π', ({ yaw0, nx }) => {
+    const { yaw } = zoomAnchorView(
+      { yaw: 0, pitch: 0 },
+      yaw0,
+      0.2,
+      nx,
+      0.3,
+      tan(80) * 1.5,
+      tan(80),
+      tan(30) * 1.5,
+      tan(30),
+      -LIMIT,
+      LIMIT,
+    );
+    // Zooming in toward the side turns toward it by a fraction of a turn.
+    expect(Math.sign(yaw - yaw0)).toBe(Math.sign(nx));
+    expect(Math.abs(yaw - yaw0)).toBeLessThan(0.6);
+  });
+
+  it('holds pitch to its limits and gives the yaw nearest the start', () => {
+    const out = zoomAnchorView(
+      { yaw: 0, pitch: 0 },
+      7,
+      1.4,
+      0.5,
+      0.9,
+      tan(80),
+      tan(80),
+      tan(20),
+      tan(20),
+      -1.45,
+      1.45,
+    );
+    expect(out.pitch).toBe(1.45);
+    expect(Math.abs(out.yaw - 7)).toBeLessThan(Math.PI);
   });
 });
 

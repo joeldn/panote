@@ -27,7 +27,7 @@ import {
   clampFov,
   damp,
   anglePerPixel,
-  zoomAnchorDelta,
+  zoomAnchorView,
   compassHeading,
   normalizeAngle,
 } from './camera-math.js';
@@ -170,6 +170,8 @@ export class PanoViewer {
   private frameList: DrawItem[] = [];
   // Scratch for project(), which may run many times a frame.
   private projectScratch: Vec3 = { x: 0, y: 0, z: 0 };
+  // zoomAt's solved view, reused so a wheel or pinch event allocates nothing.
+  private zoomScratch = { yaw: 0, pitch: 0 };
   private north: number;
   private autoRotateEnabled: boolean;
   private autoRotateSpeed: number;
@@ -741,7 +743,9 @@ export class PanoViewer {
   }
 
   private zoomAt(scaleFactor: number, clientX: number, clientY: number): void {
-    this.pauseAutoRotate();
+    // A glide left running would carry the target, and the point under the
+    // cursor with it, away from the anchor solved here.
+    this.stopMomentum();
     // The pointer is in client coordinates, so it is mapped through the
     // canvas's on-screen rect: page scroll moves it without a resize, and a
     // CSS transform scales it without changing the cached layout size.
@@ -749,14 +753,25 @@ export class PanoViewer {
     const nx = ((clientX - rect.left) / (rect.width || 1)) * 2 - 1;
     const ny = -(((clientY - rect.top) / (rect.height || 1)) * 2 - 1);
     const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const hfov0 = this.hfovOf(vfov0);
     const newReqDeg = this.clampFov(this.target.fov * scaleFactor);
     const vfov1 = this.effectiveVFovDeg(newReqDeg) * DEG2RAD;
-    const hfov1 = this.hfovOf(vfov1);
-    const yaw = unwound(this.view.yaw + zoomAnchorDelta(nx, hfov0, hfov1));
-    const pitch = this.clampPitch(this.view.pitch + zoomAnchorDelta(ny, vfov0, vfov1));
-    this.view.yaw = yaw;
-    this.target.yaw = yaw;
+    const ty0 = Math.tan(vfov0 / 2);
+    const ty1 = Math.tan(vfov1 / 2);
+    const { yaw, pitch } = zoomAnchorView(
+      this.zoomScratch,
+      this.view.yaw,
+      this.view.pitch,
+      nx,
+      ny,
+      ty0 * this.aspect,
+      ty0,
+      ty1 * this.aspect,
+      ty1,
+      this.camera.minPitch,
+      this.camera.maxPitch,
+    );
+    this.view.yaw = unwound(yaw);
+    this.target.yaw = this.view.yaw;
     this.view.pitch = pitch;
     this.target.pitch = pitch;
     this.view.fov = newReqDeg;

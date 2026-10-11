@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from './cube.js';
 import { PanoViewer as BasePanoViewer } from './PanoViewer.js';
+import { dirFromYawPitch } from './project.js';
 import type { CubeTileSource } from './source.js';
 import type { View, ViewerOptions } from './types.js';
 import { TileLayer } from './tile-layer.js';
@@ -1926,6 +1927,298 @@ describe('PanoViewer', () => {
       expect(target.yaw).toBeCloseTo(0, 10);
       expect(target.pitch).toBeCloseTo(0, 10);
       viewer.dispose();
+    });
+
+    describe('zoom to the cursor', () => {
+      // The scene direction under the cursor when a zoom starts must stay
+      // under it, frame after frame, until the zoom settles; off the screen's
+      // centre lines and with the camera pitched too, not only on the axes.
+      const W = 1200;
+      const H = 800;
+      const TOL = 1e-6;
+
+      /** Angle (rad) between two view directions. */
+      function angleBetween(
+        a: { yaw: number; pitch: number },
+        b: { yaw: number; pitch: number },
+      ): number {
+        const u = dirFromYawPitch(a.yaw, a.pitch);
+        const v = dirFromYawPitch(b.yaw, b.pitch);
+        const dot = u.x * v.x + u.y * v.y + u.z * v.z;
+        return Math.acos(Math.min(1, Math.max(-1, dot)));
+      }
+
+      function zoomViewer(view: View): PanoViewer {
+        const viewer = new PanoViewer(makeContainer(W, H));
+        const canvas = internals(viewer).renderer.canvas as unknown as {
+          getBoundingClientRect: () => DOMRect;
+        };
+        canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: W, height: H }) as DOMRect;
+        viewer.setView(view);
+        runUntilIdle();
+        return viewer;
+      }
+
+      const wheelAt = (viewer: PanoViewer, x: number, y: number, deltaY: number, deltaX = 0) =>
+        canvasListener(
+          viewer,
+          'wheel',
+        )({
+          deltaY,
+          deltaX,
+          deltaMode: 0,
+          ctrlKey: false,
+          metaKey: false,
+          clientX: x,
+          clientY: y,
+          preventDefault: vi.fn(),
+        });
+
+      /** Step frames `ms` apart until the camera settles, checking the cursor every frame. */
+      function settleKeepingAnchor(
+        viewer: PanoViewer,
+        x: number,
+        y: number,
+        anchor: { yaw: number; pitch: number },
+        ms: number,
+      ): number {
+        let worst = 0;
+        let frames = 0;
+        while (raf.pending > 0 && frames < 2000) {
+          raf.step(raf.now + ms);
+          frames++;
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
+        }
+        return worst;
+      }
+
+      it.each([
+        {
+          name: 'zoom in, level, 16 ms frames',
+          x: 1050,
+          y: 120,
+          pitch: 0,
+          fov: 70,
+          dy: -100,
+          ms: 16,
+        },
+        {
+          name: 'zoom in, pitched up, 16 ms frames',
+          x: 1050,
+          y: 120,
+          pitch: 0.6,
+          fov: 70,
+          dy: -100,
+          ms: 16,
+        },
+        {
+          name: 'zoom in, pitched down, 8 ms frames',
+          x: 150,
+          y: 700,
+          pitch: -0.5,
+          fov: 70,
+          dy: -100,
+          ms: 8,
+        },
+        {
+          name: 'zoom out, pitched up, 16 ms frames',
+          x: 1000,
+          y: 650,
+          pitch: 0.4,
+          fov: 20,
+          dy: 100,
+          ms: 16,
+        },
+        {
+          name: 'zoom out, pitched down, 8 ms frames',
+          x: 200,
+          y: 100,
+          pitch: -0.4,
+          fov: 20,
+          dy: 100,
+          ms: 8,
+        },
+        {
+          name: 'zoom in from the horizontal fov cap',
+          x: 1150,
+          y: 60,
+          pitch: 0.3,
+          fov: 80,
+          dy: -100,
+          ms: 16,
+        },
+      ])('keeps the wheel anchor under the cursor: $name', ({ x, y, pitch, fov, dy, ms }) => {
+        const viewer = zoomViewer({ yaw: 0.3, pitch, fov });
+        const anchor = viewer.directionAtPixel(x, y);
+        let worst = 0;
+        // A burst: several wheel events a frame, then frames between bursts.
+        for (let burst = 0; burst < 8; burst++) {
+          for (let i = 0; i < 3; i++) wheelAt(viewer, x, y, dy);
+          raf.step(raf.now + ms);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
+        }
+        worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, ms));
+        expect(internals(viewer).view.fov).not.toBeCloseTo(fov, 1);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('keeps the anchor through a scroll-zoom that jitters sideways', () => {
+        const viewer = zoomViewer({ yaw: 0.3, pitch: 0.3, fov: 75 });
+        const x = 980;
+        const y = 180;
+        const anchor = viewer.directionAtPixel(x, y);
+        let worst = 0;
+        // A two-finger scroll is never exactly vertical, and its momentum
+        // tail keeps sending small deltaX values.
+        const jitter = [0.5, -0.4, 1.2, -0.8, 3, 0.2, -2.5, 0.7];
+        for (let i = 0; i < 30; i++) {
+          wheelAt(viewer, x, y, -8, jitter[i % jitter.length]!);
+          raf.step(raf.now + 16);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
+        }
+        worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, 16));
+        expect(internals(viewer).view.fov).toBeLessThan(60);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('pans on a mostly sideways swipe without zooming', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0, fov: 70 });
+        wheelAt(viewer, 600, 400, 4, 40);
+        runUntilIdle();
+        expect(internals(viewer).view.fov).toBe(70);
+        expect(internals(viewer).view.yaw).toBeGreaterThan(0); // a deltaX right turns right
+        viewer.dispose();
+      });
+
+      it('stops a fling glide when a zoom starts, so the anchor holds', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0.3, fov: 70 });
+        internals(viewer).flick(25, 5);
+        raf.step(raf.now + 16);
+        const x = 1000;
+        const y = 200;
+        const anchor = viewer.directionAtPixel(x, y);
+        for (let i = 0; i < 4; i++) wheelAt(viewer, x, y, -100);
+        expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+        expect(settleKeepingAnchor(viewer, x, y, anchor, 16)).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('anchors on the fov on screen when a wheel zoom lands mid fov glide', () => {
+        const viewer = zoomViewer({ yaw: 0.2, pitch: 0.4, fov: 75 });
+        viewer.setView({ fov: 30 }); // a button zoom: the fov eases toward 30
+        raf.step(raf.now + 16);
+        raf.step(raf.now + 16);
+        const { view, target } = internals(viewer);
+        expect(view.fov).not.toBeCloseTo(target.fov, 1);
+        const x = 200;
+        const y = 650;
+        const anchor = viewer.directionAtPixel(x, y);
+        wheelAt(viewer, x, y, -100);
+        expect(settleKeepingAnchor(viewer, x, y, anchor, 8)).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('re-anchors on the new cursor position when the cursor moves', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0.5, fov: 75 });
+        for (let i = 0; i < 4; i++) wheelAt(viewer, 1000, 150, -100);
+        settleKeepingAnchor(viewer, 1000, 150, viewer.directionAtPixel(1000, 150), 16);
+        const moved = viewer.directionAtPixel(250, 600);
+        for (let i = 0; i < 4; i++) {
+          wheelAt(viewer, 250, 600, -100);
+          raf.step(raf.now + 16);
+          expect(angleBetween(viewer.directionAtPixel(250, 600), moved)).toBeLessThan(TOL);
+        }
+        expect(settleKeepingAnchor(viewer, 250, 600, moved, 16)).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('keeps a two-finger pinch anchored at its midpoint', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: 0.4, fov: 70 });
+        const y = 200;
+        const ptr = (type: string, pointerId: number, x: number) =>
+          canvasListener(
+            viewer,
+            type,
+          )({
+            pointerId,
+            pointerType: 'touch',
+            button: 0,
+            clientX: x,
+            clientY: y,
+            timeStamp: raf.now,
+          });
+        // One finger holds still and the other spreads, so the midpoint moves
+        // with every event: each event zooms about the midpoint it makes.
+        const still = 800;
+        let moving = 900;
+        ptr('pointerdown', 1, still);
+        ptr('pointerdown', 2, moving);
+        let worst = 0;
+        for (let i = 0; i < 12; i++) {
+          moving += 15;
+          const mid = (still + moving) / 2;
+          const anchor = viewer.directionAtPixel(mid, y);
+          ptr('pointermove', 2, moving);
+          for (let f = 0; f < 3; f++) {
+            raf.step(raf.now + 8);
+            worst = Math.max(worst, angleBetween(viewer.directionAtPixel(mid, y), anchor));
+          }
+        }
+        const mid = (still + moving) / 2;
+        worst = Math.max(
+          worst,
+          settleKeepingAnchor(viewer, mid, y, viewer.directionAtPixel(mid, y), 8),
+        );
+        expect(internals(viewer).view.fov).toBeLessThan(30);
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it('keeps a Safari trackpad pinch anchored where it happens', () => {
+        const viewer = zoomViewer({ yaw: 0, pitch: -0.3, fov: 70 });
+        const at = { x: 300, y: 650 };
+        const anchor = viewer.directionAtPixel(at.x, at.y);
+        const gesture = (type: string, scale: number) =>
+          canvasListener(
+            viewer,
+            type,
+          )({ scale, clientX: at.x, clientY: at.y, preventDefault: vi.fn() });
+        gesture('gesturestart', 1);
+        let worst = 0;
+        for (let scale = 1.1; scale < 3; scale += 0.1) {
+          gesture('gesturechange', scale);
+          raf.step(raf.now + 16);
+          worst = Math.max(worst, angleBetween(viewer.directionAtPixel(at.x, at.y), anchor));
+        }
+        gesture('gestureend', 3);
+        worst = Math.max(worst, settleKeepingAnchor(viewer, at.x, at.y, anchor, 16));
+        expect(worst).toBeLessThan(TOL);
+        viewer.dispose();
+      });
+
+      it.each([
+        { name: 'zoom in past the zenith', y: 40, pitch: 1.45, dy: -100 },
+        { name: 'zoom in toward the zenith', y: 120, pitch: 1.3, dy: -100 },
+        { name: 'zoom out by the zenith', y: 80, pitch: 1.45, dy: 100 },
+      ])('keeps pitch in its limits without jumping the cursor: $name', ({ y, pitch, dy }) => {
+        const limit = Math.PI / 2 - 0.001;
+        const viewer = zoomViewer({ yaw: 0, pitch, fov: dy < 0 ? 80 : 30 });
+        const x = 650;
+        let prev = viewer.directionAtPixel(x, y);
+        for (let i = 0; i < 20; i++) {
+          wheelAt(viewer, x, y, dy);
+          raf.step(raf.now + 16);
+          const now = viewer.directionAtPixel(x, y);
+          expect(internals(viewer).view.pitch).toBeLessThanOrEqual(limit);
+          // Pinned, or (once the clamp holds the camera) a small step, never a jump.
+          expect(angleBetween(now, prev)).toBeLessThan(0.05);
+          expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(Math.PI / 2); // no flip over the pole
+          prev = now;
+        }
+        viewer.dispose();
+      });
     });
 
     describe("with the tile layer's upload queue", () => {
