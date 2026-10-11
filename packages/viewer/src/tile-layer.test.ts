@@ -850,11 +850,15 @@ describe('TileLayer failure handling', () => {
       const [, face, xy] = /\/2\/(\w+)\/(\d+-\d+)\.jpg$/.exec(failing!)!;
       const [x, y] = xy!.split('-').map(Number) as [number, number];
       // Next in line for the one slot: the failed tile's parent, then the
-      // level-2 tiles still to go. No other parent.
+      // level-2 tiles nearest the centre. With one slot this view is many
+      // rounds, so the edges' parents follow those as their fallback.
       expect(queueHead).toBe(0);
-      expect(candidates[0]!.key).toBe(`1/${face}/${x >> 1}-${y >> 1}`);
-      expect(candidates.slice(1).every((c) => c.key.startsWith('2/'))).toBe(true);
-      expect(candidates.length).toBeGreaterThan(1);
+      const failedParent = `1/${face}/${x >> 1}-${y >> 1}`;
+      expect(candidates[0]!.key).toBe(failedParent);
+      const firstOther = candidates.findIndex((c, i) => i > 0 && c.key.startsWith('1/'));
+      expect(firstOther).toBeGreaterThan(1);
+      expect(candidates.slice(1, firstOther).every((c) => c.key.startsWith('2/'))).toBe(true);
+      expect(candidates.filter((c) => c.key === failedParent)).toHaveLength(1);
       layer.dispose();
     });
 

@@ -175,6 +175,14 @@ const UPLOAD_BUDGET_MS = 4;
 const ABORT_GRACE_MS = 160;
 /** Candidates at the head of each frame's queue fetched at high priority. */
 const HIGH_PRIORITY_CANDIDATES = 4;
+/**
+ * Rounds of maxConcurrent requests the tiles nearest the view centre get
+ * before any coarse fallback for the rest of the view: three cover the
+ * centre quarter of a 76-tile laptop view. See update().
+ */
+const LEAD_ROUNDS = 3;
+/** Rounds of edge tiles, beyond the lead, that make a fallback worth it. */
+const FALLBACK_ROUNDS = 2;
 
 interface Candidate {
   key: string;
@@ -292,7 +300,8 @@ export class TileLayer {
   // `${level}/` for every level, the start of that level's keys.
   private levelPrefix: string[];
   // Parents already queued this frame, so siblings queue one between them.
-  private parentsQueued = new Set<string>();
+  // A sibling that needs it sooner moves it up.
+  private parentsQueued = new Map<string, Candidate>();
   private queue: Candidate[] = [];
   // Next queue index pump() takes. A cursor rather than shift(), which is
   // O(n) per dequeue; update() replaces the queue and resets it every frame.
@@ -336,6 +345,8 @@ export class TileLayer {
   private _drawList: DrawItem[] = [];
   // What evict() is removing this frame.
   private evicting: TileEntry[] = [];
+  // What queueParent() returns, reused.
+  private parentResult = { present: false, wait: Infinity };
   // Tile indices at `visibleLevel` that passed the cull, `visibleCount` long.
   private visible: Int32Array;
   private visibleCount = 0;
@@ -351,6 +362,16 @@ export class TileLayer {
   // The view the cull last ran for. An unchanged view and level reuse the
   // visible set: a tile landing asks for a frame but moves nothing.
   private lastViewProj = new Float32Array(16);
+  // The priority of the last of the LEAD_ROUNDS × maxConcurrent tiles in
+  // view nearest its centre, resident or not; Infinity when the view holds no
+  // more than that. A target at or under it is one of the first rounds.
+  private leadCutoff = Infinity;
+  // Scratch for the cutoff: every visible tile's priority.
+  private ranks = new Float32Array(64);
+  // In-view tiles two levels above the target (from level 3), which a large
+  // view fetches as the coarse fallback. Loads of them are kept, like the
+  // level just above the target's.
+  private fallbackInView = new Set<string>();
 
   constructor(
     private renderer: GLRenderer,
@@ -466,6 +487,7 @@ export class TileLayer {
       this.desired.clear();
       const { keys } = this.table(level);
       for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
+      this.rankView(level, fwd);
     }
 
     const now = this.now();
@@ -478,6 +500,8 @@ export class TileLayer {
     // Soonest the layer needs a frame with nothing else asking for one: a
     // wanted tile's retry cooldown ending, or a stale load's grace running out.
     let wakeMs = Infinity;
+    // Targets still to request beyond the first rounds: the edges of the view.
+    let edge = 0;
     const { g, data, keys } = this.table(level);
     for (let n = 0; n < this.visibleCount; n++) {
       const i = this.visible[n]!;
@@ -498,17 +522,36 @@ export class TileLayer {
         const f = Math.floor(i / (g * g));
         const rest = i - f * g * g;
         this.pushCandidate(key, level, FACES[f]!, rest % g, Math.floor(rest / g), priority);
+        if (priority > this.leadCutoff) edge++;
       } else {
         wakeMs = Math.min(wakeMs, this.retry.waitMs(key));
       }
     }
 
+    // A large view on a slow link takes many rounds of requests, and its
+    // edges would sit on the base (an eighth of the detail at level 3) until
+    // the last one. So when more than FALLBACK_ROUNDS rounds of edge tiles are
+    // still to request, each gets a coarse fallback: its grandparent from
+    // level 3 (one request covers up to sixteen of them), its parent at level
+    // 2. The fallbacks queue behind the first LEAD_ROUNDS rounds of tiles
+    // nearest the centre, and ahead of the edge tiles. Those first rounds are
+    // ranked against the whole view (leadCutoff), not against what is still
+    // queued: the queue is rebuilt every frame, and a rank taken from it would
+    // put the next round of centre tiles ahead of the fallbacks forever.
+    const fallback = edge > FALLBACK_ROUNDS * this.maxConcurrent;
+    if (fallback) {
+      // Targets: [0, 2] within the first rounds, [4, 6] after; fallbacks
+      // take [2, 4] in between, centre-first among themselves.
+      for (const c of this.candidates) if (c.priority > this.leadCutoff) c.priority += 4;
+    }
+
     // A missing tile's parent is what shows in its place: a resident one is
-    // kept, and a missing one is fetched only for a tile that cannot be
-    // fetched itself right now (cooling down after a failure, or failed for
-    // good). Otherwise the parent would only queue ahead of its children and
-    // hold the target level back a round; the view shows the nearest resident
-    // ancestor (the base at worst) until the children land.
+    // kept, and a missing one is fetched for a tile that cannot be fetched
+    // itself right now (cooling down after a failure, or failed for good),
+    // ahead of everything else. Beyond that, parents are fetched only as the
+    // fallback above. Otherwise a parent would only queue ahead of its
+    // children and hold the target level back a round; the view shows the
+    // nearest resident ancestor (the base at worst) until the children land.
     if (level >= 2) {
       for (let n = 0; n < this.visibleCount; n++) {
         const i = this.visible[n]!;
@@ -520,12 +563,25 @@ export class TileLayer {
         const rest = i - f * g * g;
         const x = rest % g;
         const y = Math.floor(rest / g);
-        const fetchParent =
-          !this.ready.has(key) && !this.inflight.has(key) && !this.retry.eligible(key);
-        wakeMs = Math.min(
-          wakeMs,
-          this.queueParent(f, level - 1, x >> 1, y >> 1, priority, fetchParent),
-        );
+        const started = this.ready.has(key) || this.inflight.has(key);
+        const eligible = this.retry.eligible(key);
+        // Centre-first priorities are 1 - cos, in [0, 2]: minus 2 sorts every
+        // such parent before every target-level tile.
+        const fetchParent = !started && !eligible;
+        const parent = this.queueParent(f, level - 1, x >> 1, y >> 1, priority - 2, fetchParent);
+        wakeMs = Math.min(wakeMs, parent.wait);
+        if (!fallback || started || !eligible || priority <= this.leadCutoff) continue;
+        if (level === 2) {
+          wakeMs = Math.min(
+            wakeMs,
+            this.queueParent(f, 1, x >> 1, y >> 1, priority + 2, true).wait,
+          );
+        } else if (!parent.present) {
+          wakeMs = Math.min(
+            wakeMs,
+            this.queueParent(f, level - 2, x >> 2, y >> 2, priority + 2, true).wait,
+          );
+        }
       }
     }
 
@@ -622,36 +678,71 @@ export class TileLayer {
   }
 
   /**
-   * Keep a resident parent of a missing tile, and with `fetch` (the tile
-   * cannot be fetched itself for now), queue a missing one ahead of every
-   * tile at the target level: it fills the hole at a quarter of the detail
-   * instead of the base's. Returns how long until a parent cooling down after
-   * a failure may go again, Infinity when there is nothing to wait for.
+   * Keep a resident ancestor of a missing tile, and with `fetch`, queue a
+   * missing one at `priority`: it fills the hole at a coarser level than the
+   * target but finer than the base. `present` is whether the ancestor is
+   * resident, in flight or decoded; `wait` how long until one cooling down
+   * after a failure may go again, Infinity when there is nothing to wait for.
    */
   private queueParent(
     f: number,
     level: number,
     x: number,
     y: number,
-    childPriority: number,
+    priority: number,
     fetch: boolean,
-  ): number {
+  ): { present: boolean; wait: number } {
     const t = this.table(level);
     const key = t.keys[(f * t.g + y) * t.g + x]!;
+    const result = this.parentResult;
+    result.present = true;
+    result.wait = Infinity;
     const entry = this.cache.get(key);
     if (entry) {
       // On screen as the fallback for its missing child: not to be evicted.
       entry.lastUsed = this.clock;
-      return Infinity;
+      return result;
     }
-    if (!fetch || this.parentsQueued.has(key)) return Infinity;
-    if (this.inflight.has(key) || this.ready.has(key)) return Infinity;
-    if (!this.retry.eligible(key)) return this.retry.waitMs(key);
-    this.parentsQueued.add(key);
-    // Centre-first priorities are 1 - cos, in [0, 2]: minus 2 sorts every
-    // parent before every target-level tile, still centre-first among them.
-    this.pushCandidate(key, level, FACES[f]!, x, y, childPriority - 2);
-    return Infinity;
+    if (this.inflight.has(key) || this.ready.has(key)) return result;
+    result.present = false;
+    if (!fetch) return result;
+    const queued = this.parentsQueued.get(key);
+    if (queued) {
+      queued.priority = Math.min(queued.priority, priority);
+      return result;
+    }
+    if (!this.retry.eligible(key)) {
+      result.wait = this.retry.waitMs(key);
+      return result;
+    }
+    this.parentsQueued.set(key, this.pushCandidate(key, level, FACES[f]!, x, y, priority));
+    return result;
+  }
+
+  /**
+   * After a cull: the leadCutoff for the new view, and the in-view tiles at
+   * the grandparent level, whose loads are kept (see wanted()).
+   */
+  private rankView(level: number, fwd: { x: number; y: number; z: number }): void {
+    const lead = LEAD_ROUNDS * this.maxConcurrent;
+    this.leadCutoff = Infinity;
+    if (this.visibleCount > lead) {
+      if (this.ranks.length < this.visibleCount) this.ranks = new Float32Array(this.visible.length);
+      const { data } = this.table(level);
+      for (let n = 0; n < this.visibleCount; n++) {
+        const o = this.visible[n]! * STRIDE;
+        this.ranks[n] = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
+      }
+      const ranked = this.ranks.subarray(0, this.visibleCount).sort();
+      this.leadCutoff = ranked[lead - 1]!;
+    }
+    this.fallbackInView.clear();
+    if (level >= 3) {
+      const { keys } = this.table(level - 2);
+      for (let n = 0; n < this.treeCount; n++) {
+        if (this.treeLevel[n] === level - 2) this.fallbackInView.add(keys[this.treeIndex[n]!]!);
+      }
+    }
   }
 
   /**
@@ -774,7 +865,7 @@ export class TileLayer {
     x: number,
     y: number,
     priority: number,
-  ): void {
+  ): Candidate {
     let c = this.candidatePool[this.candidates.length];
     if (c) {
       c.key = key;
@@ -788,6 +879,7 @@ export class TileLayer {
       this.candidatePool.push(c);
     }
     this.candidates.push(c);
+    return c;
   }
 
   private async ensureTile(
@@ -895,13 +987,15 @@ export class TileLayer {
    * in view, if it is level 0 (the base loadBase() is waiting on, pinned and
    * drawn at every level once resident), or if it is one level coarser than
    * the target: after a zoom-in step those still improve on the fallback
-   * until the finer tiles land.
+   * until the finer tiles land. So is one in view two levels coarser than a
+   * target of 3 or more: the fallback a large view fetches.
    */
   private wanted(key: string, level: number): boolean {
     return (
       this.desired.has(key) ||
       key.startsWith('0/') ||
-      (level > 0 && key.startsWith(this.levelPrefix[level - 1]!))
+      (level > 0 && key.startsWith(this.levelPrefix[level - 1]!)) ||
+      this.fallbackInView.has(key)
     );
   }
 
@@ -1028,6 +1122,7 @@ export class TileLayer {
     this.ready.clear();
     this.stale.clear();
     this.parentsQueued.clear();
+    this.fallbackInView.clear();
     for (const e of this.cache.values()) {
       this.renderer.removeTile(e.handle);
     }
