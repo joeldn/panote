@@ -162,4 +162,149 @@ describe('TileLayer: coarse fallback for a large view', () => {
     expect(phone.requests.every((k) => levelOf(k) === phone.level)).toBe(true);
     expect(phone.requests.length).toBe(phone.desired.length);
   });
+
+  /**
+   * A laptop-sized layer at maxLevel 3 whose requests wait to be completed
+   * one at a time, oldest first, and report aborts.
+   */
+  async function heldLayer(): Promise<{
+    layer: TileLayer;
+    requests: string[];
+    aborted: string[];
+    pending: Map<string, () => void>;
+    frame: (yaw: number, height?: number) => void;
+    completeOne: () => Promise<void>;
+  }> {
+    let clock = 0;
+    const requests: string[] = [];
+    const aborted: string[] = [];
+    const pending = new Map<string, () => void>();
+    const source: CubeTileSource = {
+      id: 'pano',
+      tileSize: 512,
+      maxLevel: 3,
+      loadTile: (t, signal) =>
+        new Promise((resolve, reject) => {
+          const bitmap = { width: 512, height: 512, close: vi.fn() } as unknown as ImageBitmap;
+          if (t.level === 0) {
+            resolve(bitmap);
+            return;
+          }
+          const key = tileId(t);
+          requests.push(key);
+          const done = (): void => {
+            pending.delete(key);
+            resolve(bitmap);
+          };
+          pending.set(key, done);
+          signal.addEventListener('abort', () => {
+            aborted.push(key);
+            if (pending.get(key) === done) pending.delete(key);
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        }),
+    };
+    const renderer = { uploadTile: vi.fn(() => 1), removeTile: vi.fn() };
+    const layer = new TileLayer(renderer as unknown as GLRenderer, source, () => {}, {
+      textureBudgetMB: 512,
+      maxConcurrent: 8,
+      now: () => clock,
+    });
+    await layer.loadBase();
+    const aspect = LAPTOP.width / LAPTOP.height;
+    const vfov = effectiveVFovDeg(70, 100, aspect);
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    return {
+      layer,
+      requests,
+      aborted,
+      pending,
+      frame: (yaw, height = LAPTOP.height * LAPTOP.dpr) => {
+        clock += 1000 / 60;
+        const view = viewProjection({ yaw, pitch: 0, fov: 70 }, aspect, 100);
+        layer.update(view, vfov, dirFromYawPitch(yaw, 0), height);
+      },
+      completeOne: async () => {
+        pending.values().next().value?.();
+        await flush();
+      },
+    };
+  }
+
+  it.each([0.6, 1.5])(
+    'keeps the fallbacks still in view after a %s rad pan mid-load, and aborts the rest',
+    async (pan) => {
+      const h = await heldLayer();
+      h.frame(0);
+      const inFlight = (): string[] => [...h.pending.keys()].filter((k) => levelOf(k) === 1);
+      for (let i = 0; i < 200 && inFlight().length < 4; i++) {
+        await h.completeOne();
+        h.frame(0);
+      }
+      const fallbacks = inFlight();
+      expect(fallbacks.length).toBeGreaterThanOrEqual(4);
+
+      // Pan, and hold the new view well past the abort grace.
+      h.frame(pan);
+      const desired = [...(h.layer as unknown as { desired: Set<string> }).desired];
+      const inView = new Set(desired.map((k) => ancestor(k, 2)));
+      for (let i = 0; i < 20; i++) h.frame(pan);
+      const kept = fallbacks.filter((k) => inView.has(k));
+      const gone = fallbacks.filter((k) => !inView.has(k));
+      for (const k of kept) expect(h.aborted, `${k} is in view`).not.toContain(k);
+      for (const k of gone) expect(h.aborted, `${k} is out of view`).toContain(k);
+      // The pan reaches far enough to test both ways between the two cases.
+      if (pan < 1) expect(kept.length).toBeGreaterThan(0);
+      else expect(gone.length).toBeGreaterThan(0);
+
+      // Still now: everything lands, and nothing goes twice.
+      for (let i = 0; i < 1000 && (h.pending.size > 0 || h.layer.hasPending()); i++) {
+        await h.completeOne();
+        h.frame(pan);
+      }
+      expect(h.layer.hasPending()).toBe(false);
+      const after = h.requests.slice(h.requests.indexOf(fallbacks.at(-1)!) + 1);
+      expect(new Set(h.requests).size, 'a tile was requested twice').toBe(h.requests.length);
+      expect(after.length).toBeGreaterThan(0);
+      for (const k of desired) expect(h.requests).toContain(k);
+      h.layer.dispose();
+    },
+  );
+
+  it('fetches no grandparent on a zoom-in where the parents are resident', async () => {
+    const h = await heldLayer();
+    // Level 2 over the whole view first.
+    const level2 = (LAPTOP.height * LAPTOP.dpr) / 2;
+    h.frame(0, level2);
+    for (let i = 0; i < 500 && (h.pending.size > 0 || h.layer.hasPending()); i++) {
+      await h.completeOne();
+      h.frame(0, level2);
+    }
+    const { cache, desired, visibleLevel } = h.layer as unknown as {
+      cache: Map<string, unknown>;
+      desired: Set<string>;
+      visibleLevel: number;
+    };
+    expect(visibleLevel).toBe(2);
+    for (const k of desired) expect(cache.has(k)).toBe(true);
+    const start = h.requests.length;
+
+    // Then level 3: a view large enough for the fallback, with every parent there.
+    h.frame(0);
+    for (let i = 0; i < 500 && (h.pending.size > 0 || h.layer.hasPending()); i++) {
+      await h.completeOne();
+      h.frame(0);
+    }
+    const l3 = h.layer as unknown as { desired: Set<string>; visibleLevel: number };
+    expect(l3.visibleLevel).toBe(3);
+    expect(l3.desired.size).toBe(76);
+    for (const k of l3.desired) expect(cache.has(ancestor(k, 1))).toBe(true);
+    const zoomed = h.requests.slice(start);
+    expect(zoomed.filter((k) => levelOf(k) < 3)).toEqual([]);
+    expect(zoomed.length).toBe(76);
+    h.layer.dispose();
+  });
 });
