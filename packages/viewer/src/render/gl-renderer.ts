@@ -159,6 +159,13 @@ export class GLRenderer {
   private program!: WebGLProgram;
   private uViewProj!: WebGLUniformLocation;
   private uZ!: WebGLUniformLocation;
+  // With KHR_parallel_shader_compile, the shaders of a program still being
+  // compiled and linked off the main thread: its status is not asked for
+  // (which would wait for it) until the first frame with something to draw.
+  // Undefined once the program is checked and bound.
+  private pendingShaders: WebGLShader[] | undefined;
+  // The program failed its deferred check: nothing can be drawn.
+  private programFailed = false;
   private anisoExt: EXT_texture_filter_anisotropic | null = null;
   /** One static IBO shared by every 4-vertex quad. */
   private quadIbo!: WebGLBuffer;
@@ -248,14 +255,26 @@ export class GLRenderer {
 
     this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
 
-    this.program = this.buildProgram(VERT_SRC, FRAG_SRC);
-    this.uViewProj = this.getUniform('uViewProj');
-    this.uZ = this.getUniform('uZ');
-    // One program and one texture unit for the context's whole life, so
-    // bind them once here rather than every frame.
-    gl.useProgram(this.program);
-    gl.uniform1i(this.getUniform('uTex'), 0);
-    gl.activeTexture(gl.TEXTURE0);
+    // Asking for a shader's or program's status waits for its compile. With
+    // KHR_parallel_shader_compile the driver compiles off the main thread, so
+    // the check is left to the first frame that draws: the base tiles load
+    // in the meantime. Without it, the check is made here as it always was.
+    const parallel = gl.getExtension('KHR_parallel_shader_compile') !== null;
+    const vs = this.compile(gl.VERTEX_SHADER, VERT_SRC, !parallel);
+    const fs = this.compile(gl.FRAGMENT_SHADER, FRAG_SRC, !parallel);
+    const prog = gl.createProgram();
+    if (!prog) {
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      throw new Error('createProgram failed: context lost or resource exhaustion');
+    }
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    this.program = prog;
+    this.programFailed = false;
+    this.pendingShaders = [vs, fs];
+    if (!parallel) this.useProgram();
 
     // No VAO is bound here, so this binding is not captured by one.
     this.quadIbo = this.createBuffer();
@@ -273,35 +292,58 @@ export class GLRenderer {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  private buildProgram(vsSrc: string, fsSrc: string): WebGLProgram {
+  /** A compiled shader; with `check`, its compile status is checked now. */
+  private compile(type: number, src: string, check: boolean): WebGLShader {
     const gl = this.gl;
-    const compile = (type: number, src: string): WebGLShader => {
-      const sh = gl.createShader(type);
-      if (!sh) throw new Error('createShader failed: context lost or resource exhaustion');
-      gl.shaderSource(sh, src);
-      gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        const log = gl.getShaderInfoLog(sh);
-        gl.deleteShader(sh);
-        throw new Error(`shader compile failed: ${log}`);
-      }
-      return sh;
-    };
-    const vs = compile(gl.VERTEX_SHADER, vsSrc);
-    const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
-    const prog = gl.createProgram();
-    if (!prog) throw new Error('createProgram failed: context lost or resource exhaustion');
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      const log = gl.getProgramInfoLog(prog);
+    const sh = gl.createShader(type);
+    if (!sh) throw new Error('createShader failed: context lost or resource exhaustion');
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (check && !gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(sh);
+      gl.deleteShader(sh);
+      throw new Error(`shader compile failed: ${log}`);
+    }
+    return sh;
+  }
+
+  /**
+   * Check the linked program and bind it with its uniforms, once per
+   * context. One program and one texture unit for the context's whole life,
+   * so they are bound here rather than every frame. Throws if it failed.
+   */
+  private useProgram(): void {
+    const gl = this.gl;
+    const shaders = this.pendingShaders;
+    if (!shaders) return;
+    this.pendingShaders = undefined;
+    const prog = this.program;
+    // A shader that did not compile fails the link too.
+    const linked = gl.getProgramParameter(prog, gl.LINK_STATUS);
+    const log = linked ? '' : gl.getProgramInfoLog(prog);
+    for (const sh of shaders) gl.deleteShader(sh);
+    if (!linked) {
       gl.deleteProgram(prog);
       throw new Error(`program link failed: ${log}`);
     }
-    return prog;
+    this.uViewProj = this.getUniform('uViewProj');
+    this.uZ = this.getUniform('uZ');
+    gl.useProgram(prog);
+    gl.uniform1i(this.getUniform('uTex'), 0);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  /** useProgram() for a frame: false, reported once, if the program failed. */
+  private programReady(): boolean {
+    if (this.programFailed) return false;
+    try {
+      this.useProgram();
+      return true;
+    } catch (err) {
+      this.programFailed = true;
+      report(err);
+      return false;
+    }
   }
 
   private createBuffer(): WebGLBuffer {
@@ -486,7 +528,6 @@ export class GLRenderer {
     const gl = this.gl;
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!this.viewProj) return;
-    gl.uniformMatrix4fv(this.uViewProj, false, this.viewProj);
 
     // Cull here rather than in the layers, so tiles and preview patches
     // outside the view cost no draw call.
@@ -497,6 +538,12 @@ export class GLRenderer {
       const t = this.tiles.get(item.handle);
       if (t && intersectsSphere(frustum, t.bounds)) order.push(item);
     }
+    // Nothing to draw needs no program: a parallel compile carries on.
+    if (order.length === 0 || !this.programReady()) {
+      order.length = 0;
+      return;
+    }
+    gl.uniformMatrix4fv(this.uViewProj, false, this.viewProj);
     // Every resident level covers the screen, so painting coarse-first would
     // shade each pixel once per level. Instead draw finest-first, with each
     // distinct level (rank) at its own depth, finer in front: coarser
@@ -556,6 +603,7 @@ export class GLRenderer {
     if (!this.lost) {
       this.gl.deleteBuffer(this.quadIbo);
       this.gl.deleteProgram(this.program);
+      for (const sh of this.pendingShaders ?? []) this.gl.deleteShader(sh);
     }
     // Deleting individual resources frees GPU memory but does not release the
     // context slot itself — browsers cap live WebGL contexts per page

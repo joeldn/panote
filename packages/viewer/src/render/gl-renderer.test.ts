@@ -601,6 +601,103 @@ describe('GLRenderer', () => {
     });
   });
 
+  describe('with KHR_parallel_shader_compile', () => {
+    const camera = () => viewProjection({ yaw: 0, pitch: 0, fov: 90 }, 1, 179);
+    const STATUS_CALLS = [
+      'getShaderParameter',
+      'getProgramParameter',
+      'getUniformLocation',
+      'useProgram',
+    ] as const;
+
+    /** A renderer on a context that has the extension. */
+    function parallelSetup(opts: ConstructorParameters<typeof GLRenderer>[1] = {}) {
+      const fake = makeFakeGl();
+      fake.extensions['KHR_parallel_shader_compile'] = { COMPLETION_STATUS_KHR: 0x91b1 };
+      const dom = makeFakeDocumentAndContainer(fake.gl);
+      fake.loseContext.mockImplementation(() => dom.fire('webglcontextlost'));
+      const renderer = new GLRenderer(dom.container as unknown as HTMLElement, opts);
+      return { ...fake, ...dom, renderer };
+    }
+
+    const statusCalls = (log: string[]) =>
+      log.filter((n) => (STATUS_CALLS as readonly string[]).includes(n));
+
+    it('compiles at construction without waiting for the result', () => {
+      const { gl, log } = parallelSetup();
+      expect(gl.getExtension).toHaveBeenCalledWith('KHR_parallel_shader_compile');
+      expect(gl.compileShader).toHaveBeenCalledTimes(2);
+      expect(gl.linkProgram).toHaveBeenCalledTimes(1);
+      expect(statusCalls(log)).toEqual([]);
+    });
+
+    it('waits for nothing while there is nothing to draw, then checks once at the first draw', () => {
+      const { gl, log, renderer } = parallelSetup();
+      renderer.resize(100, 50);
+      renderer.setCamera(camera());
+      renderer.render([]);
+      expect(gl.clear).toHaveBeenCalledTimes(1);
+      expect(statusCalls(log)).toEqual([]);
+
+      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      renderer.render([{ handle, level: 2 }]);
+      expect(gl.drawElements).toHaveBeenCalledTimes(1);
+      expect(gl.useProgram).toHaveBeenCalledTimes(1);
+      expect(gl.getProgramParameter).toHaveBeenCalledWith(expect.anything(), gl.LINK_STATUS);
+      const checks = statusCalls(log).length;
+      renderer.render([{ handle, level: 2 }]);
+      expect(statusCalls(log).length).toBe(checks);
+      expect(gl.drawElements).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports a program that failed to link at the first draw, and draws nothing', () => {
+      const report = vi.fn();
+      vi.stubGlobal('reportError', report);
+      const { gl, renderer } = parallelSetup();
+      gl.getProgramParameter.mockReturnValue(false);
+      gl.getProgramInfoLog.mockReturnValue('bad link');
+      renderer.setCamera(camera());
+      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      expect(() => renderer.render([{ handle, level: 2 }])).not.toThrow();
+      expect(gl.drawElements).not.toHaveBeenCalled();
+      expect(report).toHaveBeenCalledTimes(1);
+      expect(String(report.mock.calls[0]![0])).toContain('bad link');
+      renderer.render([{ handle, level: 2 }]);
+      expect(report).toHaveBeenCalledTimes(1);
+    });
+
+    it('compiles the new context in the background too after a restore', () => {
+      const { gl, log, renderer, fire } = parallelSetup();
+      renderer.setCamera(camera());
+      const before = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      renderer.render([{ handle: before, level: 2 }]);
+      fire('webglcontextlost');
+      const checks = statusCalls(log).length;
+      fire('webglcontextrestored');
+      expect(gl.linkProgram).toHaveBeenCalledTimes(2);
+      expect(statusCalls(log).length).toBe(checks);
+      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      renderer.render([{ handle, level: 2 }]);
+      expect(gl.useProgram).toHaveBeenCalledTimes(2);
+      expect(gl.drawElements).toHaveBeenCalledTimes(2);
+    });
+
+    it('without it, checks the shaders at construction and throws there', () => {
+      const fake = makeFakeGl();
+      fake.gl.getShaderParameter.mockReturnValue(false);
+      fake.gl.getShaderInfoLog.mockReturnValue('bad shader');
+      const dom = makeFakeDocumentAndContainer(fake.gl);
+      expect(() => new GLRenderer(dom.container as unknown as HTMLElement)).toThrow(/bad shader/);
+    });
+
+    it('deletes a program it never checked on dispose', () => {
+      const { gl, renderer } = parallelSetup();
+      renderer.dispose();
+      expect(gl.deleteProgram).toHaveBeenCalledTimes(1);
+      expect(gl.deleteShader).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('render', () => {
     // Yaw 0 looks down -z, so the nz face is in front and pz is behind.
     const camera = () => viewProjection({ yaw: 0, pitch: 0, fov: 90 }, 1, 179);
