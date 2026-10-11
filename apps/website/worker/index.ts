@@ -188,6 +188,10 @@ export default {
       // start streaming the moment the slug resolves.
       const page =
         request.method === 'GET' && parseSlugPath(url.pathname) ? fetchPage(request, env) : null;
+      // Nothing awaits the page until the slug read below settles, so a fetch that fails
+      // first would be an unhandled rejection. Mark it handled; every path below that uses
+      // the page still awaits it and gets the error.
+      page?.catch(() => {});
       let resolved: SlugResolution | null = null;
       try {
         resolved = await resolveSlug(url, env.BUCKET);

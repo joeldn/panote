@@ -55,6 +55,13 @@ async function call(path: string, init?: RequestInit, vars: Partial<Env> = {}): 
   });
 }
 
+/**
+ * An ASSETS binding whose fetch fails. Not a vi.fn: a mock attaches its own handler to
+ * every promise it returns, which would hide an unhandled rejection from the test.
+ */
+const failingAssets = () =>
+  ({ fetch: () => Promise.reject(new Error('assets down')) }) as unknown as Fetcher;
+
 async function clearBucket() {
   const listed = await env.BUCKET.list();
   await Promise.all(listed.objects.map((o) => env.BUCKET.delete(o.key)));
@@ -106,6 +113,36 @@ describe('slug alias redirects', () => {
   it('redirects HEAD too (curl -I)', async () => {
     const res = await call('/s/old-name', { method: 'HEAD' });
     expect(res.status).toBe(308);
+  });
+
+  it('cancels the HTML it started fetching for the slug', async () => {
+    const cancel = vi.fn();
+    assets.fetch.mockResolvedValueOnce(
+      new Response(new ReadableStream({ cancel }), {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+    const res = await call('/s/old-name');
+    expect(res.status).toBe(308);
+    expect(assets.fetch).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+  });
+
+  it('still redirects, with nothing left unhandled, when that HTML fetch fails', async () => {
+    const unhandled = vi.fn();
+    addEventListener('unhandledrejection', unhandled);
+    try {
+      const held = holdReads('slugs/');
+      const pending = call('/s/old-name', undefined, { ASSETS: failingAssets() });
+      await sleep(20);
+      held.release();
+      expect((await pending).status).toBe(308);
+      await sleep(20);
+    } finally {
+      removeEventListener('unhandledrejection', unhandled);
+    }
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
   it('never redirects a non-GET request', async () => {
@@ -766,6 +803,30 @@ describe('link preview image (og.jpg)', () => {
     await putJson(`pub/tours/${TOUR}.json`, tour);
     const html = await (await call('/s/new-name')).text();
     expect(html).toContain(tag('og:image:alt', 'Hall &quot;A&quot; &amp; &lt;i&gt;B&lt;/i&gt;'));
+  });
+});
+
+describe('a failed HTML fetch', () => {
+  it('is never left unhandled while the slug is still being read', async () => {
+    await putSlug('new-name', live(TOUR));
+    const unhandled = vi.fn();
+    addEventListener('unhandledrejection', unhandled);
+    try {
+      const held = holdReads('slugs/');
+      const settled = call('/s/new-name', undefined, { ASSETS: failingAssets() }).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      // The fetch has already failed; the slug read is still out.
+      await sleep(20);
+      held.release();
+      // Nothing to serve without the page: the request fails as an asset fetch would.
+      expect(await settled).toEqual(new Error('assets down'));
+      await sleep(20);
+    } finally {
+      removeEventListener('unhandledrejection', unhandled);
+    }
+    expect(unhandled).not.toHaveBeenCalled();
   });
 });
 
