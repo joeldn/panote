@@ -126,10 +126,16 @@ export function ogFaceSize(view: View): number {
 /**
  * The og.jpg pipeline for `view`: a supersampled render, area-filtered down to
  * 1200x630, JPEG q80 (mozjpeg). The caller ends it with toFile or toBuffer.
+ * `supersample` is for tests that check something other than the filtering: 1
+ * renders a quarter of the rays.
  */
-export function ogImage(sampler: Sampler, view: View = OG_VIEW): sharp.Sharp {
-  const w = OG_WIDTH * SUPERSAMPLE;
-  const h = OG_HEIGHT * SUPERSAMPLE;
+export function ogImage(
+  sampler: Sampler,
+  view: View = OG_VIEW,
+  supersample: number = SUPERSAMPLE,
+): sharp.Sharp {
+  const w = OG_WIDTH * supersample;
+  const h = OG_HEIGHT * supersample;
   return sharp(renderView(sampler, w, h, view), { raw: { width: w, height: h, channels: 3 } })
     .resize(OG_WIDTH, OG_HEIGHT, { fit: 'fill', kernel: 'lanczos3' })
     .jpeg({ quality: OG_QUALITY, mozjpeg: true });

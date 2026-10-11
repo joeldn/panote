@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -7,6 +7,26 @@ import type { Manifest } from '@panote/core';
 import { backfillOg, ogLevel, type OgStore } from './backfill-og.js';
 import { build } from './build.js';
 import { OG_HEIGHT, OG_VIEW, OG_WIDTH } from './og.js';
+import type * as OgModule from './og.js';
+
+// The race and failure tests check what backfillOg writes, not the pixels, so they
+// render og.jpg without the supersample (a quarter of the rays; see cheapOg). The
+// build fixture and the clean run keep the real 2x render.
+const og = vi.hoisted(() => ({ supersample: undefined as number | undefined }));
+vi.mock('./og.js', async (importOriginal) => {
+  const real = await importOriginal<typeof OgModule>();
+  return {
+    ...real,
+    ogImage: (...[sampler, view]: Parameters<typeof real.ogImage>) =>
+      real.ogImage(sampler, view, og.supersample),
+  };
+});
+const cheapOg = () => {
+  og.supersample = 1;
+};
+afterEach(() => {
+  og.supersample = undefined;
+});
 
 // Same idea as og.test.ts's labelled equirect, kept local so neither test file
 // depends on the other: each pixel is coloured by the cube face its direction
@@ -47,8 +67,9 @@ let work: string;
 beforeAll(async () => {
   work = await mkdtemp(join(tmpdir(), 'panote-og-backfill-'));
   const src = join(work, 'src.png');
-  // 4096 wide -> faceSize 1024 -> maxLevel 1, so faces are stitched from 2x2 tiles.
-  await writeLabelledEquirect(src, 4096, 2048);
+  // 2560 wide -> 640 rounds up to faceSize 1024 -> maxLevel 1, so faces are stitched
+  // from 2x2 tiles. Wider sources give the same pyramid for more fixture work.
+  await writeLabelledEquirect(src, 2560, 1280);
   await build({ src, outDir: work, pano: PANO, version: VERSION });
   legacyObjects = new Map();
   const walk = async (dir: string): Promise<void> => {
@@ -163,39 +184,65 @@ describe('backfillOg', () => {
     expect(gets).toEqual([MANIFEST_KEY(PANO)]);
   }, 30_000);
 
-  it('renders og.jpg from the tiles, then flags the manifest, keeping its other fields', async () => {
-    const { store, puts, manifestOf } = fakeStore();
-    const before = manifestOf(PANO);
-    const results = await backfillOg({ store, keys, panos: [PANO], dryRun: false, log: quiet });
-    expect(results).toEqual([{ pano: PANO, status: 'rendered', detail: expect.any(String) }]);
+  // A plain successful run, rendered once and inspected by each test below.
+  describe('a clean run', () => {
+    let run: ReturnType<typeof fakeStore>;
+    let before: Record<string, unknown>;
+    let reread: string;
+    let results: Awaited<ReturnType<typeof backfillOg>>;
+    beforeAll(async () => {
+      run = fakeStore();
+      before = run.manifestOf(PANO);
+      reread = run.etagOf(MANIFEST_KEY(PANO));
+      results = await backfillOg({
+        store: run.store,
+        keys,
+        panos: [PANO],
+        dryRun: false,
+        log: quiet,
+      });
+    }, 30_000);
 
-    expect(puts.map((p) => p.key)).toEqual([`tiles/${PANO}/${VERSION}/og.jpg`, MANIFEST_KEY(PANO)]);
-    const [og, manifest] = puts;
-    expect(og!.contentType).toBe('image/jpeg');
-    expect(og!.cacheControl).toBe('public, max-age=31536000, immutable');
-    expect(manifest!.contentType).toBe('application/json');
-    expect(manifest!.cacheControl).toBe('public, max-age=30');
-    expect(manifestOf(PANO)).toEqual({ ...before, og: true });
-    expect(manifestOf(PANO).futureField).toBe('keep me');
+    it('renders og.jpg from the tiles, then flags the manifest, keeping its other fields', async () => {
+      const { puts, manifestOf } = run;
+      expect(results).toEqual([{ pano: PANO, status: 'rendered', detail: expect.any(String) }]);
 
-    const meta = await sharp(og!.body).metadata();
-    expect([meta.format, meta.width, meta.height]).toEqual(['jpeg', OG_WIDTH, OG_HEIGHT]);
-    const { data } = await sharp(og!.body).raw().toBuffer({ resolveWithObject: true });
-    const centre = (OG_HEIGHT / 2) * OG_WIDTH * 3 + (OG_WIDTH / 2) * 3;
-    const rgb = [data[centre], data[centre + 1], data[centre + 2]];
-    rgb.forEach((c, i) => expect(Math.abs(c! - NZ[i]!)).toBeLessThan(30));
-  }, 30_000);
+      expect(puts.map((p) => p.key)).toEqual([
+        `tiles/${PANO}/${VERSION}/og.jpg`,
+        MANIFEST_KEY(PANO),
+      ]);
+      const [og, manifest] = puts;
+      expect(og!.contentType).toBe('image/jpeg');
+      expect(og!.cacheControl).toBe('public, max-age=31536000, immutable');
+      expect(manifest!.contentType).toBe('application/json');
+      expect(manifest!.cacheControl).toBe('public, max-age=30');
+      expect(manifestOf(PANO)).toEqual({ ...before, og: true });
+      expect(manifestOf(PANO).futureField).toBe('keep me');
 
-  it('matches the tiler’s own og.jpg closely (same view, same convention)', async () => {
-    const { store, puts } = fakeStore();
-    await backfillOg({ store, keys, panos: [PANO], dryRun: false, log: quiet });
-    const direct = await readFile(join(work, PANO, 'og.jpg'));
-    const a = await sharp(puts[0]!.body).raw().toBuffer();
-    const b = await sharp(direct).raw().toBuffer();
-    let diff = 0;
-    for (let i = 0; i < a.length; i++) diff += Math.abs(a[i]! - b[i]!);
-    expect(diff / a.length).toBeLessThan(4);
-  }, 30_000);
+      const meta = await sharp(og!.body).metadata();
+      expect([meta.format, meta.width, meta.height]).toEqual(['jpeg', OG_WIDTH, OG_HEIGHT]);
+      const { data } = await sharp(og!.body).raw().toBuffer({ resolveWithObject: true });
+      const centre = (OG_HEIGHT / 2) * OG_WIDTH * 3 + (OG_WIDTH / 2) * 3;
+      const rgb = [data[centre], data[centre + 1], data[centre + 2]];
+      rgb.forEach((c, i) => expect(Math.abs(c! - NZ[i]!)).toBeLessThan(30));
+    });
+
+    it('matches the tiler’s own og.jpg closely (same view, same convention)', async () => {
+      const direct = await readFile(join(work, PANO, 'og.jpg'));
+      const a = await sharp(run.puts[0]!.body).raw().toBuffer();
+      const b = await sharp(direct).raw().toBuffer();
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) diff += Math.abs(a[i]! - b[i]!);
+      expect(diff / a.length).toBeLessThan(4);
+    });
+
+    it('writes the manifest only if it still has the ETag it was re-read with', () => {
+      const manifestPut = run.puts.find((p) => p.key === MANIFEST_KEY(PANO));
+      expect(manifestPut!.ifMatch).toBe(reread);
+      // og.jpg is new and immutable: no condition on it.
+      expect(run.puts.find((p) => p.key.endsWith('og.jpg'))!.ifMatch).toBeUndefined();
+    });
+  });
 
   it('skips a pano that already has og.jpg, and one with no manifest', async () => {
     const { store, puts, objects } = fakeStore(['done', 'gone']);
@@ -217,6 +264,7 @@ describe('backfillOg', () => {
   });
 
   it('fails a pano with a missing tile or a bad manifest, and carries on with the rest', async () => {
+    cheapOg();
     const { store, objects, puts } = fakeStore(['broken', 'bad', 'fine']);
     objects.delete(`tiles/broken/${VERSION}/1/nz/0-0.webp`);
     objects.set(MANIFEST_KEY('bad'), new TextEncoder().encode('{"pano":"bad"}'));
@@ -237,6 +285,7 @@ describe('backfillOg', () => {
   }, 30_000);
 
   it('leaves the manifest alone when a re-tile replaced it mid-render', async () => {
+    cheapOg();
     const { store, objects, puts } = fakeStore();
     const get = store.get;
     let manifestReads = 0;
@@ -257,17 +306,8 @@ describe('backfillOg', () => {
     expect(objects.has(MANIFEST_KEY(PANO))).toBe(true);
   }, 30_000);
 
-  it('writes the manifest only if it still has the ETag it was re-read with', async () => {
-    const { store, puts, etagOf } = fakeStore();
-    const reread = etagOf(MANIFEST_KEY(PANO));
-    await backfillOg({ store, keys, panos: [PANO], dryRun: false, log: quiet });
-    const manifestPut = puts.find((p) => p.key === MANIFEST_KEY(PANO));
-    expect(manifestPut!.ifMatch).toBe(reread);
-    // og.jpg is new and immutable: no condition on it.
-    expect(puts.find((p) => p.key.endsWith('og.jpg'))!.ifMatch).toBeUndefined();
-  }, 30_000);
-
   it('skips, leaving the newer manifest, when a re-tile writes it after the re-read', async () => {
+    cheapOg();
     const { store, puts, overwrite, manifestOf } = fakeStore();
     const newer = new TextEncoder().encode(
       JSON.stringify({ ...manifestOf(PANO), version: 't1-newer' }),
