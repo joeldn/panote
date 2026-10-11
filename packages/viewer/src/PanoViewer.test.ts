@@ -883,6 +883,25 @@ describe('PanoViewer', () => {
       expect(centre.y).toBeCloseTo(400, 3);
     });
 
+    it('projects into an object the caller passes, for a frame that allocates nothing', () => {
+      const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: 0.2 } });
+      const out = { x: -1, y: -1, behind: true };
+      for (const [yaw, pitch] of [
+        [0.3, 0.1],
+        [Math.PI, 0],
+        [-0.4, -0.3],
+      ] as const) {
+        expect(viewer.project(yaw, pitch, out)).toBe(out);
+        expect(out).toEqual(viewer.project(yaw, pitch));
+      }
+      // Without one, each call gets its own: a caller may hold two at once.
+      const a = viewer.project(0.1, 0);
+      const b = viewer.project(-0.1, 0);
+      expect(a).not.toBe(b);
+      expect(a.x).toBeGreaterThan(b.x);
+      viewer.dispose();
+    });
+
     it('projects from the initial view before the first frame', () => {
       const viewer = new PanoViewer(makeContainer(400, 800), { initialView: { yaw: Math.PI } });
       const ahead = viewer.project(Math.PI, 0);

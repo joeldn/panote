@@ -3,7 +3,7 @@ import {
   viewProjection,
   effectiveVFovDeg,
   maxVFovDeg,
-  projectDir,
+  projectDirInto,
   sameMatrix,
   unprojectNDC,
   type Mat4,
@@ -38,6 +38,7 @@ import {
   normalizeAngle,
 } from './camera-math.js';
 import type {
+  ProjectedPoint,
   View,
   ViewerOptions,
   PanoViewerEvents,
@@ -191,6 +192,7 @@ export class PanoViewer {
   private frameList: DrawItem[] = [];
   // Scratch for project(), which may run many times a frame.
   private projectScratch: Vec3 = { x: 0, y: 0, z: 0 };
+  private ndcProjectScratch: Vec3 = { x: 0, y: 0, z: 0 };
   // zoomAt's solved view, reused so a wheel or pinch event allocates nothing.
   private zoomScratch: YawPitch = { yaw: 0, pitch: 0 };
   // A pointer in NDC, from toNdc().
@@ -1190,12 +1192,18 @@ export class PanoViewer {
   /**
    * Where the direction (yaw, pitch) is on screen in the frame last drawn, in
    * CSS pixels from the container's top left. Reads no layout, so a render
-   * callback can call it between style writes.
+   * callback can call it between style writes. Written into `out` when given,
+   * so placing many markers a frame allocates nothing; otherwise each call
+   * returns a new object.
    */
-  project(yaw: number, pitch: number): { x: number; y: number; behind: boolean } {
+  project(
+    yaw: number,
+    pitch: number,
+    out: ProjectedPoint = { x: 0, y: 0, behind: false },
+  ): ProjectedPoint {
     const d = dirInto(this.projectScratch, yaw, pitch);
-    const ndc = projectDir(d, this.viewProj);
-    const out = { x: 0, y: 0, behind: isBehind(d, this.fwd) };
+    out.behind = isBehind(d, this.fwd);
+    const ndc = projectDirInto(this.ndcProjectScratch, d, this.viewProj);
     return ndcToPixel(ndc.x, ndc.y, this.cssW, this.cssH, out);
   }
 

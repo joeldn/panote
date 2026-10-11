@@ -125,6 +125,24 @@ describe('Controls: pointer drag and release', () => {
     expect(moved).toBe(false);
   });
 
+  it('tracks the drag in one object, allocating nothing per pointermove', () => {
+    const controls = setup();
+    pointer('pointerdown', { x: 0, y: 0, t: 0 });
+    const last = (controls as unknown as { last: object }).last;
+    for (let i = 1; i <= 5; i++) pointer('pointermove', { x: i * 10, y: i, t: i * 16 });
+    pointer('pointerup', { x: 50, y: 5, t: 85 });
+    pointer('pointerdown', { x: 7, y: 7, t: 200 });
+    expect((controls as unknown as { last: object }).last).toBe(last);
+    expect(last).toEqual({ x: 7, y: 7 });
+    expect(host.panByPixels.mock.calls).toEqual([
+      [10, 1],
+      [10, 1],
+      [10, 1],
+      [10, 1],
+      [10, 1],
+    ]);
+  });
+
   it('never flings on pointercancel', () => {
     const t = drag(5);
     pointer('pointercancel', { x: 50, y: 0, t: t + 5 });
