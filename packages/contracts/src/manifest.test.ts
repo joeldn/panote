@@ -168,4 +168,18 @@ describe('ManifestSchema', () => {
       expect(() => ManifestSchema.parse({ ...manifest, preview: false })).toThrow();
     });
   });
+
+  describe('og', () => {
+    it('accepts a manifest with no og field (old manifests still parse)', () => {
+      expect(ManifestSchema.parse(manifest).og).toBeUndefined();
+    });
+
+    it('accepts og: true', () => {
+      expect(ManifestSchema.parse({ ...manifest, og: true }).og).toBe(true);
+    });
+
+    it('rejects og: false', () => {
+      expect(() => ManifestSchema.parse({ ...manifest, og: false })).toThrow();
+    });
+  });
 });

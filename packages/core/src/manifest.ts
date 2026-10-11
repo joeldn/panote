@@ -17,6 +17,9 @@ export interface Manifest {
   // Absent for a pano tiled before preview generation existed; present ones
   // have a preview.webp (1024x512) alongside the tiles in the version dir.
   preview?: true | undefined;
+  // Absent for a pano tiled before link-preview images existed; present ones
+  // have an og.jpg (1200x630 rectilinear view) alongside the tiles.
+  og?: true | undefined;
 }
 
 export function tilePath(
@@ -48,6 +51,12 @@ export function manifestUrl(baseUrl: string, pano: string): string {
 export function previewUrl(baseUrl: string, pano: string, version?: string): string {
   const versionSegment = version !== undefined ? `${encodeURIComponent(version)}/` : '';
   return `${baseUrl}${encodeURIComponent(pano)}/${versionSegment}preview.webp`;
+}
+
+// The link-preview image, next to preview.webp in the version dir.
+export function ogImageUrl(baseUrl: string, pano: string, version?: string): string {
+  const versionSegment = version !== undefined ? `${encodeURIComponent(version)}/` : '';
+  return `${baseUrl}${encodeURIComponent(pano)}/${versionSegment}og.jpg`;
 }
 
 // These bounds are derived, not provisional guesses — see docs/decisions.md.
@@ -158,6 +167,11 @@ export function parseManifest(raw: unknown): Manifest {
     if (m.preview !== true) throw new Error('manifest.preview must be true when present');
     preview = true;
   }
+  let og: true | undefined;
+  if (m.og !== undefined) {
+    if (m.og !== true) throw new Error('manifest.og must be true when present');
+    og = true;
+  }
 
   return {
     pano,
@@ -170,5 +184,6 @@ export function parseManifest(raw: unknown): Manifest {
     ...(version !== undefined ? { version } : {}),
     ...(tilerVersion !== undefined ? { tilerVersion } : {}),
     ...(preview !== undefined ? { preview } : {}),
+    ...(og !== undefined ? { og } : {}),
   };
 }
