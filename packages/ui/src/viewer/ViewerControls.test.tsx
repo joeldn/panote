@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PanoViewerContext } from '../viewer-context.js';
 import { ViewerControls } from './ViewerControls.js';
 
-const viewer = { getView: () => ({ yaw: 0, pitch: 0, fov: 70 }), setView: vi.fn() };
+const viewer = {
+  getView: () => ({ yaw: 0, pitch: 0, fov: 70 }),
+  setView: vi.fn(),
+  zoomBy: vi.fn(),
+};
 
 function setFullscreenEnabled(value: boolean | undefined) {
   Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value });
@@ -58,5 +62,17 @@ describe('ViewerControls fullscreen', () => {
     expect(el.requestFullscreen).toHaveBeenCalled();
     expect(caught).toHaveBeenCalled();
     await act(async () => {});
+  });
+});
+
+describe('ViewerControls without a viewer', () => {
+  it('disables the zoom buttons, which would do nothing', () => {
+    render(
+      <PanoViewerContext.Provider value={null}>
+        <ViewerControls />
+      </PanoViewerContext.Provider>,
+    );
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Zoom in' }).disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Zoom out' }).disabled).toBe(true);
   });
 });

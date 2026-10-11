@@ -860,7 +860,7 @@ describe('PanoStage', () => {
   });
 
   describe('without WebGL2', () => {
-    it('says the view cannot be shown, in a live region, instead of crashing', () => {
+    it('says the view cannot be shown, as an alert, instead of crashing', () => {
       const createViewer = vi.fn((): PanoViewer => {
         throw new WebGLUnavailableError();
       });
@@ -876,8 +876,10 @@ describe('PanoStage', () => {
         </PanoStage>,
       );
       expect(createViewer).toHaveBeenCalledTimes(1);
-      const status = screen.getByRole('status');
-      expect(status.textContent).toBe('Your browser can’t display this 360° view.');
+      // An alert, so it is announced as it appears: a status region is only
+      // announced when content changes inside one already on the page.
+      const alert = screen.getByRole('alert');
+      expect(alert.textContent).toBe('Your browser can’t display this 360° view.');
       expect(onViewer).not.toHaveBeenCalled();
     });
 

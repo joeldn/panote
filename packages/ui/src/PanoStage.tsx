@@ -402,7 +402,7 @@ export function PanoStage({
       {/* The viewer's canvas is the application landmark, named by aria-label. */}
       <div ref={hostRef} className="pn-stage__viewer" />
       {unsupported && (
-        <p className="pn-stage__unsupported" role="status">
+        <p className="pn-stage__unsupported" role="alert">
           Your browser can’t display this 360° view.
         </p>
       )}
