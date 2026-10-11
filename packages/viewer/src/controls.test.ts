@@ -161,6 +161,18 @@ describe('Controls: pointer drag and release', () => {
     expect(host.flick).not.toHaveBeenCalled();
   });
 
+  it.each(['touch', 'pen'])('keeps dragging a %s that reports no buttons', (pointerType) => {
+    // Only a mouse move with no button held means a missed pointerup.
+    pointer('pointerdown', { x: 100, y: 0, t: 0, pointerType });
+    pointer('pointermove', { x: 120, y: 0, t: 16, pointerType, buttons: 0 });
+    pointer('pointermove', { x: 150, y: 0, t: 32, pointerType, buttons: 0 });
+    expect(host.panByPixels.mock.calls).toEqual([
+      [20, 0],
+      [30, 0],
+    ]);
+    expect(el.style['cursor']).toBe('grabbing');
+  });
+
   it('removes the lostpointercapture listener on dispose', () => {
     const controls = setup();
     controls.dispose();

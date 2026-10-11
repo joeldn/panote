@@ -2,7 +2,7 @@ import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from '.
 import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
 import { VIEWER_DEFAULTS } from '../defaults.js';
 import { report } from '../report.js';
-import { WebGLUnavailableError } from '../webgl-support.js';
+import { CONTEXT_ATTRIBUTES, WebGLUnavailableError } from '../webgl-support.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
@@ -188,13 +188,8 @@ export class GLRenderer {
     // its line box a few px taller than itself. The cursor belongs to Controls.
     this.canvas.style.display = 'block';
     const gl = this.canvas.getContext('webgl2', {
+      ...CONTEXT_ATTRIBUTES,
       antialias: opts.antialias ?? d.antialias,
-      // Opaque backbuffer. Depth lets finer levels reject the coarser
-      // fragments behind them (see render()). Stencil is unused.
-      alpha: false,
-      depth: true,
-      stencil: false,
-      // no preserveDrawingBuffer — snapshot() copies the frame in the same task instead.
     });
     if (!gl) throw new WebGLUnavailableError();
     this.gl = gl;

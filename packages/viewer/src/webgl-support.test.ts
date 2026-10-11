@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isWebGL2Supported, WebGLUnavailableError } from './webgl-support.js';
+import { CONTEXT_ATTRIBUTES, isWebGL2Supported, WebGLUnavailableError } from './webgl-support.js';
 
 /** A document whose canvases answer getContext('webgl2') with `gl`. */
 function stubCanvas(getContext: (type: string) => unknown) {
@@ -16,6 +16,13 @@ describe('isWebGL2Supported', () => {
     const gl = { getExtension: vi.fn(() => ({ loseContext })) };
     stubCanvas((type) => (type === 'webgl2' ? gl : null));
     expect(isWebGL2Supported()).toBe(true);
+    // Asked for as the renderer asks, so a context that only fails with
+    // those attributes is not reported as supported.
+    const canvas = vi.mocked(document.createElement).mock.results[0]!.value as {
+      getContext: ReturnType<typeof vi.fn>;
+    };
+    expect(canvas.getContext).toHaveBeenCalledWith('webgl2', CONTEXT_ATTRIBUTES);
+    expect(CONTEXT_ATTRIBUTES).toEqual({ alpha: false, depth: true, stencil: false });
     expect(gl.getExtension).toHaveBeenCalledWith('WEBGL_lose_context');
     expect(loseContext).toHaveBeenCalledTimes(1);
   });
