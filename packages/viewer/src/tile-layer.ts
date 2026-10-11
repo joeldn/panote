@@ -476,8 +476,6 @@ export class TileLayer {
     // Soonest the layer needs a frame with nothing else asking for one: a
     // wanted tile's retry cooldown ending, or a stale load's grace running out.
     let wakeMs = Infinity;
-    // Visible tiles at the target level not yet resident or decoded.
-    let missing = 0;
     const { g, data, keys } = this.table(level);
     for (let n = 0; n < this.visibleCount; n++) {
       const i = this.visible[n]!;
@@ -490,7 +488,6 @@ export class TileLayer {
         continue;
       }
       if (this.ready.has(key)) continue; // goes up within a few frames
-      missing++;
       if (this.inflight.has(key)) continue; // on its way
       if (this.retry.eligible(key)) {
         const o = i * STRIDE;
@@ -504,26 +501,28 @@ export class TileLayer {
       }
     }
 
-    // A missing tile's parent is what shows in its place. Fetching parents
-    // only pays when the missing tiles cannot all be requested at once (a
-    // zoom, a jump): then a parent lands in the first round where its four
-    // children would take several. On a steady pan the few tiles that come
-    // into view all go in one round, and their parents would only add
-    // requests ahead of them.
+    // A missing tile's parent is what shows in its place: a resident one is
+    // kept, and a missing one is fetched only for a tile that cannot be
+    // fetched itself right now (cooling down after a failure, or failed for
+    // good). Otherwise the parent would only queue ahead of its children and
+    // hold the target level back a round; the view shows the nearest resident
+    // ancestor (the base at worst) until the children land.
     if (level >= 2) {
-      const fetchParents = missing > this.maxConcurrent;
       for (let n = 0; n < this.visibleCount; n++) {
         const i = this.visible[n]!;
-        if (this.cache.has(keys[i]!)) continue;
+        const key = keys[i]!;
+        if (this.cache.has(key)) continue;
         const o = i * STRIDE;
         const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
         const f = Math.floor(i / (g * g));
         const rest = i - f * g * g;
         const x = rest % g;
         const y = Math.floor(rest / g);
+        const fetchParent =
+          !this.ready.has(key) && !this.inflight.has(key) && !this.retry.eligible(key);
         wakeMs = Math.min(
           wakeMs,
-          this.queueParent(f, level - 1, x >> 1, y >> 1, priority, fetchParents),
+          this.queueParent(f, level - 1, x >> 1, y >> 1, priority, fetchParent),
         );
       }
     }
@@ -621,13 +620,11 @@ export class TileLayer {
   }
 
   /**
-   * Keep a resident parent of a missing tile, and with `fetch`, queue a
-   * missing one ahead of every tile at the target level. Its nearest resident
-   * ancestor is then at least two levels up (the base always is), so a big
-   * zoom would show that soft ancestor until the target level lands; the
-   * parent costs a quarter of its children and gives a sharper step in
-   * between. Returns how long until a parent cooling down after a failure may
-   * go again, Infinity when there is nothing to wait for.
+   * Keep a resident parent of a missing tile, and with `fetch` (the tile
+   * cannot be fetched itself for now), queue a missing one ahead of every
+   * tile at the target level: it fills the hole at a quarter of the detail
+   * instead of the base's. Returns how long until a parent cooling down after
+   * a failure may go again, Infinity when there is nothing to wait for.
    */
   private queueParent(
     f: number,

@@ -259,7 +259,7 @@ describe('TileLayer cull', () => {
       await flush();
     }
     // Settled: past the budget, but no more than what is on screen plus the
-    // base's worth (here, parents fetched on the way that eviction let go).
+    // base's worth.
     frame(0, 0, 70, 16 / 9, 3);
     const { cache, desired } = layer as unknown as {
       cache: Map<string, unknown>;
