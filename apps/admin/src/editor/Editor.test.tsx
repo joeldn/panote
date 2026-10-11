@@ -546,6 +546,20 @@ describe('editor: points, connections, views and settings', () => {
     });
   });
 
+  it('edits the tour description in the settings and saves it trimmed', async () => {
+    server.setTour({ ...server.tour!.body, description: 'Old town at dusk' });
+    const { ui } = openTab();
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: 'Tour settings' }));
+    const settings = within(ui.getByRole('dialog', { name: 'Tour settings' }));
+    const field = settings.getByRole('textbox', { name: 'Description' }) as HTMLTextAreaElement;
+    expect(field.value).toBe('Old town at dusk');
+    fireEvent.change(field, { target: { value: 'Three squares and a harbour. ' } });
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect(server.tour!.body.description).toBe('Three squares and a harbour.');
+  });
+
   it('removes a pano from the tour via the confirm modal', async () => {
     const { ui } = openTab();
     await loaded(ui);

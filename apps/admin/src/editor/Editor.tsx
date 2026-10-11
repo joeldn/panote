@@ -558,7 +558,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       {settingsOpen && (
         <SettingsPopover
           settings={settings}
+          description={tour.description ?? ''}
           onChange={(patch) => dispatch({ type: 'tour/settings', settings: patch })}
+          onDescription={(description) => dispatch({ type: 'tour/description', description })}
           onClose={() => setSettingsOpen(false)}
         />
       )}

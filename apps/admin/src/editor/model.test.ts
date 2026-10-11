@@ -122,6 +122,16 @@ describe('editor model', () => {
     expect(configOf(docs, 'a').current.north).toBeCloseTo(3.5 - 2 * Math.PI);
   });
 
+  it('sets the tour description trimmed, and an empty one removes it', () => {
+    let docs = run({ type: 'tour/description', description: '  Old town\nat dusk  ' });
+    expect(docs.tour.current.description).toBe('Old town\nat dusk');
+    expect(dirtyKeys(docs)).toContain('tour');
+    docs = editorReducer(docs, { type: 'tour/description', description: '   ' })!;
+    expect(docs.tour.current).not.toHaveProperty('description');
+    // Back to the loaded doc, so nothing is left to save.
+    expect(dirtyKeys(docs)).not.toContain('tour');
+  });
+
   it('a save sets base to what was sent, so edits made meanwhile stay dirty', () => {
     const sent = run({ type: 'tour/title', title: 'Sent' }).tour.current;
     const docs = run(

@@ -1,10 +1,14 @@
-import type { TourSettings } from '@internal/contracts';
+import { MAX_TOUR_DESCRIPTION_LENGTH, type TourSettings } from '@internal/contracts';
 import { Segmented } from '@internal/ui';
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 export interface SettingsPopoverProps {
   settings: TourSettings;
+  /** The tour's stored (trimmed) description, '' when it has none. */
+  description: string;
   onChange: (patch: Partial<TourSettings>) => void;
+  /** Every edit, untrimmed; the editor stores it trimmed. */
+  onDescription: (text: string) => void;
   onClose: () => void;
 }
 
@@ -19,8 +23,18 @@ const TOGGLES: Array<{
 ];
 
 /** Tour-wide viewer settings: 300px glass popover under the top bar's gear. */
-export function SettingsPopover({ settings, onChange, onClose }: SettingsPopoverProps) {
+export function SettingsPopover({
+  settings,
+  description,
+  onChange,
+  onDescription,
+  onClose,
+}: SettingsPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  // What's being typed, so a trailing space survives until blur; null shows the stored value.
+  const [draft, setDraft] = useState<string | null>(null);
+  const text = draft ?? description;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -47,6 +61,32 @@ export function SettingsPopover({ settings, onChange, onClose }: SettingsPopover
   return (
     <div ref={ref} className="ed-popover" role="dialog" aria-label="Tour settings">
       <h2 className="ed-popover__title">Tour settings</h2>
+      <div className="ed-field ed-popover__description">
+        <label className="ed-label" htmlFor={`${id}-description`}>
+          Description
+        </label>
+        <textarea
+          id={`${id}-description`}
+          className="ed-input ed-textarea"
+          value={text}
+          maxLength={MAX_TOUR_DESCRIPTION_LENGTH}
+          rows={3}
+          aria-describedby={`${id}-description-hint ${id}-description-count`}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            onDescription(e.target.value);
+          }}
+          onBlur={() => setDraft(null)}
+        />
+        <div className="ed-popover__meta">
+          <span id={`${id}-description-hint`}>
+            Shown in link previews. The first 160 or so characters show in search results.
+          </span>
+          <span id={`${id}-description-count`} className="ed-popover__count">
+            {text.length} / {MAX_TOUR_DESCRIPTION_LENGTH}
+          </span>
+        </div>
+      </div>
       <div className="ed-field">
         <span className="ed-label" id="ed-controls-label">
           Controls
