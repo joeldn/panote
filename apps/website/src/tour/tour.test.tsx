@@ -196,7 +196,7 @@ const adminCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).startsWi
 
 const robots = () => document.head.querySelector('meta[name="robots"]')?.getAttribute('content');
 const shown = (panoId: string) =>
-  waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith(panoId));
+  waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith(panoId, { view: undefined }));
 const unavailable = () => screen.findByRole('heading', { name: "This tour isn't available" });
 // The stats hook and the beacon's listeners only mount in the commit after the first
 // scene-change, so `shown()` alone doesn't mean they exist yet. The view POST does.
@@ -590,7 +590,9 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
         '/s/old-town/embed?pano=church',
       ),
     );
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('church', { view: undefined }),
+    );
   });
 
   it('never follows an alias onto another tour', async () => {
@@ -610,13 +612,17 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
 describe('/s/:slug/embed', () => {
   it('lets a plain wheel scroll the host page until the viewer is engaged', async () => {
     renderAt('/s/old-town/embed');
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     expect(lastViewer().options.interaction?.wheel).toBe('engaged');
   });
 
   it('has no site chrome and keeps whole-tour navigation', async () => {
     renderAt('/s/old-town/embed');
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     await viewRecorded();
     expect(screen.queryByRole('navigation', { name: 'Tour' })).toBeNull();
     expect(document.querySelector('.app-shell__bar')).toBeNull();
@@ -630,7 +636,9 @@ describe('/s/:slug/embed', () => {
 
   it('limits ?pano= to one scene with no nav links', async () => {
     renderAt('/s/old-town/embed?pano=square');
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('square'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+    );
     expect(screen.getByRole('button', { name: 'Fountain' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Go to/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Map' })).toBeNull();

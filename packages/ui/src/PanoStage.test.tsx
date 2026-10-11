@@ -362,7 +362,7 @@ describe('PanoStage', () => {
     expect(f.made).toHaveLength(2);
     // The new viewer resolves against the new base.
     await resolvedUrl(f.last().options, 'hall', 'b/hall/manifest.json');
-    expect(f.last().load).toHaveBeenCalledWith('hall');
+    expect(f.last().load).toHaveBeenCalledWith('hall', { view: undefined });
   });
 
   it('builds the new viewer from the props of the render that changed baseUrl', () => {
@@ -391,7 +391,7 @@ describe('PanoStage', () => {
     );
     const live = f.made.filter((v) => v.dispose.mock.calls.length === 0);
     expect(live).toHaveLength(1);
-    expect(live[0]?.load).toHaveBeenCalledWith('hall');
+    expect(live[0]?.load).toHaveBeenCalledWith('hall', { view: undefined });
     // The viewer the remount threw away never fetched anything.
     expect(f.made.flatMap((v) => v.calls)).toEqual(['load:hall']);
   });
@@ -411,7 +411,7 @@ describe('PanoStage', () => {
       <PanoStage baseUrl="b/" panoId="hall" reloadKey="t1-new" createViewer={f.createViewer} />,
     );
     expect(v.load).toHaveBeenCalledTimes(2);
-    expect(v.load).toHaveBeenLastCalledWith('hall');
+    expect(v.load).toHaveBeenLastCalledWith('hall', { view: undefined });
     expect(f.createViewer).toHaveBeenCalledTimes(1);
   });
 
@@ -440,7 +440,7 @@ describe('PanoStage', () => {
       />,
     );
     expect(v.calls).toEqual(['load:hall', 'load:hall']);
-    expect(v.load).toHaveBeenLastCalledWith('hall');
+    expect(v.load).toHaveBeenLastCalledWith('hall', { view: undefined });
     rerender(
       <PanoStage
         baseUrl="b/"
@@ -1017,7 +1017,7 @@ describe('PanoStage', () => {
       expect(v.showPreview).toHaveBeenLastCalledWith('hall', sources[1], { replacesVersion: 'v1' });
       // A preview is not a pano change: the camera stays where it is.
       expect(v.setView).not.toHaveBeenCalled();
-      expect(v.load).toHaveBeenLastCalledWith('hall');
+      expect(v.load).toHaveBeenLastCalledWith('hall', { view: undefined });
     });
 
     it('leaves the reload to the viewer without a preview', () => {

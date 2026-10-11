@@ -379,7 +379,7 @@ describe('editor: scenes still tiling after a reload', () => {
     const viewer = viewers.at(-1)!;
     expect(viewer.load.mock.calls.map((c) => c[0])).toEqual(['church', 'church']);
     // The reload keeps the camera: only the first load carried a view.
-    const carriedView = viewer.load.mock.calls.map((c) => c[1] !== undefined);
+    const carriedView = viewer.load.mock.calls.map((c) => c[1]?.view !== undefined);
     expect(carriedView).toEqual([true, false]);
     expect(viewer.setView).not.toHaveBeenCalled();
     expect(screen.queryByText(/Processing this pano/)).toBeNull();

@@ -59,7 +59,7 @@ export interface CubeTileSource {
 /** Hints for a resolver; it may ignore them. */
 export interface ResolveHints {
   /** 'low' for a prefetch, unset for a load the visitor is waiting on. */
-  priority?: RequestPriority;
+  priority?: RequestPriority | undefined;
 }
 
 /**
@@ -107,8 +107,8 @@ export interface UrlTemplateInit {
   tileSize: number;
   maxLevel: number;
   /** What `{face}` becomes for each face; unmapped faces use their own id. */
-  faceNames?: Partial<Record<Face, string>>;
-  version?: string;
+  faceNames?: Partial<Record<Face, string>> | undefined;
+  version?: string | undefined;
   meta?: unknown;
 }
 
@@ -131,8 +131,8 @@ export function urlTemplateSource(init: UrlTemplateInit): CubeTileSource {
     id,
     tileSize,
     maxLevel,
-    ...(version !== undefined && { version }),
-    ...(meta !== undefined && { meta }),
+    version,
+    meta,
     tileUrl: (t) =>
       template.replace(/\{(level|face|x|y)\}/g, (_, k: string) =>
         k === 'face' ? names[t.face] : String(t[k as 'level' | 'x' | 'y']),

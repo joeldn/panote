@@ -59,7 +59,9 @@ describe('owner preview', () => {
     expect(within(crumbs).getByText('Old town')).toBeTruthy();
     expect(within(crumbs).getByText('Church')).toBeTruthy();
     expect(server.requests.map((r) => r.path)).toEqual(['/api/admin/tours/t1?include=configs']);
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('church', { view: undefined }),
+    );
     expect(screen.getByText('Preview')).toBeTruthy();
     // Full-screen: the app shell's bar isn't rendered behind it.
     expect(document.querySelector('.app-shell__bar')).toBeNull();
@@ -82,7 +84,9 @@ describe('owner preview', () => {
     await shown();
     // The markers render before the stage hands its viewer to them; a click in between
     // opens the panel but has no viewer to report to. load() runs once it has.
-    await waitFor(() => expect(lastViewer().load).toHaveBeenCalledWith('church'));
+    await waitFor(() =>
+      expect(lastViewer().load).toHaveBeenCalledWith('church', { view: undefined }),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Altar' }));
     expect(await screen.findByRole('complementary')).toBeTruthy();
     // The open is reported to the stage, as it is for visitors; Preview gives the

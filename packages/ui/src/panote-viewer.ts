@@ -163,5 +163,5 @@ export async function prefetchPano(
   { signal }: PrefetchPanoOptions = {},
 ): Promise<void> {
   if (signal?.aborted || !prefetchAllowed()) return;
-  await viewer.prefetch(pano, signal ? { signal } : {});
+  await viewer.prefetch(pano, { signal });
 }

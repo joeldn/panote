@@ -234,12 +234,8 @@ export function PanoStage({
     const opts = mergeViewerOptions(
       panoteViewerPreset({ baseUrl, label: l.ariaLabel, embed }),
       l.options ?? {},
-      {
-        autoRotate: { enabled: l.autoRotate },
-        ...(l.north !== undefined && { camera: { north: l.north } }),
-      },
+      { autoRotate: { enabled: l.autoRotate }, camera: { north: l.north }, initialView: l.view },
     );
-    if (l.view) opts.initialView = l.view;
     const v = createOrNull(l.createViewer, host, opts);
     // No WebGL2: say so in place of the viewer rather than crash the tree.
     setUnsupported(v === null);
@@ -337,7 +333,7 @@ export function PanoStage({
       callbacks.current.onLoadError?.(err, panoId);
     };
     const load = (view?: Partial<View>) => {
-      (view ? viewer.load(panoId, { view }) : viewer.load(panoId)).catch(failed);
+      viewer.load(panoId, { view }).catch(failed);
     };
 
     // Only the first load on a viewer and a pano change move the camera; a
@@ -372,14 +368,11 @@ export function PanoStage({
       // The scene's view is cut to as the preview goes up, as a load cuts to
       // it as the tiles swap in, so the new scene does not swing round. Not
       // before: an async source may land late, or never.
-      const opts = {
-        ...(newPreview.replacesVersion !== undefined && {
-          replacesVersion: newPreview.replacesVersion,
-        }),
-        ...(sceneView && { view: sceneView }),
-      };
       try {
-        viewer.showPreview(panoId, source, opts);
+        viewer.showPreview(panoId, source, {
+          replacesVersion: newPreview.replacesVersion,
+          view: sceneView,
+        });
       } catch (err) {
         // The viewer closes a source it refuses, but make sure.
         closeSource(source);
