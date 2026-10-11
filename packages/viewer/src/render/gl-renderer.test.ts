@@ -650,6 +650,20 @@ describe('GLRenderer', () => {
       expect(vert).toMatch(/gl_Position\.z\s*=\s*uZ\s*\*\s*gl_Position\.w\s*;/);
     });
 
+    it('ships its shaders without comments or indentation', () => {
+      const { gl } = setup();
+      const sources = gl.shaderSource.mock.calls.map((c) => c[1] as string);
+      expect(sources).toHaveLength(2);
+      for (const src of sources) {
+        // The directive has to be alone on the first line; nothing else needs a line.
+        expect(src.startsWith('#version 300 es\n')).toBe(true);
+        expect(src.split('\n')).toHaveLength(2);
+        expect(src).not.toContain('//');
+        expect(src).not.toMatch(/ {2}|\t/);
+        expect(src).toMatch(/void main\(\)\{.*\}$/);
+      }
+    });
+
     it('clears colour and depth every frame', () => {
       const { gl, renderer } = setup();
       renderer.setCamera(camera());

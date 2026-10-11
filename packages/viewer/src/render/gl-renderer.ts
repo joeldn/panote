@@ -112,34 +112,41 @@ function isQuadIndex(index: Uint16Array): boolean {
   return true;
 }
 
-const VERT_SRC = `#version 300 es
-precision highp float;
-uniform mat4 uViewProj;
-// Per-level depth (see rankDepth): finer levels sit in front.
-uniform float uZ;
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec2 aUv;
-out vec2 vUv;
-void main() {
-  vUv = aUv;
-  gl_Position = uViewProj * vec4(aPos, 1.0);
+// The shaders are written as one string literal per statement, with the
+// comments in JS: the minifier drops the comments and folds the literals into
+// one compact string, so the bundle carries no GLSL comments or indentation.
+// Only the #version directive needs a line of its own.
+
+const VERT_SRC =
+  '#version 300 es\n' +
+  'precision highp float;' +
+  'uniform mat4 uViewProj;' +
+  // Per-level depth (see rankDepth): finer levels sit in front.
+  'uniform float uZ;' +
+  'layout(location=0) in vec3 aPos;' +
+  'layout(location=1) in vec2 aUv;' +
+  'out vec2 vUv;' +
+  'void main(){' +
+  'vUv=aUv;' +
+  'gl_Position=uViewProj*vec4(aPos,1.0);' +
   // Constant NDC z per draw (z/w = uZ), whatever the vertex depth. Clipping
   // in z then reduces to w > 0, so the effective near plane is w = 0, as
   // with the skybox xyww trick.
-  gl_Position.z = uZ * gl_Position.w;
-}`;
+  'gl_Position.z=uZ*gl_Position.w;' +
+  '}';
 
 // Textures are plain RGBA8 holding sRGB-encoded bytes, and the canvas shows
 // the bytes it is given as sRGB, so texels pass straight through. Filtering
 // and mips work in gamma space, as browsers' own image scaling does.
-const FRAG_SRC = `#version 300 es
-precision highp float;
-uniform sampler2D uTex;
-in vec2 vUv;
-out vec4 fragColor;
-void main() {
-  fragColor = texture(uTex, vUv);
-}`;
+const FRAG_SRC =
+  '#version 300 es\n' +
+  'precision highp float;' +
+  'uniform sampler2D uTex;' +
+  'in vec2 vUv;' +
+  'out vec4 fragColor;' +
+  'void main(){' +
+  'fragColor=texture(uTex,vUv);' +
+  '}';
 
 export class GLRenderer {
   readonly canvas: HTMLCanvasElement;
