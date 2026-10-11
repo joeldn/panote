@@ -126,6 +126,9 @@ export class Controls {
     el.addEventListener('pointermove', this.onMove);
     el.addEventListener('pointerup', this.onUp);
     el.addEventListener('pointercancel', this.onCancel);
+    // Capture lost without a pointerup (the canvas re-parented, a browser or
+    // OS takeover that sends a mouse no pointercancel) ends the drag too.
+    el.addEventListener('lostpointercapture', this.onCancel);
     if (this.wheelMode !== 'off') el.addEventListener('wheel', this.onWheel, { passive: false });
     el.addEventListener('contextmenu', this.onContextMenu);
     if (this.opts.doubleClickZoom !== false) el.addEventListener('dblclick', this.onDblClick);
@@ -228,6 +231,12 @@ export class Controls {
   private onMove = (e: PointerEvent) => {
     const slot = this.slotFor(e.pointerId);
     if (!slot) return;
+    // A mouse moving with no button held missed its pointerup: a hover must
+    // not pan, and the slot must be free for the next press.
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      this.release(e, false);
+      return;
+    }
     slot.x = e.clientX;
     slot.y = e.clientY;
 
@@ -414,6 +423,7 @@ export class Controls {
     this.el.removeEventListener('pointermove', this.onMove);
     this.el.removeEventListener('pointerup', this.onUp);
     this.el.removeEventListener('pointercancel', this.onCancel);
+    this.el.removeEventListener('lostpointercapture', this.onCancel);
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.onContextMenu);
     this.el.removeEventListener('dblclick', this.onDblClick);

@@ -73,12 +73,22 @@ function setup(opts?: ControlsOptions) {
 
 function pointer(
   type: string,
-  init: { x: number; y: number; t: number; id?: number; button?: number; pointerType?: string },
+  init: {
+    x: number;
+    y: number;
+    t: number;
+    id?: number;
+    button?: number;
+    buttons?: number;
+    pointerType?: string;
+  },
 ) {
   return el.dispatch(type, {
     pointerId: init.id ?? 1,
     pointerType: init.pointerType ?? 'mouse',
     button: init.button ?? 0,
+    // Held while dragging: the left button, or a touch or pen in contact.
+    buttons: init.buttons ?? 1,
     clientX: init.x,
     clientY: init.y,
     timeStamp: init.t,
@@ -119,6 +129,42 @@ describe('Controls: pointer drag and release', () => {
     const t = drag(5);
     pointer('pointercancel', { x: 50, y: 0, t: t + 5 });
     expect(host.flick).not.toHaveBeenCalled();
+  });
+
+  it('releases on lostpointercapture, so the next press starts a fresh drag', () => {
+    pointer('pointerdown', { x: 100, y: 0, t: 0 });
+    pointer('pointermove', { x: 120, y: 0, t: 16 });
+    // Capture lost (the canvas re-parented, a browser takeover) with no pointerup.
+    pointer('lostpointercapture', { x: 120, y: 0, t: 20 });
+    // The next press starts a fresh drag from where it lands, with no jump.
+    pointer('pointerdown', { x: 600, y: 0, t: 60 });
+    pointer('pointermove', { x: 601, y: 0, t: 76 });
+    expect(host.panByPixels.mock.calls).toEqual([
+      [20, 0],
+      [1, 0],
+    ]);
+    expect(host.flick).not.toHaveBeenCalled();
+    expect(el.style['cursor']).toBe('grabbing');
+  });
+
+  it('treats a mouse move with no button held as a missed pointerup', () => {
+    pointer('pointerdown', { x: 100, y: 0, t: 0 });
+    pointer('pointermove', { x: 120, y: 0, t: 16 });
+    pointer('pointermove', { x: 400, y: 0, t: 40, buttons: 0 });
+    expect(el.style['cursor']).toBe('grab');
+    pointer('pointerdown', { x: 600, y: 0, t: 60 });
+    pointer('pointermove', { x: 601, y: 0, t: 76 });
+    expect(host.panByPixels.mock.calls).toEqual([
+      [20, 0],
+      [1, 0],
+    ]);
+    expect(host.flick).not.toHaveBeenCalled();
+  });
+
+  it('removes the lostpointercapture listener on dispose', () => {
+    const controls = setup();
+    controls.dispose();
+    expect(el.listeners.get('lostpointercapture')?.size ?? 0).toBe(0);
   });
 
   it('ignores a right-button drag', () => {
