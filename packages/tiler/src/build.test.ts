@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { build, setVipsConcurrency } from './build.js';
 import { TILER_OUTPUT_VERSION } from './version.js';
 import type { Manifest } from '@panote/core';
+import type * as OgModule from './og.js';
+import type * as RemapModule from './remap.js';
 
 // build.ts hardcodes `channels: 3` on the RgbImage it builds from sharp's raw
 // decode of opts.src, on the assumption that removeAlpha() + raw() always
@@ -65,6 +67,28 @@ vi.mock('sharp', () => ({
   ),
 }));
 
+// The pixel work build() hands to remap.ts and og.ts is stubbed here: sharp is
+// mocked, so every face and og.jpg pixel would be thrown away unread, and that
+// work (millions of JS samples, slow under coverage) made these the suite's
+// slowest tests. renderFace and the og render are checked for real in
+// remap.test.ts, og.test.ts and backfill-og.test.ts (which runs a real build).
+// ogImage itself stays real, so its resize and encode calls still reach the
+// sharp mock below; only the sampler it reads is a no-op.
+const renderFace = vi.fn((_src: unknown, _face: string, size: number) =>
+  Buffer.alloc(size * size * 3),
+);
+const equirectSampler = vi.fn((_img: unknown) => (_dir: unknown, out: number[]) => out.fill(0));
+
+vi.mock('./remap.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof RemapModule>()),
+  renderFace: (src: unknown, face: string, size: number) => renderFace(src, face, size),
+}));
+
+vi.mock('./og.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof OgModule>()),
+  equirectSampler: (img: unknown) => equirectSampler(img),
+}));
+
 describe('setVipsConcurrency', () => {
   afterEach(() => {
     concurrency.mockClear();
@@ -89,6 +113,8 @@ describe('build', () => {
     resizeCalls.length = 0;
     toFileCalls.length = 0;
     sharpCalls.length = 0;
+    renderFace.mockClear();
+    equirectSampler.mockClear();
   });
 
   async function tmp(): Promise<string> {
@@ -274,8 +300,8 @@ describe('build', () => {
   });
 
   describe('version stamping', () => {
-    // Runs the full pipeline through the manifest write; sharp stays mocked,
-    // so only renderFace()'s bilinear sampling is real work here.
+    // Runs the full pipeline through the manifest write, with sharp mocked and
+    // the face and og sampling stubbed (see the mocks at the top of the file).
     const WIDTH = 2048;
     const HEIGHT = 1024;
 
@@ -292,8 +318,6 @@ describe('build', () => {
       return JSON.parse(raw) as Manifest;
     }
 
-    // Real face rendering across 6 faces, not just mocked I/O, so this can
-    // exceed vitest's 5s default under load; give it more room.
     it('writes version and tilerVersion into the manifest when a version is given', async () => {
       const outDir = await tmp();
       mockSuccessfulDecode();
@@ -322,9 +346,16 @@ describe('build', () => {
       expect(manifest.og).toBe(true);
       expect(toFileCalls.some((p) => p.endsWith('ok-pano/og.jpg'))).toBe(true);
       expect(resizeCalls).toContainEqual([1200, 630, { fit: 'fill', kernel: 'lanczos3' }]);
-    }, 20_000);
+      // Every face at the capped face size, and og.jpg sampled from the
+      // full-resolution source rather than a face or the 1024px preview.
+      expect(renderFace.mock.calls.map(([, face, size]) => [face, size])).toEqual(
+        ['px', 'nx', 'py', 'ny', 'pz', 'nz'].map((f) => [f, 512]),
+      );
+      const [ogSource] = equirectSampler.mock.calls[0] as [{ width: number; height: number }];
+      expect(equirectSampler).toHaveBeenCalledTimes(1);
+      expect([ogSource.width, ogSource.height]).toEqual([WIDTH, HEIGHT]);
+    });
 
-    // Same real rendering pipeline as above; same timeout treatment.
     it('omits version and tilerVersion from the manifest when no version is given', async () => {
       const outDir = await tmp();
       mockSuccessfulDecode();
@@ -340,7 +371,7 @@ describe('build', () => {
       expect(manifest.tilerVersion).toBeUndefined();
       expect(manifest.preview).toBe(true);
       expect(manifest.og).toBe(true);
-    }, 20_000);
+    });
   });
 
   describe('build channel-count guard', () => {

@@ -236,8 +236,9 @@ describe('facesInView', () => {
   }, 20_000);
 
   it('adds py when the view tilts up far enough to see it', () => {
-    expect(facesInView(view({ pitch: 0.9 }))).toContain('py');
-    expect(facesInView(view({ pitch: 0.9 }))).not.toContain('ny');
+    const faces = facesInView(view({ pitch: 0.9 }));
+    expect(faces).toContain('py');
+    expect(faces).not.toContain('ny');
   }, 20_000);
 });
 
@@ -252,7 +253,8 @@ describe('ogFaceSize', () => {
 
 describe('ogImage', () => {
   it('encodes a 1200x630 JPEG of the default view, nz in the centre', async () => {
-    const jpeg = await ogImage(equirectSampler(labelledEquirect(1024, 512))).toBuffer();
+    // Without the supersample (a quarter of the rays): the filtering is the next test's job.
+    const jpeg = await ogImage(equirectSampler(labelledEquirect(1024, 512)), OG_VIEW, 1).toBuffer();
     const meta = await sharp(jpeg).metadata();
     expect(meta.format).toBe('jpeg');
     expect(meta.width).toBe(OG_WIDTH);
@@ -268,12 +270,16 @@ describe('ogImage', () => {
     // 1px vertical stripes, a bit finer than the output's pixel pitch at the centre.
     const w = 4096;
     const h = 2048;
+    // Every row is the same, so build one and copy it down.
+    const row = Buffer.alloc(w * 3);
+    for (let x = 1; x < w; x += 2) row.fill(255, x * 3, x * 3 + 3);
     const data = Buffer.alloc(w * h * 3);
-    for (let y = 0; y < h; y++)
-      for (let x = 0; x < w; x++) data.fill(x % 2 ? 255 : 0, (y * w + x) * 3, (y * w + x) * 3 + 3);
+    for (let y = 0; y < h; y++) row.copy(data, y * w * 3);
     const jpeg = await ogImage(equirectSampler({ data, width: w, height: h, channels: 3 }))
       .png()
       .toBuffer();
+    const meta = await sharp(jpeg).metadata();
+    expect([meta.width, meta.height]).toEqual([OG_WIDTH, OG_HEIGHT]);
     const { data: out } = await sharp(jpeg)
       .extract({ left: 500, top: 280, width: 200, height: 70 })
       .greyscale()
