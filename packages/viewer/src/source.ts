@@ -1,5 +1,7 @@
 import { FACES, type Face } from './cube.js';
-import type { TileImage } from './render/gl-renderer.js';
+
+/** Pixel sources the viewer can upload as a texture: a decoded tile or preview patch. */
+export type TileImage = ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
 
 /** One tile of a cube pyramid. Level L has 2^L × 2^L tiles per face; x and y count from the top left. */
 export interface TileAddress {

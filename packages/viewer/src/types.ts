@@ -1,5 +1,4 @@
-import type { TileImage } from './render/gl-renderer.js';
-import type { CubeTileSource, SourceResolver } from './source.js';
+import type { CubeTileSource, SourceResolver, TileImage } from './source.js';
 
 export interface View {
   yaw: number; // radians, around +y

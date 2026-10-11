@@ -17,9 +17,8 @@ import {
   type GLRenderer,
   type DrawItem,
   type TileHandle,
-  type TileImage,
 } from './render/gl-renderer.js';
-import type { CubeTileSource } from './source.js';
+import type { CubeTileSource, TileImage } from './source.js';
 import { loadTileImage, releaseImage, type TileNetwork } from './tile-fetch.js';
 import {
   TileRetryBudget,

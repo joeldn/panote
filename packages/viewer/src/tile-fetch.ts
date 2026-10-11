@@ -1,5 +1,4 @@
-import type { TileImage } from './render/gl-renderer.js';
-import type { CubeTileSource, TileAddress } from './source.js';
+import type { CubeTileSource, TileAddress, TileImage } from './source.js';
 import { TileHttpError } from './tile-retry.js';
 
 /** How tile requests go out; from ViewerOptions. */

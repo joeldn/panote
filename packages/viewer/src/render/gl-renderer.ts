@@ -2,13 +2,11 @@ import { frustumFromViewProj, intersectsSphere, type Mat4, type Sphere } from '.
 import { QUAD_INDEX, type TileGeometry } from '../tile-geometry.js';
 import { VIEWER_DEFAULTS } from '../defaults.js';
 import { report } from '../report.js';
+import type { TileImage } from '../source.js';
 import { CONTEXT_ATTRIBUTES, WebGLUnavailableError } from '../webgl-support.js';
 
 /** Opaque per-tile id. */
 export type TileHandle = number;
-
-/** Pixel sources the renderer can upload as a texture. */
-export type TileImage = ImageBitmap | HTMLCanvasElement | OffscreenCanvas;
 
 /** One entry in the per-frame draw list. */
 export interface DrawItem {

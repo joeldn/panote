@@ -9,10 +9,10 @@ export {
   type ResolveHints,
   type SourceResolver,
   type TileAddress,
+  type TileImage,
   type UrlTemplateInit,
 } from './source.js';
 export { FACES, type Face } from './cube.js';
-export type { TileImage } from './render/gl-renderer.js';
 export {
   PREVIEW_GUTTER_PX,
   PREVIEW_MAX_PATCH_PX,
