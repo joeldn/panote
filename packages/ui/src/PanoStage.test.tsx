@@ -1123,6 +1123,31 @@ describe('PanoStage', () => {
       expect(v.calls.filter((c) => c === 'show:hall')).toHaveLength(3);
     });
 
+    it('loads it when another pano landed while the stage was empty', async () => {
+      const f = factory();
+      const stage = (panoId: string | null) => (
+        <PanoStage
+          baseUrl="b/"
+          panoId={panoId}
+          transition
+          onLoadError={() => {}}
+          createViewer={f.createViewer}
+        />
+      );
+      const { rerender } = render(stage('hall'));
+      const v = f.last();
+      act(() => v.emit('scene-change', 'hall'));
+      rerender(stage('nave'));
+      rerender(stage(null));
+      // The hop lands on the empty stage: nave, not hall, is what the viewer has now.
+      act(() => v.emit('scene-change', 'nave'));
+      v.load.mockRejectedValueOnce(new Error('manifest 500'));
+      await act(async () => rerender(stage('crypt')));
+      await act(async () => rerender(stage('hall')));
+      expect(v.load.mock.calls.map((c) => c[0])).toEqual(['hall', 'crypt']);
+      expect(v.transitionTo.mock.calls.map((c) => c[0])).toEqual(['nave', 'hall']);
+    });
+
     it('cancels a change still in flight instead of reloading the pano on screen', async () => {
       const f = factory();
       const onLoadError = vi.fn();
