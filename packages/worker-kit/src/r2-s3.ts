@@ -44,7 +44,22 @@ export interface R2S3Client {
   head(key: string): Promise<R2HeadResult>;
   /** Signed DELETE. Throws on a non-2xx response. */
   deleteObject(key: string): Promise<void>;
+  /**
+   * The "folders" directly under `prefix` (ListObjectsV2 with a `/` delimiter),
+   * every page of them, each ending in `/`. Throws on a non-2xx response.
+   */
+  listPrefixes(prefix: string): Promise<string[]>;
 }
+
+const XML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+};
+const unescapeXml = (s: string): string =>
+  s.replace(/&(amp|lt|gt|quot|apos);/g, (e) => XML_ENTITIES[e] ?? e);
 
 const DEFAULT_PRESIGN_EXPIRY_SECONDS = 900;
 
@@ -107,6 +122,29 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
     async deleteObject(key) {
       const res = await aws.fetch(`${base}/${key}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`R2 DELETE ${key} -> ${res.status}`);
+    },
+
+    async listPrefixes(prefix) {
+      const found: string[] = [];
+      let token: string | undefined;
+      do {
+        const url = new URL(base);
+        url.searchParams.set('list-type', '2');
+        url.searchParams.set('prefix', prefix);
+        url.searchParams.set('delimiter', '/');
+        if (token !== undefined) url.searchParams.set('continuation-token', token);
+        const res = await aws.fetch(url.toString());
+        if (!res.ok) throw new Error(`R2 LIST ${prefix} -> ${res.status}`);
+        const xml = await res.text();
+        for (const m of xml.matchAll(
+          /<CommonPrefixes>\s*<Prefix>([^<]*)<\/Prefix>\s*<\/CommonPrefixes>/g,
+        ))
+          found.push(unescapeXml(m[1]!));
+        const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+        const next = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(xml)?.[1];
+        token = truncated && next ? unescapeXml(next) : undefined;
+      } while (token !== undefined);
+      return found;
     },
 
     async put(key, body, opts) {

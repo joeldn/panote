@@ -872,6 +872,44 @@ bytes **without** a version bump yields the same ETag, so the derived version st
 rewriting identical keys rather than creating a new one. Old version dirs are left in place after
 a re-tile; cleaning them up is deferred to Wave 6.
 
+## Link-preview image (og.jpg) and its backfill
+
+Every tiling run also writes `tiles/<pano>/<version>/og.jpg` (1200x630, JPEG q80) and sets
+`og: true` in the manifest. It's a normal-camera view rendered from the full-resolution source:
+yaw 0, pitch 0, 100° horizontal fov, which is the first frame the viewer shows a scene with no
+start view on a wide screen. The start view an owner picks in the editor isn't used: it isn't
+known at tiling time. The website's share pages use og.jpg for `og:image` when the manifest has
+the flag and fall back to `preview.webp` otherwise. The render adds about 0.7 s to a 50 MP job
+(measured locally, out of ~110 s of build) and the files come out around 90-115 KB.
+
+Panos tiled before this have no og.jpg. `services/tiler-consumer/src/backfill-og.ts` re-renders it
+from their existing tiles (no original needed): for each pano under `tiles/` it reads the
+manifest, skips it if it already has `og: true`, stitches the faces the view needs from the
+smallest level that is sharp enough (level 2 for 512px tiles, 48 tile GETs), writes og.jpg into
+the version dir, then re-reads the manifest and adds `og: true` only if it still names the same
+version (a re-tile that landed meanwhile already has its own og.jpg). It is safe to re-run.
+
+It needs an R2 API token with Object Read & Write on the bucket (Dashboard → R2 → Manage API
+tokens; the tiler's token is a write-only Worker secret, so make a new one, or reuse one you
+kept), and it refuses any bucket not ending in `-dev` unless that bucket is also passed as
+`--allow-bucket <name>`. Not run against any environment yet.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm exec turbo run build --filter="@service/tiler-consumer..."
+export R2_ACCOUNT_ID=12e2809e05de8a2bf20b815fd394ec9a R2_BUCKET=pano-content-dev
+export R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+# Reads manifests only and prints what it would do:
+node services/tiler-consumer/dist/backfill-og.js --dry-run
+# One pano first, then everything:
+node services/tiler-consumer/dist/backfill-og.js --pano <pano-uuid>
+node services/tiler-consumer/dist/backfill-og.js
+```
+
+It prints one line per pano (`rendered`, `would-render`, `skipped` or `failed` with the reason)
+and exits 1 if any failed. A share page already scraped keeps its old card until the scraper
+refetches it (Facebook's Sharing Debugger and LinkedIn's Post Inspector can force that).
+
 ## Tiling time and the queue limit
 
 A queue consumer invocation has a 15-minute wall-time limit, and the consumer holds its

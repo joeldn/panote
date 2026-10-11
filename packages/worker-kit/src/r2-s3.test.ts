@@ -271,3 +271,56 @@ describe('deleteObject', () => {
     );
   });
 });
+
+describe('listPrefixes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const page = (prefixes: string[], next?: string): Response =>
+    new Response(
+      `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>mybucket</Name>` +
+        `<IsTruncated>${next ? 'true' : 'false'}</IsTruncated>` +
+        (next ? `<NextContinuationToken>${next}</NextContinuationToken>` : '') +
+        prefixes.map((p) => `<CommonPrefixes><Prefix>${p}</Prefix></CommonPrefixes>`).join('') +
+        `</ListBucketResult>`,
+      { status: 200, headers: { 'content-type': 'application/xml' } },
+    );
+
+  it('lists the "folders" one level under a prefix with ListObjectsV2 and a / delimiter', async () => {
+    const fetchMock = vi.fn(async (_req: Request) => page(['tiles/a/', 'tiles/b&amp;c/']));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client(config);
+
+    expect(await client.listPrefixes('tiles/')).toEqual(['tiles/a/', 'tiles/b&c/']);
+    const url = new URL(fetchMock.mock.calls[0]![0].url);
+    expect(url.pathname).toBe('/mybucket');
+    expect(url.searchParams.get('list-type')).toBe('2');
+    expect(url.searchParams.get('prefix')).toBe('tiles/');
+    expect(url.searchParams.get('delimiter')).toBe('/');
+    expect(url.searchParams.has('continuation-token')).toBe(false);
+  });
+
+  it('follows continuation tokens until the listing is no longer truncated', async () => {
+    const fetchMock = vi
+      .fn(async (_req: Request) => page([]))
+      .mockResolvedValueOnce(page(['tiles/a/'], 'tok/1+='))
+      .mockResolvedValueOnce(page(['tiles/b/']));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client(config);
+
+    expect(await client.listPrefixes('tiles/')).toEqual(['tiles/a/', 'tiles/b/']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const second = new URL(fetchMock.mock.calls[1]![0].url);
+    expect(second.searchParams.get('continuation-token')).toBe('tok/1+=');
+  });
+
+  it('throws on a non-2xx response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('denied', { status: 403 })),
+    );
+    const client = createR2S3Client(config);
+    await expect(client.listPrefixes('tiles/')).rejects.toThrow(/R2 LIST tiles\/ -> 403/);
+  });
+});
