@@ -14,6 +14,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 
+// From cube.ts rather than the entry point (which exports faceUVToDir too):
+// Node runs this with type stripping, which cannot follow the entry point's
+// `.js` specifiers to `.ts` files.
 import { FACES, faceUVToDir, type Face } from '../../src/cube.ts';
 
 const TILE = 256;

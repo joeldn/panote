@@ -88,7 +88,7 @@ The rules a source follows:
 
 - **Pyramid.** Each face is a square split into `2^level × 2^level` tiles of `tileSize` px, for every level from 0 to `maxLevel`. `x` and `y` count from the top left of the face. Level 0 is required. `load()` waits for the six level-0 tiles before the scene goes on screen, so every direction has at least a coarse texture, and a load whose base tiles can't be fetched rejects.
 - **Images are upright.** Row 0 is the top of the tile. Don't decode with `imageOrientation: 'flipY'`. A `TileImage` is an `ImageBitmap`, an `HTMLCanvasElement` or an `OffscreenCanvas`. The viewer closes each `ImageBitmap` once it has been uploaded.
-- **Face convention.** Texel `(u, v)` of a face, with `u` running left to right and `v` top to bottom (both 0 to 1), is shown in the direction `faceUVToDir(face, u, v)`. The camera at yaw 0 and pitch 0 looks at `-z` (the centre of `nz`), with `+x` to its right and `+y` up, and yaw grows to the right.
+- **Face convention.** Texel `(u, v)` of a face, with `u` running left to right and `v` top to bottom (both 0 to 1), is shown in the direction `faceUVToDir(face, u, v)` (exported, so a converter can use the same function). The camera at yaw 0 and pitch 0 looks at `-z` (the centre of `nz`), with `+x` to its right and `+y` up, and yaw grows to the right.
 
   | face | centre | `u` runs toward | `v` runs toward |
   |---|---|---|---|

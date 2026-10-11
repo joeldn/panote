@@ -16,7 +16,8 @@ export {
   type UrlTemplateInit,
   type UrlTileSource,
 } from './source.js';
-export { FACES, type Face } from './cube.js';
+export { FACES, faceUVToDir, type Face } from './cube.js';
+export type { Vec3 } from './project.js';
 export {
   PREVIEW_GUTTER_PX,
   PREVIEW_MAX_PATCH_PX,
