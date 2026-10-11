@@ -859,6 +859,47 @@ describe('PanoStage', () => {
     expect(v.load).toHaveBeenCalledTimes(2);
   });
 
+  it('empties the stage on a null panoId and drops the load still in flight', () => {
+    const f = factory();
+    const onSceneChange = vi.fn();
+    const { container, rerender } = render(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        onSceneChange={onSceneChange}
+        createViewer={f.createViewer}
+      />,
+    );
+    const v = f.last();
+    const host = container.querySelector<HTMLElement>('.pn-stage__viewer')!;
+    expect(host.style.visibility).toBe('');
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId={null}
+        onSceneChange={onSceneChange}
+        createViewer={f.createViewer}
+      />,
+    );
+    // Nothing is on stage, so the canvas is hidden (and out of Tab order).
+    expect(host.style.visibility).toBe('hidden');
+    // The hall load lands after the stage was emptied: stale, so not reported.
+    v.emit('scene-change', 'hall');
+    expect(onSceneChange).not.toHaveBeenCalled();
+    rerender(
+      <PanoStage
+        baseUrl="b/"
+        panoId="hall"
+        onSceneChange={onSceneChange}
+        createViewer={f.createViewer}
+      />,
+    );
+    expect(host.style.visibility).toBe('');
+    expect(v.load).toHaveBeenCalledTimes(2);
+    v.emit('scene-change', 'hall');
+    expect(onSceneChange).toHaveBeenCalledExactlyOnceWith('hall');
+  });
+
   describe('without WebGL2', () => {
     it('says the view cannot be shown, as an alert, instead of crashing', () => {
       const createViewer = vi.fn((): PanoViewer => {
@@ -894,6 +935,22 @@ describe('PanoStage', () => {
         ),
       ).toThrow('boom');
       vi.mocked(console.error).mockRestore();
+    });
+
+    it('says nothing on an empty stage, which is empty by design', () => {
+      const createViewer = vi.fn((): PanoViewer => {
+        throw new WebGLUnavailableError();
+      });
+      const { rerender } = render(
+        <PanoStage baseUrl="https://cdn.test/tiles/" panoId={null} createViewer={createViewer} />,
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+      rerender(
+        <PanoStage baseUrl="https://cdn.test/tiles/" panoId="hall" createViewer={createViewer} />,
+      );
+      expect(screen.getByRole('alert').textContent).toBe(
+        'Your browser can’t display this 360° view.',
+      );
     });
   });
 

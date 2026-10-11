@@ -60,6 +60,11 @@ export interface TourViewerProps {
   overlay?: (panoId: string) => ReactNode;
   /** Adds a Share button to the controls pill. Fullscreen is left before it runs. */
   onShare?: () => void;
+  /**
+   * The visitor is about to press Share: a pointer over it, focus or a touch.
+   * For warming up a share sheet that loads on demand.
+   */
+  onShareIntent?: () => void;
   onSceneChange?: (panoId: string) => void;
   onHotspotOpen?: (panoId: string, hotspotId: string) => void;
   onLoadError?: (error: unknown, panoId: string) => void;
@@ -205,6 +210,7 @@ export function TourViewer({
   bar,
   overlay,
   onShare,
+  onShareIntent,
   onSceneChange,
   onHotspotOpen,
   onLoadError,
@@ -370,6 +376,9 @@ export function TourViewer({
               className="pn-controls__btn"
               aria-label="Share"
               aria-haspopup="dialog"
+              onPointerEnter={onShareIntent}
+              onFocus={onShareIntent}
+              onTouchStart={onShareIntent}
               onClick={() => {
                 // A share sheet portals to <body>, which a fullscreen stage would hide.
                 // It can be refused (e.g. an embed without allow="fullscreen").

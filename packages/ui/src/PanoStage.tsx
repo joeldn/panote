@@ -61,7 +61,10 @@ export interface StagePreview {
 export interface PanoStageProps {
   /** Tiles base, e.g. `tilesBaseUrl(config)`; changing it recreates the viewer. */
   baseUrl: string;
-  /** Pano to show; null leaves the stage empty. */
+  /**
+   * Pano to show. Null empties the stage: the canvas is hidden, and a load
+   * still in flight is dropped (its scene-change is not reported).
+   */
   panoId: string | null;
   /**
    * Camera for each pano as it loads (a scene's `initialView`). Applied on the
@@ -228,6 +231,8 @@ export function PanoStage({
     if (!v) return;
     const onScene = (id: string) => {
       const cur = loaded.current;
+      // No load is current (the stage was emptied): this one is stale.
+      if (!cur) return;
       landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
       callbacks.current.onSceneChange?.(id);
     };
@@ -262,8 +267,10 @@ export function PanoStage({
   useEffect(() => {
     if (!viewer) return;
     if (!panoId) {
-      // Forget the last pano so coming back to it loads it again.
+      // Forget the last pano so coming back to it loads it again, and so a
+      // load still in flight is dropped when it lands.
       loaded.current = null;
+      landed.current = null;
       return;
     }
     const prev = loaded.current;
@@ -400,8 +407,14 @@ export function PanoStage({
   return (
     <div className={cx('pn-stage', className)} style={style}>
       {/* The viewer's canvas is the application landmark, named by aria-label. */}
-      <div ref={hostRef} className="pn-stage__viewer" />
-      {unsupported && (
+      <div
+        ref={hostRef}
+        className="pn-stage__viewer"
+        // Empty: hide whatever the viewer last drew, and its canvas from Tab.
+        style={panoId ? undefined : { visibility: 'hidden' }}
+      />
+      {/* Only with a pano to show: an empty stage is empty by design. */}
+      {unsupported && panoId && (
         <p className="pn-stage__unsupported" role="alert">
           Your browser can’t display this 360° view.
         </p>
