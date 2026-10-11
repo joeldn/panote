@@ -12,18 +12,18 @@ export const FAR = 100;
 
 const DEG2RAD = Math.PI / 180;
 
-/**
- * Cap the vertical fov so the horizontal fov never exceeds maxHorizontalFovDeg.
- * Unifies the duplicated helper from the former scene.ts and PanoViewer.
- */
+/** The largest vertical fov whose horizontal fov stays within maxHorizontalFovDeg. */
+export function maxVFovDeg(maxHorizontalFovDeg: number, aspect: number): number {
+  return (2 * Math.atan(Math.tan((maxHorizontalFovDeg * Math.PI) / 360) / aspect) * 180) / Math.PI;
+}
+
+/** Cap the vertical fov so the horizontal fov never exceeds maxHorizontalFovDeg. */
 export function effectiveVFovDeg(
   requestedDeg: number,
   maxHorizontalFovDeg: number,
   aspect: number,
 ): number {
-  const maxVFov =
-    (2 * Math.atan(Math.tan((maxHorizontalFovDeg * Math.PI) / 360) / aspect) * 180) / Math.PI;
-  return Math.min(requestedDeg, maxVFov);
+  return Math.min(requestedDeg, maxVFovDeg(maxHorizontalFovDeg, aspect));
 }
 
 /**

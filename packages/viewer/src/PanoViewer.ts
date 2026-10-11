@@ -2,6 +2,7 @@ import { GLRenderer } from './render/gl-renderer.js';
 import {
   viewProjection,
   effectiveVFovDeg,
+  maxVFovDeg,
   projectDir,
   unprojectNDC,
   type Mat4,
@@ -675,8 +676,15 @@ export class PanoViewer {
     return clampPitch(pitch, this.camera.minPitch, this.camera.maxPitch);
   }
 
+  /**
+   * `fov` within the camera's limits, and no wider than the horizontal fov
+   * cap allows at the current aspect: past that, a requested fov draws the
+   * same picture, so zoom steps in that band would change nothing on screen.
+   */
   private clampFov(fov: number): number {
-    return clampFov(fov, this.camera.minFov, this.camera.maxFov);
+    const { minFov, maxFov, maxHorizontalFov } = this.camera;
+    const max = Math.max(minFov, Math.min(maxFov, maxVFovDeg(maxHorizontalFov, this.aspect)));
+    return clampFov(fov, minFov, max);
   }
 
   /**
@@ -908,6 +916,9 @@ export class PanoViewer {
     this.cssW = width || 1;
     this.cssH = height || 1;
     this.aspect = this.cssW / this.cssH;
+    // A wider viewport lowers the fov cap: keep the camera inside it.
+    this.target.fov = this.clampFov(this.target.fov);
+    this.view.fov = this.clampFov(this.view.fov);
     if (!this.renderer.resize(this.cssW, this.cssH)) return;
     if (drawNow && this.onScreen && !this.disposed && !this.contextLost) {
       cancelAnimationFrame(this.raf);
