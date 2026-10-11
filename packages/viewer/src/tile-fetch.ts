@@ -40,7 +40,11 @@ export async function loadTileImage(
 ): Promise<TileImage> {
   if (source.loadTile) return source.loadTile(tile, signal);
   const res = await requestTile(net, source.tileUrl!(tile), signal, priority);
-  if (!res.ok) throw new TileHttpError(res.status);
+  if (!res.ok) {
+    // Unread, the body would hold its connection until GC.
+    discardBody(res);
+    throw new TileHttpError(res.status);
+  }
   const blob = await res.blob();
   // Decoded upright (row 0 = top). The renderer uploads it unflipped and the
   // tile UVs address row 0 as v = 0 (see tile-geometry.ts).
