@@ -53,16 +53,19 @@ function drawnKeys(layer: TileLayer): Set<string> {
 function expectFinestDrawn(layer: TileLayer): number {
   const { cache, desired } = internals(layer);
   const drawn = drawnKeys(layer);
+  // Runs after every frame, so it checks in plain code and only reaches for
+  // expect() on a miss: an expect() and a message per tile per frame was most
+  // of the time the random walks and the pan took.
   for (const key of desired) {
     let k: string | undefined = key;
     while (k !== undefined && !cache.has(k)) k = parentKey(k);
-    expect(k, `nothing resident over ${key}`).toBeDefined();
-    expect(drawn.has(k!), `${k} is the finest resident tile over ${key} but is not drawn`).toBe(
-      true,
-    );
+    if (k === undefined) expect.fail(`nothing resident over ${key}`);
+    if (!drawn.has(k)) expect.fail(`${k} is the finest resident tile over ${key} but is not drawn`);
   }
   // The base is the floor under every seam: always drawn.
-  for (const e of cache.values()) if (e.level === 0) expect(drawn.has(e.key)).toBe(true);
+  for (const e of cache.values()) {
+    if (e.level === 0 && !drawn.has(e.key)) expect.fail(`base tile ${e.key} is not drawn`);
+  }
   let skipped = 0;
   for (const e of cache.values()) if (!drawn.has(e.key)) skipped++;
   return skipped;
@@ -76,9 +79,12 @@ describe('TileLayer: coarse tiles covered by finer ones', () => {
   let uploadThrows: ((key: string) => Error | undefined) | undefined;
   let renderer: { uploadTile: ReturnType<typeof vi.fn>; removeTile: ReturnType<typeof vi.fn> };
 
+  // setImmediate, not setTimeout(0): it runs once the microtasks (every
+  // load here settles in one) are drained, without the 1 ms timer floor that
+  // made a 900-frame test spend most of its time asleep.
   const flush = async (): Promise<void> => {
     for (let i = 0; i < 4; i++) await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setImmediate(resolve));
   };
 
   function makeLayer(maxConcurrent = 64, maxLevel = 3): TileLayer {
