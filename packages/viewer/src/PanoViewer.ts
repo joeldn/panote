@@ -77,6 +77,13 @@ function dropOverlay(el: HTMLCanvasElement): void {
   el.height = 0;
 }
 
+/** A transitionTo's crossfade, shared between it and the swap it waits on. */
+interface Crossfade {
+  ms: number;
+  /** The snapshot of the old scene, put up at the swap. */
+  snap?: HTMLCanvasElement | undefined;
+}
+
 /** A load to finish after a context restore. */
 interface Reload {
   id: string;
@@ -85,6 +92,8 @@ interface Reload {
   source?: CubeTileSource;
   /** Emit ready and scene-change: false for the scene that was already on screen. */
   announce: boolean;
+  /** Crossfade from the old scene at the swap (transitionTo). */
+  crossfade?: Crossfade;
 }
 
 export class PanoViewer {
@@ -337,12 +346,21 @@ export class PanoViewer {
    * is back, with the same view, and emits `ready` and `scene-change` for it;
    * if that reload fails it emits `load-error` instead.
    */
-  async load(source: CubeTileSource | string, options: LoadOptions = {}): Promise<boolean> {
+  load(source: CubeTileSource | string, options: LoadOptions = {}): Promise<boolean> {
+    return this.start(source, options.view);
+  }
+
+  private async start(
+    source: CubeTileSource | string,
+    view: Partial<View> | undefined,
+    crossfade?: Crossfade,
+  ): Promise<boolean> {
     const token = this.supersede();
     const stale = () => this.disposed || token !== this.loadToken;
     const id = typeof source === 'string' ? source : source.id;
-    const request: Reload = { id, view: options.view, announce: true };
+    const request: Reload = { id, view, announce: true };
     if (typeof source !== 'string') request.source = source;
+    if (crossfade) request.crossfade = crossfade;
     this.request = request;
     try {
       this.emitter.emit('loading', id);
@@ -438,6 +456,7 @@ export class PanoViewer {
     // the viewer for the length of the fetch, and would leave it blank for good
     // if the fetch failed; this way a rejected load leaves exactly what was on
     // screen before it was called.
+    if (req.crossfade) this.raiseSnapshot(req.crossfade);
     this.layer?.dispose();
     this.layer = layer;
     this.scene = source;
@@ -521,7 +540,8 @@ export class PanoViewer {
     const { source } = req;
     if (!source) return this.load(req.id, req.view ? { view: req.view } : {});
     const token = this.supersede();
-    const request: Reload = { ...req, source };
+    // No crossfade: the transitionTo that asked for one has already given up.
+    const request: Reload = { id: req.id, view: req.view, source, announce: req.announce };
     this.request = request;
     try {
       return await this.swapIn(token, { ...request, source });
@@ -1149,53 +1169,53 @@ export class PanoViewer {
     }
   }
 
+  /**
+   * Put a copy of the frame on screen over the canvas, for transitionTo to
+   * fade out. Taken at the swap, while the old scene is still drawable, so
+   * the old scene stays live and interactive for the whole load and the
+   * snapshot is up only for the fade.
+   */
+  private raiseSnapshot(fade: Crossfade): void {
+    // Only snapshot when there is something to draw; snapshotting an empty
+    // draw list would crossfade from a black frame.
+    const drawList = this.drawList();
+    if (drawList.length === 0) return;
+    try {
+      // A copy of the frame, made on the GPU; null while the context is lost.
+      const snap = this.renderer.snapshot(drawList) ?? undefined;
+      if (!snap) return;
+      snap.style.cssText =
+        'position:absolute;inset:0;width:100%;height:100%;' +
+        'pointer-events:none;transition:opacity ' +
+        fade.ms +
+        'ms ease;opacity:1;z-index:5;';
+      this.container.appendChild(snap);
+      this.transitionOverlay = snap;
+      fade.snap = snap;
+    } catch {
+      // snapshot unavailable — fall back to a plain cut
+    }
+  }
+
   async transitionTo(source: CubeTileSource | string, view?: Partial<View>): Promise<void> {
     if (this.disposed) return;
     const { durationMs, respectReducedMotion } = this.opts.transition;
     const reduce =
       respectReducedMotion && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const ms = reduce ? 0 : durationMs;
-
-    // Only snapshot when there is something to draw; snapshotting an empty draw
-    // list would crossfade from a black frame.
-    const drawList = this.drawList();
-    // Started before the snapshot goes up: superseding the load in flight
-    // removes an older transition's overlay (one that may still be fading),
-    // and must not remove this one. Up to its first await, load() leaves the
-    // scene on screen alone, so drawList is still what is drawn.
-    const loading = this.load(source, view ? { view } : {});
-    let snap: HTMLCanvasElement | undefined;
-    if (drawList.length > 0) {
-      try {
-        // A copy of the frame, made on the GPU; null while the context is lost.
-        snap = this.renderer.snapshot(drawList) ?? undefined;
-        if (snap) {
-          snap.style.cssText =
-            'position:absolute;inset:0;width:100%;height:100%;' +
-            'pointer-events:none;transition:opacity ' +
-            ms +
-            'ms ease;opacity:1;z-index:5;';
-          this.container.appendChild(snap);
-          this.transitionOverlay = snap;
-        }
-      } catch {
-        // snapshot unavailable — fall back to a plain fade
-        snap = undefined;
-      }
-    }
-
+    const fade: Crossfade = { ms: reduce ? 0 : durationMs };
     try {
-      // Superseded: the newer call owns the camera and has already removed
-      // this snapshot, so there is nothing to fade.
-      const tookEffect = await loading;
-      if (snap && tookEffect) {
+      // Superseded: the newer call owns the camera, and no snapshot went up.
+      const tookEffect = await this.start(source, view, fade);
+      const snap = fade.snap;
+      if (snap && tookEffect && this.transitionOverlay === snap) {
         await new Promise((r) => requestAnimationFrame(() => r(null)));
         snap.style.opacity = '0';
-        await new Promise((r) => setTimeout(r, ms));
+        await new Promise((r) => setTimeout(r, fade.ms));
       }
     } finally {
       // Always tear the overlay down — even if load() rejected — but don't
       // clobber an overlay a newer transitionTo may have installed.
+      const snap = fade.snap;
       if (snap) {
         dropOverlay(snap);
         if (this.transitionOverlay === snap) this.transitionOverlay = undefined;
