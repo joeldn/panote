@@ -137,6 +137,10 @@ export class PanoViewer {
   // Time of the last frame drawn while the loop was running; undefined once it
   // stops, so the first frame after an idle spell steps one nominal frame.
   private lastFrameT: number | undefined;
+  // Time of the last frame drawn at all. The first frame after a short idle
+  // spell (a drag's frames, then its release) steps only the time since it,
+  // so at 120 Hz a fling's first frame is not a 60 Hz frame's jump.
+  private lastDrawT: number | undefined;
   // False while the container is scrolled out of view: no frames are drawn
   // and auto-rotate does not turn.
   private onScreen = true;
@@ -1011,9 +1015,10 @@ export class PanoViewer {
     if (this.disposed) return;
     const dt =
       this.lastFrameT === undefined
-        ? FRAME_MS
+        ? Math.min(Math.max(t - (this.lastDrawT ?? -Infinity), 0), FRAME_MS)
         : Math.min(Math.max(t - this.lastFrameT, 0), MAX_FRAME_DT_MS);
     this.lastFrameT = t;
+    this.lastDrawT = t;
 
     if (this.autoRotating()) {
       // The first frame after (re)starting has no prior timestamp to diff
