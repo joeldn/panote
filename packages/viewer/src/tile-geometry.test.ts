@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { FACES, faceUVToDir, tileCornersUV } from './cube.js';
 import { buildTileGeometry, RADIUS } from './tile-geometry.js';
 
 describe('buildTileGeometry', () => {
@@ -34,5 +35,22 @@ describe('buildTileGeometry', () => {
     expect(b.uv).toBe(a.uv);
     expect(b.index).toBe(a.index);
     expect(b.pos).not.toBe(a.pos);
+  });
+
+  it('puts the corners where tileCornersUV and faceUVToDir put them', () => {
+    for (const face of FACES) {
+      for (const [level, x, y] of [
+        [0, 0, 0],
+        [1, 1, 0],
+        [2, 3, 1],
+        [3, 5, 6],
+      ] as const) {
+        const want = tileCornersUV(level, x, y).flatMap((c) => {
+          const d = faceUVToDir(face, c.u, c.v);
+          return [d.x * RADIUS, d.y * RADIUS, d.z * RADIUS];
+        });
+        expect(buildTileGeometry(face, level, x, y).pos).toEqual(new Float32Array(want));
+      }
+    }
   });
 });

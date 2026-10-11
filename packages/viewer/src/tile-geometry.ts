@@ -1,4 +1,5 @@
-import { faceUVToDir, tileCornersUV, type Face } from './cube.js';
+import { faceUVInto, tilesPerEdge, type Face } from './cube.js';
+import type { Vec3 } from './project.js';
 
 // Builds flat cube-face quad geometry for a tile: a 4-vert quad on the cube
 // face at RADIUS, textured with the tile's colour. No depth/displacement.
@@ -22,22 +23,27 @@ const QUAD_UV = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
  *  draws 4-vertex geometry from one shared index buffer with this content. */
 export const QUAD_INDEX = new Uint16Array([0, 2, 1, 1, 2, 3]);
 
+// Scratch for buildTileGeometry.
+const cornerDir: Vec3 = { x: 0, y: 0, z: 0 };
+
 /**
  * Build the flat 4-vert quad (TL,TR,BL,BR) for a tile on the cube face at
  * RADIUS. Only `pos` is new per tile; `uv` and `index` are the shared
  * QUAD_UV and QUAD_INDEX.
  */
 export function buildTileGeometry(face: Face, level: number, x: number, y: number): TileGeometry {
-  const corners = tileCornersUV(level, x, y); // TL, TR, BL, BR
+  const g = tilesPerEdge(level);
   const pos = new Float32Array(4 * 3);
-  corners.forEach((c, i) => {
-    // faceUVToDir returns a point on the unit CUBE (major axis = ±1). Place the
+  const d = cornerDir;
+  // TL, TR, BL, BR, as tileCornersUV orders them.
+  for (let i = 0; i < 4; i++) {
+    // faceUVInto gives a point on the unit CUBE (major axis = ±1). Place the
     // quad on the flat cube face (scaled by RADIUS) — do NOT normalize onto a
     // sphere, or the gnomonic cube-face texture gets bowed.
-    const d = faceUVToDir(face, c.u, c.v);
+    faceUVInto(d, face, (x + (i & 1)) / g, (y + (i >> 1)) / g);
     pos[i * 3] = d.x * RADIUS;
     pos[i * 3 + 1] = d.y * RADIUS;
     pos[i * 3 + 2] = d.z * RADIUS;
-  });
+  }
   return { pos, uv: QUAD_UV, index: QUAD_INDEX };
 }

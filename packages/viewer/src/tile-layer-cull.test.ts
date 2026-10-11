@@ -13,7 +13,11 @@ import type { GLRenderer } from './render/gl-renderer.js';
 // rebuilt the frustum at all, and whether it recomputed any tile corners.
 vi.mock('./cube.js', async (importOriginal) => {
   const actual = await importOriginal<typeof cube>();
-  return { ...actual, faceUVToDir: vi.fn(actual.faceUVToDir) };
+  return {
+    ...actual,
+    faceUVToDir: vi.fn(actual.faceUVToDir),
+    faceUVInto: vi.fn(actual.faceUVInto),
+  };
 });
 vi.mock('./tile-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof tileCache>();
@@ -159,10 +163,73 @@ describe('TileLayer cull', () => {
 
   it('computes tile geometry once per level, not once per frame', () => {
     frame(0, 0, 70, 16 / 9, 4);
-    const faceUVToDir = vi.mocked(cube.faceUVToDir);
-    faceUVToDir.mockClear();
+    vi.mocked(cube.faceUVToDir).mockClear();
+    vi.mocked(cube.faceUVInto).mockClear();
     for (let i = 0; i < 24; i++) frame((i * Math.PI) / 12, 0.2, 70, 16 / 9, 4);
-    expect(faceUVToDir).not.toHaveBeenCalled();
+    expect(cube.faceUVToDir).not.toHaveBeenCalled();
+    expect(cube.faceUVInto).not.toHaveBeenCalled();
+  });
+
+  it('shares its level tables with every other layer, whatever the source', () => {
+    frame(0, 0, 70, 16 / 9, 4);
+    vi.mocked(cube.faceUVInto).mockClear();
+    // The next scene: another source, another tile size.
+    const next = new TileLayer(
+      { uploadTile: vi.fn(() => 1), removeTile: vi.fn() } as unknown as GLRenderer,
+      urlTemplateSource({
+        id: 'pano-b',
+        template: '/tiles/pano-b/{level}/{face}/{x}-{y}.jpg',
+        tileSize: 1024,
+        maxLevel: MAX_LEVEL,
+      }),
+      () => {},
+      { textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
+    );
+    const table = (l: TileLayer, level: number): unknown =>
+      (l as unknown as { table(level: number): unknown }).table(level);
+    for (let level = 0; level <= 4; level++) expect(table(next, level)).toBe(table(layer, level));
+    expect(cube.faceUVInto).not.toHaveBeenCalled();
+    next.dispose();
+  });
+
+  it('builds the same spheres, centre directions and keys as the per-corner formula', () => {
+    for (let level = 0; level <= 3; level++) {
+      const { g, data, keys } = (
+        layer as unknown as {
+          table(level: number): { g: number; data: Float32Array; keys: string[] };
+        }
+      ).table(level);
+      expect(g).toBe(cube.tilesPerEdge(level));
+      const want = new Float32Array(data.length);
+      const wantKeys: string[] = [];
+      cube.FACES.forEach((face, f) => {
+        for (let y = 0; y < g; y++) {
+          for (let x = 0; x < g; x++) {
+            const corners = cube.tileCornersUV(level, x, y);
+            const p = corners.map((c) => {
+              const d = cube.faceUVToDir(face, c.u, c.v);
+              return { x: d.x * RADIUS, y: d.y * RADIUS, z: d.z * RADIUS };
+            });
+            const cx = (p[0]!.x + p[1]!.x + p[2]!.x + p[3]!.x) / 4;
+            const cy = (p[0]!.y + p[1]!.y + p[2]!.y + p[3]!.y) / 4;
+            const cz = (p[0]!.z + p[1]!.z + p[2]!.z + p[3]!.z) / 4;
+            let r = 0;
+            for (const q of p) r = Math.max(r, Math.hypot(q.x - cx, q.y - cy, q.z - cz));
+            const md = cube.faceUVToDir(
+              face,
+              (corners[0].u + corners[1].u) / 2,
+              (corners[0].v + corners[2].v) / 2,
+            );
+            const mlen = Math.hypot(md.x, md.y, md.z) || 1;
+            const i = (f * g + y) * g + x;
+            want.set([cx, cy, cz, r * 1.05, md.x / mlen, md.y / mlen, md.z / mlen], i * 7);
+            wantKeys[i] = `${level}/${face}/${x}-${y}`;
+          }
+        }
+      });
+      expect(data).toEqual(want);
+      expect(keys).toEqual(wantKeys);
+    }
   });
 
   it('reuses its candidate objects from frame to frame', () => {

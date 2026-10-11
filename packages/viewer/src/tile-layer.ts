@@ -1,4 +1,5 @@
-import { FACES, faceUVToDir, tileCornersUV, tilesPerEdge, type Face } from './cube.js';
+import { FACES, faceUVInto, tilesPerEdge, type Face } from './cube.js';
+import type { Vec3 } from './project.js';
 import { LOD_TOLERANCE, selectLevel } from './lod.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
 import { selectEvictions } from './tile-cache.js';
@@ -194,8 +195,8 @@ const STRIDE = 7;
 const CULL_PAD = 1.05;
 
 /**
- * Everything update() needs about one pyramid level, computed once per layer
- * the first time that level is wanted, so the per-frame cull is plain
+ * Everything update() needs about one pyramid level, computed once per page
+ * the first time that level is wanted (see levelTable), so the per-frame cull is plain
  * arithmetic. Tile `i = (faceIndex * g + y) * g + x`.
  */
 interface LevelTable {
@@ -208,47 +209,74 @@ interface LevelTable {
   keys: string[];
 }
 
+// Scratch for buildLevelTable: one cube point, and the four corners' xyz.
+const cornerDir: Vec3 = { x: 0, y: 0, z: 0 };
+const cornerPos = new Float64Array(12);
+
 function buildLevelTable(level: number): LevelTable {
   const g = tilesPerEdge(level);
   const count = FACES.length * g * g;
   const data = new Float32Array(count * STRIDE);
   const keys = new Array<string>(count);
+  const p = cornerPos;
+  const d = cornerDir;
   for (let f = 0; f < FACES.length; f++) {
     const face = FACES[f]!;
     for (let y = 0; y < g; y++) {
       for (let x = 0; x < g; x++) {
         const i = (f * g + y) * g + x;
         // Corners on the flat cube face, where the quad is drawn
-        // (tile-geometry.ts), not on the sphere.
-        const corners = tileCornersUV(level, x, y);
-        const p = corners.map((c) => {
-          const d = faceUVToDir(face, c.u, c.v);
-          return { x: d.x * RADIUS, y: d.y * RADIUS, z: d.z * RADIUS };
-        });
-        const cx = (p[0]!.x + p[1]!.x + p[2]!.x + p[3]!.x) / 4;
-        const cy = (p[0]!.y + p[1]!.y + p[2]!.y + p[3]!.y) / 4;
-        const cz = (p[0]!.z + p[1]!.z + p[2]!.z + p[3]!.z) / 4;
+        // (tile-geometry.ts), not on the sphere: TL, TR, BL, BR, as
+        // tileCornersUV orders them.
+        const u0 = x / g;
+        const v0 = y / g;
+        const u1 = (x + 1) / g;
+        const v1 = (y + 1) / g;
+        for (let c = 0; c < 4; c++) {
+          faceUVInto(d, face, c & 1 ? u1 : u0, c & 2 ? v1 : v0);
+          p[c * 3] = d.x * RADIUS;
+          p[c * 3 + 1] = d.y * RADIUS;
+          p[c * 3 + 2] = d.z * RADIUS;
+        }
+        const cx = (p[0]! + p[3]! + p[6]! + p[9]!) / 4;
+        const cy = (p[1]! + p[4]! + p[7]! + p[10]!) / 4;
+        const cz = (p[2]! + p[5]! + p[8]! + p[11]!) / 4;
         let r = 0;
-        for (const q of p) r = Math.max(r, Math.hypot(q.x - cx, q.y - cy, q.z - cz));
-        const md = faceUVToDir(
-          face,
-          (corners[0].u + corners[1].u) / 2,
-          (corners[0].v + corners[2].v) / 2,
-        );
-        const mlen = Math.hypot(md.x, md.y, md.z) || 1;
+        for (let c = 0; c < 12; c += 3) {
+          r = Math.max(r, Math.hypot(p[c]! - cx, p[c + 1]! - cy, p[c + 2]! - cz));
+        }
+        faceUVInto(d, face, (u0 + u1) / 2, (v0 + v1) / 2);
+        const mlen = Math.hypot(d.x, d.y, d.z) || 1;
         const o = i * STRIDE;
         data[o] = cx;
         data[o + 1] = cy;
         data[o + 2] = cz;
         data[o + 3] = r * CULL_PAD;
-        data[o + 4] = md.x / mlen;
-        data[o + 5] = md.y / mlen;
-        data[o + 6] = md.z / mlen;
+        data[o + 4] = d.x / mlen;
+        data[o + 5] = d.y / mlen;
+        data[o + 6] = d.z / mlen;
         keys[i] = tileKey(level, face, x, y);
       }
     }
   }
   return { g, data, keys };
+}
+
+/**
+ * Level tables by level, shared by every layer on the page. A table depends
+ * on the level alone (not the source, nor its tile size), so a scene change
+ * reuses the ones already built instead of spending up to a few ms per level
+ * rebuilding them.
+ */
+const levelTables: (LevelTable | undefined)[] = [];
+
+function levelTable(level: number): LevelTable {
+  let t = levelTables[level];
+  if (!t) {
+    t = buildLevelTable(level);
+    levelTables[level] = t;
+  }
+  return t;
 }
 
 /** Candidate order: nearest the view centre first. */
@@ -306,8 +334,6 @@ export class TileLayer {
   // `candidates.length` of them.
   private candidatePool: Candidate[] = [];
   private _drawList: DrawItem[] = [];
-  // Built lazily per level; see LevelTable.
-  private levels: (LevelTable | undefined)[] = [];
   // Tile indices at `visibleLevel` that passed the cull, `visibleCount` long.
   private visible: Int32Array;
   private visibleCount = 0;
@@ -638,12 +664,7 @@ export class TileLayer {
   }
 
   private table(level: number): LevelTable {
-    let t = this.levels[level];
-    if (!t) {
-      t = buildLevelTable(level);
-      this.levels[level] = t;
-    }
-    return t;
+    return levelTable(level);
   }
 
   /**
