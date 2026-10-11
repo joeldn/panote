@@ -426,7 +426,7 @@ describe('tour data inlined by the Worker', () => {
   // scheduler tasks (each one a chance for the browser to paint a frame first).
   it('asks the viewer for the start scene within two commits of the first render', async () => {
     inline({ slug: 'old-town', record: live, tour: bundle() });
-    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean | undefined };
     const actEnv = env.IS_REACT_ACT_ENVIRONMENT;
     // Rendered outside act(), which would flush every effect up front, so the
     // count is the real one.
@@ -690,6 +690,33 @@ describe('visitor share', () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
+  it('shows Share busy from the press until the sheet arrives', async () => {
+    let arrive!: () => void;
+    const arrived = new Promise<void>((r) => (arrive = r));
+    load.mockImplementation(async () => {
+      await arrived;
+      return import('@internal/ui/share');
+    });
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      const share = screen.getByRole('button', { name: 'Share' });
+      // Warming it up is not a press: nothing to show yet.
+      fireEvent.pointerEnter(share);
+      expect(share.getAttribute('aria-busy')).toBeNull();
+      fireEvent.click(share);
+      await waitFor(() => expect(share.getAttribute('aria-busy')).toBe('true'));
+      expect(share.querySelector('.pn-btn__spinner')).toBeTruthy();
+      arrive();
+      expect(await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY)).toBeTruthy();
+      expect(share.getAttribute('aria-busy')).toBeNull();
+    } finally {
+      // An import left in flight would keep the page from reloading in later tests.
+      arrive();
+      await arrived;
+    }
+  });
+
   it('retries a chunk that failed to load once, then opens the sheet', async () => {
     load.mockRejectedValueOnce(staleChunk());
     renderAt('/s/old-town');
@@ -729,6 +756,35 @@ describe('visitor share', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     expect(await screen.findByRole('alert', {}, LAZY)).toBeTruthy();
     tourStillUp(viewer);
+  });
+
+  it('gives the fallback a copy button, focus and Escape', async () => {
+    load.mockRejectedValue(staleChunk());
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      const share = screen.getByRole('button', { name: 'Share' });
+      share.focus();
+      fireEvent.click(share);
+      const fallback = await screen.findByRole('alert', {}, LAZY);
+      // Focus moves in, to the copy button; the plain link stays too.
+      const copy = within(fallback).getByRole('button', { name: 'Copy link' });
+      expect(document.activeElement).toBe(copy);
+      expect(within(fallback).getByRole('link').getAttribute('href')).toBe(
+        'https://panote.test/s/old-town',
+      );
+      await act(async () => fireEvent.click(copy));
+      expect(writeText).toHaveBeenCalledWith('https://panote.test/s/old-town');
+      expect(within(fallback).getByRole('button', { name: 'Copied ✓' })).toBeTruthy();
+      fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(document.activeElement).toBe(share);
+    } finally {
+      Reflect.deleteProperty(navigator, 'clipboard');
+    }
   });
 
   it("does not let Vite's preload-error reload the page for the share chunk", async () => {
