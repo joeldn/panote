@@ -1,10 +1,14 @@
-import type { LoadOptions, PanoViewer, View, ViewerOptions } from '@panote/viewer';
+import type {
+  LoadOptions,
+  PanoViewerApi,
+  PanoViewerEvents,
+  View,
+  ViewerOptions,
+} from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TourViewer, type TourViewerData, type TourViewerProps } from './TourViewer.js';
-
-type Handler = (payload: unknown) => void;
 
 interface PendingTransition {
   pano: string;
@@ -14,7 +18,7 @@ interface PendingTransition {
   cancel: () => void;
 }
 
-class FakeViewer {
+class FakeViewer implements PanoViewerApi {
   /** Like the real viewer's: in the host, focusable for its keys, and the named application. */
   canvas = document.createElement('canvas');
   constructor(
@@ -28,7 +32,6 @@ class FakeViewer {
   }
   setLabel = vi.fn((label: string) => this.canvas.setAttribute('aria-label', label));
   focus = vi.fn(() => this.canvas.focus({ preventScroll: true }));
-  handlers = new Map<string, Set<Handler>>();
   fail = false;
   /** When set, a transition load stays pending until the test settles it from `pending`. */
   defer = false;
@@ -73,14 +76,24 @@ class FakeViewer {
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
-  on = (type: string, fn: Handler) => {
+  showPreview = vi.fn();
+  zoomBy = vi.fn();
+  directionAtPixel = () => ({ yaw: 0, pitch: 0 });
+  requestRender = vi.fn();
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
     return () => this.off(type, fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload?: unknown) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+  }
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 
@@ -116,7 +129,7 @@ function renderViewer(props: Partial<TourViewerProps> = {}) {
   const createViewer = (el: HTMLElement, options: ViewerOptions) => {
     const v = new FakeViewer(el, options);
     viewers.push(v);
-    return v as unknown as PanoViewer;
+    return v;
   };
   render(
     <TourViewer
@@ -341,7 +354,7 @@ describe('TourViewer', () => {
           const v = new FakeViewer();
           v.fail = true;
           viewers.push(v);
-          return v as unknown as PanoViewer;
+          return v;
         }}
       />,
     );
@@ -398,7 +411,7 @@ describe('TourViewer', () => {
         createViewer: (el, options) => {
           const v = new FakeViewer(el, options);
           v.defer = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       const chevron = await screen.findByRole('button', { name: 'Go to To the church' });
@@ -413,7 +426,7 @@ describe('TourViewer', () => {
         createViewer: (el, options) => {
           const v = new FakeViewer(el, options);
           v.defer = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await screen.findByRole('button', { name: 'Go to To the church' });
@@ -477,7 +490,7 @@ describe('TourViewer', () => {
           v = new FakeViewer();
           // The start scene never loads, so nothing the stage asked for landed.
           v.fail = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await waitFor(() => expect(onLoadError).toHaveBeenCalledTimes(1));
@@ -524,7 +537,7 @@ describe('TourViewer', () => {
         // DOM: a click now reaches a point layer with no viewer yet.
         fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
         early = true;
-        return new FakeViewer(el, options) as unknown as PanoViewer;
+        return new FakeViewer(el, options);
       },
     });
     expect(early).toBe(true);
@@ -563,8 +576,7 @@ describe('TourViewer', () => {
         },
         titles: { square: 'Square', church: 'Church', tower: 'Tower', bridge: 'Bridge' },
       });
-    const settle = (v: FakeViewer) =>
-      act(() => v.emit('tiles-settled', undefined as unknown as string));
+    const settle = (v: FakeViewer) => act(() => v.emit('tiles-settled'));
 
     it('fetches up to three link targets, only once the scene on screen has settled', async () => {
       const prefetch = vi.fn(async () => {});
@@ -618,7 +630,7 @@ describe('TourViewer', () => {
           const v = new FakeViewer();
           // Its base was all it needed: settled by the time the scene is shown.
           v.settled = true;
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await waitFor(() => expect(prefetch).toHaveBeenCalledTimes(3));
@@ -639,7 +651,7 @@ describe('TourViewer', () => {
           v = new FakeViewer();
           v.settled = true;
           v.load.mockImplementation(() => new Promise<boolean>(() => {}));
-          return v as unknown as PanoViewer;
+          return v;
         },
       });
       await waitFor(() => expect(v.load).toHaveBeenCalled());
@@ -659,7 +671,7 @@ describe('TourViewer', () => {
         // The second viewer's load never lands.
         if (made.length > 0) v.load.mockImplementation(() => new Promise<boolean>(() => {}));
         made.push(v);
-        return v as unknown as PanoViewer;
+        return v;
       };
       const props = {
         data: many(),

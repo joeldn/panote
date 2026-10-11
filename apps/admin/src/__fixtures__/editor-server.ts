@@ -179,11 +179,10 @@ export class FakeServer {
   });
 }
 
-type Handler = (payload: unknown) => void;
 type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 /** jsdom has no WebGL: a PanoViewer stand-in with a scriptable view. */
-export class FakeViewer {
+export class FakeViewer implements ReturnType<ViewerFactory> {
   /** Like the real viewer's canvas: in the host, and the named application landmark. */
   canvas = document.createElement('canvas');
   constructor(host?: HTMLElement, options?: Parameters<ViewerFactory>[1]) {
@@ -195,7 +194,6 @@ export class FakeViewer {
   view = { yaw: 0, pitch: 0, fov: 70 };
   /** What directionAtPixel returns (where a placed point lands). */
   pointAt = { yaw: 0.5, pitch: 0.1 };
-  handlers = new Map<string, Set<Handler>>();
   load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
     if (opts?.transition) return this.crossfade(pano);
     this.emit('scene-change', { id: pano, kind: 'tiles' });
@@ -221,14 +219,20 @@ export class FakeViewer {
   project = vi.fn((_yaw: number, _pitch: number) => ({ x: 0, y: 0, behind: false }));
   heading = () => 0;
   prefetch = vi.fn(async () => {});
-  on = (type: string, fn: Handler) => {
+  cancelLoad = vi.fn();
+  zoomBy = vi.fn();
+  requestRender = vi.fn();
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on(type: string, fn: (payload: never) => void): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
     return () => this.off(type, fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload?: unknown) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+  }
+  off(type: string, fn: (payload: never) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit(type: string, payload?: unknown): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: unknown) => void)(payload));
   }
 }
 
@@ -237,7 +241,7 @@ export function viewerFactory(): { create: ViewerFactory; viewers: FakeViewer[] 
   const create: ViewerFactory = (host, options) => {
     const v = new FakeViewer(host, options);
     viewers.push(v);
-    return v as unknown as ReturnType<ViewerFactory>;
+    return v;
   };
   return { create, viewers };
 }

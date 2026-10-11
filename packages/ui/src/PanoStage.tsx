@@ -2,6 +2,7 @@ import {
   mergeViewerOptions,
   PanoViewer,
   WebGLUnavailableError,
+  type PanoViewerApi,
   type PreviewSource,
   type View,
   type ViewerOptions,
@@ -21,7 +22,7 @@ import { panoteViewerPreset } from './panote-viewer.js';
 import { StageEventsContext, type StageEvents } from './stage-events.js';
 import { PanoViewerContext } from './viewer-context.js';
 
-export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewer;
+export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewerApi;
 
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
@@ -110,7 +111,7 @@ export interface PanoStageProps {
   embed?: boolean;
   /** Read once when the viewer is created. */
   options?: StageViewerOptions;
-  onViewer?: (viewer: PanoViewer | null) => void;
+  onViewer?: (viewer: PanoViewerApi | null) => void;
   onSceneChange?: (panoId: string) => void;
   /** Chrome inside the stage opened a point (see `useStageEvents`). */
   onHotspotOpen?: (hotspotId: string) => void;
@@ -128,13 +129,13 @@ export interface PanoStageProps {
   style?: CSSProperties;
   /** The viewer canvas's accessible name; it is `role="application"`. */
   'aria-label'?: string;
-  /** Test seam: builds the viewer (defaults to `new PanoViewer`). */
+  /** Builds the viewer (defaults to `new PanoViewer`); a test passes a `PanoViewerApi` double. */
   createViewer?: ViewerFactory;
 }
 
 /** A load the stage started, and what it was given. */
 interface StageLoad {
-  viewer: PanoViewer;
+  viewer: PanoViewerApi;
   panoId: string;
   reloadKey: string | number | undefined;
   previewKey: string | null;
@@ -168,7 +169,7 @@ export function PanoStage({
   createViewer = defaultFactory,
 }: PanoStageProps) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const [viewer, setViewer] = useState<PanoViewer | null>(null);
+  const [viewer, setViewer] = useState<PanoViewerApi | null>(null);
   // Bumped on each WebGL context restore. The viewer drops a preview when the
   // context is lost and reloads only tiles, so the load effect puts the
   // preview back up.
@@ -453,7 +454,7 @@ function createOrNull(
   create: ViewerFactory,
   container: HTMLElement,
   options: ViewerOptions,
-): PanoViewer | null {
+): PanoViewerApi | null {
   try {
     return create(container, options);
   } catch (err) {

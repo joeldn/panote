@@ -1,5 +1,6 @@
 export * from './types.js';
 export { PanoViewer } from './PanoViewer.js';
+export type { PanoViewerApi } from './api.js';
 export { WebGLUnavailableError, isWebGL2Supported } from './webgl-support.js';
 export { VIEWER_DEFAULTS, mergeViewerOptions, resolveViewerOptions } from './defaults.js';
 export {

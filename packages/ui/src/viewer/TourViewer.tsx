@@ -1,5 +1,5 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewerApi } from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
@@ -227,7 +227,7 @@ export function TourViewer({
   prefetch = prefetchPano,
 }: TourViewerProps) {
   const frame = useRef<HTMLDivElement>(null);
-  const [viewer, setViewer] = useState<PanoViewer | null>(null);
+  const [viewer, setViewer] = useState<PanoViewerApi | null>(null);
   // `target` is the scene asked for; `shown` is the one on screen, which only
   // moves once the viewer reports the new pano drawable. The chrome follows
   // `shown`, so nothing for the next scene lands over the old pano.
@@ -240,7 +240,9 @@ export function TourViewer({
   // the current viewer has, it is empty and counts as settled, so the
   // prefetch would race its first load. The baseUrl is checked too: in the
   // render where it changes, the old viewer is still the one in hand.
-  const [arrivedOn, setArrivedOn] = useState<{ viewer: PanoViewer; baseUrl: string } | null>(null);
+  const [arrivedOn, setArrivedOn] = useState<{ viewer: PanoViewerApi; baseUrl: string } | null>(
+    null,
+  );
   const arrived = arrivedOn?.viewer === viewer && arrivedOn.baseUrl === baseUrl;
   const [active, setActive] = useState<ViewerHotspot | null>(null);
   const [autoRotate, setAutoRotate] = useState(

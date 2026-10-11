@@ -70,9 +70,7 @@ const bundle = (over: Record<string, unknown> = {}) => ({
 });
 const live = { v: 1, kind: 'tour', tourId: 'tour-a' };
 
-type Handler = (payload: unknown) => void;
-class FakeViewer {
-  handlers = new Map<string, Set<Handler>>();
+class FakeViewer implements PanoViewer {
   failLoad = false;
   constructor(readonly options: ViewerOptions) {}
   load = vi.fn(async (pano: string, opts?: LoadOptions): Promise<boolean> => {
@@ -98,14 +96,22 @@ class FakeViewer {
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
-  on = (type: string, fn: Handler) => {
+  cancelLoad = vi.fn();
+  showPreview = vi.fn();
+  zoomBy = vi.fn();
+  directionAtPixel = () => ({ yaw: 0, pitch: 0 });
+  requestRender = vi.fn();
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on(type: string, fn: (payload: never) => void): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
     return () => this.off(type, fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload?: unknown) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+  }
+  off(type: string, fn: (payload: never) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit(type: string, payload?: unknown): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: unknown) => void)(payload));
   }
 }
 
@@ -117,7 +123,7 @@ const createViewer: ViewerFactory = (_el, options) => {
   const v = new FakeViewer(options);
   v.failLoad = failLoads;
   viewers.push(v);
-  return v as unknown as PanoViewer;
+  return v;
 };
 const lastViewer = () => viewers[viewers.length - 1]!;
 
@@ -443,7 +449,7 @@ describe('tour data inlined by the Worker', () => {
         atLoad ??= { commits, tasks };
         return load(pano, opts);
       });
-      return v as unknown as PanoViewer;
+      return v;
     };
     const host = document.body.appendChild(document.createElement('div'));
     const root = createRoot(host);

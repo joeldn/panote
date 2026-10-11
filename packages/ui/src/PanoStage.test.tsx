@@ -1,7 +1,8 @@
 import {
   WebGLUnavailableError,
   type LoadOptions,
-  type PanoViewer,
+  type PanoViewerApi,
+  type PanoViewerEvents,
   type PreviewSource,
   type View,
   type ViewerOptions,
@@ -15,10 +16,7 @@ import { PanoStage, type StagePreview } from './PanoStage.js';
 import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
 
-type Handler = (payload: unknown) => void;
-
-class FakeViewer {
-  handlers = new Map<string, Set<Handler>>();
+class FakeViewer implements PanoViewerApi {
   load = vi.fn(async (_pano: string, _opts?: LoadOptions) => true);
   /** A load with a transition: `load` hands those here, so a test can script hops apart. */
   crossfade = vi.fn(async (_pano: string, _view?: Partial<View>) => true);
@@ -33,6 +31,17 @@ class FakeViewer {
   setAutoRotate = vi.fn();
   setLabel = vi.fn();
   dispose = vi.fn();
+  // Not used by the stage itself.
+  prefetch = vi.fn(async () => {});
+  getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
+  zoomBy = vi.fn();
+  heading = () => 0;
+  focus = vi.fn();
+  isSettled = () => false;
+  project = () => ({ x: 0, y: 0, behind: false });
+  directionAtPixel = () => ({ yaw: 0, pitch: 0 });
+  onRender = () => () => {};
+  requestRender = vi.fn();
   constructor(
     readonly container: HTMLElement,
     readonly options: ViewerOptions,
@@ -49,14 +58,20 @@ class FakeViewer {
       this.calls.push('setView');
     });
   }
-  on = (type: string, fn: Handler) => {
+  readonly handlers = new Map<string, Set<(payload: never) => void>>();
+  on<K extends keyof PanoViewerEvents>(
+    type: K,
+    fn: (payload: PanoViewerEvents[K]) => void,
+  ): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)?.add(fn);
     return () => this.off(type, fn);
-  };
-  off = (type: string, fn: Handler) => this.handlers.get(type)?.delete(fn);
-  emit(type: string, payload?: unknown) {
-    this.handlers.get(type)?.forEach((fn) => fn(payload));
+  }
+  off<K extends keyof PanoViewerEvents>(type: K, fn: (payload: PanoViewerEvents[K]) => void): void {
+    this.handlers.get(type)?.delete(fn);
+  }
+  emit<K extends keyof PanoViewerEvents>(type: K, payload?: PanoViewerEvents[K]): void {
+    this.handlers.get(type)?.forEach((fn) => (fn as (p: typeof payload) => void)(payload));
   }
 }
 
@@ -65,7 +80,7 @@ function factory() {
   const createViewer = vi.fn((el: HTMLElement, opts: ViewerOptions) => {
     const v = new FakeViewer(el, opts);
     made.push(v);
-    return v as unknown as PanoViewer;
+    return v;
   });
   const last = () => {
     const v = made[made.length - 1];
@@ -930,7 +945,7 @@ describe('PanoStage', () => {
 
   describe('without WebGL2', () => {
     it('says the view cannot be shown, as an alert, instead of crashing', () => {
-      const createViewer = vi.fn((): PanoViewer => {
+      const createViewer = vi.fn((): PanoViewerApi => {
         throw new WebGLUnavailableError();
       });
       const onViewer = vi.fn();
@@ -953,7 +968,7 @@ describe('PanoStage', () => {
     });
 
     it('still throws any other failure to build the viewer', () => {
-      const createViewer = vi.fn((): PanoViewer => {
+      const createViewer = vi.fn((): PanoViewerApi => {
         throw new Error('boom');
       });
       vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -966,7 +981,7 @@ describe('PanoStage', () => {
     });
 
     it('says nothing on an empty stage, which is empty by design', () => {
-      const createViewer = vi.fn((): PanoViewer => {
+      const createViewer = vi.fn((): PanoViewerApi => {
         throw new WebGLUnavailableError();
       });
       const { rerender } = render(

@@ -1,5 +1,5 @@
 import { manifestUrl, parseManifest, tilePath, type Manifest } from '@panote/core';
-import type { CubeTileSource, PanoViewer, SourceResolver, ViewerOptions } from '@panote/viewer';
+import type { CubeTileSource, PanoViewerApi, SourceResolver, ViewerOptions } from '@panote/viewer';
 
 /**
  * panote's side of `@panote/viewer`: where panote keeps its tiles and how its
@@ -158,7 +158,7 @@ export interface PrefetchPanoOptions {
  * effort: never rejects.
  */
 export async function prefetchPano(
-  viewer: PanoViewer,
+  viewer: PanoViewerApi,
   pano: string,
   { signal }: PrefetchPanoOptions = {},
 ): Promise<void> {

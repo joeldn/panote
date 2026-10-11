@@ -1,3 +1,4 @@
+import type { PanoViewerApi } from './api.js';
 import { GLRenderer } from './render/gl-renderer.js';
 import {
   viewProjection,
@@ -95,7 +96,7 @@ interface Reload {
   crossfade?: Crossfade;
 }
 
-export class PanoViewer {
+export class PanoViewer implements PanoViewerApi {
   private renderer: GLRenderer;
   private emitter = new Emitter<PanoViewerEvents>();
   // Undefined with `interaction.enabled: false`.

@@ -153,6 +153,8 @@ The rules a source follows:
 
 ## Methods
 
+`PanoViewerApi` is the type of these methods: type references to a viewer, and test doubles of one, against it rather than the class.
+
 | Method | What it does |
 |---|---|
 | `load(source \| id, { view?, transition? })` | Loads the scene and swaps it in once its level-0 base is in. `view` is cut to at the swap, not eased to. With `transition: true` it crossfades from a snapshot of the old scene, taken at the swap (the old scene stays live until the new one is ready), and settles once the fade is over. Resolves `true` when the scene went on screen and `false` when a newer load, a preview, `cancelLoad()` or `dispose()` superseded it. Rejects (often with a `BaseTileLoadError`) only for a load that is still current. |

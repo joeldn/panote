@@ -1,4 +1,4 @@
-import type { PanoViewer } from '@panote/viewer';
+import type { PanoViewerApi } from '@panote/viewer';
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 
 import { usePanoViewer } from '../viewer-context.js';
@@ -12,9 +12,9 @@ import { usePanoViewer } from '../viewer-context.js';
  * added to the list would stay unplaced (and hidden) until the camera moved.
  */
 export function useViewerFrame(
-  cb: (viewer: PanoViewer) => void,
+  cb: (viewer: PanoViewerApi) => void,
   items?: unknown,
-): PanoViewer | null {
+): PanoViewerApi | null {
   const viewer = usePanoViewer();
   const latest = useRef(cb);
   // A layout effect, so the placement below already sees the new `cb`.
@@ -83,7 +83,7 @@ export function onStage(box: StageBox, x: number, y: number, margin: number): bo
  * change. Only a change touches the DOM or reads the focus: a frame where
  * nothing shows or hides does neither.
  */
-export function setShown(el: HTMLElement, shown: boolean, viewer: PanoViewer): void {
+export function setShown(el: HTMLElement, shown: boolean, viewer: PanoViewerApi): void {
   const visibility = shown ? 'visible' : 'hidden';
   if (el.style.visibility === visibility) return;
   if (!shown && el.contains(document.activeElement)) viewer.focus();
@@ -95,7 +95,7 @@ export function setShown(el: HTMLElement, shown: boolean, viewer: PanoViewer): v
  * point is behind the camera or off the stage `box` by more than `margin`.
  */
 export function placeAt(
-  viewer: PanoViewer,
+  viewer: PanoViewerApi,
   el: HTMLElement | null,
   point: { x: number; y: number; behind: boolean },
   box: StageBox,
