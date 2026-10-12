@@ -57,6 +57,24 @@ interface Crossfade {
   snap?: HTMLCanvasElement | undefined;
 }
 
+/** A preview on screen, and how it relates to the tiles of its scene. */
+interface Preview {
+  layer: EquirectLayer;
+  /** The scene it previews. */
+  id: string;
+  /**
+   * The version of the tiles it replaces ('' for unversioned ones);
+   * undefined for a new scene, where any source is the preview's own.
+   */
+  replaces: string | undefined;
+  /**
+   * True once its own tiles are on screen: it then sits among the tile
+   * levels by resolution (see previewDrawLevel) and is disposed at the next
+   * tiles-settled. False while it covers tiles that are not its own.
+   */
+  underlay: boolean;
+}
+
 /** A load to finish after a context restore. */
 interface Reload {
   id: string;
@@ -97,15 +115,8 @@ export class PanoViewer implements PanoViewerApi {
   private scene: CubeTileSource | undefined;
   // Between webglcontextlost and webglcontextrestored: no frames are drawn.
   private contextLost = false;
-  private preview: EquirectLayer | undefined;
-  private previewId: string | undefined;
-  // The version of the tiles the preview replaces ('' for unversioned ones);
-  // undefined for a new scene, where any source is the preview's own.
-  private previewReplaces: string | undefined;
-  // True once the preview's own tiles are on screen: it then sits among the
-  // tile levels by resolution (see previewDrawLevel) and is disposed at the
-  // next tiles-settled. False while it covers tiles that are not its own.
-  private previewUnderlay = false;
+  // The preview on screen (showPreview), if any.
+  private preview: Preview | undefined;
   // The scheduled animation frame, or 0. A frame is requested only when
   // something changed (invalidate) and the loop keeps itself going only while
   // the camera is still moving or auto-rotate is turning, so an idle viewer
@@ -457,16 +468,16 @@ export class PanoViewer implements PanoViewerApi {
     this.layer = layer;
     this.scene = source;
     this.rig.cutTo(req.view);
-    if (this.preview && this.previewId === source.id) {
+    const preview = this.preview;
+    if (preview && preview.id === source.id) {
       // Replacing an image keeps the id, so the source can still be the old
       // image's until the new tiles are written. Those tiles are not the
       // preview's: it stays on top of them and outlives their tiles-settled.
-      const own =
-        this.previewReplaces === undefined || (source.version ?? '') !== this.previewReplaces;
-      this.previewUnderlay = own;
-      this.preview.setLevel(
+      const own = preview.replaces === undefined || (source.version ?? '') !== preview.replaces;
+      preview.underlay = own;
+      preview.layer.setLevel(
         own
-          ? previewDrawLevel(this.preview.width, source.tileSize, source.maxLevel)
+          ? previewDrawLevel(preview.layer.width, source.tileSize, source.maxLevel)
           : source.maxLevel + 1,
       );
     } else {
@@ -615,12 +626,10 @@ export class PanoViewer implements PanoViewerApi {
       return;
     }
     // Built first: a source that throws leaves the viewer exactly as it was.
-    const preview = new EquirectLayer(this.renderer, source);
+    const layer = new EquirectLayer(this.renderer, source);
     this.supersede();
     this.disposePreview();
-    this.preview = preview;
-    this.previewId = id;
-    this.previewReplaces = options.replacesVersion;
+    this.preview = { layer, id, replaces: options.replacesVersion, underlay: false };
     this.layer?.dispose();
     this.layer = undefined;
     this.scene = undefined;
@@ -631,11 +640,8 @@ export class PanoViewer implements PanoViewerApi {
   }
 
   private disposePreview(): void {
-    this.preview?.dispose();
+    this.preview?.layer.dispose();
     this.preview = undefined;
-    this.previewId = undefined;
-    this.previewReplaces = undefined;
-    this.previewUnderlay = false;
   }
 
   // Painter's order is applied by the renderer, so the order here is free.
@@ -643,7 +649,7 @@ export class PanoViewer implements PanoViewerApi {
     const list = this.frameList;
     list.length = 0;
     if (!this.preview) return this.layer ? this.layer.drawList() : list;
-    for (const item of this.preview.drawList()) list.push(item);
+    for (const item of this.preview.layer.drawList()) list.push(item);
     if (this.layer) for (const item of this.layer.drawList()) list.push(item);
     return list;
   }
@@ -810,7 +816,7 @@ export class PanoViewer implements PanoViewerApi {
     // preview, leaving coarser tiles in their place.
     const pending = this.layer?.hasPending() ?? false;
     const tilesSettled = this.wasPending && !pending;
-    if (tilesSettled && this.previewUnderlay) this.disposePreview();
+    if (tilesSettled && this.preview?.underlay) this.disposePreview();
     this.wasPending = pending;
 
     // Draw before anything outside the viewer runs: a listener that throws
