@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Controls, WHEEL_GESTURE_GAP_MS, type ControlHost } from './controls.js';
+import { Controls, PINCH_ARM_MS, WHEEL_GESTURE_GAP_MS, type ControlHost } from './controls.js';
 import { resolveViewerOptions } from './defaults.js';
 import type { InteractionOptions } from './types.js';
 
@@ -83,11 +83,13 @@ function pointer(
     button?: number;
     buttons?: number;
     pointerType?: string;
+    isPrimary?: boolean;
   },
 ) {
   return el.dispatch(type, {
     pointerId: init.id ?? 1,
     pointerType: init.pointerType ?? 'mouse',
+    isPrimary: init.isPrimary,
     button: init.button ?? 0,
     // Held while dragging: the left button, or a touch or pen in contact.
     buttons: init.buttons ?? 1,
@@ -234,17 +236,18 @@ describe('Controls: pointer drag and release', () => {
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
     // The pinch takes over from the first finger's drag, where it is.
     expect(host.dragEnd.mock.calls).toEqual([[true]]);
+    pointer('pointermove', { x: 300, y: 100, t: 60, id: 2, ...touch });
+    // It starts where the fingers landed, once both have been down a moment.
     expect(host.pinchStart).toHaveBeenCalledWith(150, 100);
-    pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
     // Distance 100 -> 200 halves the start fov, about the moved midpoint.
     expect(host.pinchTo).toHaveBeenCalledWith(0.5, 200, 100);
     expect(host.zoomAt).not.toHaveBeenCalled();
-    pointer('pointerup', { x: 300, y: 100, t: 20, id: 2, ...touch });
+    pointer('pointerup', { x: 300, y: 100, t: 64, id: 2, ...touch });
     // The finger left drags on from where it is, with no jump.
-    pointer('pointermove', { x: 150, y: 100, t: 32, id: 1, ...touch });
-    expect(host.dragStart).toHaveBeenLastCalledWith(20);
-    expect(host.dragBy).toHaveBeenCalledWith(50, 0, 32);
-    pointer('pointerup', { x: 150, y: 100, t: 34, id: 1, ...touch });
+    pointer('pointermove', { x: 150, y: 100, t: 76, id: 1, ...touch });
+    expect(host.dragStart).toHaveBeenLastCalledWith(64);
+    expect(host.dragBy).toHaveBeenCalledWith(50, 0, 76);
+    pointer('pointerup', { x: 150, y: 100, t: 78, id: 1, ...touch });
     expect(host.flick).not.toHaveBeenCalled();
   });
 });
@@ -540,7 +543,7 @@ describe('Controls: gesture events next to a touch pinch (iOS Safari)', () => {
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
     const start = el.dispatch('gesturestart', { scale: 1, clientX: 150, clientY: 100 });
     const change = el.dispatch('gesturechange', { scale: 2, clientX: 200, clientY: 100 });
-    pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
+    pointer('pointermove', { x: 300, y: 100, t: 60, id: 2, ...touch });
     expect(start.defaultPrevented).toBe(true);
     expect(change.defaultPrevented).toBe(true);
     expect(host.pinchStart).toHaveBeenCalledTimes(1);
@@ -679,7 +682,7 @@ describe('Controls: remaining branches', () => {
     expect(host.pinchTo).not.toHaveBeenCalled();
     expect(host.dragBy).not.toHaveBeenCalled();
     // The first two fingers still pinch normally.
-    pointer('pointermove', { x: 300, y: 100, t: 32, id: 2, ...touch });
+    pointer('pointermove', { x: 300, y: 100, t: 60, id: 2, ...touch });
     expect(host.pinchTo).toHaveBeenCalledWith(0.5, 200, 100);
   });
 
@@ -695,14 +698,144 @@ describe('Controls: remaining branches', () => {
     // A new finger 100 px away starts a new pinch; spreading to 200 px
     // halves the fov it started at.
     pointer('pointerdown', { x: 310, y: 100, t: 32, id: 3, ...touch });
+    pointer('pointermove', { x: 410, y: 100, t: 88, id: 3, ...touch });
     expect(host.pinchStart).toHaveBeenLastCalledWith(260, 100);
-    pointer('pointermove', { x: 410, y: 100, t: 48, id: 3, ...touch });
     expect(host.pinchTo).toHaveBeenCalledTimes(1);
     expect(host.pinchTo).toHaveBeenCalledWith(0.5, 310, 100);
-    pointer('pointerup', { x: 410, y: 100, t: 56, id: 3, ...touch });
-    pointer('pointerup', { x: 210, y: 100, t: 56, id: 2, ...touch });
+    pointer('pointerup', { x: 410, y: 100, t: 96, id: 3, ...touch });
+    pointer('pointerup', { x: 210, y: 100, t: 96, id: 2, ...touch });
     expect(host.dragBy).toHaveBeenCalledTimes(1);
     expect(host.flick).not.toHaveBeenCalled();
+  });
+});
+
+describe('Controls: touch bookkeeping (iOS Safari)', () => {
+  const touch = { pointerType: 'touch' };
+  const touches = (type: string, length: number) => el.dispatch(type, { touches: { length } });
+
+  beforeEach(() => {
+    setup();
+  });
+
+  it('forgets a finger whose pointerup was lost when the next one lands as primary', () => {
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, isPrimary: true, ...touch });
+    pointer('pointermove', { x: 150, y: 100, t: 16, id: 1, ...touch });
+    // No pointerup for finger 1. The next touch is primary: nothing else is down.
+    pointer('pointerdown', { x: 300, y: 300, t: 500, id: 2, isPrimary: true, ...touch });
+    pointer('pointermove', { x: 340, y: 300, t: 600, id: 2, ...touch });
+    expect(host.pinchStart).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
+    expect(host.dragBy).toHaveBeenLastCalledWith(40, 0, 600);
+    // The forgotten drag is caught up at once and never flings.
+    expect(host.dragEnd).toHaveBeenCalledWith(true);
+    expect(host.flick).not.toHaveBeenCalled();
+  });
+
+  it('forgets a touch pointer still tracked once the touches say no finger is down', () => {
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    touches('touchstart', 1);
+    pointer('pointerdown', { x: 200, y: 100, t: 8, id: 2, ...touch });
+    touches('touchstart', 2);
+    pointer('pointerup', { x: 100, y: 100, t: 100, id: 1, ...touch });
+    touches('touchend', 1);
+    // Finger 2's pointerup is lost; its touchend still comes.
+    touches('touchend', 0);
+    expect(el.style['cursor']).toBe('grab');
+    pointer('pointerdown', { x: 300, y: 300, t: 500, id: 3, ...touch });
+    pointer('pointermove', { x: 340, y: 300, t: 600, id: 3, ...touch });
+    expect(host.pinchTo).not.toHaveBeenCalled();
+    expect(host.dragBy).toHaveBeenLastCalledWith(40, 0, 600);
+  });
+
+  it('keeps tracking when a touchend leaves a finger down', () => {
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    touches('touchend', 1);
+    pointer('pointermove', { x: 120, y: 100, t: 16, id: 1, ...touch });
+    expect(host.dragBy).toHaveBeenCalledWith(20, 0, 16);
+  });
+
+  it(`hands the drag over, without pinching, to a finger that lands under ${PINCH_ARM_MS} ms before the last lifts`, () => {
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointermove', { x: 160, y: 100, t: 16, id: 1, ...touch });
+    pointer('pointerdown', { x: 120, y: 110, t: 24, id: 2, ...touch });
+    pointer('pointermove', { x: 190, y: 100, t: 32, id: 1, ...touch });
+    pointer('pointermove', { x: 170, y: 110, t: 40, id: 2, ...touch });
+    pointer('pointerup', { x: 190, y: 100, t: 48, id: 1, ...touch });
+    expect(host.pinchStart).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
+    // The new finger drags on from where it is; as after a pinch, it never flings.
+    for (let i = 1; i <= 4; i++) {
+      pointer('pointermove', { x: 170 + i * 20, y: 110, t: 48 + i * 16, id: 2, ...touch });
+    }
+    expect(host.dragBy).toHaveBeenLastCalledWith(20, 0, 112);
+    pointer('pointerup', { x: 250, y: 110, t: 116, id: 2, ...touch });
+    expect(host.flick).not.toHaveBeenCalled();
+  });
+
+  it('starts the pinch where the fingers landed, catching up with them in one step', () => {
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 200, y: 100, t: 10, id: 2, ...touch });
+    pointer('pointermove', { x: 250, y: 100, t: 30, id: 2, ...touch });
+    expect(host.pinchTo).not.toHaveBeenCalled();
+    pointer('pointermove', { x: 300, y: 100, t: 62, id: 2, ...touch });
+    expect(host.pinchStart.mock.calls).toEqual([[150, 100]]);
+    expect(host.pinchTo.mock.calls).toEqual([[0.5, 200, 100]]);
+  });
+
+  it('claims but never zooms on gesture events while a finger is down', () => {
+    touches('touchstart', 2);
+    const start = el.dispatch('gesturestart', { scale: 1 });
+    const change = el.dispatch('gesturechange', { scale: 2 });
+    expect(start.defaultPrevented).toBe(true);
+    expect(change.defaultPrevented).toBe(true);
+    expect(host.pinchStart).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
+  });
+
+  it('zooms a touch dblclick only after two taps that stayed put', () => {
+    const press = (id: number, x: number, t: number, dx: number) => {
+      pointer('pointerdown', { x, y: 100, t, id, isPrimary: true, ...touch });
+      pointer('pointermove', { x: x + dx, y: 100, t: t + 16, id, ...touch });
+      pointer('pointerup', { x: x + dx, y: 100, t: t + 20, id, ...touch });
+    };
+    // Two quick swipes the browser took for a double tap.
+    press(1, 100, 0, 60);
+    press(2, 110, 100, 60);
+    el.dispatch('dblclick', { clientX: 170, clientY: 100 });
+    expect(host.zoomAt).not.toHaveBeenCalled();
+    // A swipe, then a tap: still not two taps.
+    press(3, 100, 1000, 3);
+    el.dispatch('dblclick', { clientX: 103, clientY: 100 });
+    expect(host.zoomAt).not.toHaveBeenCalled();
+    // A second tap makes it a double tap.
+    press(4, 101, 1100, 2);
+    el.dispatch('dblclick', { clientX: 103, clientY: 100 });
+    expect(host.zoomAt).toHaveBeenCalledWith(0.6, 103, 100);
+  });
+
+  it('does not count a pinch or a cancelled press as a tap', () => {
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    pointer('pointerdown', { x: 104, y: 100, t: 10, id: 2, ...touch });
+    pointer('pointerup', { x: 100, y: 100, t: 20, id: 1, ...touch });
+    pointer('pointerup', { x: 104, y: 100, t: 22, id: 2, ...touch });
+    pointer('pointerdown', { x: 100, y: 100, t: 200, id: 3, ...touch });
+    pointer('pointercancel', { x: 100, y: 100, t: 220, id: 3, ...touch });
+    pointer('pointerdown', { x: 100, y: 100, t: 300, id: 4, ...touch });
+    pointer('pointerup', { x: 100, y: 100, t: 320, id: 4, ...touch });
+    el.dispatch('dblclick', { clientX: 100, clientY: 100 });
+    expect(host.zoomAt).not.toHaveBeenCalled();
+  });
+
+  it('removes the touch listeners on dispose', () => {
+    const controls = setup();
+    controls.dispose();
+    for (const type of ['touchstart', 'touchend', 'touchcancel']) {
+      expect(el.listeners.get(type)?.size ?? 0).toBe(0);
+    }
+  });
+
+  it('listens to the touches passively, so scrolling is never held up', () => {
+    expect(el.listenerOptions.get('touchstart')).toEqual({ passive: true });
   });
 });
 
