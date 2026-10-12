@@ -111,8 +111,12 @@ export class Controls {
   // Fingers on the screen, from the touch events: the pointer pinch owns a
   // touch pinch, so Safari's gesture events never zoom while one is down.
   private touches = 0;
-  // Forgets the touch pointers once the touches say none is down (onTouches).
+  // Forgets the touch pointers held when the touches said none was down,
+  // if they still are (onTouches): the slots themselves, so a new pointer,
+  // even one reusing an id, is never forgotten in their place.
   private pruneTimer: ReturnType<typeof setTimeout> | undefined;
+  private prune0: PointerSlot | null = null;
+  private prune1: PointerSlot | null = null;
   // The press in progress (or the last): its pointer type, where it landed,
   // and whether it moved off or went multi-touch. Clean presses in a row
   // count as taps, and a touch dblclick zooms only after two of them.
@@ -241,7 +245,11 @@ export class Controls {
     this.engaged = true;
     // Only the primary mouse button drags; right-click and middle-click don't.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    clearTimeout(this.pruneTimer);
+    // A touch pointer still held after the touches said no finger was down
+    // is waiting to be pruned. A press of any type, before the timer, must
+    // not pair with it into a pinch (a mouse on a touchscreen laptop, or a
+    // touch the browser doesn't call primary), so it goes now.
+    this.prune(e.timeStamp);
     // A primary pointer goes down with no other of its type down: a slot of
     // that type still held is a pointer whose pointerup or pointercancel
     // never came (iOS Safari can drop one), and left there it would turn
@@ -361,7 +369,7 @@ export class Controls {
       this.carryOn(left, e.timeStamp);
       return;
     }
-    clearTimeout(this.pruneTimer);
+    this.clearPrune();
     this.pinchArmed = false;
     this.host.dragEnd();
     // Only fling from a real drag — not from the tail of a pinch.
@@ -403,9 +411,12 @@ export class Controls {
    * none left, what the drag had yet to draw is applied and nothing flings.
    */
   private forget(type: string, t: number) {
+    this.drop(this.p0?.type === type, this.p1?.type === type, t);
+  }
+
+  /** Forget p0 and/or p1, as forget() does. */
+  private drop(gone0: boolean, gone1: boolean, t: number) {
     const { p0, p1 } = this;
-    const gone0 = p0?.type === type;
-    const gone1 = p1?.type === type;
     if (!gone0 && !gone1) return;
     // Slots first, as in release(): a lostpointercapture fired from inside
     // releasePointerCapture must find nothing to fling.
@@ -433,15 +444,34 @@ export class Controls {
   // The touch events say how many fingers are on the screen. With none, a
   // touch pointer still tracked a moment later lost its pointerup, and is
   // forgotten then rather than at the next touch. The moment lets a
-  // pointerup that comes after its touchend release it as usual.
+  // pointerup that comes after its touchend release it as usual. Only the
+  // pointers held now are forgotten: one pressed since is a new finger.
   private onTouches = (e: Event) => {
     this.touches = (e as TouchEvent).touches?.length ?? 0;
     if (this.touches > 0 || e.type === 'touchstart') return;
     if (this.p0?.type !== 'touch' && this.p1?.type !== 'touch') return;
     clearTimeout(this.pruneTimer);
+    this.prune0 = this.p0?.type === 'touch' ? this.p0 : null;
+    this.prune1 = this.p1?.type === 'touch' ? this.p1 : null;
     const t = e.timeStamp;
-    this.pruneTimer = setTimeout(() => this.forget('touch', t + TOUCH_PRUNE_MS), TOUCH_PRUNE_MS);
+    this.pruneTimer = setTimeout(() => this.prune(t + TOUCH_PRUNE_MS), TOUCH_PRUNE_MS);
   };
+
+  // Forget the pointers onTouches marked, those still held.
+  private prune(t: number) {
+    const { prune0, prune1 } = this;
+    this.clearPrune();
+    const marked = (slot: PointerSlot | null) =>
+      slot !== null && (slot === prune0 || slot === prune1);
+    this.drop(marked(this.p0), marked(this.p1), t);
+  }
+
+  private clearPrune() {
+    clearTimeout(this.pruneTimer);
+    this.pruneTimer = undefined;
+    this.prune0 = null;
+    this.prune1 = null;
+  }
 
   private onWheel = (e: WheelEvent) => {
     // An unengaged embed leaves a plain wheel to the page, so it scrolls.
@@ -575,7 +605,7 @@ export class Controls {
   }
 
   dispose(): void {
-    clearTimeout(this.pruneTimer);
+    this.clearPrune();
     this.el.removeEventListener('pointerdown', this.onDown);
     this.el.removeEventListener('pointermove', this.onMove);
     this.el.removeEventListener('pointerup', this.onUp);

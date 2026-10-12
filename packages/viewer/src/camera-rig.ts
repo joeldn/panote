@@ -22,6 +22,10 @@ export const FRAME_MS = 1000 / 60;
 export const MAX_FRAME_DT_MS = 100;
 // Momentum below this (rad/ms) is stopped: 1e-5 rad per 60 Hz frame.
 const MOMENTUM_EPS = 1e-5 / FRAME_MS;
+// The most friction a glide that takes over a drag's leftover can have (see
+// flick): a drag released with almost no speed eases its leftover in over
+// about half a second rather than creeping on.
+export const GLIDE_FRICTION_MAX = 0.97;
 
 // A drag is drawn where the pointer was a moment ago, interpolated between
 // its timestamped moves, not where the newest move left it. Moves come at
@@ -105,6 +109,9 @@ export class CameraRig implements ControlHost {
   private target: View;
   // Release inertia, in rad/ms. A glide moves the view and the target together.
   private momentum = { yaw: 0, pitch: 0 };
+  // The friction the glide in progress decays by, per 60 Hz frame: the
+  // camera's, or a little less for one that carries a drag's leftover on.
+  private glideFriction: number;
   // The drag in progress: the pointer's offset in px from where it started,
   // at each of its recent moves (a ring buffer), and the offset already
   // applied to the camera. step() moves the camera along it.
@@ -163,6 +170,7 @@ export class CameraRig implements ControlHost {
     private toNdc: ToNdc,
   ) {
     this.north = camera.north;
+    this.glideFriction = camera.momentumFriction;
     this.autoRotateEnabled = autoRotate.enabled;
     // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
     this.autoRotateActive = this.autoRotateEnabled;
@@ -374,6 +382,9 @@ export class CameraRig implements ControlHost {
     this.dragging = false;
     const newest = (this.dragHead - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
     if (now) {
+      // In one step: as a pinch arms on a fast touch drag, this can jump by
+      // about one drag lag's worth of motion. A pinch snaps anyway, and by
+      // the time a second finger has settled the first is usually slow.
       this.pan(this.dragX[newest]! - this.dragAppliedX, this.dragY[newest]! - this.dragAppliedY);
       this.invalidate();
       return;
@@ -472,19 +483,30 @@ export class CameraRig implements ControlHost {
     this.pauseAutoRotate();
     const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const hfov = this.hfovOf(vfov);
-    this.momentum.yaw = (-vx * anglePerPixel(hfov, this.cssW)) / FRAME_MS;
+    // 0 − vx, not −vx: no fling is +0, not −0.
+    this.momentum.yaw = ((0 - vx) * anglePerPixel(hfov, this.cssW)) / FRAME_MS;
     this.momentum.pitch = (vy * anglePerPixel(vfov, this.cssH)) / FRAME_MS;
+    const f = this.camera.momentumFriction;
+    this.glideFriction = f;
     // A drag that just ended put what it had yet to draw on the target (see
     // dragEnd). The glide takes that over: a glide travels its momentum
-    // times FRAME_MS / (1 − friction) in all, so this much more momentum
-    // travels it too. Eased in by damping instead, it would add its own
-    // burst of speed to the glide's first frames.
-    const f = this.camera.momentumFriction;
+    // times FRAME_MS / (1 − friction) in all, so it travels the fling's
+    // distance and the leftover together if it sets off at the fling's
+    // speed and decays a little slower. More momentum at the same friction
+    // would start it faster than the drag went, and easing the leftover in
+    // by damping would add its own burst of speed to the first frames.
     const left = this.dragLeft;
-    if (f < 1) {
-      const k = (1 - f) / FRAME_MS;
-      this.momentum.yaw += left.yaw * k;
-      this.momentum.pitch += left.pitch * k;
+    if (f < 1 && (left.yaw !== 0 || left.pitch !== 0)) {
+      const yaw = (this.momentum.yaw * FRAME_MS) / (1 - f) + left.yaw;
+      const pitch = (this.momentum.pitch * FRAME_MS) / (1 - f) + left.pitch;
+      const speed = Math.hypot(this.momentum.yaw, this.momentum.pitch) * FRAME_MS;
+      // A leftover against the fling (or cancelling it) keeps the friction
+      // and slows the start; with no fling at all, it glides at the most.
+      const glide = clamp(1 - speed / Math.hypot(yaw, pitch), f, Math.max(f, GLIDE_FRICTION_MAX));
+      const k = (1 - glide) / FRAME_MS;
+      this.glideFriction = glide;
+      this.momentum.yaw = yaw * k;
+      this.momentum.pitch = pitch * k;
       this.target.yaw -= left.yaw;
       this.target.pitch -= left.pitch;
     }
@@ -514,6 +536,7 @@ export class CameraRig implements ControlHost {
   private stopMomentumOnly(): void {
     this.momentum.yaw = 0;
     this.momentum.pitch = 0;
+    this.glideFriction = this.camera.momentumFriction;
     // The target has moved on from what the last drag left on it.
     this.dragLeft.yaw = 0;
     this.dragLeft.pitch = 0;
@@ -634,7 +657,7 @@ export class CameraRig implements ControlHost {
       // Momentum decays exponentially, so a step travels the integral of the
       // decay over dt. Scaled so a 60 Hz step travels exactly one frame's
       // worth, the total glide is the same at every frame rate.
-      const f = this.camera.momentumFriction;
+      const f = this.glideFriction;
       const keep = f ** steps;
       const travel = f < 1 ? (FRAME_MS * (1 - keep)) / (1 - f) : dt;
       // The glide carries the view as well as the target, so a released
@@ -645,7 +668,11 @@ export class CameraRig implements ControlHost {
       this.target.pitch = this.clampPitch(this.target.pitch + this.momentum.pitch * travel);
       this.momentum.yaw *= keep;
       this.momentum.pitch *= keep;
-      if (Math.hypot(this.momentum.yaw, this.momentum.pitch) < MOMENTUM_EPS) {
+      // A glide decaying slower than the camera's friction stops as little
+      // short of where it was going: at the same distance left, not speed.
+      const fc = this.camera.momentumFriction;
+      const eps = f === fc ? MOMENTUM_EPS : (MOMENTUM_EPS * (1 - f)) / (1 - fc);
+      if (Math.hypot(this.momentum.yaw, this.momentum.pitch) < eps) {
         this.momentum.yaw = 0;
         this.momentum.pitch = 0;
       }
