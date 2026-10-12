@@ -24,6 +24,12 @@ import { PanoViewerContext } from './viewer-context.js';
 
 export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewerApi;
 
+/**
+ * Keyboard focus (not a click or tap) on the viewer's canvas or a marker, where
+ * a moving scene would pull away what the visitor is reading or about to use.
+ */
+const HOLDS_ROTATION = '.pn-stage__viewer :focus-visible, .pn-anchors :focus-visible';
+
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
 /**
@@ -83,6 +89,10 @@ export interface PanoStageProps {
   view?: Partial<View>;
   /** Compass north offset for the current pano, radians. */
   north?: number;
+  /**
+   * Idle auto-rotate. It holds still while the viewer or a marker has keyboard
+   * focus (WCAG 2.2.2), and goes on once focus leaves them.
+   */
   autoRotate?: boolean;
   /**
    * Reloads the current pano when it changes, e.g. the new `manifest.version`
@@ -176,6 +186,8 @@ export function PanoStage({
   const [restores, setRestores] = useState(0);
   // The browser has no WebGL2, so there is no viewer to show.
   const [unsupported, setUnsupported] = useState(false);
+  // The viewer or a marker has keyboard focus: auto-rotate holds still.
+  const [held, setHeld] = useState(false);
 
   // Latest props for use inside long-lived effects without re-running them.
   const latest = useRef({
@@ -405,15 +417,21 @@ export function PanoStage({
   }, [viewer, north]);
 
   useEffect(() => {
-    viewer?.setAutoRotate(autoRotate);
-  }, [viewer, autoRotate]);
+    viewer?.setAutoRotate(autoRotate && !held);
+  }, [viewer, autoRotate, held]);
 
   useEffect(() => {
     viewer?.setLabel(ariaLabel);
   }, [viewer, ariaLabel]);
 
   return (
-    <div className={cx('pn-stage', className)} style={style}>
+    <div
+      className={cx('pn-stage', className)}
+      style={style}
+      // Focus moving between two elements in the stage blurs one, then focuses the other.
+      onFocus={(e) => setHeld(e.target.matches(HOLDS_ROTATION))}
+      onBlur={() => setHeld(false)}
+    >
       {/* The viewer's canvas is the application landmark, named by aria-label. */}
       <div
         ref={hostRef}

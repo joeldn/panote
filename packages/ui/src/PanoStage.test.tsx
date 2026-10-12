@@ -296,6 +296,83 @@ describe('PanoStage', () => {
     expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
   });
 
+  describe('auto-rotate under keyboard focus (WCAG 2.2.2)', () => {
+    // jsdom never matches :focus-visible, so say which focus came from the keyboard.
+    function stage(autoRotate = true) {
+      let keyboard = false;
+      const matches = Element.prototype.matches;
+      vi.spyOn(Element.prototype, 'matches').mockImplementation(function (
+        this: Element,
+        selector: string,
+      ) {
+        if (!selector.includes(':focus-visible')) return matches.call(this, selector);
+        return keyboard && matches.call(this, selector.replaceAll(':focus-visible', ':focus'));
+      });
+      const f = factory();
+      render(
+        <>
+          <PanoStage
+            baseUrl="b/"
+            panoId="hall"
+            autoRotate={autoRotate}
+            createViewer={f.createViewer}
+          >
+            <div className="pn-anchors">
+              <button type="button">Kitchen</button>
+            </div>
+            <button type="button">Zoom in</button>
+          </PanoStage>
+          <button type="button">Outside</button>
+        </>,
+      );
+      const v = f.last();
+      // Stands in for the viewer's canvas, which it puts in its container.
+      const canvas = document.createElement('canvas');
+      canvas.tabIndex = 0;
+      v.container.append(canvas);
+      const focus = (el: HTMLElement, by: 'keyboard' | 'pointer') => {
+        keyboard = by === 'keyboard';
+        act(() => el.focus());
+      };
+      const button = (name: string) => screen.getByRole('button', { name });
+      return { v, canvas, focus, button };
+    }
+    afterEach(() => vi.restoreAllMocks());
+
+    it('holds still while the viewer has keyboard focus, and goes on once it leaves', () => {
+      const { v, canvas, focus, button } = stage();
+      focus(canvas, 'keyboard');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
+      focus(button('Outside'), 'keyboard');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+    });
+
+    it('holds still while a marker has keyboard focus, but not for other chrome', () => {
+      const { v, canvas, focus, button } = stage();
+      focus(button('Kitchen'), 'keyboard');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
+      // Tabbing on within the stage, to a control.
+      focus(button('Zoom in'), 'keyboard');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+      focus(canvas, 'keyboard');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
+    });
+
+    it('keeps turning after a click or tap focuses the viewer', () => {
+      const { v, canvas, focus } = stage();
+      focus(canvas, 'pointer');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+      expect(v.setAutoRotate).not.toHaveBeenCalledWith(false);
+    });
+
+    it('stays off when auto-rotate is off', () => {
+      const { v, canvas, focus, button } = stage(false);
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      expect(v.setAutoRotate).not.toHaveBeenCalledWith(true);
+    });
+  });
+
   it('reports load failures for the current pano only', async () => {
     const f = factory();
     const onLoadError = vi.fn();
