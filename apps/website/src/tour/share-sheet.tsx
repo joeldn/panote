@@ -1,4 +1,4 @@
-import { cx, useCopy, type CopyState } from '@internal/ui';
+import { useCopy, type CopyState } from '@internal/ui';
 import type { ShareModalProps } from '@internal/ui/share';
 import {
   Component,
@@ -13,7 +13,7 @@ import {
 } from 'react';
 
 import { isChunkLoadError } from '../chunk-reload.js';
-import { loadShare } from './share-chunk.js';
+import { loadShare, shareChunk } from './share-chunk.js';
 
 const lazySheet = () => lazy(async () => ({ default: (await loadShare()).ShareModal }));
 // A rejected lazy() stays rejected, so the retry needs its own. Made per mount, so a
@@ -41,17 +41,33 @@ type Attempt = 'first' | 'retry' | 'failed';
 
 /**
  * Suspense's fallback: reports that the sheet is on its way for as long as it is mounted.
- * A layout effect, so Share stops spinning in the same frame the sheet appears.
+ * A layout effect, so Share stops spinning in the same frame the sheet appears. A chunk
+ * that keeps an open sheet waiting `shareChunk.stallMs` calls `onStall`.
  */
-function Pending({ onPending }: { onPending: ((pending: boolean) => void) | undefined }) {
+function Pending({
+  open,
+  onPending,
+  onStall,
+}: {
+  open: boolean;
+  onPending: ((pending: boolean) => void) | undefined;
+  onStall: (stalled: boolean) => void;
+}) {
   useLayoutEffect(() => {
     onPending?.(true);
     return () => onPending?.(false);
   }, [onPending]);
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => onStall(true), shareChunk.stallMs);
+    return () => clearTimeout(timer);
+  }, [open, onStall]);
   return null;
 }
 
 export interface LazyShareSheetProps extends ShareModalProps {
+  /** A published tour's: the fallback always has a link to offer. */
+  slug: string;
   /** True while the sheet's chunk is loading, false once it is up or has failed. */
   onPending?: (pending: boolean) => void;
 }
@@ -59,13 +75,16 @@ export interface LazyShareSheetProps extends ShareModalProps {
 /**
  * The visitor ShareModal, loaded on demand. A chunk that fails to load (say, gone after a
  * deploy) is retried once; if that fails too, or the sheet throws, a plain copyable link
- * shows instead. Unlike the lazy routes this never reloads the page: the visitor is in
- * the middle of a tour.
+ * shows instead. So it does while a chunk that hangs keeps the open sheet waiting; the
+ * next Share tries the sheet again. Unlike the lazy routes this never reloads the page:
+ * the visitor is in the middle of a tour.
  */
 export function LazyShareSheet({ onPending, ...props }: LazyShareSheetProps) {
   const [attempt, setAttempt] = useState<Attempt>('first');
   const [sheets] = useState(lazySheets);
-  if (attempt === 'failed') return props.open ? <ShareFallback {...props} /> : null;
+  const [stalled, setStalled] = useState(false);
+  if (stalled && !props.open) setStalled(false);
+  if (attempt === 'failed' || stalled) return props.open ? <ShareFallback {...props} /> : null;
   const Sheet = attempt === 'first' ? sheets.first : sheets.retry;
   return (
     <SheetBoundary
@@ -79,7 +98,7 @@ export function LazyShareSheet({ onPending, ...props }: LazyShareSheetProps) {
         setAttempt('failed');
       }}
     >
-      <Suspense fallback={<Pending onPending={onPending} />}>
+      <Suspense fallback={<Pending open={props.open} onPending={onPending} onStall={setStalled} />}>
         <Sheet {...props} />
       </Suspense>
     </SheetBoundary>
@@ -97,8 +116,8 @@ const copyLabel = (state: CopyState): string =>
  * The plain link, for when the sheet can't load. Focus moves in on open and goes back to
  * what had it (the Share button) on close; Escape closes it.
  */
-function ShareFallback({ onClose, siteOrigin, slug }: ShareModalProps) {
-  const url = slug ? shareUrl(siteOrigin, slug) : null;
+function ShareFallback({ onClose, siteOrigin, slug }: Omit<LazyShareSheetProps, 'onPending'>) {
+  const url = shareUrl(siteOrigin, slug);
   const [copied, copy] = useCopy();
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -116,29 +135,20 @@ function ShareFallback({ onClose, siteOrigin, slug }: ShareModalProps) {
   return (
     <div className="tour-share-fallback" role="alert" onKeyDown={onKeyDown}>
       <p>
-        Couldn&apos;t open sharing. Reload the page to try again
-        {url ? (
-          <>
-            , or copy this link: <a href={url}>{url.replace(/^https?:\/\//, '')}</a>
-          </>
-        ) : (
-          '.'
-        )}
+        Couldn&apos;t open sharing. Reload the page to try again, or copy this link:{' '}
+        <a href={url}>{url.replace(/^https?:\/\//, '')}</a>
       </p>
-      {url && (
-        <button
-          ref={first}
-          type="button"
-          className="tour-share-fallback__btn"
-          onClick={() => void copy(url)}
-        >
-          {copyLabel(copied)}
-        </button>
-      )}
       <button
-        ref={url ? undefined : first}
+        ref={first}
         type="button"
-        className={cx('tour-share-fallback__btn', url && 'tour-share-fallback__btn--quiet')}
+        className="tour-share-fallback__btn"
+        onClick={() => void copy(url)}
+      >
+        {copyLabel(copied)}
+      </button>
+      <button
+        type="button"
+        className="tour-share-fallback__btn tour-share-fallback__btn--quiet"
         onClick={onClose}
       >
         Close
