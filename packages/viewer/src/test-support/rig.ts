@@ -13,6 +13,7 @@ export type RigInternals = {
   view: { yaw: number; pitch: number; fov: number };
   target: { yaw: number; pitch: number; fov: number };
   momentum: { yaw: number; pitch: number };
+  glideFriction: number;
   panByPixels: (dx: number, dy: number) => void;
   flick: (vx: number, vy: number) => void;
   stopMomentum: () => void;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FRAME_MS, type CameraRig } from './camera-rig.js';
+import { FRAME_MS, GLIDE_FRICTION_MAX, type CameraRig } from './camera-rig.js';
 import { viewProjection, unprojectNDC, effectiveVFovDeg } from './render/projection.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
 import { dirFromYawPitch } from './test-support/oracles.js';
@@ -469,12 +469,74 @@ describe('CameraRig', () => {
       const { target, momentum } = rigInternals(rig);
       expect(target.yaw).toBe(rig.view.yaw);
       expect(momentum.yaw).toBeLessThan(0);
-      // The first glide frame covers a tenth of what was left (1 − friction).
+      // With no fling to carry it, the glide eases what was left in at the
+      // most friction a glide gets: its first frame covers 3% of it.
       let t = next;
       frame(t);
-      expect(draggedPx(rig) - shown).toBeCloseTo((150 - shown) * (1 - FRICTION), 6);
+      expect(draggedPx(rig) - shown).toBeCloseTo((150 - shown) * (1 - GLIDE_FRICTION_MAX), 6);
       while (frame((t += FRAME_MS)) && t < 5000);
-      expect(draggedPx(rig)).toBeCloseTo(150, 0);
+      // Short only by what is left when the glide stops: under 0.1 px.
+      expect(Math.abs(draggedPx(rig) - 150)).toBeLessThan(0.1);
+    });
+
+    it('glides a fling and what the drag had yet to draw on from the fling speed, as far as both', () => {
+      const { rig, frame, t: next } = dragRig(300);
+      const shown = draggedPx(rig);
+      rig.dragEnd();
+      // The drag's own speed, 0.5 px/ms, as px per 60 Hz frame.
+      const v = 0.5 * FRAME_MS;
+      rig.flick(v, 0);
+      let t = next;
+      const steps: number[] = [];
+      let prev = shown;
+      while (frame(t) && t < 5000) {
+        steps.push(draggedPx(rig) - prev);
+        prev = draggedPx(rig);
+        t += FRAME_MS;
+      }
+      // No faster than the drag went, then only slower.
+      expect(steps[0]!).toBeCloseTo(v, 6);
+      for (let i = 1; i < steps.length; i++) expect(steps[i]!).toBeLessThanOrEqual(steps[i - 1]!);
+      // Where the pointer let go, and the fling's v / (1 − friction) on,
+      // short only by what is left when the glide stops.
+      expect(Math.abs(draggedPx(rig) - (150 + v / (1 - FRICTION)))).toBeLessThan(0.1);
+    });
+
+    it('clears the slower glide with stopMomentum, setView and a new drag', () => {
+      const flung = () => {
+        const { rig } = dragRig(300);
+        rig.dragEnd();
+        rig.flick(0.5 * FRAME_MS, 0);
+        expect(rigInternals(rig).glideFriction).toBeGreaterThan(FRICTION);
+        return rig;
+      };
+      const ends: ((rig: CameraRig) => void)[] = [
+        (rig) => rig.stopMomentum(),
+        (rig) => rig.setView({ fov: 50 }),
+        // A press stops the glide before its drag starts, as Controls does.
+        (rig) => {
+          rig.stopMomentum();
+          rig.dragStart(400);
+          rig.dragEnd();
+          rig.flick(10, 0);
+        },
+      ];
+      for (const end of ends) {
+        const rig = flung();
+        end(rig);
+        expect(rigInternals(rig).glideFriction).toBe(FRICTION);
+      }
+    });
+
+    it('never glides to NaN, whatever the leftover and fling', () => {
+      for (const v of [0, -0.5 * FRAME_MS, -1e6, 1e-12]) {
+        const { rig, frame, t } = dragRig(300);
+        rig.dragEnd();
+        rig.flick(v, 0);
+        for (let f = t; f < t + 3000; f += FRAME_MS) frame(f);
+        expect(Number.isFinite(rig.view.yaw)).toBe(true);
+        expect(Number.isFinite(rigInternals(rig).momentum.yaw)).toBe(true);
+      }
     });
 
     it('lines up moves stamped on a clock far from the frame clock', () => {

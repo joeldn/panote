@@ -154,11 +154,16 @@ const longestStill = (a: number[], min: number) => {
   return longest;
 };
 
-/** The glide's first frame carries on at the drag's speed, then only slows. */
+/**
+ * The glide's first frame carries on at the drag's speed, then only slows.
+ * The fling is measured from the pointer's last 100 ms, which on a slow
+ * drag can read a sixth fast (in whole pixels, a pixel step more or less):
+ * any excess over 10% is under a tenth of a pixel.
+ */
 function expectSteadyGlide({ glide, dragSpeed }: Replay): void {
   expect(glide.length).toBeGreaterThan(20);
-  expect(glide[0]! / dragSpeed).toBeGreaterThanOrEqual(0.8);
-  expect(glide[0]! / dragSpeed).toBeLessThan(1.4);
+  expect(glide[0]! / dragSpeed).toBeGreaterThanOrEqual(0.9);
+  expect(glide[0]!).toBeLessThan(Math.max(dragSpeed * 1.1, dragSpeed + 0.1));
   for (let i = 1; i < glide.length; i++) expect(glide[i]!).toBeLessThanOrEqual(glide[i - 1]!);
 }
 
@@ -214,6 +219,14 @@ describe('PanoViewer: drag smoothness', () => {
       ['fast', 1.5],
     ])('glides a released %s drag on at its speed, then slows', (_, v) => {
       expectSteadyGlide(replay({ v, displayHz, noisePx: 0.15 }));
+    });
+
+    it.each([
+      ['slow', 0.03],
+      ['medium', 0.3],
+      ['fast', 1.5],
+    ])('glides a released %s drag in whole pixels on at its speed, then slows', (_, v) => {
+      expectSteadyGlide(replay({ v, displayHz, int: true }));
     });
 
     it('lands where the pointer let go, with inertia off', () => {
