@@ -7,6 +7,7 @@ import { tilesPerEdge } from '../cube.js';
 import { dirInto, type Vec3 } from '../project.js';
 import { projectDirInto, type Mat4 } from '../render/projection.js';
 import { pickEvictions, type EvictCandidate } from '../tile-cache.js';
+import type { TileRetryBudget } from '../tile-retry.js';
 
 /** Unit direction for a (yaw, pitch), matching the camera convention. */
 export function dirFromYawPitch(yaw: number, pitch: number): Vec3 {
@@ -52,4 +53,10 @@ export function selectEvictions(
   currentFrame?: number,
 ): string[] {
   return pickEvictions(entries, entries.length - maxTiles, currentFrame, []).map((e) => e.key);
+}
+
+/** Attempts `budget` has spent on the tile `key` so far (0 when it has never failed). */
+export function attemptsFor(budget: TileRetryBudget, key: string): number {
+  const { attempts } = budget as unknown as { attempts: Map<string, { count: number }> };
+  return attempts.get(key)?.count ?? 0;
 }

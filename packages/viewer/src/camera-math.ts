@@ -1,12 +1,9 @@
-const TWO_PI = Math.PI * 2;
+/** A whole turn, radians. */
+export const TAU = Math.PI * 2;
 
-/** `pitch` within [min, max]. */
-export function clampPitch(pitch: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, pitch));
-}
-
-export function clampFov(fov: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, fov));
+/** `value` within [min, max]. */
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 /** Radians of view rotation per screen pixel at the screen centre for a given fov (radians) across `dimensionPx`. */
@@ -51,15 +48,9 @@ export function rayAt(out: YawPitch, camera: YawPitch, at: Tangents): YawPitch {
   const wy = (ty * cp + sp) / len;
   const hz = ty * sp - cp; // camera-space z after the pitch, unscaled
   out.yaw = yaw + Math.atan2(tx, -hz);
-  out.pitch = Math.asin(wy < -1 ? -1 : wy > 1 ? 1 : wy);
+  out.pitch = Math.asin(clamp(wy, -1, 1));
   return out;
 }
-
-// The three pitches that raise a ray to a given height, by which side of
-// straight up or down the camera ends up on.
-const FRONT = 0;
-const PAST_UP = 1;
-const PAST_DOWN = 2;
 
 /**
  * The camera that puts the world direction `ray` under the screen point
@@ -108,18 +99,20 @@ export function aimRay(
       sinRayPitch * cosRefPitch + zr * sinRefPitch,
       sinRayPitch * sinRefPitch - zr * cosRefPitch,
     );
-  const side = was > Math.PI / 2 ? PAST_UP : was < -Math.PI / 2 ? PAST_DOWN : FRONT;
+  // The candidate pitches below, by which side of straight up or down the
+  // camera ends up on: 0 in front, 1 past straight up, 2 past straight down.
+  const side = was > Math.PI / 2 ? 1 : was < -Math.PI / 2 ? 2 : 0;
   // (ty, 1) is at angle atan(ty) above ahead with length r; pitched by p it
   // rises to r·sin(p + atan(ty)), which must match the ray's height. With
   // |s| > 1 no pitch reaches it.
   const len = Math.sqrt(tx * tx + ty * ty + 1);
   const r = Math.sqrt(ty * ty + 1) / len;
   const s = sinRayPitch / r;
-  const rise = Math.asin(s < -1 ? -1 : s > 1 ? 1 : s);
+  const rise = Math.asin(clamp(s, -1, 1));
   const up = Math.atan(ty);
   let bestFit = -Infinity;
-  for (let i = FRONT; i <= PAST_DOWN; i++) {
-    const angle = i === FRONT ? rise : i === PAST_UP ? Math.PI - rise : -Math.PI - rise;
+  for (let i = 0; i < 3; i++) {
+    const angle = i === 0 ? rise : i === 1 ? Math.PI - rise : -Math.PI - rise;
     const exact = angle - up;
     const pitch = Math.min(maxPitch, Math.max(minPitch, exact));
     const inexact = s < -1 || s > 1 || exact !== pitch;
@@ -150,31 +143,22 @@ export function aimRay(
   return out;
 }
 
-// zoomAnchorView's point, as tangents before and after the zoom.
-const pointBefore: Tangents = { x: 0, y: 0 };
-const pointAfter: Tangents = { x: 0, y: 0 };
-
 /**
- * The camera that keeps the scene direction under the screen point `ndc`
- * (−1..1, y up) at that point through a zoom: from the camera `from` with
- * half-fov tangents `before` to tangents `after`. Exact anywhere on screen
- * and at any pitch; see {@link aimRay} for the pole and the pitch limits.
- * Written into `out`.
+ * The camera that keeps the scene direction under a screen point at that
+ * point through a zoom, from the camera `from`: the point is at tangents
+ * `before` at the old fov and `after` at the new one. Exact anywhere on
+ * screen and at any pitch; see {@link aimRay} for the pole and the pitch
+ * limits. Written into `out`.
  */
 export function zoomAnchorView(
   out: YawPitch,
   from: YawPitch,
-  ndc: { x: number; y: number },
   before: Tangents,
   after: Tangents,
   limits: PitchLimits,
 ): YawPitch {
-  pointBefore.x = ndc.x * before.x;
-  pointBefore.y = ndc.y * before.y;
-  pointAfter.x = ndc.x * after.x;
-  pointAfter.y = ndc.y * after.y;
-  rayAt(out, from, pointBefore);
-  return aimRay(out, out, pointAfter, from, limits);
+  rayAt(out, from, before);
+  return aimRay(out, out, after, from, limits);
 }
 
 /** Move `current` a fraction `factor` (0..1) toward `target`. */
@@ -193,9 +177,9 @@ export function pinchFactor(start: number, current: number): number {
 
 /** Wrap a radians angle into (−π, π]. */
 export function normalizeAngle(angle: number): number {
-  const wrapped = angle % TWO_PI;
-  if (wrapped > Math.PI) return wrapped - TWO_PI;
-  if (wrapped <= -Math.PI) return wrapped + TWO_PI;
+  const wrapped = angle % TAU;
+  if (wrapped > Math.PI) return wrapped - TAU;
+  if (wrapped <= -Math.PI) return wrapped + TAU;
   return wrapped;
 }
 

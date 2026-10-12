@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  clampPitch,
-  clampFov,
+  clamp,
   damp,
   anglePerPixel,
   zoomAnchorView,
@@ -23,7 +22,10 @@ const D = Math.PI / 180;
 /** The default pitch limit, just short of straight up. */
 const LIMIT = MAX_PITCH;
 
-/** zoomAnchorView into a new object, its arguments named. */
+/**
+ * zoomAnchorView into a new object, for the point `ndc` and the half-fov
+ * tangents `before` and `after` the zoom.
+ */
 function anchor(a: {
   from: YawPitch;
   ndc: { x: number; y: number };
@@ -31,7 +33,14 @@ function anchor(a: {
   after: Tangents;
   limits: PitchLimits;
 }): YawPitch {
-  return zoomAnchorView({ yaw: 0, pitch: 0 }, a.from, a.ndc, a.before, a.after, a.limits);
+  const { ndc, before, after } = a;
+  return zoomAnchorView(
+    { yaw: 0, pitch: 0 },
+    a.from,
+    { x: ndc.x * before.x, y: ndc.y * before.y },
+    { x: ndc.x * after.x, y: ndc.y * after.y },
+    a.limits,
+  );
 }
 
 /** rayAt into a new object, for the camera at `camera` and the point at tangents (x, y). */
@@ -39,19 +48,17 @@ function rayThrough(camera: YawPitch, x: number, y: number): YawPitch {
   return rayAt({ yaw: 0, pitch: 0 }, camera, { x, y });
 }
 
-describe('clampPitch', () => {
-  it('clamps to just under ±90°', () => {
-    expect(clampPitch(Math.PI, MIN_PITCH, MAX_PITCH)).toBeCloseTo(Math.PI / 2 - 0.001, 3);
-    expect(clampPitch(-Math.PI, MIN_PITCH, MAX_PITCH)).toBeCloseTo(-(Math.PI / 2 - 0.001), 3);
-    expect(clampPitch(0.1, MIN_PITCH, MAX_PITCH)).toBeCloseTo(0.1, 5);
+describe('clamp', () => {
+  it('holds a pitch to the default limits, just under ±90°', () => {
+    expect(clamp(Math.PI, MIN_PITCH, MAX_PITCH)).toBeCloseTo(Math.PI / 2 - 0.001, 3);
+    expect(clamp(-Math.PI, MIN_PITCH, MAX_PITCH)).toBeCloseTo(-(Math.PI / 2 - 0.001), 3);
+    expect(clamp(0.1, MIN_PITCH, MAX_PITCH)).toBeCloseTo(0.1, 5);
   });
-});
 
-describe('clampFov', () => {
   it('clamps into [min,max]', () => {
-    expect(clampFov(5, 15, 90)).toBe(15);
-    expect(clampFov(120, 15, 90)).toBe(90);
-    expect(clampFov(45, 15, 90)).toBe(45);
+    expect(clamp(5, 15, 90)).toBe(15);
+    expect(clamp(120, 15, 90)).toBe(90);
+    expect(clamp(45, 15, 90)).toBe(45);
   });
 });
 

@@ -133,11 +133,6 @@ export class TileRetryBudget {
     this.attempts.delete(key);
   }
 
-  /** Attempts spent on a tile so far (0 when it has never failed). */
-  attemptsFor(key: string): number {
-    return this.attempts.get(key)?.count ?? 0;
-  }
-
   /**
    * How long until this tile may be fetched again: 0 when it may go now,
    * `Infinity` when it never may again (permanent status, or the attempt cap

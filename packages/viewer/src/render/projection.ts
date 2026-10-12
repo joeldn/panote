@@ -20,7 +20,8 @@ export type Frustum = Float32Array;
 const NEAR = 0.1;
 const FAR = 100;
 
-const DEG2RAD = Math.PI / 180;
+/** Degrees to radians. */
+export const DEG2RAD = Math.PI / 180;
 
 /** The largest vertical fov whose horizontal fov stays within maxHorizontalFovDeg. */
 export function maxVFovDeg(maxHorizontalFovDeg: number, aspect: number): number {

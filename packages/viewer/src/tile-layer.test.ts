@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from './cube.js';
+import type { TileRetryBudget } from './tile-retry.js';
+import { attemptsFor } from './test-support/oracles.js';
 import { BaseTileLoadError, TileLayer } from './tile-layer.js';
 import { ContextLostError, type GLRenderer } from './render/gl-renderer.js';
 import {
@@ -612,8 +614,7 @@ describe('TileLayer', () => {
   });
 
   describe('context loss', () => {
-    const retryOf = (layer: TileLayer) =>
-      (layer as unknown as { retry: { attemptsFor(key: string): number } }).retry;
+    const retryOf = (layer: TileLayer) => (layer as unknown as { retry: TileRetryBudget }).retry;
 
     it('spends no attempt on a tile whose upload hit a lost context', async () => {
       fx.renderer.uploadTile.mockImplementation(() => {
@@ -623,7 +624,7 @@ describe('TileLayer', () => {
       await render(layer, 0);
       const first = [...fx.requests];
       expect(first.length).toBeGreaterThan(0);
-      for (const url of first) expect(retryOf(layer).attemptsFor(keyOf(url))).toBe(0);
+      for (const url of first) expect(attemptsFor(retryOf(layer), keyOf(url))).toBe(0);
       // Each went out again on the next frame, with no cooldown to wait out.
       expect(fx.requests.length).toBeGreaterThan(new Set(fx.requests).size);
 

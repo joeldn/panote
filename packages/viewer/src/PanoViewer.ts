@@ -1,6 +1,7 @@
 import type { PanoViewerApi } from './api.js';
 import { GLRenderer } from './render/gl-renderer.js';
 import {
+  DEG2RAD,
   viewProjection,
   effectiveVFovDeg,
   maxVFovDeg,
@@ -27,8 +28,8 @@ import { resolveViewerOptions } from './defaults.js';
 import { Emitter } from './emitter.js';
 import { report } from './report.js';
 import {
-  clampPitch,
-  clampFov,
+  TAU,
+  clamp,
   damp,
   anglePerPixel,
   zoomAnchorView,
@@ -51,8 +52,6 @@ import type {
 } from './types.js';
 import { dirInto, isBehind, ndcToPixel, type Vec3 } from './project.js';
 
-const TWO_PI = Math.PI * 2;
-const DEG2RAD = Math.PI / 180;
 // damping and momentumFriction are per 60 Hz frame; motion is scaled to the
 // real frame time so it feels the same at 30, 60 and 120 Hz.
 const FRAME_MS = 1000 / 60;
@@ -65,7 +64,26 @@ const MOMENTUM_EPS = 1e-5 / FRAME_MS;
 
 /** `yaw` less its whole turns: the same rendered angle, kept within ±2π. */
 function unwound(yaw: number): number {
-  return yaw - Math.trunc(yaw / TWO_PI) * TWO_PI;
+  return yaw - Math.trunc(yaw / TAU) * TAU;
+}
+
+// Scratch for the zoom and pinch solvers, which run synchronously: the
+// pointer as tangents before and after a zoom step, and a pinch midpoint.
+const tanBefore: Tangents = { x: 0, y: 0 };
+const tanAfter: Tangents = { x: 0, y: 0 };
+const pinchPoint: Tangents = { x: 0, y: 0 };
+
+/** The screen point `ndc` as tangents, for a vertical fov of `vfovDeg` at `aspect`. */
+function pointTangents(
+  ndc: { x: number; y: number },
+  vfovDeg: number,
+  aspect: number,
+  out: Tangents,
+): Tangents {
+  const ty = Math.tan((vfovDeg * DEG2RAD) / 2);
+  out.x = ndc.x * (ty * aspect);
+  out.y = ndc.y * ty;
+  return out;
 }
 
 /**
@@ -201,10 +219,6 @@ export class PanoViewer implements PanoViewerApi {
   private ndcProjectScratch: Vec3 = { x: 0, y: 0, z: 0 };
   // zoomAt's solved view, reused so a wheel or pinch event allocates nothing.
   private zoomScratch: YawPitch = { yaw: 0, pitch: 0 };
-  // Half-fov tangents before and after a zoom step, and a pinch midpoint's.
-  private tanBefore: Tangents = { x: 0, y: 0 };
-  private tanAfter: Tangents = { x: 0, y: 0 };
-  private pinchPoint: Tangents = { x: 0, y: 0 };
   // A pointer in NDC, from toNdc().
   private ndcScratch = { x: 0, y: 0 };
   // A pinch is solved from where it started, not event by event: the scene
@@ -769,7 +783,7 @@ export class PanoViewer implements PanoViewerApi {
   }
 
   private clampPitch(pitch: number): number {
-    return clampPitch(pitch, this.camera.minPitch, this.camera.maxPitch);
+    return clamp(pitch, this.camera.minPitch, this.camera.maxPitch);
   }
 
   /**
@@ -777,7 +791,7 @@ export class PanoViewer implements PanoViewerApi {
    * requested fov survives a rotation, a resize or a zero-size blip.
    */
   private clampFov(fov: number): number {
-    return clampFov(fov, this.camera.minFov, this.camera.maxFov);
+    return clamp(fov, this.camera.minFov, this.camera.maxFov);
   }
 
   /**
@@ -791,7 +805,7 @@ export class PanoViewer implements PanoViewerApi {
     const { minFov, maxFov, maxHorizontalFov } = this.camera;
     const cap = maxVFovDeg(maxHorizontalFov, this.aspect);
     const max = Math.max(minFov, Math.min(maxFov, cap));
-    return clampFov(Math.min(fromDeg, cap) * factor, minFov, max);
+    return clamp(Math.min(fromDeg, cap) * factor, minFov, max);
   }
 
   /**
@@ -850,8 +864,8 @@ export class PanoViewer implements PanoViewerApi {
   // way); shift view and target together by whole turns only, so the float
   // stays bounded and the rendered angle does not move.
   private boundYaw(): void {
-    if (Math.abs(this.target.yaw) <= TWO_PI) return;
-    const shift = Math.trunc(this.target.yaw / TWO_PI) * TWO_PI;
+    if (Math.abs(this.target.yaw) <= TAU) return;
+    const shift = Math.trunc(this.target.yaw / TAU) * TAU;
     this.target.yaw -= shift;
     this.view.yaw -= shift;
   }
@@ -873,12 +887,12 @@ export class PanoViewer implements PanoViewerApi {
     // cursor with it, away from the anchor solved here.
     this.stopMomentum();
     const fov = this.zoomStep(this.target.fov, scaleFactor);
+    const ndc = this.toNdc(clientX, clientY);
     const { yaw, pitch } = zoomAnchorView(
       this.zoomScratch,
       this.view,
-      this.toNdc(clientX, clientY),
-      this.halfTangents(this.view.fov, this.tanBefore),
-      this.halfTangents(fov, this.tanAfter),
+      pointTangents(ndc, this.effectiveVFovDeg(this.view.fov), this.aspect, tanBefore),
+      pointTangents(ndc, this.effectiveVFovDeg(fov), this.aspect, tanAfter),
       this.camera,
     );
     this.snapCamera(yaw, pitch, fov);
@@ -893,14 +907,6 @@ export class PanoViewer implements PanoViewerApi {
     this.view.fov = fov;
     this.target.fov = fov;
     this.invalidate();
-  }
-
-  /** The tangents of half the drawn fov for a requested `fovDeg`: x across, y up. */
-  private halfTangents(fovDeg: number, out: Tangents): Tangents {
-    const ty = Math.tan((this.effectiveVFovDeg(fovDeg) * DEG2RAD) / 2);
-    out.x = ty * this.aspect;
-    out.y = ty;
-    return out;
   }
 
   /** A pointer in client coordinates as NDC (−1..1, y up), in a reused object. */
@@ -923,14 +929,14 @@ export class PanoViewer implements PanoViewerApi {
     this.pinchFov = this.view.fov;
   }
 
-  /** The pinch midpoint as tangents at the drawn fov for `fovDeg`. */
+  /** The pinch midpoint as tangents, at the drawn fov for a requested `fovDeg`. */
   private pinchTangents(clientX: number, clientY: number, fovDeg: number): Tangents {
-    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
-    const ty = Math.tan((this.effectiveVFovDeg(fovDeg) * DEG2RAD) / 2);
-    const out = this.pinchPoint;
-    out.x = nx * ty * this.aspect;
-    out.y = ny * ty;
-    return out;
+    return pointTangents(
+      this.toNdc(clientX, clientY),
+      this.effectiveVFovDeg(fovDeg),
+      this.aspect,
+      pinchPoint,
+    );
   }
 
   // The pinch now: the fov is the start fov times `scale`, and the camera
@@ -1074,8 +1080,8 @@ export class PanoViewer implements PanoViewerApi {
     if (this.disposed) return;
     const dt =
       this.lastFrameT === undefined
-        ? Math.min(Math.max(t - (this.lastDrawT ?? -Infinity), 0), FRAME_MS)
-        : Math.min(Math.max(t - this.lastFrameT, 0), MAX_FRAME_DT_MS);
+        ? clamp(t - (this.lastDrawT ?? -Infinity), 0, FRAME_MS)
+        : clamp(t - this.lastFrameT, 0, MAX_FRAME_DT_MS);
     this.lastFrameT = t;
     this.lastDrawT = t;
 
@@ -1085,7 +1091,7 @@ export class PanoViewer implements PanoViewerApi {
       const rotateMs =
         this.autoRotateLastFrame === undefined
           ? 0
-          : Math.min(Math.max(t - this.autoRotateLastFrame, 0), MAX_FRAME_DT_MS);
+          : clamp(t - this.autoRotateLastFrame, 0, MAX_FRAME_DT_MS);
       this.autoRotateLastFrame = t;
       this.target.yaw += this.autoRotateSpeed * (rotateMs / 1000);
       this.boundYaw();
@@ -1236,8 +1242,7 @@ export class PanoViewer implements PanoViewerApi {
     const ndcX = (px / this.cssW) * 2 - 1;
     const ndcY = -((py / this.cssH) * 2 - 1);
     const v = unprojectNDC(ndcX, ndcY, this.viewProj);
-    const y = v.y < -1 ? -1 : v.y > 1 ? 1 : v.y;
-    return { yaw: Math.atan2(v.x, -v.z), pitch: Math.asin(y) };
+    return { yaw: Math.atan2(v.x, -v.z), pitch: Math.asin(clamp(v.y, -1, 1)) };
   }
 
   /**

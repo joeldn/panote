@@ -86,8 +86,10 @@ export class BaseTileLoadError extends Error {
     cause: unknown,
   ) {
     const reason = cause instanceof Error ? cause.message : String(cause ?? 'no attempt succeeded');
-    const message = `tile source "${sourceId}": low-resolution base tile for face "${face}" failed (${reason})`;
-    super(message, { cause });
+    super(
+      `tile source "${sourceId}": low-resolution base tile for face "${face}" failed (${reason})`,
+      { cause },
+    );
     this.name = 'BaseTileLoadError';
     this.permanent = classifyFailure(cause) === 'permanent';
   }
@@ -205,7 +207,7 @@ const CULL_PAD = 1.05;
  * the first time that level is wanted (see levelTable), so the per-frame cull is plain
  * arithmetic. Tile `i = (faceIndex * g + y) * g + x`.
  */
-interface LevelTable {
+export interface LevelTable {
   /** Tiles per face edge. */
   g: number;
   /**
@@ -217,11 +219,9 @@ interface LevelTable {
   keys: string[];
 }
 
-// Scratch for buildLevelTable: one cube point, the four corners' xyz, and
-// the tile being keyed.
+// Scratch for buildLevelTable: one cube point, and the four corners' xyz.
 const cornerDir: Vec3 = { x: 0, y: 0, z: 0 };
 const cornerPos = new Float64Array(12);
-const tableTile: TileAddress = { face: 'px', level: 0, x: 0, y: 0 };
 
 function buildLevelTable(level: number): LevelTable {
   const g = tilesPerEdge(level);
@@ -264,11 +264,7 @@ function buildLevelTable(level: number): LevelTable {
         data[o + 4] = d.x / mlen;
         data[o + 5] = d.y / mlen;
         data[o + 6] = d.z / mlen;
-        tableTile.face = face;
-        tableTile.level = level;
-        tableTile.x = x;
-        tableTile.y = y;
-        keys[i] = tileKey(tableTile);
+        keys[i] = tileKey({ face, level, x, y });
       }
     }
   }
@@ -283,7 +279,7 @@ function buildLevelTable(level: number): LevelTable {
  */
 const levelTables: (LevelTable | undefined)[] = [];
 
-function levelTable(level: number): LevelTable {
+export function levelTable(level: number): LevelTable {
   let t = levelTables[level];
   if (!t) {
     t = buildLevelTable(level);
@@ -485,7 +481,7 @@ export class TileLayer {
       frustumFromViewProj(viewProj, this.frustum);
       this.cull(level);
       this.desired.clear();
-      const { keys } = this.table(level);
+      const { keys } = levelTable(level);
       for (let n = 0; n < this.visibleCount; n++) this.desired.add(keys[this.visible[n]!]!);
       this.rankView(level, fwd);
     }
@@ -502,7 +498,7 @@ export class TileLayer {
     let wakeMs = Infinity;
     // Targets still to request beyond the first rounds: the edges of the view.
     let edge = 0;
-    const { g, data, keys } = this.table(level);
+    const { g, data, keys } = levelTable(level);
     for (let n = 0; n < this.visibleCount; n++) {
       const i = this.visible[n]!;
       const key = keys[i]!;
@@ -693,7 +689,7 @@ export class TileLayer {
     priority: number,
     fetch: boolean,
   ): { present: boolean; wait: number } {
-    const t = this.table(level);
+    const t = levelTable(level);
     const key = t.keys[(faceIndex * t.g + y) * t.g + x]!;
     const result = this.parentResult;
     result.present = true;
@@ -729,7 +725,7 @@ export class TileLayer {
     this.leadCutoff = Infinity;
     if (this.visibleCount > lead) {
       if (this.ranks.length < this.visibleCount) this.ranks = new Float32Array(this.visible.length);
-      const { data } = this.table(level);
+      const { data } = levelTable(level);
       for (let n = 0; n < this.visibleCount; n++) {
         const o = this.visible[n]! * STRIDE;
         this.ranks[n] = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
@@ -739,7 +735,7 @@ export class TileLayer {
     }
     this.fallbackInView.clear();
     if (level >= 3) {
-      const { keys } = this.table(level - 2);
+      const { keys } = levelTable(level - 2);
       for (let n = 0; n < this.treeCount; n++) {
         if (this.treeLevel[n] === level - 2) this.fallbackInView.add(keys[this.treeIndex[n]!]!);
       }
@@ -767,10 +763,6 @@ export class TileLayer {
     }, delay);
   }
 
-  private table(level: number): LevelTable {
-    return levelTable(level);
-  }
-
   /**
    * Fill `visible` with the tiles at `level` whose padded bounding sphere
    * meets the frustum. Descends from level 0 and skips a subtree whose parent
@@ -786,7 +778,7 @@ export class TileLayer {
   }
 
   private descend(f: number, level: number, x: number, y: number, target: number): void {
-    const t = this.table(level);
+    const t = levelTable(level);
     const o = ((f * t.g + y) * t.g + x) * STRIDE;
     const sphere = this.sphere;
     sphere.cx = t.data[o]!;
