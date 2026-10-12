@@ -2,8 +2,17 @@ import { pinchFactor } from './camera-math.js';
 import type { ResolvedViewerOptions, WheelMode } from './types.js';
 
 export interface ControlHost {
-  /** Move the camera now: a drag follows the pointer exactly. */
+  /** Move the camera now, with no easing (a wheel swipe). */
   panByPixels(dx: number, dy: number): void;
+  /** A drag starts at time `t` (the pointer events' timeStamp clock, ms). */
+  dragStart(t: number): void;
+  /** The drag moved by (dx, dy) px at time `t`; the camera follows it frame by frame. */
+  dragBy(dx: number, dy: number, t: number): void;
+  /**
+   * The drag ended: the camera catches up with where the pointer let go,
+   * easing, or at once with `now`.
+   */
+  dragEnd(now?: boolean): void;
   /** Move where the camera is heading, and let damping ease it there (keys). */
   panTargetByPixels(dx: number, dy: number): void;
   zoomAt(scaleFactor: number, clientX: number, clientY: number): void;
@@ -211,13 +220,15 @@ export class Controls {
     this.moveLast(e.clientX, e.clientY);
     if (this.p0 && this.p1) {
       // A second finger makes this a multi-touch (pinch) gesture, a new one
-      // each time a finger lands.
+      // each time a finger lands; the pinch takes over from the drag.
+      this.host.dragEnd(true);
       this.gestureConsumed = true;
       this.pinchDist0 = Math.hypot(this.p0.x - this.p1.x, this.p0.y - this.p1.y);
       this.host.pinchStart((this.p0.x + this.p1.x) / 2, (this.p0.y + this.p1.y) / 2);
     }
     // Grabbing halts any ongoing inertial glide and resets velocity tracking.
     this.host.stopMomentum();
+    if (!this.p1) this.host.dragStart(e.timeStamp);
     this.sampleCount = 0;
     this.pushSample(e.timeStamp, e.clientX, e.clientY);
     this.setCursor('grabbing');
@@ -255,7 +266,7 @@ export class Controls {
     const dx = e.clientX - this.last.x;
     const dy = e.clientY - this.last.y;
     this.moveLast(e.clientX, e.clientY);
-    this.host.panByPixels(dx, dy);
+    this.host.dragBy(dx, dy, e.timeStamp);
     this.pushSample(e.timeStamp, e.clientX, e.clientY);
   };
 
@@ -284,8 +295,10 @@ export class Controls {
     if (left) {
       // The finger left drags on from where it is, with no jump.
       this.moveLast(left.x, left.y);
+      this.host.dragStart(e.timeStamp);
       return;
     }
+    this.host.dragEnd();
     // Only fling from a real drag — not from the tail of a pinch.
     if (fling && this.opts.inertia && !this.gestureConsumed) {
       const [vx, vy] = this.releaseVelocity(e.timeStamp);

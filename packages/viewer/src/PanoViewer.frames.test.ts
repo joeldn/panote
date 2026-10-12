@@ -97,7 +97,7 @@ describe('PanoViewer', () => {
       }
     });
 
-    it('glides a released drag smoothly from its first frame at 60, 120 and 144 Hz', () => {
+    it('glides a released drag on at its speed from the first frame at 60, 120 and 144 Hz', () => {
       // A drag at 0.6 px/ms, one move per display frame as Chrome sends them,
       // released mid-move; then the camera's yaw speed frame by frame.
       const glide = (hz: number) => {
@@ -115,14 +115,18 @@ describe('PanoViewer', () => {
         });
         let x = 300;
         canvasListener(viewer, 'pointerdown')(ev(x, raf.now));
+        let before = 0;
         for (let i = 0; i < 20; i++) {
           x += 0.6 * period;
           canvasListener(viewer, 'pointermove')(ev(x, raf.now + period));
+          if (i === 14) before = internals(viewer).rig.view.yaw;
           raf.step(raf.now + period);
         }
         canvasListener(viewer, 'pointerup')(ev(x, raf.now + 2, 0));
-        const speeds: number[] = [];
         const released = internals(viewer).rig.view.yaw;
+        // The drag's speed on screen over its last five frames.
+        const dragSpeed = Math.abs(released - before) / (5 * period);
+        const speeds: number[] = [];
         let yaw = released;
         while (raf.pending > 0 && speeds.length < 5000) {
           raf.step(raf.now + period);
@@ -132,23 +136,23 @@ describe('PanoViewer', () => {
         }
         const total = Math.abs(internals(viewer).rig.view.yaw - released);
         viewer.dispose();
-        return { speeds, total };
+        return { speeds, total, dragSpeed };
       };
       const at60 = glide(60);
       expect(at60.speeds.length).toBeGreaterThan(30);
       for (const hz of [60, 120, 144]) {
-        const { speeds, total } = hz === 60 ? at60 : glide(hz);
-        // Eases in: the first frame moves no faster than the next ones.
-        expect(speeds[0]!).toBeLessThan(speeds[1]!);
-        const peak = speeds.indexOf(Math.max(...speeds));
-        for (let i = 1; i <= peak; i++) expect(speeds[i]!).toBeGreaterThanOrEqual(speeds[i - 1]!);
+        const { speeds, total, dragSpeed } = hz === 60 ? at60 : glide(hz);
+        // No dip as the glide takes over: the first frame carries on at
+        // about the drag's speed.
+        expect(speeds[0]! / dragSpeed).toBeGreaterThanOrEqual(0.8);
+        expect(speeds[0]! / dragSpeed).toBeLessThan(1.3);
         // Then only slows, and never stalls, until it settles.
-        for (let i = peak + 1; i < speeds.length - 1; i++) {
+        for (let i = 1; i < speeds.length - 1; i++) {
           expect(speeds[i]!).toBeLessThanOrEqual(speeds[i - 1]!);
           expect(speeds[i]!).toBeGreaterThan(0);
         }
         expect(Math.abs(total / at60.total - 1)).toBeLessThan(0.05);
-        expect(Math.abs(Math.max(...speeds) / Math.max(...at60.speeds) - 1)).toBeLessThan(0.1);
+        expect(Math.abs(speeds[0]! / at60.speeds[0]! - 1)).toBeLessThan(0.1);
       }
     });
 

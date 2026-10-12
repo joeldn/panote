@@ -404,11 +404,168 @@ describe('CameraRig', () => {
     });
   });
 
+  describe('drags', () => {
+    // Yaw per pixel of drag at the default fov in a 400 × 800 rig.
+    const yawPerPx = (() => {
+      const { rig } = makeRig(400, 800);
+      rig.panByPixels(-1, 0);
+      return rig.view.yaw;
+    })();
+    /** How far right the rig has been dragged, px. */
+    const draggedPx = (rig: CameraRig) => -rig.view.yaw / yawPerPx;
+
+    /** A rig dragged right at 0.5 px/ms, a move every 10 ms, for `ms`; frames at 60 Hz. */
+    function dragRig(ms: number) {
+      const made = makeRig(400, 800);
+      const { rig } = made;
+      const frame = frameClock(rig);
+      rig.dragStart(0);
+      let t = FRAME_MS;
+      for (let m = 10; m <= ms; m += 10) {
+        for (; t < m; t += FRAME_MS) frame(t);
+        rig.dragBy(5, 0, m);
+      }
+      return { ...made, frame, t };
+    }
+
+    it('moves the camera on frames, not moves, a little behind the pointer', () => {
+      const { rig, invalidate, frame, t } = dragRig(300);
+      expect(invalidate).toHaveBeenCalled();
+      const before = draggedPx(rig);
+      rig.dragBy(5, 0, 305);
+      expect(draggedPx(rig)).toBe(before);
+      frame(t);
+      // The pointer is at 0.5 px/ms · t; the camera trails it by one input
+      // period and the filter's smoothing: some ms, not tens.
+      const lagMs = (0.5 * t - draggedPx(rig)) / 0.5;
+      expect(lagMs).toBeGreaterThan(5);
+      expect(lagMs).toBeLessThan(25);
+    });
+
+    it('catches up with a pointer that holds still, then settles', () => {
+      const { rig, frame } = dragRig(300);
+      let t = 300;
+      let frames = 0;
+      while (frame((t += FRAME_MS)) && frames < 200) frames++;
+      expect(frames).toBeLessThan(200);
+      expect(draggedPx(rig)).toBeCloseTo(150, 1);
+    });
+
+    it('puts what it had yet to draw on the target when it ends', () => {
+      const { rig, frame } = dragRig(300);
+      rig.dragEnd();
+      expect(draggedPx(rig)).toBeLessThan(150);
+      expect(-rigInternals(rig).target.yaw / yawPerPx).toBeCloseTo(150, 6);
+      let t = 300;
+      while (frame((t += FRAME_MS)) && t < 5000);
+      expect(draggedPx(rig)).toBeCloseTo(150, 6);
+    });
+
+    it('hands what it had yet to draw to a flick, which glides it in', () => {
+      const { rig, frame, t: next } = dragRig(300);
+      const shown = draggedPx(rig);
+      rig.dragEnd();
+      rig.flick(0, 0);
+      const { target, momentum } = rigInternals(rig);
+      expect(target.yaw).toBe(rig.view.yaw);
+      expect(momentum.yaw).toBeLessThan(0);
+      // The first glide frame covers a tenth of what was left (1 − friction).
+      let t = next;
+      frame(t);
+      expect(draggedPx(rig) - shown).toBeCloseTo((150 - shown) * (1 - FRICTION), 6);
+      while (frame((t += FRAME_MS)) && t < 5000);
+      expect(draggedPx(rig)).toBeCloseTo(150, 0);
+    });
+
+    it('lines up moves stamped on a clock far from the frame clock', () => {
+      const { rig } = makeRig(400, 800);
+      const frame = frameClock(rig);
+      rig.dragStart(1e6);
+      for (let i = 1; i <= 30; i++) {
+        rig.dragBy(5, 0, 1e6 + i * 10);
+        frame(i * 10);
+      }
+      expect(draggedPx(rig)).toBeGreaterThan(100);
+      expect(draggedPx(rig)).toBeLessThan(150);
+    });
+
+    it('flings what was left of a drag released next to the ±2π wrap, not a whole turn', () => {
+      const release = (yaw: number) => {
+        const { rig } = makeRig(400, 800, { initialView: { yaw } });
+        const frame = frameClock(rig);
+        rig.dragStart(0);
+        let t = FRAME_MS;
+        for (let m = 10; m <= 100; m += 10) {
+          for (; t < m; t += FRAME_MS) frame(t);
+          rig.dragBy(5, 0, m);
+        }
+        const drawn = rig.view.yaw - yaw;
+        rig.dragEnd();
+        rig.flick(-2, 0);
+        const start = rig.view.yaw;
+        while (frame((t += FRAME_MS)) && t < 10_000);
+        return { drawn, glide: rig.view.yaw - start };
+      };
+      const ref = release(0);
+      // The rest of the drag carries the target across −2π, where it is
+      // wound back by a whole turn.
+      const nearWrap = release(-2 * Math.PI + 0.001 - ref.drawn);
+      expect(nearWrap.glide).toBeCloseTo(ref.glide, 9);
+    });
+
+    /** Drag at 0.5 px/ms from `start` for 500 ms; the mean lag over its last 300 ms. */
+    function lagAfter(rig: CameraRig, frame: (t: number) => boolean, start: number): number {
+      let t = Math.ceil(start / FRAME_MS) * FRAME_MS;
+      const lags: number[] = [];
+      for (let m = start; m <= start + 500; m += 10) {
+        for (; t < m; t += FRAME_MS) {
+          frame(t);
+          if (t > start + 200) lags.push((0.5 * (t - start) - draggedPx(rig)) / 0.5);
+        }
+        rig.dragBy(5, 0, m);
+      }
+      return lags.reduce((a, b) => a + b, 0) / lags.length;
+    }
+
+    it('keeps up with a drag that sets off after a long hold, whatever frames came in it', () => {
+      const lag = (strayFrameAt?: number) => {
+        const { rig } = makeRig(400, 800);
+        const frame = frameClock(rig);
+        rig.dragStart(0);
+        // A frame drawn while the pointer is held still: a tile, a timer.
+        if (strayFrameAt !== undefined) frame(strayFrameAt);
+        return lagAfter(rig, frame, 3010);
+      };
+      const none = lag();
+      expect(none).toBeLessThan(25);
+      for (const at of [900, 1200, 3000]) expect(Math.abs(lag(at) - none)).toBeLessThan(1);
+    });
+
+    it('keeps up after a jank of over a second between the press and the next frame', () => {
+      const { rig } = makeRig(400, 800);
+      const frame = frameClock(rig);
+      frame(0);
+      rig.dragStart(20);
+      frame(1130);
+      expect(lagAfter(rig, frame, 1140)).toBeLessThan(25);
+    });
+
+    it('starts afresh, with nothing left over, after a pinch takes over', () => {
+      const { rig } = dragRig(300);
+      rig.dragEnd();
+      rig.pinchStart(200, 400);
+      rig.pinchTo(1, 200, 400);
+      rig.flick(0, 0);
+      expect(rigInternals(rig).momentum).toEqual({ yaw: 0, pitch: 0 });
+    });
+  });
+
   describe('pinned numbers', () => {
     // Exact outputs of PanoViewer's camera before the CameraRig existed, for
     // fixed inputs, compared bit for bit: a change to the order of the float
     // operations in the zoom anchor, the pinch solve, momentum or damping
-    // shows up here first.
+    // shows up here first. (The glide has since moved the view as well as
+    // the target; see camera-trace.ts.)
     it('zooms, pinches, glides and eases to the same bits as before the extraction', () => {
       const { rig } = makeRig(1200, 800, { initialView: { yaw: 0.3, pitch: 0.4, fov: 72 } });
       const { target, momentum } = rigInternals(rig);
