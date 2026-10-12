@@ -436,13 +436,16 @@ export function PanoStage({
     const r = rotation.current;
     const holding = held && document.activeElement?.matches(HOLDS_ROTATION);
     const on = autoRotate && !holding;
+    const wasHeld = r.held;
+    // Kept current even when nothing changes below, so a hold let go while
+    // auto-rotate was off doesn't delay turning it back on.
+    r.held = holding;
     if (!viewer || r.on === on) return;
     clearTimeout(r.timer);
-    // Let go of a hold, it waits out the idle window first, as after a drag.
-    if (on && r.held) r.timer = setTimeout(() => viewer.setAutoRotate(true), r.idle);
+    // A hold that lets go waits out the idle window first, as after a drag.
+    if (on && wasHeld) r.timer = setTimeout(() => viewer.setAutoRotate(true), r.idle);
     else viewer.setAutoRotate(on);
     r.on = on;
-    r.held = holding;
   });
 
   useEffect(() => {

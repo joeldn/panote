@@ -298,7 +298,7 @@ describe('PanoStage', () => {
 
   describe('auto-rotate under keyboard focus (WCAG 2.2.2)', () => {
     // jsdom never matches :focus-visible, so say which focus came from the keyboard.
-    function stage(autoRotate = true) {
+    function stage(autoRotate = true, options?: ViewerOptions) {
       let keyboard = false;
       const matches = Element.prototype.matches;
       vi.spyOn(Element.prototype, 'matches').mockImplementation(function (
@@ -309,12 +309,13 @@ describe('PanoStage', () => {
         return keyboard && matches.call(this, selector.replaceAll(':focus-visible', ':focus'));
       });
       const f = factory();
-      const ui = (markers: boolean) => (
+      const ui = (markers: boolean, rotate = autoRotate) => (
         <>
           <PanoStage
             baseUrl="b/"
             panoId="hall"
-            autoRotate={autoRotate}
+            autoRotate={rotate}
+            {...(options && { options })}
             createViewer={f.createViewer}
           >
             {markers && (
@@ -342,7 +343,8 @@ describe('PanoStage', () => {
       };
       const button = (name: string) => screen.getByRole('button', { name });
       const dropMarkers = () => rerender(ui(false));
-      return { v, canvas, focus, button, dropMarkers, unmount };
+      const setAutoRotate = (on: boolean) => rerender(ui(true, on));
+      return { v, canvas, focus, button, dropMarkers, setAutoRotate, unmount };
     }
     // The preset's idle window.
     const IDLE_MS = 3000;
@@ -385,6 +387,27 @@ describe('PanoStage', () => {
       unmount();
       wait(IDLE_MS);
       expect(v.setAutoRotate).not.toHaveBeenCalled();
+    });
+
+    it("waits the viewer's own idle window from its options", () => {
+      const { v, canvas, focus, button } = stage(true, { autoRotate: { idleMs: 500 } });
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      wait(499);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
+      wait(1);
+      expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
+    });
+
+    it('turns at once when switched back on after a hold let go while it was off', () => {
+      const { v, canvas, focus, button, setAutoRotate } = stage();
+      focus(canvas, 'keyboard');
+      setAutoRotate(false);
+      focus(button('Outside'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      setAutoRotate(true);
+      expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
     });
 
     it('stays held when keyboard focus comes back within the idle window', () => {
