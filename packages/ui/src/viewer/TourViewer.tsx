@@ -91,19 +91,7 @@ const NONE: never[] = [];
 const prefersReducedMotion = () =>
   typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => {
-  const h: ViewerHotspot = {
-    id: source.id,
-    yaw: source.yaw,
-    pitch: source.pitch,
-    title: source.title,
-  };
-  if (source.body !== undefined) h.body = source.body;
-  if (source.icon !== undefined) h.icon = source.icon;
-  if (source.size !== undefined) h.size = source.size;
-  if (source.media !== undefined) h.media = source.media;
-  return h;
-};
+const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => source;
 
 interface PointsLayerProps {
   panoId: string;

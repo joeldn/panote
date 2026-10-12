@@ -10,12 +10,13 @@ export interface ViewerHotspot {
   yaw: number;
   pitch: number;
   title: string;
-  body?: string;
+  // `| undefined` so a contracts `Hotspot` is one as it is, without a copy.
+  body?: string | undefined;
   /** Font Awesome solid icon name, e.g. `utensils`. */
-  icon?: string;
+  icon?: string | undefined;
   /** Marker scale, 0.5..3 (contracts `Hotspot.size`). */
-  size?: number;
-  media?: ViewerMedia;
+  size?: number | undefined;
+  media?: ViewerMedia | undefined;
 }
 
 /** A floor chevron to another scene. */
