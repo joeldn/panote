@@ -23,6 +23,47 @@ export const MAX_FRAME_DT_MS = 100;
 // Momentum below this (rad/ms) is stopped: 1e-5 rad per 60 Hz frame.
 const MOMENTUM_EPS = 1e-5 / FRAME_MS;
 
+// A drag is drawn where the pointer was a moment ago, interpolated between
+// its timestamped moves, not where the newest move left it. Moves come at
+// the input rate (about 90 Hz from a Mac trackpad, with jitter) and frames
+// at the display rate, so a camera moved on each arrival steps unevenly from
+// frame to frame and some frames don't move at all. The lag is one input
+// period, measured from the moves, plus DRAG_JITTER_MS, so a frame nearly
+// always falls between two moves: 13 ms behind at 90 Hz input, 10 ms at
+// 120 Hz, never more than DRAG_LAG_MAX_MS. With the filter below, a 90 Hz
+// drag is drawn about 15 ms behind the pointer when fast, 20 ms at medium
+// speed and 30 ms when slow (under a pixel at 0.03 px/ms), against 6 or 7 ms
+// when each move was applied as it came.
+const DRAG_JITTER_MS = 2;
+const DRAG_LAG_MAX_MS = 20;
+// The input period assumed until a drag's moves measure it, and how much of
+// each gap between moves goes into the measure: about the last five.
+const DRAG_PERIOD_MS = 1000 / 90;
+const DRAG_PERIOD_GAIN = 0.2;
+// A gap between moves longer than this is a rest, not the input period: the
+// move after it is taken to have started one 60 Hz frame before it came,
+// rather than to have crept along through the whole rest.
+const DRAG_REST_MS = 50;
+// Drag samples kept: 20 ms of 240 Hz input is 5, with headroom for a stall.
+const DRAG_SAMPLES = 16;
+// The interpolated pointer then passes through a one-euro filter (Casiez et
+// al., 2012): a low-pass whose cutoff rises with speed. A slow drag, where
+// whole-pixel coordinates and sensor noise are as big as a frame's motion,
+// is smoothed over about 20 ms (8 Hz); a fast one barely at all (98 Hz at
+// 1.5 px/ms), so it keeps up.
+const DRAG_MIN_CUTOFF_HZ = 8;
+// Cutoff gained per px/ms of drag speed.
+const DRAG_BETA = 60;
+// Cutoff for the speed estimate that sets the cutoff.
+const DRAG_SPEED_CUTOFF_HZ = 1;
+// A drag closer than this (px) to its newest move has caught up.
+const DRAG_SETTLE_PX = 0.01;
+
+/** One-euro smoothing factor for a cutoff of `hz` over `dt` ms. */
+function smoothing(hz: number, dt: number): number {
+  return 1 / (1 + 1000 / (TAU * hz * dt));
+}
+
 /** `yaw` less its whole turns: the same rendered angle, kept within ±2π. */
 function unwound(yaw: number): number {
   return yaw - Math.trunc(yaw / TAU) * TAU;
@@ -61,8 +102,32 @@ export class CameraRig implements ControlHost {
   /** The camera as drawn: rewritten in place as it moves. Read it, don't write it. */
   readonly view: View;
   private target: View;
-  // Release inertia, in rad/ms.
+  // Release inertia, in rad/ms. A glide moves the view and the target together.
   private momentum = { yaw: 0, pitch: 0 };
+  // The drag in progress: the pointer's offset in px from where it started,
+  // at each of its recent moves (a ring buffer), and the offset already
+  // applied to the camera. step() moves the camera along it.
+  private dragging = false;
+  private dragT = new Float64Array(DRAG_SAMPLES);
+  private dragX = new Float64Array(DRAG_SAMPLES);
+  private dragY = new Float64Array(DRAG_SAMPLES);
+  private dragCount = 0;
+  private dragHead = 0;
+  private dragPeriod = DRAG_PERIOD_MS;
+  private dragAppliedX = 0;
+  private dragAppliedY = 0;
+  // The one-euro filter: the pointer offset sampled on the last frame, its
+  // smoothed speed (px/ms) and when that frame was; undefined until the
+  // drag's first frame. A frame clock that disagrees with the moves' clock
+  // by more than a second is lined up with it then, through dragClockShift.
+  private dragRawX = 0;
+  private dragRawY = 0;
+  private dragSpeedX = 0;
+  private dragSpeedY = 0;
+  private dragFrameT: number | undefined;
+  private dragClockShift = 0;
+  // What dragEnd() last added to the target (rad), for a flick to take over.
+  private dragLeft = { yaw: 0, pitch: 0 };
   // The container's CSS size, never 0, and width over height of the last
   // container that had both. Set through setViewport(); read, don't write.
   cssW = 1;
@@ -222,9 +287,15 @@ export class CameraRig implements ControlHost {
     return 2 * Math.atan(Math.tan(vfov / 2) * this.aspect);
   }
 
-  /** Move the camera now: a drag follows the pointer exactly. */
+  /** Move the camera now, by a wheel swipe: no easing and no resampling. */
   panByPixels(dx: number, dy: number): void {
     this.pauseAutoRotate();
+    this.pan(dx, dy);
+    this.invalidate();
+  }
+
+  // Move view and target together by (dx, dy) px of pointer motion.
+  private pan(dx: number, dy: number): void {
     const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const hfov = this.hfovOf(vfov);
     // drag right → look left
@@ -234,19 +305,152 @@ export class CameraRig implements ControlHost {
     this.target.yaw = yaw;
     this.view.pitch = pitch;
     this.target.pitch = pitch;
-    this.invalidate();
   }
 
   // panByPixels for the keyboard: moves only the target, so step()'s
   // damping eases the camera after it and key repeat glides.
   panTargetByPixels(dx: number, dy: number): void {
     this.pauseAutoRotate();
+    this.panTarget(dx, dy);
+    this.invalidate();
+  }
+
+  private panTarget(dx: number, dy: number): void {
     const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
     const hfov = this.hfovOf(vfov);
     this.target.yaw -= dx * anglePerPixel(hfov, this.cssW);
     this.target.pitch = this.clampPitch(this.target.pitch + dy * anglePerPixel(vfov, this.cssH));
     this.boundYaw();
+  }
+
+  /** A drag starts at time `t` (ms, the pointer events' clock). */
+  dragStart(t: number): void {
+    this.pauseAutoRotate();
+    this.dragging = true;
+    this.dragCount = 0;
+    this.dragHead = 0;
+    this.dragPeriod = DRAG_PERIOD_MS;
+    this.dragAppliedX = 0;
+    this.dragAppliedY = 0;
+    this.dragFrameT = undefined;
+    this.dragLeft.yaw = 0;
+    this.dragLeft.pitch = 0;
+    this.pushDrag(t, 0, 0);
+  }
+
+  /** The drag moved by (dx, dy) px at time `t`; step() moves the camera after it. */
+  dragBy(dx: number, dy: number, t: number): void {
+    if (!this.dragging) this.dragStart(t);
+    this.pauseAutoRotate();
+    const newest = (this.dragHead - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
+    const x = this.dragX[newest]! + dx;
+    const y = this.dragY[newest]! + dy;
+    const gap = t - this.dragT[newest]!;
+    if (gap > DRAG_REST_MS) {
+      // After a rest: the pointer set off one frame ago, from where it rested.
+      this.pushDrag(t - FRAME_MS, this.dragX[newest]!, this.dragY[newest]!);
+    } else if (gap > 0) {
+      this.dragPeriod += (gap - this.dragPeriod) * DRAG_PERIOD_GAIN;
+    }
+    // A move stamped before the one before it (a clock blip) is moved up to
+    // it, so the samples stay in order.
+    this.pushDrag(Math.max(t, this.dragT[newest]!), x, y);
     this.invalidate();
+  }
+
+  /**
+   * The drag ended: the part of it not drawn yet goes to the target, for a
+   * flick to take over or step()'s damping to ease in, so the camera ends
+   * where the pointer did.
+   */
+  dragEnd(): void {
+    this.dragLeft.yaw = 0;
+    this.dragLeft.pitch = 0;
+    if (!this.dragging) return;
+    this.dragging = false;
+    const newest = (this.dragHead - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
+    const { yaw, pitch } = this.target;
+    this.panTarget(
+      this.dragX[newest]! - this.dragAppliedX,
+      this.dragY[newest]! - this.dragAppliedY,
+    );
+    this.dragLeft.yaw = this.target.yaw - yaw;
+    this.dragLeft.pitch = this.target.pitch - pitch;
+    this.invalidate();
+  }
+
+  private pushDrag(t: number, x: number, y: number): void {
+    this.dragT[this.dragHead] = t;
+    this.dragX[this.dragHead] = x;
+    this.dragY[this.dragHead] = y;
+    this.dragHead = (this.dragHead + 1) % DRAG_SAMPLES;
+    if (this.dragCount < DRAG_SAMPLES) this.dragCount++;
+  }
+
+  /**
+   * Move the camera to the drag as of frame time `t`: the pointer
+   * interpolated one input period back, through the one-euro filter. True
+   * while the camera has yet to catch up with the newest move.
+   */
+  private followDrag(t: number): boolean {
+    const newest = (this.dragHead - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
+    const tNew = this.dragT[newest]!;
+    if (this.dragFrameT === undefined) {
+      this.dragClockShift = Math.abs(tNew - t) > 1000 ? tNew - t : 0;
+    }
+    const at =
+      t + this.dragClockShift - Math.min(this.dragPeriod + DRAG_JITTER_MS, DRAG_LAG_MAX_MS);
+    // The pointer at `at`: the newest move after it, the oldest kept before it.
+    let i = newest;
+    let rawX = this.dragX[newest]!;
+    let rawY = this.dragY[newest]!;
+    for (let n = 1; n < this.dragCount && this.dragT[i]! > at; n++) {
+      const j = (i - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
+      const tj = this.dragT[j]!;
+      const ti = this.dragT[i]!;
+      if (tj <= at) {
+        const f = ti > tj ? (at - tj) / (ti - tj) : 1;
+        rawX = this.dragX[j]! + (this.dragX[i]! - this.dragX[j]!) * f;
+        rawY = this.dragY[j]! + (this.dragY[i]! - this.dragY[j]!) * f;
+        break;
+      }
+      i = j;
+      rawX = this.dragX[j]!;
+      rawY = this.dragY[j]!;
+    }
+
+    let x = rawX;
+    let y = rawY;
+    if (this.dragFrameT === undefined) {
+      this.dragSpeedX = 0;
+      this.dragSpeedY = 0;
+    } else {
+      const dt = clamp(t - this.dragFrameT, 0, MAX_FRAME_DT_MS);
+      x = this.dragAppliedX;
+      y = this.dragAppliedY;
+      if (dt > 0) {
+        const s = smoothing(DRAG_SPEED_CUTOFF_HZ, dt);
+        this.dragSpeedX += ((rawX - this.dragRawX) / dt - this.dragSpeedX) * s;
+        this.dragSpeedY += ((rawY - this.dragRawY) / dt - this.dragSpeedY) * s;
+        const hz = DRAG_MIN_CUTOFF_HZ + DRAG_BETA * Math.hypot(this.dragSpeedX, this.dragSpeedY);
+        const a = smoothing(hz, dt);
+        x += (rawX - x) * a;
+        y += (rawY - y) * a;
+      }
+    }
+    this.dragRawX = rawX;
+    this.dragRawY = rawY;
+    this.dragFrameT = t;
+    // Not even a zero pan before the pointer moves: it would cut short an
+    // ease still under way, as a drag does once it moves.
+    if (x !== this.dragAppliedX || y !== this.dragAppliedY) {
+      this.pan(x - this.dragAppliedX, y - this.dragAppliedY);
+    }
+    this.dragAppliedX = x;
+    this.dragAppliedY = y;
+    return (
+      at < tNew || Math.hypot(this.dragX[newest]! - x, this.dragY[newest]! - y) > DRAG_SETTLE_PX
+    );
   }
 
   // flick takes px per 60 Hz frame; momentum is kept in rad/ms.
@@ -256,6 +460,22 @@ export class CameraRig implements ControlHost {
     const hfov = this.hfovOf(vfov);
     this.momentum.yaw = (-vx * anglePerPixel(hfov, this.cssW)) / FRAME_MS;
     this.momentum.pitch = (vy * anglePerPixel(vfov, this.cssH)) / FRAME_MS;
+    // A drag that just ended put what it had yet to draw on the target (see
+    // dragEnd). The glide takes that over: a glide travels its momentum
+    // times FRAME_MS / (1 − friction) in all, so this much more momentum
+    // travels it too. Eased in by damping instead, it would add its own
+    // burst of speed to the glide's first frames.
+    const f = this.camera.momentumFriction;
+    const left = this.dragLeft;
+    if (f < 1) {
+      const k = (1 - f) / FRAME_MS;
+      this.momentum.yaw += left.yaw * k;
+      this.momentum.pitch += left.pitch * k;
+      this.target.yaw -= left.yaw;
+      this.target.pitch -= left.pitch;
+    }
+    left.yaw = 0;
+    left.pitch = 0;
     this.invalidate();
   }
 
@@ -280,6 +500,9 @@ export class CameraRig implements ControlHost {
   private stopMomentumOnly(): void {
     this.momentum.yaw = 0;
     this.momentum.pitch = 0;
+    // The target has moved on from what the last drag left on it.
+    this.dragLeft.yaw = 0;
+    this.dragLeft.pitch = 0;
   }
 
   /** A zoom step by `scaleFactor` that keeps the scene under the pointer where it is. */
@@ -371,11 +594,12 @@ export class CameraRig implements ControlHost {
 
   /**
    * Advance the camera to frame time `t` (ms), `dt` ms after the frame
-   * before: auto-rotate, then momentum, then damping toward the target.
+   * before: a drag, then auto-rotate, then momentum, then damping toward the target.
    * True while the camera is still moving; false once it has settled, with
    * the view snapped exactly onto the target.
    */
   step(t: number, dt: number): boolean {
+    const dragging = this.dragging && this.followDrag(t);
     if (this.autoRotating()) {
       // The first frame after (re)starting has no prior timestamp to diff
       // against, so it advances by zero rather than a stale or huge gap.
@@ -399,6 +623,10 @@ export class CameraRig implements ControlHost {
       const f = this.camera.momentumFriction;
       const keep = f ** steps;
       const travel = f < 1 ? (FRAME_MS * (1 - keep)) / (1 - f) : dt;
+      // The glide carries the view as well as the target, so a released
+      // drag goes on at its own speed instead of easing in after the target.
+      this.view.yaw += this.momentum.yaw * travel;
+      this.view.pitch = this.clampPitch(this.view.pitch + this.momentum.pitch * travel);
       this.target.yaw += this.momentum.yaw * travel;
       this.target.pitch = this.clampPitch(this.target.pitch + this.momentum.pitch * travel);
       this.momentum.yaw *= keep;
@@ -416,9 +644,10 @@ export class CameraRig implements ControlHost {
     view.pitch = damp(view.pitch, target.pitch, k);
     view.fov = damp(view.fov, target.fov, k);
 
-    // Still moving unless no momentum is left and the camera has eased all
-    // the way to its target.
+    // Still moving unless no drag is catching up, no momentum is left and
+    // the camera has eased all the way to its target.
     const settled =
+      !dragging &&
       this.momentum.yaw === 0 &&
       this.momentum.pitch === 0 &&
       Math.abs(target.yaw - view.yaw) < 1e-4 &&

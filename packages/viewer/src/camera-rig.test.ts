@@ -404,11 +404,107 @@ describe('CameraRig', () => {
     });
   });
 
+  describe('drags', () => {
+    // Yaw per pixel of drag at the default fov in a 400 × 800 rig.
+    const yawPerPx = (() => {
+      const { rig } = makeRig(400, 800);
+      rig.panByPixels(-1, 0);
+      return rig.view.yaw;
+    })();
+    /** How far right the rig has been dragged, px. */
+    const draggedPx = (rig: CameraRig) => -rig.view.yaw / yawPerPx;
+
+    /** A rig dragged right at 0.5 px/ms, a move every 10 ms, for `ms`; frames at 60 Hz. */
+    function dragRig(ms: number) {
+      const made = makeRig(400, 800);
+      const { rig } = made;
+      const frame = frameClock(rig);
+      rig.dragStart(0);
+      let t = FRAME_MS;
+      for (let m = 10; m <= ms; m += 10) {
+        for (; t < m; t += FRAME_MS) frame(t);
+        rig.dragBy(5, 0, m);
+      }
+      return { ...made, frame, t };
+    }
+
+    it('moves the camera on frames, not moves, a little behind the pointer', () => {
+      const { rig, invalidate, frame, t } = dragRig(300);
+      expect(invalidate).toHaveBeenCalled();
+      const before = draggedPx(rig);
+      rig.dragBy(5, 0, 305);
+      expect(draggedPx(rig)).toBe(before);
+      frame(t);
+      // The pointer is at 0.5 px/ms · t; the camera trails it by one input
+      // period and the filter's smoothing: some ms, not tens.
+      const lagMs = (0.5 * t - draggedPx(rig)) / 0.5;
+      expect(lagMs).toBeGreaterThan(5);
+      expect(lagMs).toBeLessThan(25);
+    });
+
+    it('catches up with a pointer that holds still, then settles', () => {
+      const { rig, frame } = dragRig(300);
+      let t = 300;
+      let frames = 0;
+      while (frame((t += FRAME_MS)) && frames < 200) frames++;
+      expect(frames).toBeLessThan(200);
+      expect(draggedPx(rig)).toBeCloseTo(150, 1);
+    });
+
+    it('puts what it had yet to draw on the target when it ends', () => {
+      const { rig, frame } = dragRig(300);
+      rig.dragEnd();
+      expect(draggedPx(rig)).toBeLessThan(150);
+      expect(-rigInternals(rig).target.yaw / yawPerPx).toBeCloseTo(150, 6);
+      let t = 300;
+      while (frame((t += FRAME_MS)) && t < 5000);
+      expect(draggedPx(rig)).toBeCloseTo(150, 6);
+    });
+
+    it('hands what it had yet to draw to a flick, which glides it in', () => {
+      const { rig, frame, t: next } = dragRig(300);
+      const shown = draggedPx(rig);
+      rig.dragEnd();
+      rig.flick(0, 0);
+      const { target, momentum } = rigInternals(rig);
+      expect(target.yaw).toBe(rig.view.yaw);
+      expect(momentum.yaw).toBeLessThan(0);
+      // The first glide frame covers a tenth of what was left (1 − friction).
+      let t = next;
+      frame(t);
+      expect(draggedPx(rig) - shown).toBeCloseTo((150 - shown) * (1 - FRICTION), 6);
+      while (frame((t += FRAME_MS)) && t < 5000);
+      expect(draggedPx(rig)).toBeCloseTo(150, 0);
+    });
+
+    it('lines up moves stamped on a clock far from the frame clock', () => {
+      const { rig } = makeRig(400, 800);
+      const frame = frameClock(rig);
+      rig.dragStart(1e6);
+      for (let i = 1; i <= 30; i++) {
+        rig.dragBy(5, 0, 1e6 + i * 10);
+        frame(i * 10);
+      }
+      expect(draggedPx(rig)).toBeGreaterThan(100);
+      expect(draggedPx(rig)).toBeLessThan(150);
+    });
+
+    it('starts afresh, with nothing left over, after a pinch takes over', () => {
+      const { rig } = dragRig(300);
+      rig.dragEnd();
+      rig.pinchStart(200, 400);
+      rig.pinchTo(1, 200, 400);
+      rig.flick(0, 0);
+      expect(rigInternals(rig).momentum).toEqual({ yaw: 0, pitch: 0 });
+    });
+  });
+
   describe('pinned numbers', () => {
     // Exact outputs of PanoViewer's camera before the CameraRig existed, for
     // fixed inputs, compared bit for bit: a change to the order of the float
     // operations in the zoom anchor, the pinch solve, momentum or damping
-    // shows up here first.
+    // shows up here first. (The glide has since moved the view as well as
+    // the target; see camera-trace.ts.)
     it('zooms, pinches, glides and eases to the same bits as before the extraction', () => {
       const { rig } = makeRig(1200, 800, { initialView: { yaw: 0.3, pitch: 0.4, fov: 72 } });
       const { target, momentum } = rigInternals(rig);

@@ -50,6 +50,9 @@ class FakeElement {
 function makeHost() {
   return {
     panByPixels: vi.fn<ControlHost['panByPixels']>(),
+    dragStart: vi.fn<ControlHost['dragStart']>(),
+    dragBy: vi.fn<ControlHost['dragBy']>(),
+    dragEnd: vi.fn<ControlHost['dragEnd']>(),
     panTargetByPixels: vi.fn<ControlHost['panTargetByPixels']>(),
     zoomAt: vi.fn<ControlHost['zoomAt']>(),
     pinchStart: vi.fn<ControlHost['pinchStart']>(),
@@ -133,12 +136,12 @@ describe('Controls: pointer drag and release', () => {
     pointer('pointerdown', { x: 7, y: 7, t: 200 });
     expect((controls as unknown as { last: object }).last).toBe(last);
     expect(last).toEqual({ x: 7, y: 7 });
-    expect(host.panByPixels.mock.calls).toEqual([
-      [10, 1],
-      [10, 1],
-      [10, 1],
-      [10, 1],
-      [10, 1],
+    expect(host.dragBy.mock.calls).toEqual([
+      [10, 1, 16],
+      [10, 1, 32],
+      [10, 1, 48],
+      [10, 1, 64],
+      [10, 1, 80],
     ]);
   });
 
@@ -157,9 +160,10 @@ describe('Controls: pointer drag and release', () => {
     // The next press starts a fresh drag from where it lands, with no jump.
     pointer('pointerdown', { x: 600, y: 0, t: 260 });
     pointer('pointermove', { x: 601, y: 0, t: 276 });
-    expect(host.panByPixels.mock.calls).toEqual([
-      [20, 0],
-      [1, 0],
+    expect(host.dragStart.mock.calls).toEqual([[0], [260]]);
+    expect(host.dragBy.mock.calls).toEqual([
+      [20, 0, 16],
+      [1, 0, 276],
     ]);
     expect(host.flick.mock.calls).toEqual([[0, 0]]);
     expect(el.style['cursor']).toBe('grabbing');
@@ -173,9 +177,9 @@ describe('Controls: pointer drag and release', () => {
     expect(el.style['cursor']).toBe('grab');
     pointer('pointerdown', { x: 600, y: 0, t: 460 });
     pointer('pointermove', { x: 601, y: 0, t: 476 });
-    expect(host.panByPixels.mock.calls).toEqual([
-      [20, 0],
-      [1, 0],
+    expect(host.dragBy.mock.calls).toEqual([
+      [20, 0, 16],
+      [1, 0, 476],
     ]);
     expect(host.flick.mock.calls).toEqual([[0, 0]]);
   });
@@ -185,9 +189,9 @@ describe('Controls: pointer drag and release', () => {
     pointer('pointerdown', { x: 100, y: 0, t: 0, pointerType });
     pointer('pointermove', { x: 120, y: 0, t: 16, pointerType, buttons: 0 });
     pointer('pointermove', { x: 150, y: 0, t: 32, pointerType, buttons: 0 });
-    expect(host.panByPixels.mock.calls).toEqual([
-      [20, 0],
-      [30, 0],
+    expect(host.dragBy.mock.calls).toEqual([
+      [20, 0, 16],
+      [30, 0, 32],
     ]);
     expect(el.style['cursor']).toBe('grabbing');
   });
@@ -202,20 +206,34 @@ describe('Controls: pointer drag and release', () => {
     pointer('pointerdown', { x: 0, y: 0, t: 0, button: 2 });
     pointer('pointermove', { x: 30, y: 0, t: 16 });
     pointer('pointerup', { x: 30, y: 0, t: 20, button: 2 });
-    expect(host.panByPixels).not.toHaveBeenCalled();
+    expect(host.dragStart).not.toHaveBeenCalled();
+    expect(host.dragBy).not.toHaveBeenCalled();
     expect(host.flick).not.toHaveBeenCalled();
   });
 
-  it('pans a left-button drag by the pointer delta', () => {
+  it('drags by the pointer delta, timestamped, from a left-button press', () => {
     pointer('pointerdown', { x: 0, y: 0, t: 0 });
     pointer('pointermove', { x: 12, y: -4, t: 16 });
-    expect(host.panByPixels).toHaveBeenCalledWith(12, -4);
+    expect(host.dragStart).toHaveBeenCalledWith(0);
+    expect(host.dragBy).toHaveBeenCalledWith(12, -4, 16);
+    expect(host.panByPixels).not.toHaveBeenCalled();
+  });
+
+  it('ends the drag before it flings, so the glide takes over what is left of it', () => {
+    const t = drag(5);
+    pointer('pointerup', { x: 50, y: 0, t: t + 5 });
+    expect(host.dragEnd).toHaveBeenCalledTimes(1);
+    expect(host.dragEnd.mock.invocationCallOrder[0]!).toBeLessThan(
+      host.flick.mock.invocationCallOrder[0]!,
+    );
   });
 
   it('pinches with two touch pointers, drags on with the finger left, and never flings', () => {
     const touch = { pointerType: 'touch' };
     pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
+    // The pinch takes over from the first finger's drag.
+    expect(host.dragEnd).toHaveBeenCalledTimes(1);
     expect(host.pinchStart).toHaveBeenCalledWith(150, 100);
     pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
     // Distance 100 -> 200 halves the start fov, about the moved midpoint.
@@ -224,7 +242,8 @@ describe('Controls: pointer drag and release', () => {
     pointer('pointerup', { x: 300, y: 100, t: 20, id: 2, ...touch });
     // The finger left drags on from where it is, with no jump.
     pointer('pointermove', { x: 150, y: 100, t: 32, id: 1, ...touch });
-    expect(host.panByPixels).toHaveBeenCalledWith(50, 0);
+    expect(host.dragStart).toHaveBeenLastCalledWith(20);
+    expect(host.dragBy).toHaveBeenCalledWith(50, 0, 32);
     pointer('pointerup', { x: 150, y: 100, t: 34, id: 1, ...touch });
     expect(host.flick).not.toHaveBeenCalled();
   });
@@ -658,7 +677,7 @@ describe('Controls: remaining branches', () => {
     pointer('pointermove', { x: 600, y: 600, t: 16, id: 3, ...touch });
     pointer('pointerup', { x: 600, y: 600, t: 20, id: 3, ...touch });
     expect(host.pinchTo).not.toHaveBeenCalled();
-    expect(host.panByPixels).not.toHaveBeenCalled();
+    expect(host.dragBy).not.toHaveBeenCalled();
     // The first two fingers still pinch normally.
     pointer('pointermove', { x: 300, y: 100, t: 32, id: 2, ...touch });
     expect(host.pinchTo).toHaveBeenCalledWith(0.5, 200, 100);
@@ -671,8 +690,8 @@ describe('Controls: remaining branches', () => {
     pointer('pointerup', { x: 100, y: 100, t: 16, id: 1, ...touch });
     // The finger left drags on from where it is.
     pointer('pointermove', { x: 210, y: 100, t: 24, id: 2, ...touch });
-    expect(host.panByPixels).toHaveBeenCalledTimes(1);
-    expect(host.panByPixels).toHaveBeenCalledWith(10, 0);
+    expect(host.dragBy).toHaveBeenCalledTimes(1);
+    expect(host.dragBy).toHaveBeenCalledWith(10, 0, 24);
     // A new finger 100 px away starts a new pinch; spreading to 200 px
     // halves the fov it started at.
     pointer('pointerdown', { x: 310, y: 100, t: 32, id: 3, ...touch });
@@ -682,7 +701,7 @@ describe('Controls: remaining branches', () => {
     expect(host.pinchTo).toHaveBeenCalledWith(0.5, 310, 100);
     pointer('pointerup', { x: 410, y: 100, t: 56, id: 3, ...touch });
     pointer('pointerup', { x: 210, y: 100, t: 56, id: 2, ...touch });
-    expect(host.panByPixels).toHaveBeenCalledTimes(1);
+    expect(host.dragBy).toHaveBeenCalledTimes(1);
     expect(host.flick).not.toHaveBeenCalled();
   });
 });
@@ -799,7 +818,7 @@ describe('Controls: release velocity', () => {
     pointer('pointermove', { x: 60, y: 0, t: t + 8, buttons: 0 });
     // The drag is over: the move does not pan and the pointerup is ignored.
     pointer('pointerup', { x: 60, y: 0, t: t + 9 });
-    expect(host.panByPixels).toHaveBeenCalledTimes(5);
+    expect(host.dragBy).toHaveBeenCalledTimes(5);
     expect(host.flick).toHaveBeenCalledTimes(1);
     expect(flickVx()).toBeGreaterThan(8);
     expect(el.style['cursor']).toBe('grab');
