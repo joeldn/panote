@@ -8,7 +8,7 @@ import {
   type ViewerOptions,
 } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useLayoutEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { panoteViewerPreset } from './panote-viewer.js';
@@ -177,6 +177,33 @@ describe('PanoStage', () => {
     expect(v.load).toHaveBeenCalledWith('hall', { view: { yaw: 1, fov: 60 } });
     expect(v.setNorth).toHaveBeenLastCalledWith(0.5);
     expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+  });
+
+  it('creates the viewer in the commit that mounts it, before any passive effect', () => {
+    const f = factory();
+    // A later sibling's layout effect runs after the stage's in the same commit,
+    // and a passive effect only after every layout effect.
+    const seen: string[] = [];
+    function After() {
+      useLayoutEffect(() => {
+        seen.push(`layout:${f.createViewer.mock.calls.length}`);
+      }, []);
+      useEffect(() => {
+        seen.push(`passive:${f.createViewer.mock.calls.length}`);
+      }, []);
+      return null;
+    }
+    render(
+      <>
+        <PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />
+        <After />
+      </>,
+    );
+    expect(seen).toEqual(['layout:1', 'passive:1']);
+    expect(f.createViewer).toHaveBeenCalledWith(
+      document.querySelector('.pn-stage__viewer'),
+      expect.anything(),
+    );
   });
 
   it('names the viewer canvas, not its own host, and renames it in place', () => {
