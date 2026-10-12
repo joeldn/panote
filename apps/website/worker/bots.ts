@@ -10,11 +10,14 @@ export const LINK_PREVIEW_AGENTS = [
   // Meta: Facebook, Messenger, Instagram, iMessage's preview fetcher
   'facebookexternalhit',
   'facebookcatalog',
+  'meta-externalagent',
+  'meta-externalfetcher',
   'Facebot',
   'WhatsApp',
   'Twitterbot',
   'LinkedInBot',
   'Slackbot',
+  'Slack-ImgProxy',
   'Discordbot',
   'TelegramBot',
   // Skype and Microsoft Teams
@@ -24,6 +27,10 @@ export const LINK_PREVIEW_AGENTS = [
   'redditbot',
   'Embedly',
   'Iframely',
+  // Matrix homeservers' URL previews
+  'Synapse',
+  'Discourse Forum Onebox',
+  'kakaotalk-scrap',
   // Fediverse servers fetching a card for a post
   'Mastodon',
   'Pleroma',
@@ -39,7 +46,9 @@ export const LINK_PREVIEW_AGENTS = [
   // Search engines: the tags are also the page's title and snippet
   'Googlebot',
   'Google-InspectionTool',
+  'GoogleOther',
   'bingbot',
+  'BingPreview',
   'DuckDuckBot',
   'YandexBot',
 ] as const;

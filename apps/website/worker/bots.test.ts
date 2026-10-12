@@ -7,6 +7,23 @@ const CRAWLERS: [string, string][] = [
   ['Facebook', 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'],
   ['Facebook catalog', 'facebookcatalog/1.0'],
   ['Facebot', 'Facebot'],
+  [
+    'Meta agent',
+    'meta-externalagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)',
+  ],
+  [
+    'Meta fetcher',
+    'meta-externalfetcher/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)',
+  ],
+  ['Slack image proxy', 'Slack-ImgProxy (+https://api.slack.com/robots)'],
+  ['Matrix (Synapse)', 'Synapse (bot; +https://github.com/matrix-org/synapse)'],
+  ['Discourse', 'Discourse Forum Onebox v3.3.0'],
+  ['KakaoTalk', 'facebookexternalhit/1.1; kakaotalk-scrap/1.0; +https://devtalk.kakao.com/'],
+  ['GoogleOther', 'Mozilla/5.0 (compatible; GoogleOther)'],
+  [
+    'Bing preview',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0 BingPreview/1.0b',
+  ],
   ['WhatsApp', 'WhatsApp/2.23.20.0 A'],
   ['Twitter / X', 'Twitterbot/1.0'],
   [

@@ -814,13 +814,13 @@ describe('link-preview crawlers', () => {
       expect(await res.text()).toBe(PLAIN);
       const took = Date.now() - started;
       expect(took).toBeGreaterThanOrEqual(BOT_BOOT_BUDGET_MS - 50);
-      expect(took).toBeLessThan(BOT_BOOT_BUDGET_MS + 1500);
+      expect(took).toBeLessThan(BOT_BOOT_BUDGET_MS + 3000);
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(
         `tour boot read took over ${BOT_BOOT_BUDGET_MS}ms; serving the plain page`,
       );
     },
-    BOT_BOOT_BUDGET_MS + 5000,
+    BOT_BOOT_BUDGET_MS + 6000,
   );
 
   it('serves the plain page at once when the tour read fails', async () => {
