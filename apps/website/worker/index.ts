@@ -1,3 +1,4 @@
+import { isLinkPreviewBot } from './bots.js';
 import { preloadLinks, preloadUrls, readTourBoot, scriptJson, type TourBoot } from './boot.js';
 import { linkPreviewTags } from './og.js';
 import { parseSlugPath, resolveSlug, type SlugResolution } from './redirect.js';
@@ -117,19 +118,30 @@ function primeHtml(
 }
 
 /**
- * How long the R2 reads may hold the end of the head back. Past this the page finishes
- * plain and the SPA fetches the tour itself. The head streams before the reads, so a slow
- * R2 delays the boot data and the rest of the page by at most this much, not the app's JS.
+ * How long the R2 reads may hold the end of the head back for a person. Past this the page
+ * finishes plain and the SPA fetches the tour itself. The head streams before the reads, so
+ * a slow R2 delays the boot data and the rest of the page by at most this much, not the
+ * app's JS.
  */
 export const BOOT_BUDGET_MS = 300;
 
-function withinBudget<T>(read: Promise<T | null>): Promise<T | null> {
+/**
+ * The same, for a link-preview or search crawler (bots.ts). A crawler runs no JS, so a
+ * plain page is a card with no tour title, description or image, and it waits for the whole
+ * document anyway. R2 answers in tens of milliseconds, so a read still pending after 5 s is
+ * an incident, not latency: waiting longer only risks the crawler's own fetch timeout
+ * (a few seconds on the stricter unfurlers) and getting no card at all, where the plain page
+ * still gives a generic one.
+ */
+export const BOT_BOOT_BUDGET_MS = 5000;
+
+function withinBudget<T>(read: Promise<T | null>, budgetMs: number): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => {
-      console.warn(`tour boot read took over ${BOOT_BUDGET_MS}ms; serving the plain page`);
+      console.warn(`tour boot read took over ${budgetMs}ms; serving the plain page`);
       resolve(null);
-    }, BOOT_BUDGET_MS);
+    }, budgetMs);
   });
   return Promise.race([read, timeout]).finally(() => {
     if (timer !== null) clearTimeout(timer);
@@ -158,12 +170,18 @@ async function tourPage(
   live: Extract<SlugResolution, { kind: 'tour' }>,
   page: Promise<Response>,
 ): Promise<Response> {
-  // Started before the HTML is awaited: the reads run while the head streams.
+  // Started before the HTML is awaited: the reads run while the head streams. Only the wait
+  // depends on the User-Agent, never the content: a crawler gets the same primed page a
+  // person gets when R2 is quick, so a cache holding either can't serve the wrong shape.
+  const budget = isLinkPreviewBot(request.headers.get('User-Agent'))
+    ? BOT_BOOT_BUDGET_MS
+    : BOOT_BUDGET_MS;
   const boot = withinBudget(
     readTourBoot(env.BUCKET, live.path, live.record, new URL(request.url)).catch((err: unknown) => {
       console.error('tour boot read failed', err);
       return null;
     }),
+    budget,
   );
   const html = await page;
   if (!isHtml(html)) return html;
