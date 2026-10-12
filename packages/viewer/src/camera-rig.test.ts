@@ -4,6 +4,7 @@ import { viewProjection, unprojectNDC, effectiveVFovDeg } from './render/project
 import { VIEWER_DEFAULTS } from './defaults.js';
 import { dirFromYawPitch } from './test-support/oracles.js';
 import { makeRig, frameClock, rigInternals } from './test-support/rig.js';
+import { PRE_RIG_CAMERA_TRACE } from './test-support/camera-trace.js';
 import type { View } from './types.js';
 
 const { maxHorizontalFov: MAX_H, momentumFriction: FRICTION } = VIEWER_DEFAULTS.camera;
@@ -400,6 +401,47 @@ describe('CameraRig', () => {
       rig.flick(30, 0);
       rig.pinchStart(600, 400);
       expect(rigInternals(rig).momentum).toEqual({ yaw: 0, pitch: 0 });
+    });
+  });
+
+  describe('pinned numbers', () => {
+    // Exact outputs of PanoViewer's camera before the CameraRig existed, for
+    // fixed inputs, compared bit for bit: a change to the order of the float
+    // operations in the zoom anchor, the pinch solve, momentum or damping
+    // shows up here first.
+    it('zooms, pinches, glides and eases to the same bits as before the extraction', () => {
+      const { rig } = makeRig(1200, 800, { initialView: { yaw: 0.3, pitch: 0.4, fov: 72 } });
+      const { target, momentum } = rigInternals(rig);
+      const out: number[] = [];
+      const rec = () => {
+        out.push(rig.view.yaw, rig.view.pitch, rig.view.fov, target.yaw, target.pitch, target.fov);
+      };
+      for (let k = 0; k < 12; k++) {
+        rig.zoomAt(k % 3 === 2 ? 1.17 : 0.83, 97 + k * 91, 53 + ((k * 137) % 700));
+        rec();
+      }
+      rig.pinchStart(700, 300);
+      for (let k = 1; k <= 8; k++) {
+        rig.pinchTo(1 - k * 0.061, 700 + k * 13, 300 + k * 7);
+        rec();
+      }
+      rig.flick(30, -8);
+      const frame = frameClock(rig);
+      let t = 0;
+      for (let k = 0; k < 20; k++) {
+        t += [7, 16.7, 3, 41, 9][k % 5]!;
+        frame(t);
+        rec();
+        out.push(momentum.yaw, momentum.pitch);
+      }
+      rig.panTargetByPixels(40, -25);
+      rig.setView({ fov: 30 });
+      for (let k = 0; k < 10; k++) {
+        t += [8, 16.7, 33][k % 3]!;
+        frame(t);
+        rec();
+      }
+      expect(out).toEqual(PRE_RIG_CAMERA_TRACE);
     });
   });
 
