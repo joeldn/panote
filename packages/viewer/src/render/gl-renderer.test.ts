@@ -42,8 +42,7 @@ describe('mipLevels', () => {
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test
 // dependency. GLRenderer is DOM/WebGL-driven throughout, so this builds a
-// minimal fake `document`/canvas/WebGL2-context stand-in, following the same
-// approach as ui/info-hotspots.test.ts's fake document, rather than adding
+// minimal fake `document`/canvas/WebGL2-context stand-in rather than adding
 // jsdom as a new devDependency. Every GL method is a vi.fn that also appends
 // its name to `log`, so tests can count the calls a frame makes.
 const GL_CONSTANTS = {

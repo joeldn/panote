@@ -12,10 +12,8 @@ import { BaseTileLoadError as InternalBaseTileLoadError } from './tile-layer.js'
 import { TileHttpError as InternalTileHttpError } from './tile-retry.js';
 
 // index.ts is the package's public entry point (see package.json `exports`).
-// This file is the only thing asserting a symbol actually crosses that
-// boundary — a class can be defined and exported from its own module and
-// still never make it into src/index.ts, which is exactly the state
-// BaseTileLoadError was in before this change (see tile-layer.ts).
+// This file checks that a symbol actually crosses that boundary: a class can
+// be exported from its own module and still be missing from src/index.ts.
 describe('public entry point', () => {
   it('re-exports BaseTileLoadError as the exact class TileLayer throws', () => {
     // Not just "a class with the same name" - the same reference, so a
@@ -26,9 +24,8 @@ describe('public entry point', () => {
 
   it('re-exports TileHttpError, the `cause` type its own doc points callers at', () => {
     // BaseTileLoadError's doc tells callers to inspect `cause` and names
-    // TileHttpError as what they will find. Leaving that class unexported left
-    // the advice unfollowable from outside the package — the only way to name
-    // it was to reach past the entry point into './tile-retry.js'.
+    // TileHttpError as what they will find, so a caller must be able to
+    // import it from the entry point.
     expect(TileHttpError).toBe(InternalTileHttpError);
 
     const err = new BaseTileLoadError('pano-a', 'px', new TileHttpError(401));

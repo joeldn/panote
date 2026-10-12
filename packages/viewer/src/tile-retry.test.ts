@@ -17,8 +17,8 @@ afterEach(() => {
 });
 
 // Everything here runs on an injected clock, never on wall time or timers, so
-// the whole policy is exercised deterministically under plain Node (this
-// package has no jsdom and no fake-timer dependency — see vitest.config.ts).
+// the whole policy is exercised deterministically under plain Node, with no
+// fake timers.
 function fakeClock(start = 0): { now: () => number; advance: (ms: number) => void } {
   let t = start;
   return {
@@ -64,7 +64,7 @@ describe('classifyFailure', () => {
     expect(classifyFailure(new TileHttpError(503))).toBe('transient');
   });
 
-  it('keeps the thrown message shape used before the split', () => {
+  it('formats the message as `tile <status>`', () => {
     expect(new TileHttpError(500).message).toBe('tile 500');
   });
 

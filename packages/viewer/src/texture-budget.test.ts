@@ -10,7 +10,7 @@ import {
 } from './texture-budget.js';
 
 describe('defaultTextureBudgetMB', () => {
-  it('keeps the pre-scaling budget on a devicePixelRatio-1 display', () => {
+  it('gives the base budget, 128 MB, on a devicePixelRatio-1 display', () => {
     expect(defaultTextureBudgetMB(1, 2)).toBe(BASE_TEXTURE_BUDGET_MB);
     expect(defaultTextureBudgetMB(1, 2)).toBe(128);
   });
