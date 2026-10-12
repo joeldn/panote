@@ -9,6 +9,7 @@ import { PanoViewer } from '../PanoViewer.js';
 import { FACES } from '../cube.js';
 import type { CubeTileSource } from '../source.js';
 import type { ViewerOptions } from '../types.js';
+import type { RigInternals } from './rig.js';
 import {
   FRAME_MS,
   FakeIntersectionObserver,
@@ -86,14 +87,10 @@ export class TestViewer extends PanoViewer {
 }
 
 export type Internals = {
-  view: { yaw: number; pitch: number; fov: number };
-  target: { yaw: number; pitch: number; fov: number };
-  momentum: { yaw: number; pitch: number };
+  /** The viewer's CameraRig. */
+  rig: RigInternals;
   dirty: boolean;
   invalidate: () => void;
-  panByPixels: (dx: number, dy: number) => void;
-  flick: (vx: number, vy: number) => void;
-  stopMomentum: () => void;
   controls: unknown;
   pendingLayers: Set<{ dispose: () => void }>;
   layer: unknown;

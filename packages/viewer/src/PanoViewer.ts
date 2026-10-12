@@ -1,10 +1,7 @@
 import type { PanoViewerApi } from './api.js';
 import { GLRenderer } from './render/gl-renderer.js';
 import {
-  DEG2RAD,
   viewProjection,
-  effectiveVFovDeg,
-  maxVFovDeg,
   projectDirInto,
   sameMatrix,
   unprojectNDC,
@@ -23,23 +20,11 @@ import {
 import type { DrawItem } from './render/gl-renderer.js';
 import { defaultTextureBudgetMB, isConstrainedDevice } from './texture-budget.js';
 import { Controls } from './controls.js';
-import type { ControlHost } from './controls.js';
 import { resolveViewerOptions } from './defaults.js';
 import { Emitter } from './emitter.js';
 import { report } from './report.js';
-import {
-  TAU,
-  clamp,
-  damp,
-  anglePerPixel,
-  zoomAnchorView,
-  rayAt,
-  aimRay,
-  type Tangents,
-  type YawPitch,
-  compassHeading,
-  normalizeAngle,
-} from './camera-math.js';
+import { clamp } from './camera-math.js';
+import { CameraRig, FRAME_MS, MAX_FRAME_DT_MS } from './camera-rig.js';
 import type {
   ProjectedPoint,
   View,
@@ -52,39 +37,8 @@ import type {
 } from './types.js';
 import { dirInto, isBehind, ndcToPixel, type Vec3 } from './project.js';
 
-// damping and momentumFriction are per 60 Hz frame; motion is scaled to the
-// real frame time so it feels the same at 30, 60 and 120 Hz.
-const FRAME_MS = 1000 / 60;
-// A stalled or backgrounded tab must not spend its whole absence as one jump on resume.
-const MAX_FRAME_DT_MS = 100;
 /** Decoded tiles uploaded per frame on a phone or tablet; elsewhere the layer's default. */
 const CONSTRAINED_UPLOADS_PER_UPDATE = 4;
-// Momentum below this (rad/ms) is stopped: 1e-5 rad per 60 Hz frame.
-const MOMENTUM_EPS = 1e-5 / FRAME_MS;
-
-/** `yaw` less its whole turns: the same rendered angle, kept within ±2π. */
-function unwound(yaw: number): number {
-  return yaw - Math.trunc(yaw / TAU) * TAU;
-}
-
-// Scratch for the zoom and pinch solvers, which run synchronously: the
-// pointer as tangents before and after a zoom step, and a pinch midpoint.
-const tanBefore: Tangents = { x: 0, y: 0 };
-const tanAfter: Tangents = { x: 0, y: 0 };
-const pinchPoint: Tangents = { x: 0, y: 0 };
-
-/** The screen point `ndc` as tangents, for a vertical fov of `vfovDeg` at `aspect`. */
-function pointTangents(
-  ndc: { x: number; y: number },
-  vfovDeg: number,
-  aspect: number,
-  out: Tangents,
-): Tangents {
-  const ty = Math.tan((vfovDeg * DEG2RAD) / 2);
-  out.x = ndc.x * (ty * aspect);
-  out.y = ndc.y * ty;
-  return out;
-}
 
 /**
  * Take a transition snapshot off the page, and free its backing store now
@@ -101,6 +55,24 @@ interface Crossfade {
   ms: number;
   /** The snapshot of the old scene, put up at the swap. */
   snap?: HTMLCanvasElement | undefined;
+}
+
+/** A preview on screen, and how it relates to the tiles of its scene. */
+interface Preview {
+  layer: EquirectLayer;
+  /** The scene it previews. */
+  id: string;
+  /**
+   * The version of the tiles it replaces ('' for unversioned ones);
+   * undefined for a new scene, where any source is the preview's own.
+   */
+  replaces: string | undefined;
+  /**
+   * True once its own tiles are on screen: it then sits among the tile
+   * levels by resolution (see previewDrawLevel) and is disposed at the next
+   * tiles-settled. False while it covers tiles that are not its own.
+   */
+  underlay: boolean;
 }
 
 /** A load to finish after a context restore. */
@@ -143,15 +115,8 @@ export class PanoViewer implements PanoViewerApi {
   private scene: CubeTileSource | undefined;
   // Between webglcontextlost and webglcontextrestored: no frames are drawn.
   private contextLost = false;
-  private preview: EquirectLayer | undefined;
-  private previewId: string | undefined;
-  // The version of the tiles the preview replaces ('' for unversioned ones);
-  // undefined for a new scene, where any source is the preview's own.
-  private previewReplaces: string | undefined;
-  // True once the preview's own tiles are on screen: it then sits among the
-  // tile levels by resolution (see previewDrawLevel) and is disposed at the
-  // next tiles-settled. False while it covers tiles that are not its own.
-  private previewUnderlay = false;
+  // The preview on screen (showPreview), if any.
+  private preview: Preview | undefined;
   // The scheduled animation frame, or 0. A frame is requested only when
   // something changed (invalidate) and the loop keeps itself going only while
   // the camera is still moving or auto-rotate is turning, so an idle viewer
@@ -169,13 +134,12 @@ export class PanoViewer implements PanoViewerApi {
   // and auto-rotate does not turn.
   private onScreen = true;
   private wasPending = false;
-  private view: View;
-  private target: View;
+  // The camera and everything that moves it.
+  private rig: CameraRig;
   // Every option with its default filled in, fixed at construction. north
   // and autoRotate.enabled change at runtime (setNorth, setAutoRotate), so
-  // the live values are the fields below.
+  // the live values are the rig's.
   private opts: ResolvedViewerOptions;
-  private camera: ResolvedViewerOptions['camera'];
   private textureBudgetMB: number;
   // A phone or tablet (see isConstrainedDevice), read once at construction.
   private constrained: boolean;
@@ -183,8 +147,6 @@ export class PanoViewer implements PanoViewerApi {
   private network: TileNetwork;
   private loadToken = 0;
   private disposed = false;
-  // Release inertia, in rad/ms.
-  private momentum = { yaw: 0, pitch: 0 };
   private renderCbs = new Set<(view: Readonly<View>) => void>();
   // What render callbacks are handed: a copy, so they cannot move the camera
   // by writing to it, reused so a frame allocates nothing.
@@ -203,11 +165,6 @@ export class PanoViewer implements PanoViewerApi {
   // window moves to a display with another one. Re-armed each time.
   private pixelRatioQuery: MediaQueryList | undefined;
   private intersectionObserver: IntersectionObserver | undefined;
-  // The container's CSS size, kept by resize events so that no frame, input
-  // event or project() call has to read layout.
-  private cssW = 1;
-  private cssH = 1;
-  private aspect = 1;
   // The view-projection matrix and forward vector of the frame last drawn,
   // rewritten in place each frame.
   private viewProj: Mat4 = new Float32Array(16);
@@ -217,25 +174,8 @@ export class PanoViewer implements PanoViewerApi {
   // Scratch for project(), which may run many times a frame.
   private projectScratch: Vec3 = { x: 0, y: 0, z: 0 };
   private ndcProjectScratch: Vec3 = { x: 0, y: 0, z: 0 };
-  // zoomAt's solved view, reused so a wheel or pinch event allocates nothing.
-  private zoomScratch: YawPitch = { yaw: 0, pitch: 0 };
   // A pointer in NDC, from toNdc().
   private ndcScratch = { x: 0, y: 0 };
-  // A pinch is solved from where it started, not event by event: the scene
-  // direction under the fingers then, and the fov then.
-  private pinchRay: YawPitch = { yaw: 0, pitch: 0 };
-  private pinchFov = 0;
-  private north: number;
-  private autoRotateEnabled: boolean;
-  private autoRotateSpeed: number;
-  private autoRotateIdleMs: number;
-  // Whether auto-rotate is actually turning this frame — false while a
-  // recent interaction's idle timer hasn't elapsed yet.
-  private autoRotateActive: boolean;
-  private autoRotateResumeTimer: ReturnType<typeof setTimeout> | undefined;
-  // Last frame auto-rotate advanced yaw on; undefined whenever it isn't
-  // running, so the frame it (re)starts on applies zero elapsed time.
-  private autoRotateLastFrame: number | undefined;
 
   constructor(
     private container: HTMLElement,
@@ -243,9 +183,7 @@ export class PanoViewer implements PanoViewerApi {
   ) {
     const opts = resolveViewerOptions(options);
     this.opts = opts;
-    const camera = opts.camera;
-    this.camera = camera;
-    const { memory, rendering, interaction } = opts;
+    const { camera, memory, rendering, interaction } = opts;
     // Only 'auto' scales with the display, and is held lower on a phone: a
     // caller who names a budget is naming an absolute one, and gets exactly
     // that. See texture-budget.ts for why the scale is linear in the pixel
@@ -266,19 +204,14 @@ export class PanoViewer implements PanoViewerApi {
       requestInit: opts.network.requestInit,
       decode: options.network?.decode,
     };
-    this.north = camera.north;
-    this.autoRotateSpeed = opts.autoRotate.speed;
-    this.autoRotateIdleMs = opts.autoRotate.idleMs;
-    this.autoRotateEnabled = opts.autoRotate.enabled;
-    // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
-    this.autoRotateActive = this.autoRotateEnabled;
-    // Clamped like setView: an embed config can say anything, and an
-    // unclamped pitch past ±π/2 reaches viewProjection as a mirrored view.
-    const initialYaw = options.initialView?.yaw ?? 0;
-    const initialPitch = this.clampPitch(options.initialView?.pitch ?? 0);
-    const initialFov = this.clampFov(options.initialView?.fov ?? camera.defaultFov);
-    this.view = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
-    this.target = { yaw: initialYaw, pitch: initialPitch, fov: initialFov };
+    const rig = new CameraRig(
+      camera,
+      opts.autoRotate,
+      options.initialView,
+      this.invalidate,
+      this.toNdc,
+    );
+    this.rig = rig;
     this.renderer = new GLRenderer(container, {
       antialias: rendering.antialias,
       maxPixelRatio: rendering.maxPixelRatio,
@@ -294,22 +227,13 @@ export class PanoViewer implements PanoViewerApi {
     this.resizeTo(container.clientWidth, container.clientHeight, false);
     // project() works before the first frame too (chrome places itself as
     // soon as the viewer exists), so the camera it reads starts out current.
-    viewProjection(this.view, this.aspect, camera.maxHorizontalFov, this.viewProj);
-    dirInto(this.fwd, this.view.yaw, this.view.pitch);
-    // Built once: the canvas and this host never change, and rebuilding it on
-    // each load would drop a drag that is in progress when a scene swaps in.
-    // The host is a private object, so the input methods stay off the
-    // viewer's public surface.
-    const host: ControlHost = {
-      panByPixels: (dx, dy) => this.panByPixels(dx, dy),
-      panTargetByPixels: (dx, dy) => this.panTargetByPixels(dx, dy),
-      zoomAt: (scale, x, y) => this.zoomAt(scale, x, y),
-      pinchStart: (x, y) => this.pinchStart(x, y),
-      pinchTo: (scale, x, y) => this.pinchTo(scale, x, y),
-      flick: (vx, vy) => this.flick(vx, vy),
-      stopMomentum: () => this.stopMomentum(),
-    };
-    if (interaction.enabled) this.controls = new Controls(this.renderer.canvas, host, interaction);
+    viewProjection(rig.view, rig.aspect, camera.maxHorizontalFov, this.viewProj);
+    dirInto(this.fwd, rig.view.yaw, rig.view.pitch);
+    // The rig is the Controls' host, built once: rebuilding it on each load
+    // would drop a drag that is in progress when a scene swaps in. Being a
+    // private object, it keeps the input methods off the viewer's public
+    // surface.
+    if (interaction.enabled) this.controls = new Controls(this.renderer.canvas, rig, interaction);
     if (interaction.a11y) {
       // Attributes, not the role and ariaLabel properties: Firefox ESR does
       // not reflect those, and would leave the canvas unnamed. A viewer that
@@ -543,18 +467,17 @@ export class PanoViewer implements PanoViewerApi {
     this.layer?.dispose();
     this.layer = layer;
     this.scene = source;
-    if (req.view) this.cutTo(req.view);
-    this.stopMomentumOnly();
-    if (this.preview && this.previewId === source.id) {
+    this.rig.cutTo(req.view);
+    const preview = this.preview;
+    if (preview && preview.id === source.id) {
       // Replacing an image keeps the id, so the source can still be the old
       // image's until the new tiles are written. Those tiles are not the
       // preview's: it stays on top of them and outlives their tiles-settled.
-      const own =
-        this.previewReplaces === undefined || (source.version ?? '') !== this.previewReplaces;
-      this.previewUnderlay = own;
-      this.preview.setLevel(
+      const own = preview.replaces === undefined || (source.version ?? '') !== preview.replaces;
+      preview.underlay = own;
+      preview.layer.setLevel(
         own
-          ? previewDrawLevel(this.preview.width, source.tileSize, source.maxLevel)
+          ? previewDrawLevel(preview.layer.width, source.tileSize, source.maxLevel)
           : source.maxLevel + 1,
       );
     } else {
@@ -636,15 +559,11 @@ export class PanoViewer implements PanoViewerApi {
    * current target, with `view`'s axes applied as the swap will apply them.
    */
   private prime(layer: TileLayer, view: Partial<View> | undefined): void {
-    const t = this.target;
-    const arrival: View = {
-      yaw: view?.yaw ?? t.yaw,
-      pitch: view?.pitch === undefined ? t.pitch : this.clampPitch(view.pitch),
-      fov: view?.fov === undefined ? t.fov : this.clampFov(view.fov),
-    };
+    const rig = this.rig;
+    const arrival = rig.arrival(view);
     layer.update(
-      viewProjection(arrival, this.aspect, this.camera.maxHorizontalFov),
-      this.effectiveVFovDeg(arrival.fov),
+      viewProjection(arrival, rig.aspect, this.opts.camera.maxHorizontalFov),
+      rig.effectiveVFovDeg(arrival.fov),
       dirInto({ x: 0, y: 0, z: 0 }, arrival.yaw, arrival.pitch),
       this.rasterHeight(),
     );
@@ -707,28 +626,22 @@ export class PanoViewer implements PanoViewerApi {
       return;
     }
     // Built first: a source that throws leaves the viewer exactly as it was.
-    const preview = new EquirectLayer(this.renderer, source);
+    const layer = new EquirectLayer(this.renderer, source);
     this.supersede();
     this.disposePreview();
-    this.preview = preview;
-    this.previewId = id;
-    this.previewReplaces = options.replacesVersion;
+    this.preview = { layer, id, replaces: options.replacesVersion, underlay: false };
     this.layer?.dispose();
     this.layer = undefined;
     this.scene = undefined;
     this.wasPending = false;
-    if (options.view) this.cutTo(options.view);
-    this.stopMomentumOnly();
+    this.rig.cutTo(options.view);
     this.requestRender();
     this.emitter.emit('scene-change', { id, kind: 'preview' });
   }
 
   private disposePreview(): void {
-    this.preview?.dispose();
+    this.preview?.layer.dispose();
     this.preview = undefined;
-    this.previewId = undefined;
-    this.previewReplaces = undefined;
-    this.previewUnderlay = false;
   }
 
   // Painter's order is applied by the renderer, so the order here is free.
@@ -736,181 +649,29 @@ export class PanoViewer implements PanoViewerApi {
     const list = this.frameList;
     list.length = 0;
     if (!this.preview) return this.layer ? this.layer.drawList() : list;
-    for (const item of this.preview.drawList()) list.push(item);
+    for (const item of this.preview.layer.drawList()) list.push(item);
     if (this.layer) for (const item of this.layer.drawList()) list.push(item);
     return list;
   }
 
   /** Set the compass north offset (radians) for the currently loaded scene. */
   setNorth(radians: number): void {
-    this.north = radians;
+    this.rig.setNorth(radians);
     this.requestRender();
   }
 
   /** Current compass heading (radians): north relative to the rendered yaw. */
   heading(): number {
-    return compassHeading(this.view.yaw, this.north);
+    return this.rig.heading();
   }
 
   /** Enable or disable idle auto-rotate at runtime; interaction still pauses it. */
   setAutoRotate(enabled: boolean): void {
-    this.autoRotateEnabled = enabled;
-    clearTimeout(this.autoRotateResumeTimer);
-    this.autoRotateResumeTimer = undefined;
-    this.autoRotateActive = enabled;
-    this.invalidate();
-  }
-
-  // Pause auto-rotate immediately and arm a timer to resume it once the
-  // configured idle window passes with no further interaction.
-  private pauseAutoRotate(): void {
-    if (!this.autoRotateEnabled) return;
-    this.autoRotateActive = false;
-    clearTimeout(this.autoRotateResumeTimer);
-    this.autoRotateResumeTimer = setTimeout(() => {
-      this.autoRotateActive = true;
-      this.invalidate();
-    }, this.autoRotateIdleMs);
-  }
-
-  private autoRotating(): boolean {
-    // A zero speed turns nothing, so it must not keep the loop running.
-    return this.autoRotateEnabled && this.autoRotateActive && this.autoRotateSpeed !== 0;
-  }
-
-  private effectiveVFovDeg(requestedDeg: number): number {
-    return effectiveVFovDeg(requestedDeg, this.camera.maxHorizontalFov, this.aspect);
-  }
-
-  private clampPitch(pitch: number): number {
-    return clamp(pitch, this.camera.minPitch, this.camera.maxPitch);
-  }
-
-  /**
-   * `fov` within camera.minFov/maxFov. Independent of the aspect, so a
-   * requested fov survives a rotation, a resize or a zero-size blip.
-   */
-  private clampFov(fov: number): number {
-    return clamp(fov, this.camera.minFov, this.camera.maxFov);
-  }
-
-  /**
-   * A user zoom step: `factor` applied to the fov drawn, not the one
-   * requested, and kept within what this aspect can draw. Above the
-   * horizontal fov cap a requested fov draws the same picture, so a step
-   * taken from it could change nothing on screen. Zooming out stops at the
-   * cap, which the user then has chosen.
-   */
-  private zoomStep(fromDeg: number, factor: number): number {
-    const { minFov, maxFov, maxHorizontalFov } = this.camera;
-    const cap = maxVFovDeg(maxHorizontalFov, this.aspect);
-    const max = Math.max(minFov, Math.min(maxFov, cap));
-    return clamp(Math.min(fromDeg, cap) * factor, minFov, max);
-  }
-
-  /**
-   * Move the camera to `view` at once, with no easing: a scene's own view.
-   * Only the axes it sets are cut; any other axis keeps easing as it was.
-   */
-  private cutTo(view: Partial<View>): void {
-    this.setView(view);
-    if (view.yaw !== undefined) this.view.yaw = this.target.yaw;
-    if (view.pitch !== undefined) this.view.pitch = this.target.pitch;
-    if (view.fov !== undefined) this.view.fov = this.target.fov;
-  }
-
-  /** Horizontal fov (rad) for a vertical one at the current aspect. */
-  private hfovOf(vfov: number): number {
-    return 2 * Math.atan(Math.tan(vfov / 2) * this.aspect);
-  }
-
-  private panByPixels(dx: number, dy: number): void {
-    this.pauseAutoRotate();
-    const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const hfov = this.hfovOf(vfov);
-    // drag right → look left
-    const yaw = unwound(this.view.yaw - dx * anglePerPixel(hfov, this.cssW));
-    const pitch = this.clampPitch(this.view.pitch + dy * anglePerPixel(vfov, this.cssH));
-    this.view.yaw = yaw;
-    this.target.yaw = yaw;
-    this.view.pitch = pitch;
-    this.target.pitch = pitch;
-    this.invalidate();
-  }
-
-  // panByPixels for the keyboard: moves only the target, so the frame loop's
-  // damping eases the camera after it and key repeat glides.
-  private panTargetByPixels(dx: number, dy: number): void {
-    this.pauseAutoRotate();
-    const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const hfov = this.hfovOf(vfov);
-    this.target.yaw -= dx * anglePerPixel(hfov, this.cssW);
-    this.target.pitch = this.clampPitch(this.target.pitch + dy * anglePerPixel(vfov, this.cssH));
-    this.boundYaw();
-    this.invalidate();
-  }
-
-  // flick takes px per 60 Hz frame; momentum is kept in rad/ms.
-  private flick(vx: number, vy: number): void {
-    this.pauseAutoRotate();
-    const vfov = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const hfov = this.hfovOf(vfov);
-    this.momentum.yaw = (-vx * anglePerPixel(hfov, this.cssW)) / FRAME_MS;
-    this.momentum.pitch = (vy * anglePerPixel(vfov, this.cssH)) / FRAME_MS;
-    this.invalidate();
-  }
-
-  // Yaw stays unbounded (wrapping target across ±π makes damp() swing the long
-  // way); shift view and target together by whole turns only, so the float
-  // stays bounded and the rendered angle does not move.
-  private boundYaw(): void {
-    if (Math.abs(this.target.yaw) <= TAU) return;
-    const shift = Math.trunc(this.target.yaw / TAU) * TAU;
-    this.target.yaw -= shift;
-    this.view.yaw -= shift;
-  }
-
-  private stopMomentum(): void {
-    this.pauseAutoRotate();
-    this.stopMomentumOnly();
-  }
-
-  // stopMomentum without counting as an interaction: programmatic moves
-  // clear a glide but leave auto-rotate alone.
-  private stopMomentumOnly(): void {
-    this.momentum.yaw = 0;
-    this.momentum.pitch = 0;
-  }
-
-  private zoomAt(scaleFactor: number, clientX: number, clientY: number): void {
-    // A glide left running would carry the target, and the point under the
-    // cursor with it, away from the anchor solved here.
-    this.stopMomentum();
-    const fov = this.zoomStep(this.target.fov, scaleFactor);
-    const ndc = this.toNdc(clientX, clientY);
-    const { yaw, pitch } = zoomAnchorView(
-      this.zoomScratch,
-      this.view,
-      pointTangents(ndc, this.effectiveVFovDeg(this.view.fov), this.aspect, tanBefore),
-      pointTangents(ndc, this.effectiveVFovDeg(fov), this.aspect, tanAfter),
-      this.camera,
-    );
-    this.snapCamera(yaw, pitch, fov);
-  }
-
-  /** Move view and target to (yaw, pitch, fov) at once, with no easing: a zoom step. */
-  private snapCamera(yaw: number, pitch: number, fov: number): void {
-    this.view.yaw = unwound(yaw);
-    this.target.yaw = this.view.yaw;
-    this.view.pitch = pitch;
-    this.target.pitch = pitch;
-    this.view.fov = fov;
-    this.target.fov = fov;
-    this.invalidate();
+    this.rig.setAutoRotate(enabled);
   }
 
   /** A pointer in client coordinates as NDC (−1..1, y up), in a reused object. */
-  private toNdc(clientX: number, clientY: number): { x: number; y: number } {
+  private toNdc = (clientX: number, clientY: number): { x: number; y: number } => {
     // Mapped through the canvas's on-screen rect: page scroll moves it
     // without a resize, and a CSS transform scales it without changing the
     // cached layout size.
@@ -919,52 +680,10 @@ export class PanoViewer implements PanoViewerApi {
     out.x = ((clientX - rect.left) / (rect.width || 1)) * 2 - 1;
     out.y = -(((clientY - rect.top) / (rect.height || 1)) * 2 - 1);
     return out;
-  }
-
-  // A pinch starts: remember the scene direction under its midpoint and the
-  // fov on screen, which every later pinchTo() is solved from.
-  private pinchStart(clientX: number, clientY: number): void {
-    this.stopMomentum();
-    rayAt(this.pinchRay, this.view, this.pinchTangents(clientX, clientY, this.view.fov));
-    this.pinchFov = this.view.fov;
-  }
-
-  /** The pinch midpoint as tangents, at the drawn fov for a requested `fovDeg`. */
-  private pinchTangents(clientX: number, clientY: number, fovDeg: number): Tangents {
-    return pointTangents(
-      this.toNdc(clientX, clientY),
-      this.effectiveVFovDeg(fovDeg),
-      this.aspect,
-      pinchPoint,
-    );
-  }
-
-  // The pinch now: the fov is the start fov times `scale`, and the camera
-  // puts the start direction under the midpoint, wherever it has moved. Each
-  // step is solved from the start, so nothing builds up between events.
-  private pinchTo(scale: number, clientX: number, clientY: number): void {
-    this.stopMomentum();
-    const fov = this.zoomStep(this.pinchFov, scale);
-    const { yaw, pitch } = aimRay(
-      this.zoomScratch,
-      this.pinchRay,
-      this.pinchTangents(clientX, clientY, fov),
-      this.view,
-      this.camera,
-    );
-    this.snapCamera(yaw, pitch, fov);
-  }
+  };
 
   setView(view: Partial<View>): void {
-    // The rendered yaw is unbounded (drags and auto-rotate wind it up), so
-    // aim at the equivalent angle nearest to it rather than the literal one,
-    // which could be several turns away.
-    if (view.yaw !== undefined)
-      this.target.yaw = this.view.yaw + normalizeAngle(view.yaw - this.view.yaw);
-    if (view.pitch !== undefined) this.target.pitch = this.clampPitch(view.pitch);
-    if (view.fov !== undefined) this.target.fov = this.clampFov(view.fov);
-    this.stopMomentumOnly();
-    this.invalidate();
+    this.rig.setView(view);
   }
 
   /**
@@ -974,9 +693,7 @@ export class PanoViewer implements PanoViewerApi {
    * `getView().fov`, which can sit above what a wide viewport draws.
    */
   zoomBy(factor: number): void {
-    this.target.fov = this.zoomStep(this.target.fov, factor);
-    this.stopMomentumOnly();
-    this.invalidate();
+    this.rig.zoomBy(factor);
   }
 
   /**
@@ -998,7 +715,7 @@ export class PanoViewer implements PanoViewerApi {
 
   /** The camera being moved to, with yaw in (−π, π]. */
   getView(): View {
-    return { ...this.target, yaw: normalizeAngle(this.target.yaw) };
+    return this.rig.getView();
   }
 
   private onWindowResize = () => {
@@ -1019,7 +736,7 @@ export class PanoViewer implements PanoViewerApi {
   // one, and size the backbuffer for it.
   private onPixelRatioChange = (): void => {
     this.watchPixelRatio();
-    this.resizeTo(this.cssW, this.cssH);
+    this.resizeTo(this.rig.cssW, this.rig.cssH);
   };
 
   // The observer reports the new size, so this costs no layout read.
@@ -1037,12 +754,9 @@ export class PanoViewer implements PanoViewerApi {
    * callbacks, so waiting for the next one would show the cleared canvas.
    */
   private resizeTo(width: number, height: number, drawNow = true): void {
-    this.cssW = width || 1;
-    this.cssH = height || 1;
-    // A zero-size container (hidden, mid-layout) has no aspect: keep the
-    // last real one rather than make one up from a stand-in size.
-    if (width > 0 && height > 0) this.aspect = width / height;
-    if (!this.renderer.resize(this.cssW, this.cssH)) return;
+    const rig = this.rig;
+    rig.setViewport(width, height);
+    if (!this.renderer.resize(rig.cssW, rig.cssH)) return;
     // Overlays are placed in CSS pixels, which moved even if the matrix did not.
     this.notifyRender = true;
     if (drawNow && this.onScreen && !this.disposed && !this.contextLost) {
@@ -1062,7 +776,7 @@ export class PanoViewer implements PanoViewerApi {
     const entry = entries[entries.length - 1];
     if (!entry || entry.isIntersecting === this.onScreen) return;
     this.onScreen = entry.isIntersecting;
-    this.autoRotateLastFrame = undefined;
+    this.rig.restartAutoRotateClock();
     // No new tile requests while nobody can see them; the ones in flight finish.
     this.layer?.setPaused(!this.onScreen);
     for (const pending of this.pendingLayers) pending.setPaused(!this.onScreen);
@@ -1085,57 +799,12 @@ export class PanoViewer implements PanoViewerApi {
     this.lastFrameT = t;
     this.lastDrawT = t;
 
-    if (this.autoRotating()) {
-      // The first frame after (re)starting has no prior timestamp to diff
-      // against, so it advances by zero rather than a stale or huge gap.
-      const rotateMs =
-        this.autoRotateLastFrame === undefined
-          ? 0
-          : clamp(t - this.autoRotateLastFrame, 0, MAX_FRAME_DT_MS);
-      this.autoRotateLastFrame = t;
-      this.target.yaw += this.autoRotateSpeed * (rotateMs / 1000);
-      this.boundYaw();
-    } else {
-      this.autoRotateLastFrame = undefined;
-    }
+    const rig = this.rig;
+    this.dirty = rig.step(t, dt);
+    const view = rig.view;
 
-    this.dirty = false;
-    const steps = dt / FRAME_MS;
-
-    if (this.momentum.yaw !== 0 || this.momentum.pitch !== 0) {
-      // Momentum decays exponentially, so a step travels the integral of the
-      // decay over dt. Scaled so a 60 Hz step travels exactly one frame's
-      // worth, the total glide is the same at every frame rate.
-      const f = this.camera.momentumFriction;
-      const keep = f ** steps;
-      const travel = f < 1 ? (FRAME_MS * (1 - keep)) / (1 - f) : dt;
-      this.target.yaw += this.momentum.yaw * travel;
-      this.target.pitch = this.clampPitch(this.target.pitch + this.momentum.pitch * travel);
-      this.momentum.yaw *= keep;
-      this.momentum.pitch *= keep;
-      if (Math.hypot(this.momentum.yaw, this.momentum.pitch) < MOMENTUM_EPS) {
-        this.momentum.yaw = 0;
-        this.momentum.pitch = 0;
-      }
-    }
-
-    const k = 1 - (1 - this.camera.damping) ** steps;
-    const view = this.view;
-    const target = this.target;
-    view.yaw = damp(view.yaw, target.yaw, k);
-    view.pitch = damp(view.pitch, target.pitch, k);
-    view.fov = damp(view.fov, target.fov, k);
-
-    if (!this.cameraSettled()) {
-      this.dirty = true;
-    } else {
-      view.yaw = target.yaw;
-      view.pitch = target.pitch;
-      view.fov = target.fov;
-    }
-
-    const vfovDeg = this.effectiveVFovDeg(view.fov);
-    viewProjection(view, this.aspect, this.camera.maxHorizontalFov, this.viewProj);
+    const vfovDeg = rig.effectiveVFovDeg(view.fov);
+    viewProjection(view, rig.aspect, this.opts.camera.maxHorizontalFov, this.viewProj);
     this.renderer.setCamera(this.viewProj);
     dirInto(this.fwd, view.yaw, view.pitch);
     this.layer?.update(this.viewProj, vfovDeg, this.fwd, this.rasterHeight());
@@ -1147,7 +816,7 @@ export class PanoViewer implements PanoViewerApi {
     // preview, leaving coarser tiles in their place.
     const pending = this.layer?.hasPending() ?? false;
     const tilesSettled = this.wasPending && !pending;
-    if (tilesSettled && this.previewUnderlay) this.disposePreview();
+    if (tilesSettled && this.preview?.underlay) this.disposePreview();
     this.wasPending = pending;
 
     // Draw before anything outside the viewer runs: a listener that throws
@@ -1188,25 +857,12 @@ export class PanoViewer implements PanoViewerApi {
 
     // Keep going only while there is motion to draw; anything else that
     // needs a frame asks for one through invalidate().
-    if (this.dirty || this.autoRotating()) {
+    if (this.dirty || rig.autoRotating()) {
       this.invalidate();
     } else {
       this.lastFrameT = undefined;
     }
   };
-
-  /** No momentum left, and the camera has eased all the way to its target. */
-  private cameraSettled(): boolean {
-    const view = this.view;
-    const target = this.target;
-    return (
-      this.momentum.yaw === 0 &&
-      this.momentum.pitch === 0 &&
-      Math.abs(target.yaw - view.yaw) < 1e-4 &&
-      Math.abs(target.pitch - view.pitch) < 1e-4 &&
-      Math.abs(target.fov - view.fov) < 1e-3
-    );
-  }
 
   /**
    * Whether `tiles-settled` holds right now: the frame that settles has run
@@ -1235,12 +891,12 @@ export class PanoViewer implements PanoViewerApi {
     const d = dirInto(this.projectScratch, yaw, pitch);
     out.behind = isBehind(d, this.fwd);
     const ndc = projectDirInto(this.ndcProjectScratch, d, this.viewProj);
-    return ndcToPixel(ndc.x, ndc.y, this.cssW, this.cssH, out);
+    return ndcToPixel(ndc.x, ndc.y, this.rig.cssW, this.rig.cssH, out);
   }
 
   directionAtPixel(px: number, py: number): { yaw: number; pitch: number } {
-    const ndcX = (px / this.cssW) * 2 - 1;
-    const ndcY = -((py / this.cssH) * 2 - 1);
+    const ndcX = (px / this.rig.cssW) * 2 - 1;
+    const ndcY = -((py / this.rig.cssH) * 2 - 1);
     const v = unprojectNDC(ndcX, ndcY, this.viewProj);
     return { yaw: Math.atan2(v.x, -v.z), pitch: Math.asin(clamp(v.y, -1, 1)) };
   }
@@ -1344,7 +1000,7 @@ export class PanoViewer implements PanoViewerApi {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.raf = 0;
-    clearTimeout(this.autoRotateResumeTimer);
+    this.rig.dispose();
     window.removeEventListener('resize', this.onWindowResize);
     this.pixelRatioQuery?.removeEventListener('change', this.onPixelRatioChange);
     this.pixelRatioQuery = undefined;

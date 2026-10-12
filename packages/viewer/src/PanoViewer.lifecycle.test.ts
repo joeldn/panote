@@ -325,9 +325,9 @@ describe('PanoViewer', () => {
           runUntilIdle();
           viewer.setView({ yaw: 1 });
           raf.step();
-          const yaw = internals(viewer).view.yaw;
+          const yaw = internals(viewer).rig.view.yaw;
           FakeResizeObserver.instances[0]!.trigger(500, 300);
-          expect(internals(viewer).view.yaw).toBe(yaw);
+          expect(internals(viewer).rig.view.yaw).toBe(yaw);
           expect(raf.pending).toBe(1);
           viewer.dispose();
         });
