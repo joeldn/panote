@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { PINCH_ARM_MS } from './controls.js';
 import { effectiveVFovDeg } from './render/projection.js';
 import type { View } from './types.js';
 import { dirFromYawPitch } from './test-support/oracles.js';
@@ -270,6 +271,8 @@ describe('PanoViewer', () => {
           });
         send('pointerdown', 1);
         send('pointerdown', 2);
+        // Both fingers down a moment: the pinch starts with their next move.
+        raf.step(raf.now + PINCH_ARM_MS);
         return {
           mid: (): [number, number] => [(pos[1][0] + pos[2][0]) / 2, (pos[1][1] + pos[2][1]) / 2],
           move(id: 1 | 2, x: number, y: number) {

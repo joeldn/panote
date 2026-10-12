@@ -134,7 +134,7 @@ The rules a source follows:
 | `interaction.pinchGain` | `0.01` | The same for a trackpad pinch (a ctrl-wheel with small deltas). |
 | `interaction.keyboard.panStepPx` | `40` | Arrow-key pan step, screen px. `keyboard: false` ignores keys and drops the tab stop. |
 | `interaction.keyboard.zoomStep` | `0.8` | Fov factor for `+`; `-` uses its inverse. |
-| `interaction.doubleClickZoom` | `0.6` | Fov factor for a double click, toward the point; `false` ignores double clicks. |
+| `interaction.doubleClickZoom` | `0.6` | Fov factor for a double click or a touch double tap, toward the point; `false` ignores them. A double tap counts only when both taps stayed put, not two quick swipes. |
 | `interaction.inertia` | `true` | Keep gliding after a fling. |
 | `rendering.maxPixelRatio` | `2` | Cap on `devicePixelRatio`. |
 | `rendering.maxPixels` | `8300000` | Cap on backbuffer pixels (one 4K frame); above it the pixel ratio drops, which also picks a coarser level. |
