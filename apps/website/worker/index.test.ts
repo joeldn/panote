@@ -1,7 +1,7 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import worker, { BOOT_BUDGET_MS } from './index.js';
+import worker, { BOOT_BUDGET_MS, BOT_BOOT_BUDGET_MS } from './index.js';
 import { parseSlugPath } from './redirect.js';
 
 const ORIGIN = 'https://panote.test';
@@ -752,6 +752,107 @@ describe('link previews', () => {
   });
 });
 
+const SLACK = 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)';
+const CHROME =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
+const as = (ua: string) => ({ headers: { 'User-Agent': ua } });
+
+/** Delays every R2 read under `prefix` by `ms`; `forever` never answers. */
+function slowReads(prefix: string, ms: number | 'forever') {
+  const get = env.BUCKET.get.bind(env.BUCKET);
+  return vi.spyOn(env.BUCKET, 'get').mockImplementation(async (key: string) => {
+    if (key.startsWith(prefix)) {
+      if (ms === 'forever') await new Promise<never>(() => {});
+      else await sleep(ms);
+    }
+    return get(key);
+  });
+}
+
+describe('link-preview crawlers', () => {
+  beforeEach(async () => {
+    await publish();
+    for (const pano of ['pano-1', 'pano-2']) {
+      await putJson(`tiles/${pano}/manifest.json`, { ...manifest(pano), preview: true });
+    }
+  });
+
+  it('waits past the person budget for a slow tour read and gets the full tags', async () => {
+    slowReads('pub/', BOOT_BUDGET_MS + 400);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const html = await (await call('/s/new-name', as(SLACK))).text();
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
+    expect(html).toContain('<title>Old town · panote</title>');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('waits for a slow manifest read too, so the card keeps its image', async () => {
+    slowReads('tiles/', BOOT_BUDGET_MS + 400);
+    const html = await (await call('/s/new-name', as('Twitterbot/1.0'))).text();
+    expect(metasOf(html)).toEqual([...textTags(), ...previewTags()]);
+  });
+
+  it('keeps the person budget for a browser', async () => {
+    slowReads('pub/', BOOT_BUDGET_MS + 400);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await within(call('/s/new-name', as(CHROME)), BOOT_BUDGET_MS + 300);
+    expect(await res.text()).toBe(PLAIN);
+    expect(warn).toHaveBeenCalledWith(
+      `tour boot read took over ${BOOT_BUDGET_MS}ms; serving the plain page`,
+    );
+  });
+
+  it(
+    'gives up at the cap and serves the plain page when R2 never answers',
+    async () => {
+      // A literal bound: one derived from the cap would pass however far it was raised.
+      expect(BOT_BOOT_BUDGET_MS).toBeLessThanOrEqual(5000);
+      slowReads('pub/', 'forever');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const started = Date.now();
+      const res = await call('/s/new-name', as(SLACK));
+      expect(await res.text()).toBe(PLAIN);
+      const took = Date.now() - started;
+      expect(took).toBeGreaterThanOrEqual(BOT_BOOT_BUDGET_MS - 50);
+      expect(took).toBeLessThan(BOT_BOOT_BUDGET_MS + 1500);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        `tour boot read took over ${BOT_BOOT_BUDGET_MS}ms; serving the plain page`,
+      );
+    },
+    BOT_BOOT_BUDGET_MS + 5000,
+  );
+
+  it('serves the plain page at once when the tour read fails', async () => {
+    const get = env.BUCKET.get.bind(env.BUCKET);
+    vi.spyOn(env.BUCKET, 'get').mockImplementation(async (key: string) => {
+      if (key.startsWith('pub/')) throw new Error('r2 down');
+      return get(key);
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await within(call('/s/new-name', as(SLACK)), 1000);
+    expect(await res.text()).toBe(PLAIN);
+    expect(error).toHaveBeenCalledWith('tour boot read failed', expect.any(Error));
+  });
+
+  it('serves a crawler and a person the same page when R2 is quick', async () => {
+    // Only the wait depends on the User-Agent, so a cache can't hand either the wrong shape.
+    const bot = await call('/s/new-name', as(SLACK));
+    const person = await call('/s/new-name', as(CHROME));
+    expect(await bot.text()).toBe(await person.text());
+    expect(bot.headers.get('Vary')).toBe(person.headers.get('Vary'));
+  });
+
+  it('still streams the head before the reads land', async () => {
+    const held = holdReads('pub/');
+    const res = await within(call('/s/new-name', as(SLACK)), 1000);
+    const { before, after } = await readAround(res.body!, held.release);
+    expect(before).toContain('<script type="module"');
+    expect(before).not.toContain('og:');
+    expect(metasOf(before + after)).toEqual([...textTags(), ...previewTags()]);
+  });
+});
+
 // Kept apart from 'link previews' above: only the image tags, so the text tags can change freely.
 describe('link preview image (og.jpg)', () => {
   const imageTags = (html: string) =>
@@ -875,9 +976,15 @@ describe('routing through the assets router', () => {
 
   it('primes the built index.html, using the CDN root Vite wrote into it', async () => {
     await publish();
-    const html = await (await SELF.fetch(`${ORIGIN}/s/new-name`)).text();
+    const res = await SELF.fetch(`${ORIGIN}/s/new-name`);
+    const html = await res.text();
     expect(html).toContain('<script type="module"');
     expect(html).toContain('<title>Old town · panote</title>');
+    // Revalidated every time and with no validator, so no cache can reuse a primed page
+    // (crawler or person) without asking the Worker again; no Vary needed.
+    expect(res.headers.get('Cache-Control')).toBe('public, max-age=0, must-revalidate');
+    expect(res.headers.get('ETag')).toBeNull();
+    expect(res.headers.get('Last-Modified')).toBeNull();
     expect(preloadsOf(html).map(hrefOf)).toEqual([
       'https://cdn.panote.dev/tiles/pano-1/manifest.json',
       ...l0('pano-1').map((u) => u.replace(CDN, 'https://cdn.panote.dev/')),

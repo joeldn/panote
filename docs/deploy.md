@@ -111,7 +111,19 @@ browser reuses the preload. The SPA's `TourPage` passes `#pn-boot` to `loadPubli
 first attempt, which uses it only if it is for the same slug and passes the same schemas.
 The R2 reads get 300 ms (`BOOT_BUDGET_MS`); past that the script logs a warning and finishes
 the plain page, so a slow R2 holds back the rest of the page by at most that much, never the
-app's JS. A streamed response has no `ETag`. A GET for a slug path is never a `304`: the
+app's JS. Link-preview and search crawlers get 5 s instead (`BOT_BOOT_BUDGET_MS`, picked by
+User-Agent from the list in `apps/website/worker/bots.ts`: facebookexternalhit, Twitterbot,
+LinkedInBot, Slackbot, Discordbot, WhatsApp, TelegramBot, SkypeUriPreview (Teams), Applebot,
+Pinterest, redditbot, Embedly, Iframely, Mastodon and other fediverse servers, Bluesky's Cardyb,
+Googlebot, bingbot and a few more). A crawler runs no JS, so a plain page is a card without the
+tour's title, description or image. R2 normally answers in tens of milliseconds, so 5 s only
+matters during an incident, and it stays well inside the unfurlers' own fetch timeouts: past it a
+crawler still gets the plain page rather than no card. Only the wait depends on the User-Agent,
+never the content, so there is no `Vary: User-Agent`: a crawler gets the page a person gets when
+R2 is quick. Nothing caches these pages anyway: the script uses no Cache API, the zone's cache
+rules only cover `cdn.panote.dev`, and the HTML keeps `public, max-age=0, must-revalidate` with no
+validator. A client that sends no browser UA (Signal builds its preview in the app) gets the
+person budget. A streamed response has no `ETag`. A GET for a slug path is never a `304`: the
 script drops `If-None-Match` and `If-Modified-Since` before it fetches `index.html`, so a cached
 plain page can't stand in for a primed one. A HEAD keeps them and goes straight to
 `env.ASSETS.fetch`, so a conditional HEAD can still get the asset's `304`. A missing or
@@ -143,8 +155,8 @@ it has `preview: true`, with card `summary_large_image` and `og:image:alt` set t
 There is no cube-face fallback: face tiles are stored mirrored left to right (`faceUVToDir` in
 `@panote/core`) and a scraper can't flip them back. No og.jpg or preview, no manifest, or a CDN
 root that isn't absolute `https://` means no image and a `summary` card. Public and unlisted tours both get the tags: sharing the link is the point of
-unlisted, and its `noindex` stays. A page served plain (missing bundle, R2 error, budget) gets
-none, the same as a slug with no live tour. With `?pano=` the image is that scene's, while
+unlisted, and its `noindex` stays. A page served plain (missing bundle, R2 error, budget: 300 ms, or 5 s
+for a crawler) gets none, the same as a slug with no live tour. With `?pano=` the image is that scene's, while
 `og:url` stays the canonical page.
 
 Scrapers fetch the page and the image anonymously. On dev, `panote.dev/s/*` is behind Cloudflare
