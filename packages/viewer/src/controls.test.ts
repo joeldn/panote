@@ -752,6 +752,79 @@ describe('Controls: touch bookkeeping (iOS Safari)', () => {
     expect(host.dragBy).toHaveBeenLastCalledWith(40, 0, 600);
   });
 
+  it('does not pinch a mouse pressed just after a touch whose pointerup was lost', () => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, isPrimary: true, ...touch });
+    touches('touchstart', 1);
+    pointer('pointermove', { x: 150, y: 100, t: 16, id: 1, ...touch });
+    // Finger 1's pointerup is lost; its touchend still comes.
+    touches('touchend', 0);
+    // A touchscreen laptop: the mouse is pressed before the prune is due.
+    vi.advanceTimersByTime(10);
+    pointer('pointerdown', { x: 400, y: 300, t: 30, id: 7, isPrimary: true });
+    pointer('pointermove', { x: 420, y: 300, t: 90, id: 7 });
+    vi.advanceTimersByTime(100);
+    pointer('pointermove', { x: 450, y: 300, t: 140, id: 7 });
+    expect(host.pinchStart).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
+    expect(host.dragBy.mock.calls.slice(-2)).toEqual([
+      [20, 0, 90],
+      [30, 0, 140],
+    ]);
+    pointer('pointerup', { x: 450, y: 300, t: 144, id: 7, buttons: 0 });
+    expect(host.flick).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a lost touch by 100 ms though a non-primary touch lands in the meantime', () => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, isPrimary: true, ...touch });
+    touches('touchstart', 1);
+    // Finger 1's pointerup is lost; its touchend still comes.
+    touches('touchend', 0);
+    vi.advanceTimersByTime(20);
+    pointer('pointerdown', { x: 300, y: 300, t: 20, id: 2, isPrimary: false, ...touch });
+    touches('touchstart', 1);
+    vi.advanceTimersByTime(100);
+    expect(host.dragEnd).toHaveBeenCalledWith(true);
+    // Finger 2 drags on alone, and nothing pinches.
+    pointer('pointermove', { x: 340, y: 300, t: 130, id: 2, ...touch });
+    expect(host.pinchStart).not.toHaveBeenCalled();
+    expect(host.pinchTo).not.toHaveBeenCalled();
+    expect(host.dragBy).toHaveBeenLastCalledWith(40, 0, 130);
+  });
+
+  it('never forgets a finger pressed after the touches said none was down, even with the same id', () => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, isPrimary: true, ...touch });
+    touches('touchstart', 1);
+    pointer('pointermove', { x: 160, y: 100, t: 16, id: 1, ...touch });
+    // The touchend comes first; the pointerup after it still releases.
+    touches('touchend', 0);
+    pointer('pointerup', { x: 160, y: 100, t: 20, id: 1, buttons: 0, ...touch });
+    expect(host.flick).toHaveBeenCalledTimes(1);
+    // A new finger, with the id the last one had, lands before the timer is due.
+    pointer('pointerdown', { x: 200, y: 200, t: 40, id: 1, isPrimary: true, ...touch });
+    touches('touchstart', 1);
+    vi.advanceTimersByTime(100);
+    expect(host.dragEnd).toHaveBeenCalledTimes(1);
+    pointer('pointermove', { x: 230, y: 200, t: 150, id: 1, ...touch });
+    expect(host.dragBy).toHaveBeenLastCalledWith(30, 0, 150);
+    expect(el.style['cursor']).toBe('grabbing');
+  });
+
+  it('clears the pending prune on dispose', () => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    const controls = setup();
+    pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
+    touches('touchend', 0);
+    controls.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('keeps tracking when a touchend leaves a finger down', () => {
     pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
     touches('touchend', 1);
