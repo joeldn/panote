@@ -170,7 +170,9 @@ export const BRAND_ICONS = [
 ] as const;
 
 /** Every solid icon in the subset font, sorted. */
-export const SOLID_ICONS: readonly string[] = [...new Set([...POINT_ICONS, ...UI_ICONS])].sort();
+export const SOLID_ICONS: readonly string[] = /* @__PURE__ */ [
+  ...new Set([...POINT_ICONS, ...UI_ICONS]),
+].sort();
 
 /** Point icon used when none is set. */
 export const DEFAULT_POINT_ICON = 'info';
@@ -178,7 +180,9 @@ export const DEFAULT_POINT_ICON = 'info';
 /** Shown for a stored icon name that isn't in the subset (contracts accept any FA name). */
 export const FALLBACK_ICON = 'circle-info';
 
-const solid = new Set(SOLID_ICONS);
+// Built from the lists rather than SOLID_ICONS, so a bundle that only needs
+// pointIcon doesn't also build the sorted list.
+const solid = new Set<string>([...POINT_ICONS, ...UI_ICONS]);
 
 /** The solid icon to render for a point's stored `icon`. */
 export function pointIcon(name: string | null | undefined): string {

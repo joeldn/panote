@@ -138,8 +138,9 @@ const deferred = () => {
   const promise = new Promise<void>((r) => (resolve = r));
   return { promise, resolve };
 };
-// What `GET /api/admin/tours/tour-a` answers: a status, or a thrown network error.
-let adminTour: number | 'error';
+// What `GET /api/admin/tours/tour-a` answers: a status, a thrown network error, or
+// an SPA fallback's HTML page with a 200.
+let adminTour: number | 'error' | 'html';
 const ownerBody = {
   tour: { tourId: 'tour-a', title: 'Old town', scenes: [{ panoId: 'square' }] },
   etag: 'e1',
@@ -149,6 +150,9 @@ const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit
   const url = String(input);
   if (url.startsWith('/api/admin/')) {
     if (adminTour === 'error') throw new TypeError('network down');
+    if (adminTour === 'html') {
+      return new Response('<!doctype html>', { headers: { 'Content-Type': 'text/html' } });
+    }
     if (adminTour === 200) return Response.json(ownerBody);
     const error = adminTour === 404 ? 'not found' : 'forbidden';
     return Response.json({ error }, { status: adminTour });
@@ -772,6 +776,35 @@ describe('visitor share', () => {
     }
   });
 
+  it('drops the stall timer once the sheet arrives in time', async () => {
+    let arrive!: () => void;
+    const arrived = new Promise<void>((r) => (arrive = r));
+    load.mockImplementation(async () => {
+      await arrived;
+      return import('@internal/ui/share');
+    });
+    const stallMs = shareChunk.stallMs;
+    // Long enough that the preloaded chunk always beats it, short enough to wait out.
+    shareChunk.stallMs = 400;
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      const share = screen.getByRole('button', { name: 'Share' });
+      fireEvent.click(share);
+      // The timer is armed while the sheet waits.
+      await waitFor(() => expect(share.getAttribute('aria-busy')).toBe('true'));
+      arrive();
+      expect(await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY)).toBeTruthy();
+      await act(() => new Promise((r) => setTimeout(r, 600)));
+      expect(screen.getByRole('dialog', { name: 'Share this tour' })).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+    } finally {
+      shareChunk.stallMs = stallMs;
+      arrive();
+      await arrived;
+    }
+  });
+
   it('retries a chunk that failed to load once, then opens the sheet', async () => {
     load.mockRejectedValueOnce(staleChunk());
     renderAt('/s/old-town');
@@ -929,10 +962,12 @@ describe('owner Edit', () => {
   });
 
   it.each([
+    ['a signed-out token (401)', 401],
     ['a non-owner (403)', 403],
     ['a missing tour (404)', 404],
     ['a server error', 500],
     ['a network error', 'error'],
+    ['an HTML page with a 200 (SPA fallback)', 'html'],
   ] as const)('stays hidden for %s', async (_label, status) => {
     adminTour = status;
     renderAt('/s/old-town', signedIn());
