@@ -49,7 +49,7 @@ describe('TileLayer scheduling', () => {
       layer.dispose();
     });
 
-    it('never fx.requests a tile behind the camera', async () => {
+    it('never requests a tile behind the camera', async () => {
       const layer = makeLayer();
       for (const yaw of [0, Math.PI / 2, Math.PI]) {
         fx.requests = [];
@@ -729,7 +729,7 @@ describe('TileLayer scheduling', () => {
       layer.dispose();
     });
 
-    it('starts no fx.requests while paused, and catches up when resumed', async () => {
+    it('starts no requests while paused, and catches up when resumed', async () => {
       const layer = makeLayer();
       layer.setPaused(true);
       frame(layer, 0);
