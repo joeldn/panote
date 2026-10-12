@@ -106,7 +106,7 @@ describe('PanoViewer', () => {
       const viewer = new TestViewer(makeContainer(400, 800));
       viewer.setView({ pitch: 0.3 });
       viewer.showPreview('pano-a', source(), { view: { yaw: 1, fov: 50 } });
-      const { view } = internals(viewer);
+      const { view } = internals(viewer).rig;
       expect(view.yaw).toBe(1);
       expect(view.fov).toBe(50);
       // Pitch was on its way to 0.3 and is left to get there.

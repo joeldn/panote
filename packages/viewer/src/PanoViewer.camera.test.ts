@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { effectiveVFovDeg } from './render/projection.js';
 import type { ViewerOptions } from './types.js';
+import type { ControlHost } from './controls.js';
 import { FakeResizeObserver } from './test-support/fake-dom.js';
 import {
   useViewerGlobals,
@@ -43,14 +44,10 @@ describe('PanoViewer', () => {
 
     /** The vertical fov drawn this frame. */
     const drawn = (viewer: TestViewer, w: number, h: number) =>
-      effectiveVFovDeg(internals(viewer).view.fov, MAX_H, w / h);
+      effectiveVFovDeg(internals(viewer).rig.view.fov, MAX_H, w / h);
 
-    const host = (viewer: TestViewer) =>
-      internals(viewer) as unknown as {
-        pinchStart: (x: number, y: number) => void;
-        pinchTo: (s: number, x: number, y: number) => void;
-        zoomAt: (s: number, x: number, y: number) => void;
-      };
+    /** The ControlHost the viewer gave its Controls: input in client coordinates. */
+    const host = (viewer: TestViewer) => (internals(viewer).controls as { host: ControlHost }).host;
 
     describe('keeps the requested fov through', () => {
       it('a widen and back', () => {
@@ -58,7 +55,7 @@ describe('PanoViewer', () => {
         resize(2100, 900);
         resize(1000, 1000);
         expect(viewer.getView().fov).toBe(70);
-        expect(internals(viewer).view.fov).toBe(70);
+        expect(internals(viewer).rig.view.fov).toBe(70);
         viewer.dispose();
       });
 
@@ -69,7 +66,7 @@ describe('PanoViewer', () => {
         resize(1600, 900);
         runUntilIdle();
         expect(viewer.getView().fov).toBe(70);
-        expect(internals(viewer).view.fov).toBe(70);
+        expect(internals(viewer).rig.view.fov).toBe(70);
         viewer.dispose();
       });
 
@@ -97,7 +94,7 @@ describe('PanoViewer', () => {
         resize(900, 1600);
         runUntilIdle();
         expect(viewer.getView().fov).toBe(75);
-        expect(internals(viewer).view.fov).toBe(75);
+        expect(internals(viewer).rig.view.fov).toBe(75);
         viewer.dispose();
       });
 
@@ -249,7 +246,7 @@ describe('PanoViewer', () => {
     }
 
     function yawOf(viewer: TestViewer): number {
-      return internals(viewer).view.yaw;
+      return internals(viewer).rig.view.yaw;
     }
 
     it('does not rotate when disabled, where the same frames turn an enabled viewer', () => {
@@ -290,7 +287,7 @@ describe('PanoViewer', () => {
         camera: { damping: 1 },
       });
       tick(viewer);
-      internals(viewer).stopMomentum(); // stands in for a real interaction's gesture start
+      internals(viewer).rig.stopMomentum(); // stands in for a real interaction's gesture start
       const paused = yawOf(viewer);
 
       vi.advanceTimersByTime(999);
@@ -311,7 +308,7 @@ describe('PanoViewer', () => {
         autoRotate: { enabled: true, speed: 1, idleMs: 1000 },
         camera: { damping: 1 },
       });
-      internals(viewer).stopMomentum();
+      internals(viewer).rig.stopMomentum();
       viewer.setAutoRotate(false);
       const before = yawOf(viewer);
 
@@ -378,10 +375,10 @@ describe('PanoViewer', () => {
       const viewer = new TestViewer(makeContainer(400, 800), {
         initialView: { yaw: 4 * Math.PI + 0.1 },
       });
-      const before = internals(viewer).view.yaw;
+      const before = internals(viewer).rig.view.yaw;
       viewer.setView({ yaw: 0.1 });
       tick(viewer);
-      expect(Math.abs(internals(viewer).view.yaw - before)).toBeLessThan(0.1);
+      expect(Math.abs(internals(viewer).rig.view.yaw - before)).toBeLessThan(0.1);
       expect(viewer.getView().yaw).toBeCloseTo(0.1, 10);
     });
 
@@ -391,7 +388,7 @@ describe('PanoViewer', () => {
       });
       viewer.setView({ yaw: -Math.PI + 0.1 });
       // 0.2 rad forward across ±π, not 2π − 0.2 back.
-      expect(internals(viewer).target.yaw).toBeCloseTo(Math.PI + 0.1, 10);
+      expect(internals(viewer).rig.target.yaw).toBeCloseTo(Math.PI + 0.1, 10);
       expect(viewer.getView().yaw).toBeCloseTo(-Math.PI + 0.1, 10);
     });
 
@@ -399,9 +396,9 @@ describe('PanoViewer', () => {
       const viewer = new TestViewer(makeContainer(400, 800), {
         initialView: { yaw: 2 * Math.PI - 0.01 },
       });
-      internals(viewer).panByPixels(-100, 0); // drag left → look right, past 2π
-      expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(2 * Math.PI);
-      expect(internals(viewer).target.yaw).toBe(internals(viewer).view.yaw);
+      internals(viewer).rig.panByPixels(-100, 0); // drag left → look right, past 2π
+      expect(Math.abs(internals(viewer).rig.view.yaw)).toBeLessThan(2 * Math.PI);
+      expect(internals(viewer).rig.target.yaw).toBe(internals(viewer).rig.view.yaw);
     });
 
     it('clamps initialView pitch and fov', () => {
@@ -412,34 +409,34 @@ describe('PanoViewer', () => {
       const view = viewer.getView();
       expect(view.pitch).toBeLessThan(Math.PI / 2);
       expect(view.fov).toBe(80);
-      expect(internals(viewer).view.pitch).toBe(view.pitch);
-      expect(internals(viewer).view.fov).toBe(80);
+      expect(internals(viewer).rig.view.pitch).toBe(view.pitch);
+      expect(internals(viewer).rig.view.fov).toBe(80);
     });
 
     it('clears momentum on setView', () => {
       const viewer = new TestViewer(makeContainer(400, 800));
-      internals(viewer).flick(100, 50);
-      expect(internals(viewer).momentum.yaw).not.toBe(0);
+      internals(viewer).rig.flick(100, 50);
+      expect(internals(viewer).rig.momentum.yaw).not.toBe(0);
       viewer.setView({ yaw: 0.5 });
-      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+      expect(internals(viewer).rig.momentum).toEqual({ yaw: 0, pitch: 0 });
     });
 
     it('clears momentum when a pano swaps in and when a preview goes up', async () => {
       stubNet();
       const viewer = new TestViewer(makeContainer(400, 800));
-      internals(viewer).flick(100, 50);
+      internals(viewer).rig.flick(100, 50);
       await viewer.load('pano-a');
-      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
-      internals(viewer).flick(100, 50);
+      expect(internals(viewer).rig.momentum).toEqual({ yaw: 0, pitch: 0 });
+      internals(viewer).rig.flick(100, 50);
       viewer.showPreview('pano-b', previewSource());
-      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+      expect(internals(viewer).rig.momentum).toEqual({ yaw: 0, pitch: 0 });
       viewer.dispose();
     });
 
     it('does not settle while momentum is left, however small', () => {
       const viewer = new TestViewer(makeContainer(400, 800));
       // rad/ms: a step's travel is under the position settle threshold.
-      internals(viewer).momentum.yaw = 2e-6;
+      internals(viewer).rig.momentum.yaw = 2e-6;
       tick(viewer);
       expect(internals(viewer).dirty).toBe(true);
       expect(raf.pending).toBe(1);

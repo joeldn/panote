@@ -40,7 +40,7 @@ describe('PanoViewer', () => {
         clientY: 800,
         preventDefault: vi.fn(),
       });
-      const { target } = internals(viewer);
+      const { target } = internals(viewer).rig;
       expect(target.fov).toBeLessThan(70);
       expect(target.yaw).toBeCloseTo(0, 10);
       expect(target.pitch).toBeCloseTo(0, 10);
@@ -177,7 +177,7 @@ describe('PanoViewer', () => {
           worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
         }
         worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, ms));
-        expect(internals(viewer).view.fov).not.toBeCloseTo(fov, 1);
+        expect(internals(viewer).rig.view.fov).not.toBeCloseTo(fov, 1);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -197,7 +197,7 @@ describe('PanoViewer', () => {
           worst = Math.max(worst, angleBetween(viewer.directionAtPixel(x, y), anchor));
         }
         worst = Math.max(worst, settleKeepingAnchor(viewer, x, y, anchor, 16));
-        expect(internals(viewer).view.fov).toBeLessThan(60);
+        expect(internals(viewer).rig.view.fov).toBeLessThan(60);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -206,20 +206,20 @@ describe('PanoViewer', () => {
         const viewer = zoomViewer({ yaw: 0, pitch: 0, fov: 70 });
         wheelAt(viewer, 600, 400, 4, 40);
         runUntilIdle();
-        expect(internals(viewer).view.fov).toBe(70);
-        expect(internals(viewer).view.yaw).toBeGreaterThan(0); // a deltaX right turns right
+        expect(internals(viewer).rig.view.fov).toBe(70);
+        expect(internals(viewer).rig.view.yaw).toBeGreaterThan(0); // a deltaX right turns right
         viewer.dispose();
       });
 
       it('stops a fling glide when a zoom starts, so the anchor holds', () => {
         const viewer = zoomViewer({ yaw: 0, pitch: 0.3, fov: 70 });
-        internals(viewer).flick(25, 5);
+        internals(viewer).rig.flick(25, 5);
         raf.step(raf.now + 16);
         const x = 1000;
         const y = 200;
         const anchor = viewer.directionAtPixel(x, y);
         for (let i = 0; i < 4; i++) wheelAt(viewer, x, y, -100);
-        expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+        expect(internals(viewer).rig.momentum).toEqual({ yaw: 0, pitch: 0 });
         expect(settleKeepingAnchor(viewer, x, y, anchor, 16)).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -229,7 +229,7 @@ describe('PanoViewer', () => {
         viewer.setView({ fov: 30 }); // a button zoom: the fov eases toward 30
         raf.step(raf.now + 16);
         raf.step(raf.now + 16);
-        const { view, target } = internals(viewer);
+        const { view, target } = internals(viewer).rig;
         expect(view.fov).not.toBeCloseTo(target.fov, 1);
         const x = 200;
         const y = 650;
@@ -325,8 +325,8 @@ describe('PanoViewer', () => {
           6,
           [4, 3],
         );
-        expect(internals(viewer).view.fov).toBeLessThan(40);
-        expect(internals(viewer).view.fov).toBeGreaterThan(15);
+        expect(internals(viewer).rig.view.fov).toBeLessThan(40);
+        expect(internals(viewer).rig.view.fov).toBeGreaterThan(15);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -343,7 +343,7 @@ describe('PanoViewer', () => {
           12,
           [-3, -4],
         );
-        expect(internals(viewer).view.fov).toBe(15);
+        expect(internals(viewer).rig.view.fov).toBe(15);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -361,10 +361,10 @@ describe('PanoViewer', () => {
           4,
           [2, 1],
         );
-        expect(internals(viewer).view.fov).toBeLessThan(50);
+        expect(internals(viewer).rig.view.fov).toBeLessThan(50);
         // Exact, and by pitching on over the top, not by turning around.
-        expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(0.5);
-        expect(internals(viewer).view.pitch).toBeGreaterThan(1.2);
+        expect(Math.abs(internals(viewer).rig.view.yaw)).toBeLessThan(0.5);
+        expect(internals(viewer).rig.view.pitch).toBeGreaterThan(1.2);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -381,7 +381,7 @@ describe('PanoViewer', () => {
           -6,
           [5, 2],
         );
-        expect(internals(viewer).view.fov).toBeGreaterThan(40);
+        expect(internals(viewer).rig.view.fov).toBeGreaterThan(40);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -392,14 +392,14 @@ describe('PanoViewer', () => {
         f.move(2, 900, 310);
         f.move(1, 650, 300);
         runUntilIdle();
-        const before = { ...internals(viewer).view };
+        const before = { ...internals(viewer).rig.view };
         f.lift(1);
         runUntilIdle();
-        expect(internals(viewer).view).toEqual(before);
+        expect(internals(viewer).rig.view).toEqual(before);
         // The finger left drags by what it moves, not by where the midpoint was.
         f.move(2, 902, 310);
         runUntilIdle();
-        const { view } = internals(viewer);
+        const { view } = internals(viewer).rig;
         expect(view.fov).toBe(before.fov);
         expect(Math.abs(view.yaw - before.yaw)).toBeGreaterThan(0);
         expect(Math.abs(view.yaw - before.yaw)).toBeLessThan(0.01);
@@ -439,7 +439,7 @@ describe('PanoViewer', () => {
 
       /** The angle above the horizon, in the camera's vertical plane, of the point at NDC y. */
       const wasAt = (viewer: TestViewer, ny: number) => {
-        const { view } = internals(viewer);
+        const { view } = internals(viewer).rig;
         const ty = Math.tan((effectiveVFovDeg(view.fov, 100, W / H) * Math.PI) / 360);
         return view.pitch + Math.atan(ny * ty);
       };
@@ -474,7 +474,7 @@ describe('PanoViewer', () => {
           const was = wasAt(viewer, ny);
           fire(viewer, x, y);
           runUntilIdle();
-          const { view } = internals(viewer);
+          const { view } = internals(viewer).rig;
           const drift = angleBetween(viewer.directionAtPixel(x, y), anchor);
           const at = `pitch ${pitch} at (${x}, ${y})`;
           if (exactOnSideExists(anchor, nx, ny, view.fov, was)) {
@@ -496,7 +496,7 @@ describe('PanoViewer', () => {
         const anchor = viewer.directionAtPixel(...f.mid());
         let exactSteps = 0;
         let heldSteps = 0;
-        let prev = { ...internals(viewer).view };
+        let prev = { ...internals(viewer).rig.view };
         // Drag the midpoint down while spreading: the camera has to pitch up
         // to keep the start direction under it, until the limit holds it.
         for (let i = 0; i < 40; i++) {
@@ -507,7 +507,7 @@ describe('PanoViewer', () => {
           f.move(id, x + (id === 1 ? -1 : 1), y + 24);
           raf.step(raf.now + 8);
           const [mx2, my2] = f.mid();
-          const { view } = internals(viewer);
+          const { view } = internals(viewer).rig;
           const nx = (mx2 / W) * 2 - 1;
           const ny = -((my2 / H) * 2 - 1);
           if (exactOnSideExists(anchor, nx, ny, view.fov, was)) {
@@ -528,12 +528,12 @@ describe('PanoViewer', () => {
 
       it('stops a fling glide when a Safari pinch starts', () => {
         const viewer = zoomViewer({ yaw: 0, pitch: 0, fov: 70 });
-        internals(viewer).flick(25, 5);
+        internals(viewer).rig.flick(25, 5);
         canvasListener(
           viewer,
           'gesturestart',
         )({ scale: 1, clientX: 300, clientY: 300, preventDefault: vi.fn() });
-        expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+        expect(internals(viewer).rig.momentum).toEqual({ yaw: 0, pitch: 0 });
         viewer.dispose();
       });
 
@@ -553,7 +553,7 @@ describe('PanoViewer', () => {
         }
         gesture('gestureend', 3, at.x, at.y);
         worst = Math.max(worst, settleKeepingAnchor(viewer, at.x, at.y, anchor, 16));
-        expect(internals(viewer).view.fov).toBeLessThan(30);
+        expect(internals(viewer).rig.view.fov).toBeLessThan(30);
         expect(worst).toBeLessThan(TOL);
         viewer.dispose();
       });
@@ -580,9 +580,9 @@ describe('PanoViewer', () => {
         for (let i = 0; i < 40; i++) {
           wheelAt(viewer, 600, 400, i % 2 ? 1.5 : -1.5, 30 * 0.88 ** i);
           raf.step(raf.now + 16);
-          expect(internals(viewer).view.fov).toBe(70);
+          expect(internals(viewer).rig.view.fov).toBe(70);
         }
-        expect(internals(viewer).view.yaw).toBeGreaterThan(0.1);
+        expect(internals(viewer).rig.view.yaw).toBeGreaterThan(0.1);
         viewer.dispose();
       });
 
@@ -599,10 +599,10 @@ describe('PanoViewer', () => {
           wheelAt(viewer, x, y, dy);
           raf.step(raf.now + 16);
           const now = viewer.directionAtPixel(x, y);
-          expect(internals(viewer).view.pitch).toBeLessThanOrEqual(limit);
+          expect(internals(viewer).rig.view.pitch).toBeLessThanOrEqual(limit);
           // Pinned, or (once the clamp holds the camera) a small step, never a jump.
           expect(angleBetween(now, prev)).toBeLessThan(0.05);
-          expect(Math.abs(internals(viewer).view.yaw)).toBeLessThan(Math.PI / 2); // no flip over the pole
+          expect(Math.abs(internals(viewer).rig.view.yaw)).toBeLessThan(Math.PI / 2); // no flip over the pole
           prev = now;
         }
         viewer.dispose();

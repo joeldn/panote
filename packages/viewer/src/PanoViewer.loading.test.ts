@@ -33,18 +33,18 @@ describe('PanoViewer', () => {
       const net = stubNet({ holdTile: (url) => url.includes('/pano-b/') });
       const viewer = new TestViewer(makeContainer(400, 800));
       await viewer.load('pano-a');
-      internals(viewer).flick(100, 0);
+      internals(viewer).rig.flick(100, 0);
       const loading = viewer.load('pano-b', { view: { yaw: 1, pitch: 0.2, fov: 50 } });
       await flush();
       // Not applied before the swap: the old pano keeps its camera.
       expect(viewer.getView().yaw).toBe(0);
       net.release();
       await expect(loading).resolves.toBe(true);
-      expect(internals(viewer).target).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
-      expect(internals(viewer).view).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
-      expect(internals(viewer).momentum).toEqual({ yaw: 0, pitch: 0 });
+      expect(internals(viewer).rig.target).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
+      expect(internals(viewer).rig.view).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
+      expect(internals(viewer).rig.momentum).toEqual({ yaw: 0, pitch: 0 });
       tick(viewer);
-      expect(internals(viewer).view).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
+      expect(internals(viewer).rig.view).toEqual({ yaw: 1, pitch: 0.2, fov: 50 });
       viewer.dispose();
     });
 
@@ -209,9 +209,9 @@ describe('PanoViewer', () => {
       await viewer.load('pano-a');
       viewer.setView({ fov: 40 }); // not drawn yet: the camera is still at 70
       await viewer.load('pano-b', { view: { yaw: 1 } });
-      expect(internals(viewer).view.yaw).toBe(1);
-      expect(internals(viewer).view.fov).toBe(70);
-      expect(internals(viewer).target.fov).toBe(40);
+      expect(internals(viewer).rig.view.yaw).toBe(1);
+      expect(internals(viewer).rig.view.fov).toBe(70);
+      expect(internals(viewer).rig.target.fov).toBe(40);
       viewer.dispose();
     });
 
@@ -266,11 +266,11 @@ describe('PanoViewer', () => {
       expect(container.appendChild).not.toHaveBeenCalled();
 
       // A drag still moves what the visitor sees.
-      const yaw0 = internals(viewer).view.yaw;
+      const yaw0 = internals(viewer).rig.view.yaw;
       fake.render.mockClear();
-      internals(viewer).panByPixels(300, 0);
+      internals(viewer).rig.panByPixels(300, 0);
       raf.step();
-      expect(internals(viewer).view.yaw).not.toBeCloseTo(yaw0, 3);
+      expect(internals(viewer).rig.view.yaw).not.toBeCloseTo(yaw0, 3);
       expect(fake.render).toHaveBeenCalledTimes(1);
       const drawn = fake.render.mock.calls[0]![0] as unknown[];
       expect(drawn.length).toBeGreaterThan(0);

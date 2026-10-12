@@ -29,7 +29,7 @@ describe('PanoViewer', () => {
       const viewer = new TestViewer(makeContainer(400, 800));
       viewer.setView({ yaw: 1 });
       expect(runUntilIdle()).toBeGreaterThan(5);
-      expect(internals(viewer).view.yaw).toBe(1);
+      expect(internals(viewer).rig.view.yaw).toBe(1);
       const requested = raf.request.mock.calls.length;
       for (let i = 0; i < 10; i++) raf.step();
       expect(raf.request.mock.calls.length).toBe(requested);
@@ -54,20 +54,20 @@ describe('PanoViewer', () => {
 
       io.trigger(false);
       expect(raf.pending).toBe(0);
-      const yaw = internals(viewer).view.yaw;
+      const yaw = internals(viewer).rig.view.yaw;
       const requested = raf.request.mock.calls.length;
       viewer.setView({ pitch: 0.1 }); // waits until the viewer is back
       for (let i = 0; i < 10; i++) raf.step(raf.now + 1000);
       expect(raf.request.mock.calls.length).toBe(requested);
-      expect(internals(viewer).view.yaw).toBe(yaw);
+      expect(internals(viewer).rig.view.yaw).toBe(yaw);
 
       io.trigger(true);
       expect(raf.pending).toBe(1);
       raf.step(raf.now + 5000); // no turn for the time spent away
-      expect(internals(viewer).view.yaw).toBeCloseTo(yaw, 10);
-      expect(internals(viewer).view.pitch).toBeCloseTo(0.1, 10);
+      expect(internals(viewer).rig.view.yaw).toBeCloseTo(yaw, 10);
+      expect(internals(viewer).rig.view.pitch).toBeCloseTo(0.1, 10);
       raf.step(raf.now + 50);
-      expect(internals(viewer).view.yaw).toBeCloseTo(yaw + 0.05, 10);
+      expect(internals(viewer).rig.view.yaw).toBeCloseTo(yaw + 0.05, 10);
       viewer.dispose();
       expect(io.disconnect).toHaveBeenCalled();
     });
@@ -76,14 +76,14 @@ describe('PanoViewer', () => {
       const glide = (hz: number): { at200ms: number; total: number } => {
         const viewer = new TestViewer(makeContainer(400, 800));
         runUntilIdle();
-        internals(viewer).flick(30, 0);
+        internals(viewer).rig.flick(30, 0);
         raf.step(); // the first frame after an idle spell steps one nominal frame
         const end = raf.now + 200;
         while (raf.now < end - 1e-6) raf.step(raf.now + 1000 / hz);
         // Where the glide has carried the target; the camera eases after it.
-        const at200ms = internals(viewer).target.yaw;
+        const at200ms = internals(viewer).rig.target.yaw;
         runUntilIdle(1000 / hz, 10_000);
-        const total = internals(viewer).view.yaw;
+        const total = internals(viewer).rig.view.yaw;
         viewer.dispose();
         return { at200ms, total };
       };
@@ -122,15 +122,15 @@ describe('PanoViewer', () => {
         }
         canvasListener(viewer, 'pointerup')(ev(x, raf.now + 2, 0));
         const speeds: number[] = [];
-        const released = internals(viewer).view.yaw;
+        const released = internals(viewer).rig.view.yaw;
         let yaw = released;
         while (raf.pending > 0 && speeds.length < 5000) {
           raf.step(raf.now + period);
-          const now = internals(viewer).view.yaw;
+          const now = internals(viewer).rig.view.yaw;
           speeds.push(Math.abs(now - yaw) / period);
           yaw = now;
         }
-        const total = Math.abs(internals(viewer).view.yaw - released);
+        const total = Math.abs(internals(viewer).rig.view.yaw - released);
         viewer.dispose();
         return { speeds, total };
       };
@@ -160,7 +160,7 @@ describe('PanoViewer', () => {
         raf.step(); // the first frame after an idle spell steps one nominal frame
         const end = raf.now + 100;
         while (raf.now < end - 1e-6) raf.step(raf.now + 1000 / hz);
-        const yaw = internals(viewer).view.yaw;
+        const yaw = internals(viewer).rig.view.yaw;
         viewer.dispose();
         return yaw;
       };
@@ -191,13 +191,13 @@ describe('PanoViewer', () => {
         projected += 2;
       });
       for (let i = 0; i < 10; i++) {
-        internals(viewer).panByPixels(5, 0);
+        internals(viewer).rig.panByPixels(5, 0);
         raf.step();
         viewer.directionAtPixel(10, 10);
       }
       expect(projected).toBe(20);
       expect(reads).toBe(0);
-      const centre = viewer.project(internals(viewer).view.yaw, 0);
+      const centre = viewer.project(internals(viewer).rig.view.yaw, 0);
       expect(centre.x).toBeCloseTo(200, 3);
       expect(centre.y).toBeCloseTo(400, 3);
     });
@@ -245,7 +245,7 @@ describe('PanoViewer', () => {
     it('moves the target on an arrow key, so damping eases the camera after it', () => {
       const viewer = new TestViewer(makeContainer(400, 800));
       runUntilIdle();
-      const { view, target } = internals(viewer);
+      const { view, target } = internals(viewer).rig;
       canvasListener(
         viewer,
         'keydown',
@@ -275,7 +275,7 @@ describe('PanoViewer', () => {
       viewer.requestRender();
       raf.step();
       expect(seen).toEqual([0.3, 0.3]);
-      expect(internals(viewer).view.yaw).toBe(0.3);
+      expect(internals(viewer).rig.view.yaw).toBe(0.3);
       viewer.dispose();
     });
 
@@ -508,7 +508,7 @@ describe('PanoViewer', () => {
             vi.stubGlobal('requestAnimationFrame', raf.request);
             vi.stubGlobal('cancelAnimationFrame', raf.cancel);
             const viewer = idleViewer({ autoRotate: { enabled: true, idleMs: 1000 } });
-            internals(viewer).stopMomentum(); // an interaction pauses it
+            internals(viewer).rig.stopMomentum(); // an interaction pauses it
             return {
               viewer,
               fire: () => {
@@ -581,7 +581,7 @@ describe('PanoViewer', () => {
       viewer.setView({ yaw: 1 });
       raf.step(raf.now + 10_000);
       // damping 0.25 per 16.67 ms: one quarter of the way.
-      expect(internals(viewer).view.yaw).toBeCloseTo(0.25, 10);
+      expect(internals(viewer).rig.view.yaw).toBeCloseTo(0.25, 10);
       viewer.dispose();
     });
 
@@ -592,7 +592,7 @@ describe('PanoViewer', () => {
       raf.step(); // running now, at 0.25
       raf.step(raf.now + 5000);
       // 100 ms is six 60 Hz frames of damping 0.25.
-      expect(internals(viewer).view.yaw).toBeCloseTo(1 - 0.75 * 0.75 ** 6, 10);
+      expect(internals(viewer).rig.view.yaw).toBeCloseTo(1 - 0.75 * 0.75 ** 6, 10);
       viewer.dispose();
     });
 

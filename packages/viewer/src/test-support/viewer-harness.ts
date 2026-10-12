@@ -85,15 +85,20 @@ export class TestViewer extends PanoViewer {
   }
 }
 
-export type Internals = {
+/** The viewer's CameraRig, with its private state opened up for tests. */
+export type RigInternals = {
   view: { yaw: number; pitch: number; fov: number };
   target: { yaw: number; pitch: number; fov: number };
   momentum: { yaw: number; pitch: number };
-  dirty: boolean;
-  invalidate: () => void;
   panByPixels: (dx: number, dy: number) => void;
   flick: (vx: number, vy: number) => void;
   stopMomentum: () => void;
+};
+
+export type Internals = {
+  rig: RigInternals;
+  dirty: boolean;
+  invalidate: () => void;
   controls: unknown;
   pendingLayers: Set<{ dispose: () => void }>;
   layer: unknown;
