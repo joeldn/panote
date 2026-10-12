@@ -9,7 +9,7 @@ import {
 } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode, useEffect, useLayoutEffect } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { panoteViewerPreset } from './panote-viewer.js';
 import { PanoStage, type StagePreview } from './PanoStage.js';
@@ -309,7 +309,7 @@ describe('PanoStage', () => {
         return keyboard && matches.call(this, selector.replaceAll(':focus-visible', ':focus'));
       });
       const f = factory();
-      render(
+      const ui = (markers: boolean) => (
         <>
           <PanoStage
             baseUrl="b/"
@@ -317,14 +317,20 @@ describe('PanoStage', () => {
             autoRotate={autoRotate}
             createViewer={f.createViewer}
           >
-            <div className="pn-anchors">
-              <button type="button">Kitchen</button>
-            </div>
+            {markers && (
+              <div className="pn-anchors">
+                <button type="button">Kitchen</button>
+              </div>
+            )}
+            <aside className="pn-hspanel" aria-label="Kitchen panel" tabIndex={-1}>
+              <a href="#more">More</a>
+            </aside>
             <button type="button">Zoom in</button>
           </PanoStage>
           <button type="button">Outside</button>
-        </>,
+        </>
       );
+      const { rerender, unmount } = render(ui(true));
       const v = f.last();
       // Stands in for the viewer's canvas, which it puts in its container.
       const canvas = document.createElement('canvas');
@@ -335,16 +341,61 @@ describe('PanoStage', () => {
         act(() => el.focus());
       };
       const button = (name: string) => screen.getByRole('button', { name });
-      return { v, canvas, focus, button };
+      const dropMarkers = () => rerender(ui(false));
+      return { v, canvas, focus, button, dropMarkers, unmount };
     }
-    afterEach(() => vi.restoreAllMocks());
+    // The preset's idle window.
+    const IDLE_MS = 3000;
+    const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
 
-    it('holds still while the viewer has keyboard focus, and goes on once it leaves', () => {
+    it('holds still while the viewer has keyboard focus, and goes on an idle window after', () => {
       const { v, canvas, focus, button } = stage();
       focus(canvas, 'keyboard');
       expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
+      v.setAutoRotate.mockClear();
       focus(button('Outside'), 'keyboard');
-      expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
+      wait(IDLE_MS - 1);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
+      wait(1);
+      expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
+    });
+
+    it('waits out the idle window across an unrelated re-render', () => {
+      const { v, canvas, focus, button, dropMarkers } = stage();
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      dropMarkers();
+      wait(IDLE_MS - 1);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
+      wait(1);
+      expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
+    });
+
+    it('drops a resume still waiting when the stage unmounts', () => {
+      const { v, canvas, focus, button, unmount } = stage();
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      unmount();
+      wait(IDLE_MS);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
+    });
+
+    it('stays held when keyboard focus comes back within the idle window', () => {
+      const { v, canvas, focus, button } = stage();
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      wait(IDLE_MS - 1);
+      focus(canvas, 'keyboard');
+      v.setAutoRotate.mockClear();
+      wait(IDLE_MS);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
     });
 
     it('holds still while a marker has keyboard focus, but not for other chrome', () => {
@@ -353,9 +404,33 @@ describe('PanoStage', () => {
       expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
       // Tabbing on within the stage, to a control.
       focus(button('Zoom in'), 'keyboard');
+      wait(IDLE_MS);
       expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
       focus(canvas, 'keyboard');
       expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
+    });
+
+    it("holds still while a point's panel has keyboard focus, as the marker hands it over", () => {
+      const { v, focus, button } = stage();
+      focus(button('Kitchen'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      const panel = screen.getByRole('complementary', { name: 'Kitchen panel' });
+      focus(panel, 'keyboard');
+      wait(IDLE_MS);
+      expect(v.setAutoRotate).not.toHaveBeenCalledWith(true);
+      focus(screen.getByRole('link', { name: 'More' }), 'keyboard');
+      wait(IDLE_MS);
+      expect(v.setAutoRotate).not.toHaveBeenCalledWith(true);
+    });
+
+    it('lets go when the focused marker leaves the DOM without a blur', () => {
+      const { v, focus, button, dropMarkers } = stage();
+      focus(button('Kitchen'), 'keyboard');
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(false);
+      dropMarkers();
+      expect(document.activeElement).toBe(document.body);
+      wait(IDLE_MS);
+      expect(v.setAutoRotate).toHaveBeenLastCalledWith(true);
     });
 
     it('keeps turning after a click or tap focuses the viewer', () => {
@@ -369,6 +444,7 @@ describe('PanoStage', () => {
       const { v, canvas, focus, button } = stage(false);
       focus(canvas, 'keyboard');
       focus(button('Outside'), 'keyboard');
+      wait(IDLE_MS);
       expect(v.setAutoRotate).not.toHaveBeenCalledWith(true);
     });
   });

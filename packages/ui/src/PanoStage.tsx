@@ -25,10 +25,12 @@ import { PanoViewerContext } from './viewer-context.js';
 export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => PanoViewerApi;
 
 /**
- * Keyboard focus (not a click or tap) on the viewer's canvas or a marker, where
- * a moving scene would pull away what the visitor is reading or about to use.
+ * Keyboard focus (not a click or tap) on the viewer's canvas, a marker or an open
+ * point's panel, where a moving scene would pull away what the visitor is reading
+ * or about to use.
  */
-const HOLDS_ROTATION = '.pn-stage__viewer :focus-visible, .pn-anchors :focus-visible';
+const HOLDS_ROTATION =
+  ':is(.pn-stage__viewer *,.pn-anchors *,.pn-hspanel,.pn-hspanel *):focus-visible';
 
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
@@ -186,8 +188,16 @@ export function PanoStage({
   const [restores, setRestores] = useState(0);
   // The browser has no WebGL2, so there is no viewer to show.
   const [unsupported, setUnsupported] = useState(false);
-  // The viewer or a marker has keyboard focus: auto-rotate holds still.
+  // The viewer, a marker or a point's panel has keyboard focus: auto-rotate holds still.
   const [held, setHeld] = useState(false);
+  // The viewer's idle window, what auto-rotate was last set to on it, and the resume
+  // in waiting.
+  const rotation = useRef<{
+    idle?: number;
+    on?: boolean;
+    held?: boolean | undefined;
+    timer?: ReturnType<typeof setTimeout>;
+  }>({});
 
   // Latest props for use inside long-lived effects without re-running them.
   const latest = useRef({
@@ -248,6 +258,8 @@ export function PanoStage({
       l.options ?? {},
       { autoRotate: { enabled: l.autoRotate }, camera: { north: l.north }, initialView: l.view },
     );
+    // The preset always gives the merged options an autoRotate object.
+    rotation.current = { idle: (opts.autoRotate as { idleMs: number }).idleMs };
     const v = createOrNull(l.createViewer, host, opts);
     // No WebGL2: say so in place of the viewer rather than crash the tree.
     setUnsupported(v === null);
@@ -274,6 +286,7 @@ export function PanoStage({
     return () => {
       loaded.current = null;
       landed.current = null;
+      clearTimeout(rotation.current.timer);
       for (const off of unsubscribe) off();
       callbacks.current.onViewer?.(null);
       setViewer(null);
@@ -416,9 +429,21 @@ export function PanoStage({
     viewer?.setNorth(north ?? 0);
   }, [viewer, north]);
 
+  // After every render, not on a dependency change: a focused element that leaves
+  // the DOM (markers remount on a scene change) takes its focus with it, and no blur
+  // says so, so where focus is now is checked here.
   useEffect(() => {
-    viewer?.setAutoRotate(autoRotate && !held);
-  }, [viewer, autoRotate, held]);
+    const r = rotation.current;
+    const holding = held && document.activeElement?.matches(HOLDS_ROTATION);
+    const on = autoRotate && !holding;
+    if (!viewer || r.on === on) return;
+    clearTimeout(r.timer);
+    // Let go of a hold, it waits out the idle window first, as after a drag.
+    if (on && r.held) r.timer = setTimeout(() => viewer.setAutoRotate(true), r.idle);
+    else viewer.setAutoRotate(on);
+    r.on = on;
+    r.held = holding;
+  });
 
   useEffect(() => {
     viewer?.setLabel(ariaLabel);
