@@ -509,7 +509,9 @@ describe('GLRenderer', () => {
     it('rejects geometry whose uv and pos disagree on the vertex count', () => {
       const { renderer } = setup();
       const g = { ...grid(), uv: new Float32Array(16) };
-      expect(() => renderer.uploadTile(g, {} as ImageBitmap)).toThrow(/vertex counts/);
+      expect(() => renderer.uploadTile(g, {} as ImageBitmap)).toThrow(
+        new TypeError('uploadTile: pos and uv describe different vertex counts'),
+      );
     });
 
     it('frees what it created and unbinds when the texture upload throws', () => {
@@ -923,7 +925,7 @@ describe('GLRenderer options', () => {
     // A class of its own, so a host can tell it from any other failure.
     expect(err).toBeInstanceOf(WebGLUnavailableError);
     expect((err as Error).message).toBe(
-      'PanoViewer needs WebGL2, which this browser does not provide.',
+      'PanoViewer needs WebGL2, which this browser does not provide',
     );
   });
 });

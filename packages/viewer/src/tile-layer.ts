@@ -86,12 +86,8 @@ export class BaseTileLoadError extends Error {
     cause: unknown,
   ) {
     const reason = cause instanceof Error ? cause.message : String(cause ?? 'no attempt succeeded');
-    super(
-      `panorama "${sourceId}": low-resolution base tile for face "${face}" failed (${reason})`,
-      {
-        cause,
-      },
-    );
+    const message = `tile source "${sourceId}": low-resolution base tile for face "${face}" failed (${reason})`;
+    super(message, { cause });
     this.name = 'BaseTileLoadError';
     this.permanent = classifyFailure(cause) === 'permanent';
   }

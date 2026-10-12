@@ -462,7 +462,7 @@ export class PanoViewer implements PanoViewerApi {
     const resolver = this.resolveSource;
     if (!resolver) {
       return Promise.reject(
-        new Error(`PanoViewer: "${id}" is an id, and no resolveSource option was given`),
+        new TypeError(`tile source "${id}": an id needs the resolveSource option`),
       );
     }
     return resolver(id, signal, hints);

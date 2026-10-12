@@ -217,7 +217,9 @@ describe('PanoViewer with no options and a loadTile source', () => {
 
   it('rejects an id when there is no resolveSource, fetching nothing', async () => {
     const viewer = new PanoViewer(container());
-    await expect(viewer.load('pano-a')).rejects.toThrow(/no resolveSource/);
+    await expect(viewer.load('pano-a')).rejects.toThrow(
+      new TypeError('tile source "pano-a": an id needs the resolveSource option'),
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
     viewer.dispose();
   });

@@ -1366,7 +1366,7 @@ describe('TileLayer failure handling', () => {
       const layer = makeLayer('pano-a');
       respond = (url) => (url === baseUrl('ny') ? { status: 410 } : { status: 200 });
 
-      await expect(layer.loadBase()).rejects.toThrow(/panorama "pano-a".*face "ny"/);
+      await expect(layer.loadBase()).rejects.toThrow(/tile source "pano-a".*face "ny"/);
     });
 
     it('rejects when the network is down entirely', async () => {

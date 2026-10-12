@@ -50,6 +50,6 @@ describe('WebGLUnavailableError', () => {
     const err = new WebGLUnavailableError();
     expect(err).toBeInstanceOf(Error);
     expect(err.name).toBe('WebGLUnavailableError');
-    expect(err.message).toBe('PanoViewer needs WebGL2, which this browser does not provide.');
+    expect(err.message).toBe('PanoViewer needs WebGL2, which this browser does not provide');
   });
 });

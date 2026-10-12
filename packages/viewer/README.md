@@ -194,6 +194,8 @@ The rules a source follows:
 
 A base tile that can't be loaded rejects `load()` with a `BaseTileLoadError` carrying `sourceId`, `face`, `permanent` and `cause`. When `cause` is a `TileHttpError`, its `status` tells you, for example, a 401 apart from a 404.
 
+The viewer's own errors start with what is wrong, such as `tile source "id": maxLevel must be <= 10`, and have no trailing period. A bad argument or source throws a `TypeError`, a value out of range (a preview patch too large for the GPU) a `RangeError`, and a failure at run time a plain `Error` or one of the classes above. Match on the class, not the message.
+
 ## Preview format
 
 `showPreview` takes a decoded equirectangular image as a `PreviewSource`: `{ width, height, patches }`. Each patch `{ x, y, w, h, image }` covers a rect of the `width × height` equirect, and its image is upright. A side may be at most `PREVIEW_MAX_PATCH_PX` (4096) or the GPU's texture limit. Neighbouring patches overlap by `PREVIEW_GUTTER_PX` (2) on each side to hide the seams. The viewer closes the patches' `ImageBitmap`s once they are uploaded, so a source can be shown only once. A later `load()` of the same id swaps the tiles in underneath it. The preview stays in front of tiles that are no sharper than itself, and is dropped at the next `tiles-settled`. For a replaced image, pass `replacesVersion`, the old source's `version`: the preview then stays on top of the old tiles until a source with another version loads.
