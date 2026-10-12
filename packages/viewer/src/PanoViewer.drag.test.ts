@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { anglePerPixel } from './camera-math.js';
+import { PINCH_ARM_MS } from './controls.js';
 import { DEG2RAD } from './render/projection.js';
 import {
   useViewerGlobals,
@@ -336,6 +337,28 @@ describe('PanoViewer: drag smoothness', () => {
       let x = g.dragFor(300, 200, 1, true);
       raf.now += 5;
       g.send('pointerdown', 600, { id: 2, touch: true });
+      raf.now += 30;
+      // It lifts before the pinch delay is up: no pinch, the drag goes on.
+      g.send('pointerup', 600, { id: 2, touch: true });
+      const lifted = g.px();
+      x = g.dragFor(x, 200, 1, true);
+      expect(g.px()).toBeGreaterThan(lifted);
+      g.send('pointerup', x, { touch: true });
+      // A plain drag after all: its release glides on past where it let go.
+      expect(g.rig.momentum.yaw).not.toBe(0);
+      runUntilIdle();
+      expect(g.px()).toBeGreaterThan(x - 300);
+      g.viewer.dispose();
+    });
+
+    it('drags on with the finger left after a pinch, with no fling', () => {
+      const g = gesture();
+      g.send('pointerdown', 300, { touch: true });
+      let x = g.dragFor(300, 200, 1, true);
+      raf.now += 5;
+      g.send('pointerdown', 600, { id: 2, touch: true });
+      raf.now += PINCH_ARM_MS;
+      g.send('pointermove', 600, { id: 2, touch: true });
       // The pinch takes over where the first finger had got to.
       expect(g.px()).toBeCloseTo(x - 300, 6);
       raf.now += 30;

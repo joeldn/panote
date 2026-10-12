@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { Controls } from './controls.js';
+import { describe, it, expect, beforeEach, onTestFinished, vi } from 'vitest';
+import { Controls, PINCH_ARM_MS } from './controls.js';
 import { resolveViewerOptions } from './defaults.js';
 import { viewProjection, unprojectNDC } from './render/projection.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
 import { dirFromYawPitch } from './test-support/oracles.js';
-import { makeRig, frameClock } from './test-support/rig.js';
+import { makeRig, frameClock, rigInternals } from './test-support/rig.js';
 import type { CameraRig } from './camera-rig.js';
 import type { InteractionOptions } from './types.js';
 
@@ -112,20 +112,34 @@ function fingerMove(id: number, x: number, y: number, t: number) {
   touchEvent('touchmove');
 }
 
-/** The finger lifts; `lost` drops its pointerup, as a missed one would be. */
-function fingerUp(id: number, t: number, how: 'up' | 'cancel' | 'lost' = 'up') {
+/**
+ * The finger lifts; `lost` drops its pointerup, as a missed one would be.
+ * The pointerup comes before the touchend, or after it with `touchFirst`.
+ */
+function fingerUp(id: number, t: number, how: 'up' | 'cancel' | 'lost' = 'up', touchFirst = false) {
   const at = down.get(id)!;
-  if (how !== 'lost') pointer(how === 'up' ? 'pointerup' : 'pointercancel', id, at.x, at.y, t);
   down.delete(id);
-  touchEvent(how === 'cancel' ? 'touchcancel' : 'touchend');
+  const touch = () => touchEvent(how === 'cancel' ? 'touchcancel' : 'touchend');
+  if (touchFirst) touch();
+  if (how !== 'lost') pointer(how === 'up' ? 'pointerup' : 'pointercancel', id, at.x, at.y, t);
+  if (!touchFirst) touch();
 }
 
 /** One finger from (x, y) by (dx, dy) over `ms`, a move every 16 ms. */
-function swipe(id: number, x: number, y: number, dx: number, dy: number, t: number, ms: number) {
+function swipe(
+  id: number,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  t: number,
+  ms: number,
+  touchFirst = false,
+) {
   fingerDown(id, x, y, t);
   const n = Math.max(1, Math.round(ms / 16));
   for (let i = 1; i <= n; i++) fingerMove(id, x + (dx * i) / n, y + (dy * i) / n, t + (ms * i) / n);
-  fingerUp(id, t + ms + 4);
+  fingerUp(id, t + ms + 4, 'up', touchFirst);
   return t + ms + 4;
 }
 
@@ -144,16 +158,17 @@ function pinch(
   fingerDown(a, cx - gap / 2, cy, t);
   fingerDown(b, cx + gap / 2, cy, t + 8);
   el.dispatch('gesturestart', { scale: 1, rotation: 0 });
+  // The fingers settle for the pinch delay, then move.
   for (let i = 1; i <= 10; i++) {
     const g = (gap * (1 + ((spread - 1) * i) / 10)) / 2;
     const mx = cx + (px * i) / 10;
     const my = cy + (py * i) / 10;
-    const ti = t + 8 + i * 16;
+    const ti = t + 8 + PINCH_ARM_MS + (i - 1) * 16;
     fingerMove(a, mx - g, my, ti);
     el.dispatch('gesturechange', { scale: 1 + ((spread - 1) * i) / 10, rotation: 0 });
     fingerMove(b, mx + g, my, ti + 1);
   }
-  const end = t + 8 + 10 * 16 + 10;
+  const end = t + 8 + PINCH_ARM_MS + 9 * 16 + 10;
   fingerUp(a, end, opts.end === 'cancel' ? 'cancel' : 'up');
   el.dispatch('gestureend', { scale: spread, rotation: 0 });
   fingerUp(b, end + 2, opts.end ?? 'up');
@@ -200,7 +215,10 @@ describe('Controls with a CameraRig: one-finger touch never zooms (iOS Safari)',
     fingerMove(2, 200, 425, 86);
     pointer('pointerup', 1, 250, 400, 90);
     fingerMove(2, 300, 430, 100);
+    fingerMove(2, 360, 430, 116);
+    // The second finger's own flick still glides.
     fingerUp(2, 120);
+    expect(rigInternals(rig).momentum.yaw).not.toBe(0);
     drawTo(1500);
     expect(rig.view.fov).toBe(70);
   });
@@ -239,10 +257,10 @@ describe('Controls with a CameraRig: one-finger touch never zooms (iOS Safari)',
     fingerDown(1, 145, 420, 0);
     fingerDown(2, 245, 420, 8);
     el.dispatch('gesturestart', { scale: 1, rotation: 0 });
-    fingerMove(2, 295, 420, 24);
+    fingerMove(2, 295, 420, 70);
     el.dispatch('gesturechange', { scale: 1.5, rotation: 0 });
-    fingerUp(1, 40);
-    fingerUp(2, 42);
+    fingerUp(1, 90);
+    fingerUp(2, 92);
     const fov = rig.view.fov;
     const t = swipe(3, 100, 300, 220, 0, 400, 200);
     // A stray gesturechange with no gesture under way scales nothing.
@@ -262,14 +280,49 @@ describe('Controls with a CameraRig: one-finger touch never zooms (iOS Safari)',
   it('applies no centre zoom from gesture events once the pinch pointers are cancelled', () => {
     fingerDown(1, 145, 420, 0);
     fingerDown(2, 245, 420, 8);
-    el.dispatch('gesturestart', { scale: 1, rotation: 0 });
-    // The browser takes the touches over; the fingers stay down.
+    // The browser takes the touches over before its gesture starts; the
+    // fingers stay down.
     pointer('pointercancel', 1, 145, 420, 20);
     pointer('pointercancel', 2, 245, 420, 20);
-    const fov = rig.view.fov;
+    const start = el.dispatch('gesturestart', { scale: 1, rotation: 0 });
     const change = el.dispatch('gesturechange', { scale: 2, rotation: 0 });
+    expect(start.defaultPrevented).toBe(true);
     expect(change.defaultPrevented).toBe(true);
-    expect(rig.view.fov).toBe(fov);
+    expect(rig.view.fov).toBe(70);
+  });
+
+  it("glides the same whether a flick's touchend comes before or after its pointerup", () => {
+    const glide = (touchFirst: boolean) => {
+      setup();
+      const t = swipe(1, 80, 400, 240, 40, 0, 96, touchFirst);
+      const momentum = { ...rigInternals(rig).momentum };
+      drawTo(t + 1500);
+      return { momentum, view: { ...rig.view } };
+    };
+    const pointerFirst = glide(false);
+    expect(pointerFirst.momentum.yaw).not.toBe(0);
+    expect(glide(true)).toEqual(pointerFirst);
+  });
+
+  it('zooms on a double tap whose touchends come before their pointerups', () => {
+    const t = swipe(1, 200, 400, 2, 1, 0, 30, true);
+    swipe(2, 201, 401, 1, 0, t + 80, 30, true);
+    el.dispatch('dblclick', { clientX: 201, clientY: 401 });
+    expect(rig.view.fov).toBeCloseTo(70 * VIEWER_DEFAULTS.interaction.doubleClickZoom, 6);
+  });
+
+  it('forgets a finger whose pointerup never comes, shortly after its touchend', () => {
+    vi.useFakeTimers();
+    onTestFinished(() => void vi.useRealTimers());
+    fingerDown(1, 100, 400, 0);
+    fingerMove(1, 200, 400, 16);
+    fingerUp(1, 20, 'lost');
+    expect(el.style['cursor']).toBe('grabbing');
+    vi.advanceTimersByTime(100);
+    expect(el.style['cursor']).toBe('grab');
+    // A late pointerup then finds nothing to release.
+    pointer('pointerup', 1, 200, 400, 200);
+    expect(rigInternals(rig).momentum).toEqual({ yaw: 0, pitch: 0 });
   });
 
   it('zooms on a double tap, but not on two quick swipes', () => {

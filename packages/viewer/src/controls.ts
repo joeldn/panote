@@ -73,9 +73,13 @@ interface SafariGestureEvent extends UIEvent {
 
 // A second finger has to stay down this long before the two pinch. Flicking
 // fast, the next finger can land before the last one has lifted, both
-// moving and close together, and a pinch over those few ms would zoom hard.
-// A real pinch zooms once this has passed, from where its fingers landed.
+// moving and close together, and a pinch over those few ms would zoom hard;
+// instead the drag hands over to it. A real pinch starts once this has
+// passed, from where its fingers are then.
 export const PINCH_ARM_MS = 50;
+// A touch pointer still tracked this long after the touches say no finger is
+// down lost its pointerup, and is forgotten.
+const TOUCH_PRUNE_MS = 100;
 // A press that moves no further than this is a tap (for a touch double tap).
 const TAP_SLOP_PX = 10;
 
@@ -88,14 +92,13 @@ export class Controls {
   private p0: PointerSlot | null = null;
   private p1: PointerSlot | null = null;
   private last = { x: 0, y: 0 };
-  // Finger distance and midpoint when the second finger landed, and when;
-  // the zoom is relative to them. pinchArmed once the pinch has started
-  // (see PINCH_ARM_MS).
-  private pinchDist0 = 0;
-  private pinchX = 0;
-  private pinchY = 0;
+  // When the second finger landed, and whether the pinch has started since
+  // (see PINCH_ARM_MS); the finger distance then, which the zoom is
+  // relative to; and the pointer that drags while there is no pinch.
   private pinchT = 0;
   private pinchArmed = false;
+  private pinchDist0 = 0;
+  private dragId = -1;
   // Recent drag positions and timestamps (ring buffer) for release velocity.
   private sampleT = new Float64Array(SAMPLES);
   private sampleX = new Float64Array(SAMPLES);
@@ -108,6 +111,8 @@ export class Controls {
   // Fingers on the screen, from the touch events: the pointer pinch owns a
   // touch pinch, so Safari's gesture events never zoom while one is down.
   private touches = 0;
+  // Forgets the touch pointers once the touches say none is down (onTouches).
+  private pruneTimer: ReturnType<typeof setTimeout> | undefined;
   // The press in progress (or the last): its pointer type, where it landed,
   // and whether it moved off or went multi-touch. Clean presses in a row
   // count as taps, and a touch dblclick zooms only after two of them.
@@ -236,11 +241,12 @@ export class Controls {
     this.engaged = true;
     // Only the primary mouse button drags; right-click and middle-click don't.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    // A primary pointer goes down with no other of its kind down: a slot
-    // still held is a pointer whose pointerup or pointercancel never came
-    // (iOS Safari can drop one), and left there it would turn every later
-    // one-finger drag into a pinch against where it lifted.
-    if (e.isPrimary && (this.p0 || this.p1)) this.releaseAll();
+    clearTimeout(this.pruneTimer);
+    // A primary pointer goes down with no other of its type down: a slot of
+    // that type still held is a pointer whose pointerup or pointercancel
+    // never came (iOS Safari can drop one), and left there it would turn
+    // every later one-finger drag into a pinch against where it lifted.
+    if (e.isPrimary) this.forget(e.pointerType, e.timeStamp);
     if (this.slotFor(e.pointerId)) return;
     const slot = { id: e.pointerId, x: e.clientX, y: e.clientY, type: e.pointerType };
     if (!this.p0) this.p0 = slot;
@@ -251,28 +257,25 @@ export class Controls {
     } catch {
       // ignore — capture is best-effort and must not break gesture handling
     }
-    this.moveLast(e.clientX, e.clientY);
+    // Grabbing halts any ongoing inertial glide.
+    this.host.stopMomentum();
     if (this.p0 && this.p1) {
-      // A second finger makes this a multi-touch (pinch) gesture, a new one
-      // each time a finger lands. The drag stops here; the pinch starts once
-      // both fingers have been down PINCH_ARM_MS (see onMove).
-      this.host.dragEnd(true);
-      this.gestureConsumed = true;
-      this.pressMoved = true;
-      this.pinchDist0 = Math.hypot(this.p0.x - this.p1.x, this.p0.y - this.p1.y);
-      this.pinchX = (this.p0.x + this.p1.x) / 2;
-      this.pinchY = (this.p0.y + this.p1.y) / 2;
+      // A second finger: a pinch once both have been down PINCH_ARM_MS (see
+      // onMove), a new one each time a finger lands. Until then the first
+      // finger drags on, and a press with two fingers is no tap.
       this.pinchT = e.timeStamp;
       this.pinchArmed = false;
-    } else {
-      this.pressType = e.pointerType;
-      this.pressX = e.clientX;
-      this.pressY = e.clientY;
-      this.pressMoved = false;
+      this.pressMoved = true;
+      return;
     }
-    // Grabbing halts any ongoing inertial glide and resets velocity tracking.
-    this.host.stopMomentum();
-    if (!this.p1) this.host.dragStart(e.timeStamp);
+    this.dragId = e.pointerId;
+    this.pressType = e.pointerType;
+    this.pressX = e.clientX;
+    this.pressY = e.clientY;
+    this.pressMoved = false;
+    this.moveLast(e.clientX, e.clientY);
+    this.host.dragStart(e.timeStamp);
+    // A new drag: velocity tracking starts afresh.
     this.sampleCount = 0;
     this.pushSample(e.timeStamp, e.clientX, e.clientY);
     this.setCursor('grabbing');
@@ -291,25 +294,35 @@ export class Controls {
       this.release(e, true);
       return;
     }
+
+    const { p0, p1 } = this;
+    if (p0 && p1 && !this.pinchArmed && e.timeStamp - this.pinchT >= PINCH_ARM_MS) {
+      // Both fingers have stayed down: the pinch takes over from the drag,
+      // from where the fingers are before this move, so this move is the
+      // pinch's first step and nothing jumps.
+      this.pinchArmed = true;
+      this.gestureConsumed = true;
+      this.host.dragEnd(true);
+      this.pinchDist0 = Math.hypot(p0.x - p1.x, p0.y - p1.y);
+      this.host.pinchStart((p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+    }
     slot.x = e.clientX;
     slot.y = e.clientY;
 
-    const { p0, p1 } = this;
     if (p0 && p1) {
-      // Not a pinch yet: one finger may be about to lift (see PINCH_ARM_MS).
-      if (!this.pinchArmed) {
-        if (e.timeStamp - this.pinchT < PINCH_ARM_MS) return;
-        this.pinchArmed = true;
-        this.host.pinchStart(this.pinchX, this.pinchY);
+      if (this.pinchArmed) {
+        // Both fingers' latest positions, against the pinch's start: a zoom
+        // and a pan together, the scene between the fingers following them.
+        const dist = Math.hypot(p0.x - p1.x, p0.y - p1.y);
+        if (this.pinchDist0 && dist) {
+          const scale = pinchFactor(this.pinchDist0, dist);
+          this.host.pinchTo(scale, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
+        }
+        return;
       }
-      // Both fingers' latest positions, against where they landed: a zoom
-      // and a pan together, the scene between the fingers following them.
-      const dist = Math.hypot(p0.x - p1.x, p0.y - p1.y);
-      if (this.pinchDist0 && dist) {
-        const scale = pinchFactor(this.pinchDist0, dist);
-        this.host.pinchTo(scale, (p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
-      }
-      return;
+      // Not a pinch yet (one finger may be about to lift): the dragging
+      // finger drags on, and the other only keeps its position.
+      if (e.pointerId !== this.dragId) return;
     }
 
     // Single pointer drag
@@ -343,15 +356,13 @@ export class Controls {
     } catch {
       // ignore — pointer may not be captured
     }
-    this.pinchDist0 = 0;
-    this.pinchArmed = false;
     const left = this.p0 ?? this.p1;
     if (left) {
-      // The finger left drags on from where it is, with no jump.
-      this.moveLast(left.x, left.y);
-      this.host.dragStart(e.timeStamp);
+      this.carryOn(left, e.timeStamp);
       return;
     }
+    clearTimeout(this.pruneTimer);
+    this.pinchArmed = false;
     this.host.dragEnd();
     // Only fling from a real drag — not from the tail of a pinch.
     if (fling && this.opts.inertia && !this.gestureConsumed) {
@@ -360,6 +371,22 @@ export class Controls {
     }
     this.taps = fling && !this.pressMoved ? this.taps + 1 : 0;
     this.endGesture();
+  }
+
+  // One of two pointers is gone, and `left` carries on alone.
+  private carryOn(left: PointerSlot, t: number) {
+    const pinched = this.pinchArmed;
+    this.pinchArmed = false;
+    // The dragging finger is left before any pinch: its drag never stopped.
+    if (!pinched && left.id === this.dragId) return;
+    // Otherwise it drags on from where it is, with no jump: after a pinch as
+    // a new drag, and before one by taking the drag over, which the camera
+    // follows on without a break. Its release flings by its own moves.
+    this.moveLast(left.x, left.y);
+    this.dragId = left.id;
+    if (pinched) this.host.dragStart(t);
+    this.sampleCount = 0;
+    this.pushSample(t, left.x, left.y);
   }
 
   // All pointers are up: back to the resting state.
@@ -371,17 +398,20 @@ export class Controls {
   }
 
   /**
-   * Forget every tracked pointer, as a cancel: their pointerup or
-   * pointercancel went missing. What a drag had yet to draw is applied, and
-   * nothing flings.
+   * Forget the tracked pointers of `type`, as a cancel: their pointerup or
+   * pointercancel went missing. A pointer of another type carries on; with
+   * none left, what the drag had yet to draw is applied and nothing flings.
    */
-  private releaseAll() {
+  private forget(type: string, t: number) {
     const { p0, p1 } = this;
+    const gone0 = p0?.type === type;
+    const gone1 = p1?.type === type;
+    if (!gone0 && !gone1) return;
     // Slots first, as in release(): a lostpointercapture fired from inside
     // releasePointerCapture must find nothing to fling.
-    this.p0 = null;
-    this.p1 = null;
-    for (const slot of [p0, p1]) {
+    if (gone0) this.p0 = null;
+    if (gone1) this.p1 = null;
+    for (const slot of [gone0 ? p0 : null, gone1 ? p1 : null]) {
       if (!slot) continue;
       try {
         this.el.releasePointerCapture(slot.id);
@@ -389,7 +419,11 @@ export class Controls {
         // ignore — pointer may not be captured
       }
     }
-    this.pinchDist0 = 0;
+    const left = this.p0 ?? this.p1;
+    if (left) {
+      this.carryOn(left, t);
+      return;
+    }
     this.pinchArmed = false;
     this.host.dragEnd(true);
     this.taps = 0;
@@ -397,12 +431,16 @@ export class Controls {
   }
 
   // The touch events say how many fingers are on the screen. With none, a
-  // touch pointer still tracked lost its pointerup: forget it now rather
-  // than at the next touch.
+  // touch pointer still tracked a moment later lost its pointerup, and is
+  // forgotten then rather than at the next touch. The moment lets a
+  // pointerup that comes after its touchend release it as usual.
   private onTouches = (e: Event) => {
     this.touches = (e as TouchEvent).touches?.length ?? 0;
     if (this.touches > 0 || e.type === 'touchstart') return;
-    if (this.p0?.type === 'touch' || this.p1?.type === 'touch') this.releaseAll();
+    if (this.p0?.type !== 'touch' && this.p1?.type !== 'touch') return;
+    clearTimeout(this.pruneTimer);
+    const t = e.timeStamp;
+    this.pruneTimer = setTimeout(() => this.forget('touch', t + TOUCH_PRUNE_MS), TOUCH_PRUNE_MS);
   };
 
   private onWheel = (e: WheelEvent) => {
@@ -537,6 +575,7 @@ export class Controls {
   }
 
   dispose(): void {
+    clearTimeout(this.pruneTimer);
     this.el.removeEventListener('pointerdown', this.onDown);
     this.el.removeEventListener('pointermove', this.onMove);
     this.el.removeEventListener('pointerup', this.onUp);
