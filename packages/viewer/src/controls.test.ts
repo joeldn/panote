@@ -232,8 +232,8 @@ describe('Controls: pointer drag and release', () => {
     const touch = { pointerType: 'touch' };
     pointer('pointerdown', { x: 100, y: 100, t: 0, id: 1, ...touch });
     pointer('pointerdown', { x: 200, y: 100, t: 0, id: 2, ...touch });
-    // The pinch takes over from the first finger's drag.
-    expect(host.dragEnd).toHaveBeenCalledTimes(1);
+    // The pinch takes over from the first finger's drag, where it is.
+    expect(host.dragEnd.mock.calls).toEqual([[true]]);
     expect(host.pinchStart).toHaveBeenCalledWith(150, 100);
     pointer('pointermove', { x: 300, y: 100, t: 16, id: 2, ...touch });
     // Distance 100 -> 200 halves the start fov, about the moved midpoint.

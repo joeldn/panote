@@ -42,7 +42,8 @@ const DRAG_PERIOD_MS = 1000 / 90;
 const DRAG_PERIOD_GAIN = 0.2;
 // A gap between moves longer than this is a rest, not the input period: the
 // move after it is taken to have started one 60 Hz frame before it came,
-// rather than to have crept along through the whole rest.
+// rather than to have crept along through the whole rest. Coarse timestamps
+// (Firefox's resistFingerprinting rounds them) make rests harder to tell.
 const DRAG_REST_MS = 50;
 // Drag samples kept: 20 ms of 240 Hz input is 5, with headroom for a stall.
 const DRAG_SAMPLES = 16;
@@ -118,8 +119,8 @@ export class CameraRig implements ControlHost {
   private dragAppliedY = 0;
   // The one-euro filter: the pointer offset sampled on the last frame, its
   // smoothed speed (px/ms) and when that frame was; undefined until the
-  // drag's first frame. A frame clock that disagrees with the moves' clock
-  // by more than a second is lined up with it then, through dragClockShift.
+  // drag's first frame. Moves stamped more than a second ahead of the frame
+  // clock are on another clock, and dragClockShift lines the two up.
   private dragRawX = 0;
   private dragRawY = 0;
   private dragSpeedX = 0;
@@ -333,6 +334,7 @@ export class CameraRig implements ControlHost {
     this.dragAppliedX = 0;
     this.dragAppliedY = 0;
     this.dragFrameT = undefined;
+    this.dragClockShift = 0;
     this.dragLeft.yaw = 0;
     this.dragLeft.pitch = 0;
     this.pushDrag(t, 0, 0);
@@ -361,21 +363,31 @@ export class CameraRig implements ControlHost {
   /**
    * The drag ended: the part of it not drawn yet goes to the target, for a
    * flick to take over or step()'s damping to ease in, so the camera ends
-   * where the pointer did.
+   * where the pointer did. With `now`, it moves the camera at once instead:
+   * a pinch takes over from here, and a drag by the finger it leaves would
+   * cut the easing short.
    */
-  dragEnd(): void {
+  dragEnd(now = false): void {
     this.dragLeft.yaw = 0;
     this.dragLeft.pitch = 0;
     if (!this.dragging) return;
     this.dragging = false;
     const newest = (this.dragHead - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
-    const { yaw, pitch } = this.target;
+    if (now) {
+      this.pan(this.dragX[newest]! - this.dragAppliedX, this.dragY[newest]! - this.dragAppliedY);
+      this.invalidate();
+      return;
+    }
+    // Measured against the view: panTarget() may shift view and target by a
+    // whole turn together, which must not count as part of the drag.
+    const yaw = this.target.yaw - this.view.yaw;
+    const pitch = this.target.pitch - this.view.pitch;
     this.panTarget(
       this.dragX[newest]! - this.dragAppliedX,
       this.dragY[newest]! - this.dragAppliedY,
     );
-    this.dragLeft.yaw = this.target.yaw - yaw;
-    this.dragLeft.pitch = this.target.pitch - pitch;
+    this.dragLeft.yaw = this.target.yaw - this.view.yaw - yaw;
+    this.dragLeft.pitch = this.target.pitch - this.view.pitch - pitch;
     this.invalidate();
   }
 
@@ -395,9 +407,11 @@ export class CameraRig implements ControlHost {
   private followDrag(t: number): boolean {
     const newest = (this.dragHead - 1 + DRAG_SAMPLES) % DRAG_SAMPLES;
     const tNew = this.dragT[newest]!;
-    if (this.dragFrameT === undefined) {
-      this.dragClockShift = Math.abs(tNew - t) > 1000 ? tNew - t : 0;
-    }
+    // Only a clock running ahead gives itself away: a move can't come from
+    // the future, but the newest one can be long past, when the pointer was
+    // pressed and held. A frame drawn during a hold (a tile landing, a
+    // timer) must not take the hold for a clock offset.
+    if (tNew - t - this.dragClockShift > 1000) this.dragClockShift = tNew - t;
     const at =
       t + this.dragClockShift - Math.min(this.dragPeriod + DRAG_JITTER_MS, DRAG_LAG_MAX_MS);
     // The pointer at `at`: the newest move after it, the oldest kept before it.

@@ -233,4 +233,122 @@ describe('PanoViewer: drag smoothness', () => {
     // A fling from 0.3 px/ms travels 5 px per frame / (1 − 0.9).
     expect(flung.settledPx - held.settledPx).toBeCloseTo(50, -1);
   });
+
+  describe('drag edge cases', () => {
+    /** A viewer, its camera read back as px dragged, and pointer and frame drivers. */
+    function gesture() {
+      const viewer = new TestViewer(makeContainer(W, H));
+      runUntilIdle();
+      const rig = internals(viewer).rig;
+      const vfov = (viewer as unknown as { rig: { effectiveVFovDeg(f: number): number } }).rig;
+      const vfovRad = vfov.effectiveVFovDeg(rig.view.fov) * DEG2RAD;
+      const pxPerRad = 1 / anglePerPixel(2 * Math.atan(Math.tan(vfovRad / 2) * (W / H)), W);
+      const yaw0 = rig.view.yaw;
+      const send = (type: string, x: number, init: { id?: number; touch?: boolean } = {}) =>
+        canvasListener(
+          viewer,
+          type,
+        )({
+          pointerId: init.id ?? 1,
+          pointerType: init.touch ? 'touch' : 'mouse',
+          button: 0,
+          buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1,
+          clientX: x,
+          clientY: 400,
+          timeStamp: raf.now,
+        });
+      /** Move pointer `id` right at 0.3 px/ms from `x`, a move every 10 ms, a frame every 16.7. */
+      const dragFor = (x: number, ms: number, id = 1, touch = false) => {
+        const end = raf.now + ms;
+        let next = raf.now + FRAME;
+        for (let t = raf.now + 10; t <= end; t += 10) {
+          for (; next <= t; next += FRAME) raf.step(next);
+          raf.now = t;
+          x += 3;
+          send('pointermove', x, { id, touch });
+        }
+        return x;
+      };
+      return {
+        viewer,
+        rig,
+        send,
+        dragFor,
+        px: (yaw = rig.view.yaw) => -(yaw - yaw0) * pxPerRad,
+      };
+    }
+    const FRAME = 1000 / 60;
+
+    it('eases in the rest of a drag cut short by a pointercancel, without a fling', () => {
+      const g = gesture();
+      g.send('pointerdown', 300);
+      const x = g.dragFor(300, 300);
+      g.send('pointercancel', x);
+      expect(g.rig.momentum).toEqual({ yaw: 0, pitch: 0 });
+      // Not drawn yet, but on its way.
+      expect(g.px()).toBeLessThan(x - 300);
+      expect(g.px(g.rig.target.yaw)).toBeCloseTo(x - 300, 6);
+      runUntilIdle();
+      expect(g.px()).toBeCloseTo(x - 300, 6);
+      g.viewer.dispose();
+    });
+
+    it('drags on, from where the camera is, after a wheel zoom mid-drag', () => {
+      const g = gesture();
+      g.send('pointerdown', 300);
+      let x = g.dragFor(300, 300);
+      const fov = g.rig.view.fov;
+      const turned = g.rig.view.yaw;
+      x = g.dragFor(x, 200);
+      const before = g.rig.view.yaw - turned;
+      canvasListener(
+        g.viewer,
+        'wheel',
+      )({
+        deltaY: -100,
+        deltaX: 0,
+        deltaMode: 0,
+        ctrlKey: false,
+        metaKey: false,
+        clientX: x,
+        clientY: 400,
+        timeStamp: raf.now,
+        preventDefault: vi.fn(),
+      });
+      expect(g.rig.view.fov).toBeLessThan(fov);
+      const zoomed = g.rig.view.yaw;
+      x = g.dragFor(x, 200);
+      // It keeps following the drag at about the same pace, with no jump:
+      // from 70° the zoom turns the view about 7% less per pixel, and the
+      // two spans can differ by a frame's worth of drawing.
+      const after = g.rig.view.yaw - zoomed;
+      expect(after / before).toBeGreaterThan(0.85);
+      expect(after / before).toBeLessThan(1.15);
+      g.send('pointerup', x);
+      runUntilIdle();
+      expect(Number.isFinite(g.rig.view.yaw)).toBe(true);
+      g.viewer.dispose();
+    });
+
+    it('drags on with the finger left when a second one lifts without pinching', () => {
+      const g = gesture();
+      g.send('pointerdown', 300, { touch: true });
+      let x = g.dragFor(300, 200, 1, true);
+      raf.now += 5;
+      g.send('pointerdown', 600, { id: 2, touch: true });
+      // The pinch takes over where the first finger had got to.
+      expect(g.px()).toBeCloseTo(x - 300, 6);
+      raf.now += 30;
+      g.send('pointerup', 600, { id: 2, touch: true });
+      const lifted = g.px();
+      x = g.dragFor(x, 200, 1, true);
+      expect(g.px()).toBeGreaterThan(lifted);
+      g.send('pointerup', x, { touch: true });
+      // No fling from the tail of a pinch; the camera lands where the finger did.
+      expect(g.rig.momentum).toEqual({ yaw: 0, pitch: 0 });
+      runUntilIdle();
+      expect(g.px()).toBeCloseTo(x - 300, 6);
+      g.viewer.dispose();
+    });
+  });
 });

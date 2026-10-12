@@ -489,6 +489,67 @@ describe('CameraRig', () => {
       expect(draggedPx(rig)).toBeLessThan(150);
     });
 
+    it('flings what was left of a drag released next to the ±2π wrap, not a whole turn', () => {
+      const release = (yaw: number) => {
+        const { rig } = makeRig(400, 800, { initialView: { yaw } });
+        const frame = frameClock(rig);
+        rig.dragStart(0);
+        let t = FRAME_MS;
+        for (let m = 10; m <= 100; m += 10) {
+          for (; t < m; t += FRAME_MS) frame(t);
+          rig.dragBy(5, 0, m);
+        }
+        const drawn = rig.view.yaw - yaw;
+        rig.dragEnd();
+        rig.flick(-2, 0);
+        const start = rig.view.yaw;
+        while (frame((t += FRAME_MS)) && t < 10_000);
+        return { drawn, glide: rig.view.yaw - start };
+      };
+      const ref = release(0);
+      // The rest of the drag carries the target across −2π, where it is
+      // wound back by a whole turn.
+      const nearWrap = release(-2 * Math.PI + 0.001 - ref.drawn);
+      expect(nearWrap.glide).toBeCloseTo(ref.glide, 9);
+    });
+
+    /** Drag at 0.5 px/ms from `start` for 500 ms; the mean lag over its last 300 ms. */
+    function lagAfter(rig: CameraRig, frame: (t: number) => boolean, start: number): number {
+      let t = Math.ceil(start / FRAME_MS) * FRAME_MS;
+      const lags: number[] = [];
+      for (let m = start; m <= start + 500; m += 10) {
+        for (; t < m; t += FRAME_MS) {
+          frame(t);
+          if (t > start + 200) lags.push((0.5 * (t - start) - draggedPx(rig)) / 0.5);
+        }
+        rig.dragBy(5, 0, m);
+      }
+      return lags.reduce((a, b) => a + b, 0) / lags.length;
+    }
+
+    it('keeps up with a drag that sets off after a long hold, whatever frames came in it', () => {
+      const lag = (strayFrameAt?: number) => {
+        const { rig } = makeRig(400, 800);
+        const frame = frameClock(rig);
+        rig.dragStart(0);
+        // A frame drawn while the pointer is held still: a tile, a timer.
+        if (strayFrameAt !== undefined) frame(strayFrameAt);
+        return lagAfter(rig, frame, 3010);
+      };
+      const none = lag();
+      expect(none).toBeLessThan(25);
+      for (const at of [900, 1200, 3000]) expect(Math.abs(lag(at) - none)).toBeLessThan(1);
+    });
+
+    it('keeps up after a jank of over a second between the press and the next frame', () => {
+      const { rig } = makeRig(400, 800);
+      const frame = frameClock(rig);
+      frame(0);
+      rig.dragStart(20);
+      frame(1130);
+      expect(lagAfter(rig, frame, 1140)).toBeLessThan(25);
+    });
+
     it('starts afresh, with nothing left over, after a pinch takes over', () => {
       const { rig } = dragRig(300);
       rig.dragEnd();
