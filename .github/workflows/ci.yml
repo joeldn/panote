@@ -50,13 +50,22 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # The documented local gate, in the documented order, in one job. Splitting
-  # it further would mean re-running `pnpm install` and the turbo `^build`
+  # The documented local gate, in the documented order, in one job - minus
+  # `pnpm test`. The coverage job runs `pnpm test:coverage`, which is the same
+  # vitest run in every workspace with --coverage added (or nothing added, for
+  # the workerd packages), so running `pnpm test` here as well executed every
+  # test twice per push for no extra verification. A test failure therefore
+  # shows up on the required Coverage check, not on Gate. Splitting this job
+  # further would mean re-running `pnpm install` and the turbo `^build`
   # prerequisite once per job for tasks that take seconds each.
+  #
+  # Timeouts across this file sit at roughly 3x the slowest run seen (Gate and
+  # Coverage peak at ~3.5 min), so a hung workerd or vitest pool is killed
+  # after 10 minutes instead of 20.
   gate:
     name: Gate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -73,9 +82,6 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Test
-        run: pnpm test
-
       # prettier --check over the whole repo. Markdown is excluded in
       # .prettierignore on purpose; so are the generated wrangler type files.
       - name: Format check
@@ -90,7 +96,7 @@ jobs:
   generated-types:
     name: Generated types drift
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -131,7 +137,7 @@ jobs:
   deploy-dry-run:
     name: Deploy dry-run
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -204,12 +210,12 @@ jobs:
   # Runs in parallel with `gate`, not after it. `pnpm test:coverage` is a
   # superset of `pnpm test` for the Node-side packages (same tests, plus
   # instrumentation and the per-package thresholds) and identical to it for the
-  # workerd packages, so this job is what enforces the thresholds while `gate`
-  # is what reproduces the documented local command.
+  # workerd packages, so this is the one job that runs the test suite: it is
+  # where a failing test shows up, and it enforces the thresholds.
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
