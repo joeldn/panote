@@ -1,11 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { faceUVToDir, tileCornersUV, type Face } from './cube.js';
+import { faceUVToDir, type Face } from './cube.js';
 import { TileLayer } from './tile-layer.js';
 import type { CubeTileSource, TileAddress } from './source.js';
 import { effectiveVFovDeg, viewProjection } from './render/projection.js';
-import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch, tileCornersUV } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {

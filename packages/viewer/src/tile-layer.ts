@@ -17,7 +17,7 @@ import {
   type DrawItem,
   type TileHandle,
 } from './render/gl-renderer.js';
-import type { CubeTileSource, TileImage } from './source.js';
+import type { CubeTileSource, TileAddress, TileImage } from './source.js';
 import { loadTileImage, releaseImage, type TileNetwork } from './tile-fetch.js';
 import {
   TileRetryBudget,
@@ -145,11 +145,14 @@ interface TileEntry {
 
 /** A decoded tile waiting for update() to upload it. */
 interface ReadyTile {
-  level: number;
-  face: Face;
-  x: number;
-  y: number;
+  tile: TileAddress;
   bitmap: TileImage;
+}
+
+/** A tile load in flight. */
+interface InflightTile {
+  controller: AbortController;
+  level: number;
 }
 
 /**
@@ -185,17 +188,15 @@ const LEAD_ROUNDS = 3;
 /** Rounds of edge tiles, beyond the lead, that make a fallback worth it. */
 const FALLBACK_ROUNDS = 2;
 
-interface Candidate {
+/** A tile to request this frame. Pooled: copy the address before keeping it. */
+interface Candidate extends TileAddress {
   key: string;
-  level: number;
-  face: Face;
-  x: number;
-  y: number;
   priority: number;
 }
 
-function tileKey(level: number, face: string, x: number, y: number): string {
-  return `${level}/${face}/${x}-${y}`;
+/** The cache key of a tile. */
+function tileKey(tile: TileAddress): string {
+  return `${tile.level}/${tile.face}/${tile.x}-${tile.y}`;
 }
 
 /** Floats per tile in a LevelTable: bounding sphere, then unit centre direction. */
@@ -211,16 +212,20 @@ const CULL_PAD = 1.05;
 interface LevelTable {
   /** Tiles per face edge. */
   g: number;
-  /** Per tile: sphere centre xyz, padded radius, then the unit direction
-   *  through the tile's UV centre (the load priority's axis). */
+  /**
+   * Per tile: sphere centre xyz, padded radius, then the unit direction
+   * through the tile's UV centre (the load priority's axis).
+   */
   data: Float32Array;
   /** Per tile cache key, so a frame builds no strings. */
   keys: string[];
 }
 
-// Scratch for buildLevelTable: one cube point, and the four corners' xyz.
+// Scratch for buildLevelTable: one cube point, the four corners' xyz, and
+// the tile being keyed.
 const cornerDir: Vec3 = { x: 0, y: 0, z: 0 };
 const cornerPos = new Float64Array(12);
+const tableTile: TileAddress = { face: 'px', level: 0, x: 0, y: 0 };
 
 function buildLevelTable(level: number): LevelTable {
   const g = tilesPerEdge(level);
@@ -235,8 +240,7 @@ function buildLevelTable(level: number): LevelTable {
       for (let x = 0; x < g; x++) {
         const i = (f * g + y) * g + x;
         // Corners on the flat cube face, where the quad is drawn
-        // (tile-geometry.ts), not on the sphere: TL, TR, BL, BR, as
-        // tileCornersUV orders them.
+        // (tile-geometry.ts), not on the sphere: TL, TR, BL, BR.
         const u0 = x / g;
         const v0 = y / g;
         const u1 = (x + 1) / g;
@@ -264,7 +268,11 @@ function buildLevelTable(level: number): LevelTable {
         data[o + 4] = d.x / mlen;
         data[o + 5] = d.y / mlen;
         data[o + 6] = d.z / mlen;
-        keys[i] = tileKey(level, face, x, y);
+        tableTile.face = face;
+        tableTile.level = level;
+        tableTile.x = x;
+        tableTile.y = y;
+        keys[i] = tileKey(tableTile);
       }
     }
   }
@@ -293,13 +301,11 @@ const byPriority = (a: Candidate, b: Candidate): number => a.priority - b.priori
 
 export class TileLayer {
   private cache = new Map<string, TileEntry>();
-  private inflight = new Map<string, AbortController>();
+  private inflight = new Map<string, InflightTile>();
   // Decoded and not yet uploaded, in arrival order. See drainReady().
   private ready = new Map<string, ReadyTile>();
   // When an in-flight or decoded tile stopped being wanted, on the layer's clock.
   private stale = new Map<string, number>();
-  // `${level}/` for every level, the start of that level's keys.
-  private levelPrefix: string[];
   // Parents already queued this frame, so siblings queue one between them.
   // A sibling that needs it sooner moves it up.
   private parentsQueued = new Map<string, Candidate>();
@@ -330,10 +336,10 @@ export class TileLayer {
   private wakeTimer: ReturnType<typeof setTimeout> | undefined;
   private wakeAt = Infinity;
 
-  // Per-tile retry accounting for this panorama load. Replaces the old
-  // permanent `failed` set: a transiently-failed tile stays re-queueable (so a
-  // pan away and back refills the hole) until it exhausts its attempt budget,
-  // while a 404/410 is still skipped for good. See tile-retry.ts.
+  // Per-tile retry accounting for this panorama load: a transiently-failed
+  // tile stays re-queueable (so a pan away and back refills the hole) until it
+  // exhausts its attempt budget, while a 404/410 is skipped for good. See
+  // tile-retry.ts.
   private retry: TileRetryBudget;
 
   // Reusable scratch buffers — no per-frame allocation.
@@ -392,7 +398,6 @@ export class TileLayer {
     // Cooldowns and the wake timer share one clock (faked together in tests).
     this.retry = new TileRetryBudget(opts.retry, this.now);
     this.visible = new Int32Array(FACES.length * tilesPerEdge(source.maxLevel) ** 2);
-    this.levelPrefix = Array.from({ length: source.maxLevel + 1 }, (_, l) => `${l}/`);
   }
 
   /**
@@ -425,10 +430,11 @@ export class TileLayer {
    * blip on one of six requests costs a second, not the load.
    */
   private async loadBaseFace(face: Face): Promise<void> {
-    const key = tileKey(0, face, 0, 0);
+    const tile: TileAddress = { face, level: 0, x: 0, y: 0 };
+    const key = tileKey(tile);
     let cause: unknown;
     for (;;) {
-      const result = await this.ensureTile(0, face, 0, 0, 'high');
+      const result = await this.ensureTile(tile, 'high');
       if (result.kind === 'loaded') return;
       // Disposal (or a newer load superseding this one) tears the layer down
       // mid-flight. That is not the base layer failing — the caller already
@@ -519,7 +525,7 @@ export class TileLayer {
         const priority = 1 - (data[o + 4]! * fwd.x + data[o + 5]! * fwd.y + data[o + 6]! * fwd.z);
         const f = Math.floor(i / (g * g));
         const rest = i - f * g * g;
-        this.pushCandidate(key, level, FACES[f]!, rest % g, Math.floor(rest / g), priority);
+        this.pushCandidate(key, FACES[f]!, level, rest % g, Math.floor(rest / g), priority);
         if (priority > this.leadCutoff) edge++;
       } else {
         wakeMs = Math.min(wakeMs, this.retry.waitMs(key));
@@ -585,8 +591,8 @@ export class TileLayer {
 
     // Abort in-flight loads that have been out of the view for
     // ABORT_GRACE_MS. See wanted() for what is kept.
-    for (const [key, controller] of this.inflight) {
-      if (this.wanted(key, level)) {
+    for (const [key, { controller, level: tileLevel }] of this.inflight) {
+      if (this.wanted(key, tileLevel, level)) {
         this.stale.delete(key);
         continue;
       }
@@ -671,7 +677,8 @@ export class TileLayer {
       // The head of the queue is what the view is centred on (or the parents
       // it needs first); the rest can wait behind other requests.
       const priority = this.queueHead <= HIGH_PRIORITY_CANDIDATES ? 'high' : 'low';
-      void this.ensureTile(next.level, next.face, next.x, next.y, priority);
+      const { face, level, x, y } = next;
+      void this.ensureTile({ face, level, x, y }, priority);
     }
   }
 
@@ -683,7 +690,7 @@ export class TileLayer {
    * after a failure may go again, Infinity when there is nothing to wait for.
    */
   private queueParent(
-    f: number,
+    faceIndex: number,
     level: number,
     x: number,
     y: number,
@@ -691,7 +698,7 @@ export class TileLayer {
     fetch: boolean,
   ): { present: boolean; wait: number } {
     const t = this.table(level);
-    const key = t.keys[(f * t.g + y) * t.g + x]!;
+    const key = t.keys[(faceIndex * t.g + y) * t.g + x]!;
     const result = this.parentResult;
     result.present = true;
     result.wait = Infinity;
@@ -713,7 +720,7 @@ export class TileLayer {
       result.wait = this.retry.waitMs(key);
       return result;
     }
-    this.parentsQueued.set(key, this.pushCandidate(key, level, FACES[f]!, x, y, priority));
+    this.parentsQueued.set(key, this.pushCandidate(key, FACES[faceIndex]!, level, x, y, priority));
     return result;
   }
 
@@ -858,8 +865,8 @@ export class TileLayer {
 
   private pushCandidate(
     key: string,
-    level: number,
     face: Face,
+    level: number,
     x: number,
     y: number,
     priority: number,
@@ -873,31 +880,27 @@ export class TileLayer {
       c.y = y;
       c.priority = priority;
     } else {
-      c = { key, level, face, x, y, priority };
+      c = { key, face, level, x, y, priority };
       this.candidatePool.push(c);
     }
     this.candidates.push(c);
     return c;
   }
 
-  private async ensureTile(
-    level: number,
-    face: Face,
-    x: number,
-    y: number,
-    priority: RequestPriority,
-  ): Promise<TileLoadOutcome> {
+  /** Load `tile`, which the layer keeps: pass an address nothing else will change. */
+  private async ensureTile(tile: TileAddress, priority: RequestPriority): Promise<TileLoadOutcome> {
     if (this.disposed) return { kind: 'aborted' };
-    const key = tileKey(level, face, x, y);
+    const key = tileKey(tile);
     if (this.cache.has(key)) return { kind: 'loaded' };
     if (this.inflight.has(key) || this.ready.has(key)) return { kind: 'skipped' };
     const controller = new AbortController();
-    this.inflight.set(key, controller);
+    const inflight: InflightTile = { controller, level: tile.level };
+    this.inflight.set(key, inflight);
     try {
       // `priority` is a hint; browsers without it ignore the field.
       const bitmap = await loadTileImage(
         this.source,
-        { face, level, x, y },
+        tile,
         controller.signal,
         priority,
         this.network,
@@ -922,11 +925,11 @@ export class TileLayer {
       // The base goes up at once: loadBase() is waiting on it, and no frame
       // runs while the layer is still loading. Everything else waits for
       // update() to upload it, a few per frame.
-      if (level === 0) {
-        this.upload(key, level, face, x, y, bitmap);
+      if (tile.level === 0) {
+        this.upload(key, tile, bitmap);
         return { kind: 'loaded' };
       }
-      this.ready.set(key, { level, face, x, y, bitmap });
+      this.ready.set(key, { tile, bitmap });
       this.onInvalidate();
       return { kind: 'decoded' };
     } catch (err) {
@@ -944,22 +947,16 @@ export class TileLayer {
       // Only clear the slot this call owns. After an abort the key may already
       // belong to a reload, which must stay tracked: it still counts against
       // maxConcurrent and update() must still be able to abort it.
-      if (this.inflight.get(key) === controller) this.inflight.delete(key);
+      if (this.inflight.get(key) === inflight) this.inflight.delete(key);
       if (!this.inflight.has(key) && !this.ready.has(key)) this.stale.delete(key);
       this.pump(); // a slot freed — start more queued loads
     }
   }
 
   /** Upload a decoded tile and cache it. Closes the bitmap, even on a throw. */
-  private upload(
-    key: string,
-    level: number,
-    face: Face,
-    x: number,
-    y: number,
-    bitmap: TileImage,
-  ): void {
-    const geom = buildTileGeometry(face, level, x, y);
+  private upload(key: string, tile: TileAddress, bitmap: TileImage): void {
+    const { level } = tile;
+    const geom = buildTileGeometry(tile);
     let handle: TileHandle;
     try {
       handle = this.renderer.uploadTile(geom, bitmap);
@@ -981,18 +978,19 @@ export class TileLayer {
   }
 
   /**
-   * Is a tile that is loading still worth finishing at `level`? Yes if it is
+   * Is the tile `key`, at `tileLevel`, that is loading still worth finishing
+   * for a view at `level`? Yes if it is
    * in view, if it is level 0 (the base loadBase() is waiting on, pinned and
    * drawn at every level once resident), or if it is one level coarser than
    * the target: after a zoom-in step those still improve on the fallback
    * until the finer tiles land. So is one in view two levels coarser than a
    * target of 3 or more: the fallback a large view fetches.
    */
-  private wanted(key: string, level: number): boolean {
+  private wanted(key: string, tileLevel: number, level: number): boolean {
     return (
       this.desired.has(key) ||
-      key.startsWith('0/') ||
-      (level > 0 && key.startsWith(this.levelPrefix[level - 1]!)) ||
+      tileLevel === 0 ||
+      tileLevel === level - 1 ||
       this.fallbackInView.has(key)
     );
   }
@@ -1032,12 +1030,12 @@ export class TileLayer {
   private drainReady(level: number, start: number): void {
     if (this.ready.size === 0) return;
     let uploads = 0;
-    for (const [key, tile] of this.ready) {
-      if (this.wanted(key, level)) {
+    for (const [key, pending] of this.ready) {
+      if (this.wanted(key, pending.tile.level, level)) {
         this.stale.delete(key);
       } else {
         if (this.unwantedFor(key, start) >= ABORT_GRACE_MS) {
-          releaseImage(tile.bitmap);
+          releaseImage(pending.bitmap);
           this.ready.delete(key);
           this.stale.delete(key);
         }
@@ -1047,7 +1045,7 @@ export class TileLayer {
       this.ready.delete(key);
       uploads++;
       try {
-        this.upload(key, tile.level, tile.face, tile.x, tile.y, tile.bitmap);
+        this.upload(key, pending.tile, pending.bitmap);
       } catch (err) {
         // A lost context is no fault of the tile's: it spends no attempt.
         if (!(err instanceof ContextLostError)) this.recordFailure(key, err);
@@ -1089,9 +1087,9 @@ export class TileLayer {
    */
   hasPending(): boolean {
     if (this.queueHead < this.queue.length) return true;
-    for (const key of this.inflight.keys()) {
+    for (const [key, { level }] of this.inflight) {
       // The base counts before the first frame has said what is in view.
-      if (this.desired.has(key) || key.startsWith('0/')) return true;
+      if (level === 0 || this.desired.has(key)) return true;
     }
     for (const key of this.ready.keys()) if (this.desired.has(key)) return true;
     return false;
@@ -1114,7 +1112,7 @@ export class TileLayer {
     this.visibleCount = 0;
     this.visibleLevel = -1;
     this.treeCount = 0;
-    for (const c of this.inflight.values()) c.abort();
+    for (const { controller } of this.inflight.values()) controller.abort();
     this.inflight.clear();
     for (const tile of this.ready.values()) releaseImage(tile.bitmap);
     this.ready.clear();

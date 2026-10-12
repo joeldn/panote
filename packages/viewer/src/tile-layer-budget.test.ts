@@ -5,9 +5,9 @@ import { TileLayer } from './tile-layer.js';
 import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
-import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {

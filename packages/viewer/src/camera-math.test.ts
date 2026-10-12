@@ -10,11 +10,34 @@ import {
   pinchFactor,
   normalizeAngle,
   compassHeading,
+  type PitchLimits,
+  type Tangents,
+  type YawPitch,
 } from './camera-math.js';
-import { viewProjection, projectDir, unprojectNDC, effectiveVFovDeg } from './render/projection.js';
+import { viewProjection, unprojectNDC, effectiveVFovDeg } from './render/projection.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { projectDir } from './test-support/oracles.js';
 
 const { minPitch: MIN_PITCH, maxPitch: MAX_PITCH } = VIEWER_DEFAULTS.camera;
+const D = Math.PI / 180;
+/** The default pitch limit, just short of straight up. */
+const LIMIT = MAX_PITCH;
+
+/** zoomAnchorView into a new object, its arguments named. */
+function anchor(a: {
+  from: YawPitch;
+  ndc: { x: number; y: number };
+  before: Tangents;
+  after: Tangents;
+  limits: PitchLimits;
+}): YawPitch {
+  return zoomAnchorView({ yaw: 0, pitch: 0 }, a.from, a.ndc, a.before, a.after, a.limits);
+}
+
+/** rayAt into a new object, for the camera at `camera` and the point at tangents (x, y). */
+function rayThrough(camera: YawPitch, x: number, y: number): YawPitch {
+  return rayAt({ yaw: 0, pitch: 0 }, camera, { x, y });
+}
 
 describe('clampPitch', () => {
   it('clamps to just under ±90°', () => {
@@ -51,12 +74,16 @@ describe('anglePerPixel', () => {
 });
 
 describe('zoomAnchorView', () => {
-  const D = Math.PI / 180;
-  const LIMIT = Math.PI / 2 - 0.001;
   const tan = (fovDeg: number) => Math.tan((fovDeg * D) / 2);
 
   it('leaves the camera alone for the centre of the screen', () => {
-    const out = zoomAnchorView({ yaw: 0, pitch: 0 }, 0.4, 0.3, 0, 0, 1, 1, 0.5, 0.5, -LIMIT, LIMIT);
+    const out = anchor({
+      from: { yaw: 0.4, pitch: 0.3 },
+      ndc: { x: 0, y: 0 },
+      before: { x: 1, y: 1 },
+      after: { x: 0.5, y: 0.5 },
+      limits: { minPitch: -LIMIT, maxPitch: LIMIT },
+    });
     expect(out.yaw).toBeCloseTo(0.4, 12);
     expect(out.pitch).toBeCloseTo(0.3, 12);
   });
@@ -78,19 +105,13 @@ describe('zoomAnchorView', () => {
       const yaw0 = 0.4;
       const vp0 = viewProjection({ yaw: yaw0, pitch, fov: fov0 }, aspect, 179);
       const world = unprojectNDC(nx, ny, vp0);
-      const { yaw, pitch: pitch1 } = zoomAnchorView(
-        { yaw: 0, pitch: 0 },
-        yaw0,
-        pitch,
-        nx,
-        ny,
-        tan(fov0) * aspect,
-        tan(fov0),
-        tan(fov1) * aspect,
-        tan(fov1),
-        -LIMIT,
-        LIMIT,
-      );
+      const { yaw, pitch: pitch1 } = anchor({
+        from: { yaw: yaw0, pitch: pitch },
+        ndc: { x: nx, y: ny },
+        before: { x: tan(fov0) * aspect, y: tan(fov0) },
+        after: { x: tan(fov1) * aspect, y: tan(fov1) },
+        limits: { minPitch: -LIMIT, maxPitch: LIMIT },
+      });
       const p = projectDir(world, viewProjection({ yaw, pitch: pitch1, fov: fov1 }, aspect, 179));
       // The matrices are float32.
       expect(p.x).toBeCloseTo(nx, 6);
@@ -103,47 +124,32 @@ describe('zoomAnchorView', () => {
     { yaw0: -Math.PI + 0.05, nx: -0.9 },
     { yaw0: 7, nx: 0.8 },
   ])('gives the yaw nearest $yaw0, unwrapped across ±π', ({ yaw0, nx }) => {
-    const { yaw } = zoomAnchorView(
-      { yaw: 0, pitch: 0 },
-      yaw0,
-      0.2,
-      nx,
-      0.3,
-      tan(80) * 1.5,
-      tan(80),
-      tan(30) * 1.5,
-      tan(30),
-      -LIMIT,
-      LIMIT,
-    );
+    const { yaw } = anchor({
+      from: { yaw: yaw0, pitch: 0.2 },
+      ndc: { x: nx, y: 0.3 },
+      before: { x: tan(80) * 1.5, y: tan(80) },
+      after: { x: tan(30) * 1.5, y: tan(30) },
+      limits: { minPitch: -LIMIT, maxPitch: LIMIT },
+    });
     // Zooming in toward the side turns toward it by a fraction of a turn.
     expect(Math.sign(yaw - yaw0)).toBe(Math.sign(nx));
     expect(Math.abs(yaw - yaw0)).toBeLessThan(0.6);
   });
 
   it('holds pitch to its limits and gives the yaw nearest the start', () => {
-    const out = zoomAnchorView(
-      { yaw: 0, pitch: 0 },
-      7,
-      1.4,
-      0.5,
-      0.9,
-      tan(80),
-      tan(80),
-      tan(20),
-      tan(20),
-      -1.45,
-      1.45,
-    );
+    const out = anchor({
+      from: { yaw: 7, pitch: 1.4 },
+      ndc: { x: 0.5, y: 0.9 },
+      before: { x: tan(80), y: tan(80) },
+      after: { x: tan(20), y: tan(20) },
+      limits: { minPitch: -1.45, maxPitch: 1.45 },
+    });
     expect(out.pitch).toBe(1.45);
     expect(Math.abs(out.yaw - 7)).toBeLessThan(Math.PI);
   });
 });
 
 describe('rayAt and aimRay', () => {
-  const D = Math.PI / 180;
-  const LIMIT = Math.PI / 2 - 0.001;
-
   // A pinch moves the scene point between the fingers to a new screen point
   // at a new fov: the world ray from one screen point, aimed at another.
   it.each([
@@ -160,17 +166,13 @@ describe('rayAt and aimRay', () => {
         from[1]!,
         viewProjection({ yaw: 1, pitch, fov: fov0 }, aspect, 179),
       );
-      const ray = rayAt({ yaw: 0, pitch: 0 }, 1, pitch, from[0]! * ty0 * aspect, from[1]! * ty0);
+      const ray = rayThrough({ yaw: 1, pitch }, from[0]! * ty0 * aspect, from[1]! * ty0);
       const cam = aimRay(
         { yaw: 0, pitch: 0 },
-        ray.yaw,
-        ray.pitch,
-        to[0]! * ty1 * aspect,
-        to[1]! * ty1,
-        1,
-        pitch,
-        -LIMIT,
-        LIMIT,
+        ray,
+        { x: to[0]! * ty1 * aspect, y: to[1]! * ty1 },
+        { yaw: 1, pitch },
+        { minPitch: -LIMIT, maxPitch: LIMIT },
       );
       expect(Math.abs(cam.yaw - 1)).toBeLessThan(Math.PI);
       const p = projectDir(
@@ -184,9 +186,6 @@ describe('rayAt and aimRay', () => {
 });
 
 describe('zoomAnchorView near the poles', () => {
-  const D = Math.PI / 180;
-  const LIMIT = Math.PI / 2 - 0.001;
-
   /** The angle between two directions given as yaw and pitch (precise when small). */
   function between(a: { yaw: number; pitch: number }, b: { yaw: number; pitch: number }): number {
     const u = [
@@ -205,8 +204,11 @@ describe('zoomAnchorView near the poles', () => {
     return Math.atan2(cross, ux * vx + uy * vy + uz * vz);
   }
 
-  /** The zoom anchor as #84 shipped it: same side of the pole, then clamp. */
-  function before84(
+  /**
+   * The previous zoom anchor, kept as a baseline: it stayed on the same side
+   * of the pole and then clamped the pitch.
+   */
+  function previousZoomAnchor(
     yaw0: number,
     pitch0: number,
     nx: number,
@@ -270,29 +272,23 @@ describe('zoomAnchorView near the poles', () => {
     }
   }
 
-  it(`is exact whenever it can be without turning round, and never worse than #84 (${cases.length} zooms)`, () => {
+  it(`is exact whenever it can be without turning round, and never worse than the previous anchor (${cases.length} zooms)`, () => {
     const ty0 = tanOf(78);
     let exactCount = 0;
     for (const [pitch0, nx, ny, scale] of cases) {
       const ty1 = tanOf(78 * scale);
-      const ray = rayAt({ yaw: 0, pitch: 0 }, 0.5, pitch0, nx * ty0 * aspect, ny * ty0);
-      const got = zoomAnchorView(
-        { yaw: 0, pitch: 0 },
-        0.5,
-        pitch0,
-        nx,
-        ny,
-        ty0 * aspect,
-        ty0,
-        ty1 * aspect,
-        ty1,
-        -LIMIT,
-        LIMIT,
-      );
-      const old = before84(0.5, pitch0, nx, ny, ty0 * aspect, ty0, ty1 * aspect, ty1);
+      const ray = rayThrough({ yaw: 0.5, pitch: pitch0 }, nx * ty0 * aspect, ny * ty0);
+      const got = anchor({
+        from: { yaw: 0.5, pitch: pitch0 },
+        ndc: { x: nx, y: ny },
+        before: { x: ty0 * aspect, y: ty0 },
+        after: { x: ty1 * aspect, y: ty1 },
+        limits: { minPitch: -LIMIT, maxPitch: LIMIT },
+      });
+      const old = previousZoomAnchor(0.5, pitch0, nx, ny, ty0 * aspect, ty0, ty1 * aspect, ty1);
       // Where the ray is now, and where the old answer put it.
-      const shown = rayAt({ yaw: 0, pitch: 0 }, got.yaw, got.pitch, nx * ty1 * aspect, ny * ty1);
-      const shownOld = rayAt({ yaw: 0, pitch: 0 }, old.yaw, old.pitch, nx * ty1 * aspect, ny * ty1);
+      const shown = rayThrough(got, nx * ty1 * aspect, ny * ty1);
+      const shownOld = rayThrough(old, nx * ty1 * aspect, ny * ty1);
       const err = between(shown, ray);
       const errOld = between(shownOld, ray);
       const was = pitch0 + Math.atan(ny * ty0);
@@ -315,19 +311,13 @@ describe('zoomAnchorView near the poles', () => {
     // The point's ray is past straight down: pitch -1.2, then 0.4 rad lower.
     const vp0 = viewProjection({ yaw: 0.3, pitch: -1.2, fov: 70 }, 1, 179);
     const world = unprojectNDC(0.05, -0.6, vp0);
-    const out = zoomAnchorView(
-      { yaw: 0, pitch: 0 },
-      0.3,
-      -1.2,
-      0.05,
-      -0.6,
-      ty0,
-      ty0,
-      ty1,
-      ty1,
-      -LIMIT,
-      LIMIT,
-    );
+    const out = anchor({
+      from: { yaw: 0.3, pitch: -1.2 },
+      ndc: { x: 0.05, y: -0.6 },
+      before: { x: ty0, y: ty0 },
+      after: { x: ty1, y: ty1 },
+      limits: { minPitch: -LIMIT, maxPitch: LIMIT },
+    });
     expect(Math.abs(out.yaw - 0.3)).toBeLessThan(Math.PI / 2);
     expect(out.pitch).toBeLessThan(-1.2);
     const p = projectDir(
@@ -341,11 +331,11 @@ describe('zoomAnchorView near the poles', () => {
 
 describe('pinchFactor', () => {
   it.each([
-    { prev: 200, dist: 100, want: 2 }, // pinch in, zooms out
-    { prev: 100, dist: 200, want: 0.5 }, // pinch out, zooms in
-    { prev: 150, dist: 150, want: 1 },
-  ])('pinchFactor($prev, $dist) = $want', ({ prev, dist, want }) => {
-    expect(pinchFactor(prev, dist)).toBe(want);
+    { start: 200, current: 100, want: 2 }, // pinch in, zooms out
+    { start: 100, current: 200, want: 0.5 }, // pinch out, zooms in
+    { start: 150, current: 150, want: 1 },
+  ])('pinchFactor($start, $current) = $want', ({ start, current, want }) => {
+    expect(pinchFactor(start, current)).toBe(want);
   });
 });
 

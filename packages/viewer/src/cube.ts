@@ -1,10 +1,10 @@
-import type { Vec3 } from './project.js';
-
 /**
  * Cube and equirect conventions the viewer renders with. Pure functions, no
  * DOM. The face convention must match whatever wrote the tiles; cube.test.ts
  * checks it against the tiler's copy so the two can't drift.
  */
+
+import type { Vec3 } from './project.js';
 
 export const FACES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'] as const;
 export type Face = (typeof FACES)[number];
@@ -61,28 +61,4 @@ export function equirectUVToDir(u: number, v: number): Vec3 {
 /** Tiles along one face edge at a pyramid level. */
 export function tilesPerEdge(level: number): number {
   return 2 ** level;
-}
-
-/** Four UV corners in top-left, top-right, bottom-left, bottom-right order. */
-export function tileCornersUV(
-  level: number,
-  x: number,
-  y: number,
-): [
-  { u: number; v: number },
-  { u: number; v: number },
-  { u: number; v: number },
-  { u: number; v: number },
-] {
-  const g = tilesPerEdge(level);
-  const u0 = x / g;
-  const v0 = y / g;
-  const u1 = (x + 1) / g;
-  const v1 = (y + 1) / g;
-  return [
-    { u: u0, v: v0 },
-    { u: u1, v: v0 },
-    { u: u0, v: v1 },
-    { u: u1, v: v1 },
-  ];
 }

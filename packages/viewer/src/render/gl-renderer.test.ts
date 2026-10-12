@@ -541,7 +541,9 @@ describe('GLRenderer', () => {
         gl.__log.push('createTexture');
         return null;
       });
-      expect(() => renderer.uploadTile(buildTileGeometry('pz', 0, 0, 0), image())).toThrow();
+      expect(() =>
+        renderer.uploadTile(buildTileGeometry({ face: 'pz', level: 0, x: 0, y: 0 }), image()),
+      ).toThrow();
       const vao = gl.createVertexArray.mock.results[0]!.value as unknown;
       const vbo = gl.createBuffer.mock.results[1]!.value as unknown;
       expect(gl.deleteVertexArray).toHaveBeenCalledExactlyOnceWith(vao);
@@ -564,8 +566,8 @@ describe('GLRenderer', () => {
       const { gl, renderer } = setup();
       const shared = gl.createBuffer.mock.calls.length;
       expect(shared).toBe(1); // the static quad IBO, made once
-      renderer.uploadTile(buildTileGeometry('pz', 1, 0, 0), image());
-      renderer.uploadTile(buildTileGeometry('nx', 1, 1, 1), image());
+      renderer.uploadTile(buildTileGeometry({ face: 'pz', level: 1, x: 0, y: 0 }), image());
+      renderer.uploadTile(buildTileGeometry({ face: 'nx', level: 1, x: 1, y: 1 }), image());
       // One VBO per quad tile, no per-tile IBO.
       expect(gl.createBuffer).toHaveBeenCalledTimes(shared + 2);
       // N-vertex patches still get their own IBO.
@@ -575,7 +577,9 @@ describe('GLRenderer', () => {
 
     it('frees only the VBO of a quad tile, never the shared index buffer', () => {
       const { gl, renderer } = setup();
-      renderer.removeTile(renderer.uploadTile(buildTileGeometry('pz', 0, 0, 0), image()));
+      renderer.removeTile(
+        renderer.uploadTile(buildTileGeometry({ face: 'pz', level: 0, x: 0, y: 0 }), image()),
+      );
       expect(gl.deleteBuffer).toHaveBeenCalledTimes(1);
       renderer.dispose();
       expect(gl.deleteBuffer).toHaveBeenCalledTimes(2); // the shared IBO, on dispose
@@ -620,7 +624,10 @@ describe('GLRenderer', () => {
       expect(gl.clear).toHaveBeenCalledTimes(1);
       expect(statusCalls(log)).toEqual([]);
 
-      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      const handle = renderer.uploadTile(
+        buildTileGeometry({ face: 'nz', level: 2, x: 1, y: 1 }),
+        image(),
+      );
       renderer.render([{ handle, level: 2 }]);
       expect(gl.drawElements).toHaveBeenCalledTimes(1);
       expect(gl.useProgram).toHaveBeenCalledTimes(1);
@@ -638,7 +645,10 @@ describe('GLRenderer', () => {
       gl.getProgramParameter.mockReturnValue(false);
       gl.getProgramInfoLog.mockReturnValue('bad link');
       renderer.setCamera(camera());
-      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      const handle = renderer.uploadTile(
+        buildTileGeometry({ face: 'nz', level: 2, x: 1, y: 1 }),
+        image(),
+      );
       expect(() => renderer.render([{ handle, level: 2 }])).not.toThrow();
       expect(gl.drawElements).not.toHaveBeenCalled();
       expect(report).toHaveBeenCalledTimes(1);
@@ -652,7 +662,10 @@ describe('GLRenderer', () => {
       vi.stubGlobal('reportError', report);
       const { gl, renderer, fire } = parallelSetup();
       renderer.setCamera(camera());
-      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      const handle = renderer.uploadTile(
+        buildTileGeometry({ face: 'nz', level: 2, x: 1, y: 1 }),
+        image(),
+      );
       // Lost, and the loss event not dispatched yet: the status reads null.
       gl.isContextLost.mockReturnValue(true);
       gl.getProgramParameter.mockReturnValue(null);
@@ -663,7 +676,10 @@ describe('GLRenderer', () => {
       gl.isContextLost.mockReturnValue(false);
       gl.getProgramParameter.mockReturnValue(true);
       fire('webglcontextrestored');
-      const after = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      const after = renderer.uploadTile(
+        buildTileGeometry({ face: 'nz', level: 2, x: 1, y: 1 }),
+        image(),
+      );
       renderer.render([{ handle: after, level: 2 }]);
       expect(gl.drawElements).toHaveBeenCalledTimes(1);
       expect(report).not.toHaveBeenCalled();
@@ -672,14 +688,20 @@ describe('GLRenderer', () => {
     it('compiles the new context in the background too after a restore', () => {
       const { gl, log, renderer, fire } = parallelSetup();
       renderer.setCamera(camera());
-      const before = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      const before = renderer.uploadTile(
+        buildTileGeometry({ face: 'nz', level: 2, x: 1, y: 1 }),
+        image(),
+      );
       renderer.render([{ handle: before, level: 2 }]);
       fire('webglcontextlost');
       const checks = statusCalls(log).length;
       fire('webglcontextrestored');
       expect(gl.linkProgram).toHaveBeenCalledTimes(2);
       expect(statusCalls(log).length).toBe(checks);
-      const handle = renderer.uploadTile(buildTileGeometry('nz', 2, 1, 1), image());
+      const handle = renderer.uploadTile(
+        buildTileGeometry({ face: 'nz', level: 2, x: 1, y: 1 }),
+        image(),
+      );
       renderer.render([{ handle, level: 2 }]);
       expect(gl.useProgram).toHaveBeenCalledTimes(2);
       expect(gl.drawElements).toHaveBeenCalledTimes(2);
@@ -720,7 +742,7 @@ describe('GLRenderer', () => {
     }
 
     function tile(renderer: GLRenderer, gl: FakeGl, face: Face, level = 0, x = 0, y = 0) {
-      const handle = renderer.uploadTile(buildTileGeometry(face, level, x, y), image());
+      const handle = renderer.uploadTile(buildTileGeometry({ face, level, x, y }), image());
       const tex = gl.createTexture.mock.results.at(-1)!.value as unknown;
       return { handle, level, tex };
     }

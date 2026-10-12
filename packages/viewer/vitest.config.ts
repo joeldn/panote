@@ -11,7 +11,8 @@ import { defineConfig, mergeConfig } from 'vitest/config';
  * side effect, so everything imports cleanly under Node.
  *
  * The coverage `exclude` list is the files with no statements to cover: the
- * entry point's re-exports and the type-only modules. `exclude` is used (not
+ * entry point's re-exports and the type-only modules, plus the test-support
+ * helpers, which are test code. `exclude` is used (not
  * `include`) because `mergeConfig` CONCATENATES array fields rather than
  * replacing them - an `include` here would only widen the base's `src/**`,
  * not narrow it, silently pulling untested files into the coverage
@@ -23,7 +24,7 @@ export default mergeConfig(
     test: {
       name: '@panote/viewer',
       coverage: {
-        exclude: ['src/index.ts', 'src/types.ts', 'src/api.ts'],
+        exclude: ['src/index.ts', 'src/types.ts', 'src/api.ts', 'src/test-support/**'],
         thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
       },
     },

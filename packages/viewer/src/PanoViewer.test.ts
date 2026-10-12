@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FACES } from './cube.js';
 import { PanoViewer as BasePanoViewer } from './PanoViewer.js';
-import { dirFromYawPitch } from './project.js';
 import { effectiveVFovDeg } from './render/projection.js';
 import type { CubeTileSource } from './source.js';
 import type { View, ViewerOptions } from './types.js';
 import { TileLayer } from './tile-layer.js';
+import { dirFromYawPitch } from './test-support/oracles.js';
 
 // This package's vitest config runs under Node, not jsdom (see
 // vitest.config.ts) — deliberately, so the package pays for no DOM test

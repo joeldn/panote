@@ -34,6 +34,7 @@ import {
   zoomAnchorView,
   rayAt,
   aimRay,
+  type Tangents,
   type YawPitch,
   compassHeading,
   normalizeAngle,
@@ -200,6 +201,10 @@ export class PanoViewer implements PanoViewerApi {
   private ndcProjectScratch: Vec3 = { x: 0, y: 0, z: 0 };
   // zoomAt's solved view, reused so a wheel or pinch event allocates nothing.
   private zoomScratch: YawPitch = { yaw: 0, pitch: 0 };
+  // Half-fov tangents before and after a zoom step, and a pinch midpoint's.
+  private tanBefore: Tangents = { x: 0, y: 0 };
+  private tanAfter: Tangents = { x: 0, y: 0 };
+  private pinchPoint: Tangents = { x: 0, y: 0 };
   // A pointer in NDC, from toNdc().
   private ndcScratch = { x: 0, y: 0 };
   // A pinch is solved from where it started, not event by event: the scene
@@ -254,7 +259,7 @@ export class PanoViewer implements PanoViewerApi {
     // No interaction has happened yet, so an enabled auto-rotate starts turning right away.
     this.autoRotateActive = this.autoRotateEnabled;
     // Clamped like setView: an embed config can say anything, and an
-    // unclamped pitch past ±π/2 reaches viewMatrix as a mirrored view.
+    // unclamped pitch past ±π/2 reaches viewProjection as a mirrored view.
     const initialYaw = options.initialView?.yaw ?? 0;
     const initialPitch = this.clampPitch(options.initialView?.pitch ?? 0);
     const initialFov = this.clampFov(options.initialView?.fov ?? camera.defaultFov);
@@ -627,8 +632,17 @@ export class PanoViewer implements PanoViewerApi {
       viewProjection(arrival, this.aspect, this.camera.maxHorizontalFov),
       this.effectiveVFovDeg(arrival.fov),
       dirInto({ x: 0, y: 0, z: 0 }, arrival.yaw, arrival.pitch),
-      this.renderer.canvas.height || 1,
+      this.rasterHeight(),
     );
+  }
+
+  /**
+   * The framebuffer's height in device pixels: what selectLevel (lod.ts)
+   * compares texel density against. Not the CSS height, which on a DPR > 1
+   * display would pick a level coarser than the screen can show.
+   */
+  private rasterHeight(): number {
+    return this.renderer.canvas.height || 1;
   }
 
   /**
@@ -667,7 +681,7 @@ export class PanoViewer implements PanoViewerApi {
    * Ownership: the patches' ImageBitmaps are closed as soon as they are on the
    * GPU (or straight away if the viewer is disposed or the source is
    * rejected), so a `PreviewSource` can be shown once. To show it again,
-   * decode it again, e.g. from the stored WebP.
+   * decode it again from the stored image.
    *
    * Any `load()` in flight is cancelled, including one for `id`: it
    * resolves without swapping anything in. Call `load(id)` again after
@@ -858,32 +872,35 @@ export class PanoViewer implements PanoViewerApi {
     // A glide left running would carry the target, and the point under the
     // cursor with it, away from the anchor solved here.
     this.stopMomentum();
-    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
-    const vfov0 = this.effectiveVFovDeg(this.view.fov) * DEG2RAD;
-    const newReqDeg = this.zoomStep(this.target.fov, scaleFactor);
-    const vfov1 = this.effectiveVFovDeg(newReqDeg) * DEG2RAD;
-    const ty0 = Math.tan(vfov0 / 2);
-    const ty1 = Math.tan(vfov1 / 2);
+    const fov = this.zoomStep(this.target.fov, scaleFactor);
     const { yaw, pitch } = zoomAnchorView(
       this.zoomScratch,
-      this.view.yaw,
-      this.view.pitch,
-      nx,
-      ny,
-      ty0 * this.aspect,
-      ty0,
-      ty1 * this.aspect,
-      ty1,
-      this.camera.minPitch,
-      this.camera.maxPitch,
+      this.view,
+      this.toNdc(clientX, clientY),
+      this.halfTangents(this.view.fov, this.tanBefore),
+      this.halfTangents(fov, this.tanAfter),
+      this.camera,
     );
+    this.snapCamera(yaw, pitch, fov);
+  }
+
+  /** Move view and target to (yaw, pitch, fov) at once, with no easing: a zoom step. */
+  private snapCamera(yaw: number, pitch: number, fov: number): void {
     this.view.yaw = unwound(yaw);
     this.target.yaw = this.view.yaw;
     this.view.pitch = pitch;
     this.target.pitch = pitch;
-    this.view.fov = newReqDeg;
-    this.target.fov = newReqDeg;
+    this.view.fov = fov;
+    this.target.fov = fov;
     this.invalidate();
+  }
+
+  /** The tangents of half the drawn fov for a requested `fovDeg`: x across, y up. */
+  private halfTangents(fovDeg: number, out: Tangents): Tangents {
+    const ty = Math.tan((this.effectiveVFovDeg(fovDeg) * DEG2RAD) / 2);
+    out.x = ty * this.aspect;
+    out.y = ty;
+    return out;
   }
 
   /** A pointer in client coordinates as NDC (−1..1, y up), in a reused object. */
@@ -902,10 +919,18 @@ export class PanoViewer implements PanoViewerApi {
   // fov on screen, which every later pinchTo() is solved from.
   private pinchStart(clientX: number, clientY: number): void {
     this.stopMomentum();
-    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
-    const ty = Math.tan((this.effectiveVFovDeg(this.view.fov) * DEG2RAD) / 2);
-    rayAt(this.pinchRay, this.view.yaw, this.view.pitch, nx * ty * this.aspect, ny * ty);
+    rayAt(this.pinchRay, this.view, this.pinchTangents(clientX, clientY, this.view.fov));
     this.pinchFov = this.view.fov;
+  }
+
+  /** The pinch midpoint as tangents at the drawn fov for `fovDeg`. */
+  private pinchTangents(clientX: number, clientY: number, fovDeg: number): Tangents {
+    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
+    const ty = Math.tan((this.effectiveVFovDeg(fovDeg) * DEG2RAD) / 2);
+    const out = this.pinchPoint;
+    out.x = nx * ty * this.aspect;
+    out.y = ny * ty;
+    return out;
   }
 
   // The pinch now: the fov is the start fov times `scale`, and the camera
@@ -914,26 +939,14 @@ export class PanoViewer implements PanoViewerApi {
   private pinchTo(scale: number, clientX: number, clientY: number): void {
     this.stopMomentum();
     const fov = this.zoomStep(this.pinchFov, scale);
-    const { x: nx, y: ny } = this.toNdc(clientX, clientY);
-    const ty = Math.tan((this.effectiveVFovDeg(fov) * DEG2RAD) / 2);
     const { yaw, pitch } = aimRay(
       this.zoomScratch,
-      this.pinchRay.yaw,
-      this.pinchRay.pitch,
-      nx * ty * this.aspect,
-      ny * ty,
-      this.view.yaw,
-      this.view.pitch,
-      this.camera.minPitch,
-      this.camera.maxPitch,
+      this.pinchRay,
+      this.pinchTangents(clientX, clientY, fov),
+      this.view,
+      this.camera,
     );
-    this.view.yaw = unwound(yaw);
-    this.target.yaw = this.view.yaw;
-    this.view.pitch = pitch;
-    this.target.pitch = pitch;
-    this.view.fov = fov;
-    this.target.fov = fov;
-    this.invalidate();
+    this.snapCamera(yaw, pitch, fov);
   }
 
   setView(view: Partial<View>): void {
@@ -1119,16 +1132,7 @@ export class PanoViewer implements PanoViewerApi {
     viewProjection(view, this.aspect, this.camera.maxHorizontalFov, this.viewProj);
     this.renderer.setCamera(this.viewProj);
     dirInto(this.fwd, view.yaw, view.pitch);
-    // selectLevel()'s math (see lod.ts) compares texel
-    // density against what is actually rasterised, so it needs the
-    // framebuffer's device-pixel height, not the container's CSS-pixel
-    // height — the renderer sizes the canvas by devicePixelRatio (see
-    // gl-renderer.ts's resize()), so on any DPR>1 display the CSS height alone
-    // under-counts the real pixel budget and the pyramid picks one level
-    // coarser than the screen can show. this.renderer.canvas.height is the
-    // already-DPR-scaled raster height, so it's used directly here instead
-    // of re-deriving devicePixelRatio.
-    this.layer?.update(this.viewProj, vfovDeg, this.fwd, this.renderer.canvas.height || 1);
+    this.layer?.update(this.viewProj, vfovDeg, this.fwd, this.rasterHeight());
 
     // Queued tiles count as pending: the queue outlasts a frame only while
     // every request slot is busy, and settling then would drop the preview
@@ -1296,7 +1300,7 @@ export class PanoViewer implements PanoViewerApi {
       this.transitionOverlay = snap;
       fade.snap = snap;
     } catch {
-      // snapshot unavailable — fall back to a plain cut
+      // No snapshot: the new scene cuts in instead of crossfading.
     }
   }
 

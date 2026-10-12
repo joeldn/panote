@@ -1,9 +1,19 @@
+/*
+ * Camera and frustum math. The conventions are three.js's: column-major
+ * matrices, -z forward and +y up, NDC in [-1, 1] on every axis.
+ */
+
 import type { Vec3 } from '../project.js';
 import type { View } from '../types.js';
 
-/** 4×4 matrix, column-major (same element layout as three's Matrix4.elements). */
+/** 4×4 matrix, column-major. */
 export type Mat4 = Float32Array;
-export type Sphere = { cx: number; cy: number; cz: number; r: number };
+export interface Sphere {
+  cx: number;
+  cy: number;
+  cz: number;
+  r: number;
+}
 /** 6 planes × [a,b,c,d], each normalized so a²+b²+c²=1. */
 export type Frustum = Float32Array;
 
@@ -28,21 +38,21 @@ export function effectiveVFovDeg(
 
 /**
  * Write the camera basis for (yaw, pitch) into `b` as
- * [xx, xz, yx, yy, yz, zx, zy, zz] (x.y is always 0). three's lookAt
- * convention: -z is forward, up is +y.
+ * [xx, xz, yx, yy, yz, zx, zy, zz] (x.y is always 0): -z is forward, up
+ * is +y.
  *
  * The right vector is (cos yaw, 0, sin yaw). It is unit length and depends
  * on yaw alone, so it has no degenerate case at the poles and does not flip
  * when pitch passes ±π/2.
  */
 function cameraBasis(yaw: number, pitch: number, b: Float64Array): void {
-  // z = -dirFromYawPitch(yaw, pitch), written out to skip the object.
-  const cy = Math.cos(yaw),
-    sy = Math.sin(yaw),
-    cp = Math.cos(pitch);
-  const zx = -sy * cp,
-    zy = -Math.sin(pitch),
-    zz = cy * cp;
+  // z = -dirInto(yaw, pitch), written out to skip the object.
+  const cy = Math.cos(yaw);
+  const sy = Math.sin(yaw);
+  const cp = Math.cos(pitch);
+  const zx = -sy * cp;
+  const zy = -Math.sin(pitch);
+  const zz = cy * cp;
   const xx = cy;
   const xz = sy;
   // y = cross(z, x), with x.y == 0
@@ -79,14 +89,14 @@ export function viewProjection(
   const a = (FAR + NEAR) * nf;
   const b = 2 * FAR * NEAR * nf;
   cameraBasis(view.yaw, view.pitch, basis);
-  const xx = basis[0]!,
-    xz = basis[1]!,
-    yx = basis[2]!,
-    yy = basis[3]!,
-    yz = basis[4]!,
-    zx = basis[5]!,
-    zy = basis[6]!,
-    zz = basis[7]!;
+  const xx = basis[0]!;
+  const xz = basis[1]!;
+  const yx = basis[2]!;
+  const yy = basis[3]!;
+  const yz = basis[4]!;
+  const zx = basis[5]!;
+  const zy = basis[6]!;
+  const zz = basis[7]!;
   out[0] = fa * xx;
   out[1] = f * yx;
   out[2] = a * zx;
@@ -112,12 +122,7 @@ export function sameMatrix(a: Mat4, b: Mat4): boolean {
   return true;
 }
 
-/** Direction → NDC. Matches three's Vector3.project(camera). */
-export function projectDir(dir: Vec3, viewProj: Mat4): Vec3 {
-  return projectDirInto({ x: 0, y: 0, z: 0 }, dir, viewProj);
-}
-
-/** {@link projectDir} written into `out`, which may be `dir` itself. */
+/** Direction → NDC, written into `out`, which may be `dir` itself. */
 export function projectDirInto(out: Vec3, dir: Vec3, viewProj: Mat4): Vec3 {
   const m = viewProj;
   const { x, y, z } = dir;
@@ -129,9 +134,7 @@ export function projectDirInto(out: Vec3, dir: Vec3, viewProj: Mat4): Vec3 {
 }
 
 /**
- * NDC → normalized ray direction from the origin. Matches three's
- * Vector3.unproject(camera) followed by sub(cameraPosition).normalize() when
- * the camera is at the origin.
+ * NDC → normalized ray direction from the camera at the origin.
  *
  * For M = P·V from {@link viewProjection}, rows 0, 1 and 3 of M are
  * (f/aspect)·x, f·y and the forward vector. So the ray through (ndcX, ndcY)
@@ -139,12 +142,12 @@ export function projectDirInto(out: Vec3, dir: Vec3, viewProj: Mat4): Vec3 {
  */
 export function unprojectNDC(ndcX: number, ndcY: number, viewProj: Mat4): Vec3 {
   const m = viewProj;
-  const r0x = m[0]!,
-    r0y = m[4]!,
-    r0z = m[8]!;
-  const r1x = m[1]!,
-    r1y = m[5]!,
-    r1z = m[9]!;
+  const r0x = m[0]!;
+  const r0y = m[4]!;
+  const r0z = m[8]!;
+  const r1x = m[1]!;
+  const r1y = m[5]!;
+  const r1z = m[9]!;
   const s0 = ndcX / (r0x * r0x + r0y * r0y + r0z * r0z);
   const s1 = ndcY / (r1x * r1x + r1y * r1y + r1z * r1z);
   const x = s0 * r0x + s1 * r1x + m[3]!;
@@ -156,27 +159,27 @@ export function unprojectNDC(ndcX: number, ndcY: number, viewProj: Mat4): Vec3 {
 
 /**
  * Extract the 6 frustum planes from a view-projection matrix and normalize
- * them, matching three's Frustum.setFromProjectionMatrix. Plane order:
+ * them (the Gribb-Hartmann method). Plane order:
  * right, left, bottom, top, far, near.
  */
 export function frustumFromViewProj(viewProj: Mat4, out: Frustum = new Float32Array(24)): Frustum {
   const m = viewProj;
-  const m0 = m[0]!,
-    m1 = m[1]!,
-    m2 = m[2]!,
-    m3 = m[3]!;
-  const m4 = m[4]!,
-    m5 = m[5]!,
-    m6 = m[6]!,
-    m7 = m[7]!;
-  const m8 = m[8]!,
-    m9 = m[9]!,
-    m10 = m[10]!,
-    m11 = m[11]!;
-  const m12 = m[12]!,
-    m13 = m[13]!,
-    m14 = m[14]!,
-    m15 = m[15]!;
+  const m0 = m[0]!;
+  const m1 = m[1]!;
+  const m2 = m[2]!;
+  const m3 = m[3]!;
+  const m4 = m[4]!;
+  const m5 = m[5]!;
+  const m6 = m[6]!;
+  const m7 = m[7]!;
+  const m8 = m[8]!;
+  const m9 = m[9]!;
+  const m10 = m[10]!;
+  const m11 = m[11]!;
+  const m12 = m[12]!;
+  const m13 = m[13]!;
+  const m14 = m[14]!;
+  const m15 = m[15]!;
   setPlane(out, 0, m3 - m0, m7 - m4, m11 - m8, m15 - m12); // right
   setPlane(out, 1, m3 + m0, m7 + m4, m11 + m8, m15 + m12); // left
   setPlane(out, 2, m3 + m1, m7 + m5, m11 + m9, m15 + m13); // bottom
@@ -194,7 +197,7 @@ function setPlane(out: Frustum, i: number, a: number, b: number, c: number, d: n
   out[i * 4 + 3] = d * inv;
 }
 
-/** Plane-vs-sphere test, matching three's Frustum.intersectsSphere. */
+/** Whether `sphere` is at least partly inside every plane of `frustum`. */
 export function intersectsSphere(frustum: Frustum, sphere: Sphere): boolean {
   const negR = -sphere.r;
   for (let i = 0; i < 6; i++) {

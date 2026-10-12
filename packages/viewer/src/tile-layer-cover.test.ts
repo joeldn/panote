@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TileLayer } from './tile-layer.js';
 import type { CubeTileSource, TileAddress } from './source.js';
 import { viewProjection } from './render/projection.js';
-import { dirFromYawPitch } from './project.js';
 import { ContextLostError, type DrawItem, type GLRenderer } from './render/gl-renderer.js';
 import { TileHttpError } from './tile-retry.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {

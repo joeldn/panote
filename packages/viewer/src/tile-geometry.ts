@@ -1,26 +1,39 @@
-import { faceUVInto, tilesPerEdge, type Face } from './cube.js';
-import type { Vec3 } from './project.js';
+/**
+ * Geometry for the renderer: a tile is a flat 4-vertex quad on its cube face
+ * at RADIUS, textured with the tile image. Preview patches use the same
+ * TileGeometry shape with more vertices.
+ */
 
-// Builds flat cube-face quad geometry for a tile: a 4-vert quad on the cube
-// face at RADIUS, textured with the tile's colour. No depth/displacement.
+import { faceUVInto, tilesPerEdge } from './cube.js';
+import type { Vec3 } from './project.js';
+import type { TileAddress } from './source.js';
 
 /** Sphere/cube radius the tiles sit on (shared with tile-layer.ts). */
 export const RADIUS = 10;
 
-/** Plain typed-array geometry consumed by the WebGL2 renderer: N vertices
- *  (N ≤ 65536, the indices are 16-bit) as xyz positions and texture UVs. */
+/**
+ * Plain typed-array geometry consumed by the WebGL2 renderer: N vertices
+ * (N ≤ 65536, the indices are 16-bit) as xyz positions and texture UVs.
+ */
 export interface TileGeometry {
-  pos: Float32Array; // N verts × 3 floats (a cube tile quad has N = 4)
-  uv: Float32Array; // N verts × 2 floats
-  index: Uint16Array; // triangle list, 3 indices per triangle
+  /** N vertices × 3 floats (a cube tile quad has N = 4). */
+  pos: Float32Array;
+  /** N vertices × 2 floats. */
+  uv: Float32Array;
+  /** Triangle list, 3 indices per triangle. */
+  index: Uint16Array;
 }
 
-/** Quad UVs (TL,TR,BL,BR). Tile images are upright, so the top-left corner
- *  samples row 0 at v = 0. Shared by every tile; never mutate. */
+/**
+ * Quad UVs (TL,TR,BL,BR). Tile images are upright, so the top-left corner
+ * samples row 0 at v = 0. Shared by every tile; never mutate.
+ */
 const QUAD_UV = new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]);
 
-/** Quad triangle list. Shared by every tile; never mutate. The renderer
- *  draws 4-vertex geometry from one shared index buffer with this content. */
+/**
+ * Quad triangle list. Shared by every tile; never mutate. The renderer
+ * draws 4-vertex geometry from one shared index buffer with this content.
+ */
 export const QUAD_INDEX = new Uint16Array([0, 2, 1, 1, 2, 3]);
 
 // Scratch for buildTileGeometry.
@@ -31,11 +44,12 @@ const cornerDir: Vec3 = { x: 0, y: 0, z: 0 };
  * RADIUS. Only `pos` is new per tile; `uv` and `index` are the shared
  * QUAD_UV and QUAD_INDEX.
  */
-export function buildTileGeometry(face: Face, level: number, x: number, y: number): TileGeometry {
+export function buildTileGeometry(tile: TileAddress): TileGeometry {
+  const { face, level, x, y } = tile;
   const g = tilesPerEdge(level);
   const pos = new Float32Array(4 * 3);
   const d = cornerDir;
-  // TL, TR, BL, BR, as tileCornersUV orders them.
+  // TL, TR, BL, BR.
   for (let i = 0; i < 4; i++) {
     // faceUVInto gives a point on the unit CUBE (major axis = ±1). Place the
     // quad on the flat cube face (scaled by RADIUS) — do NOT normalize onto a

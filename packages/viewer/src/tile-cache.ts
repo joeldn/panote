@@ -1,30 +1,22 @@
+/** What eviction reads of a cached tile. */
 export interface EvictCandidate {
   key: string;
+  /** Pyramid level; level 0 is never evicted. */
+  level: number;
+  /** The frame the tile was last drawn or needed in. */
   lastUsed: number;
 }
 
 /**
- * Choose which tile keys to evict when the cache exceeds maxTiles.
- * Level-0 tiles (keys starting with '0/') are the preview and are never evicted.
- * Evicts least-recently-used non-level-0 tiles first.
+ * The `overflow` least recently used of `entries` that may go, oldest first,
+ * written into `out`. Ties go in iteration order, as a stable sort would put
+ * them.
  *
- * Tiles stamped with `currentFrame` are on screen right now and are never
- * evicted either, even if that leaves the cache over budget. Evicting one
- * would only refetch it next frame and evict it again, forever, with the
- * camera standing still. The overshoot is bounded by the visible set.
- */
-export function selectEvictions(
-  entries: EvictCandidate[],
-  maxTiles: number,
-  currentFrame?: number,
-): string[] {
-  return pickEvictions(entries, entries.length - maxTiles, currentFrame, []).map((e) => e.key);
-}
-
-/**
- * The `overflow` least recently used of `entries` that may go (see
- * selectEvictions), oldest first, written into `out`. Ties go in iteration
- * order, as a stable sort would put them.
+ * Level-0 tiles are the base layer (see TileLayer.loadBase) and never go.
+ * Nor do tiles stamped with `currentFrame`: they are on screen right now, and
+ * evicting one would only refetch it next frame and evict it again, forever,
+ * with the camera standing still. So the cache can stay over budget, by at
+ * most the visible set.
  *
  * A partial selection: one pass that keeps the oldest `overflow` seen so far
  * in order, so a cache a few tiles over budget costs a scan, not a sort of
@@ -40,7 +32,7 @@ export function pickEvictions<T extends EvictCandidate>(
   out.length = 0;
   if (overflow <= 0) return out;
   for (const e of entries) {
-    if (e.lastUsed === currentFrame || e.key.startsWith('0/')) continue;
+    if (e.lastUsed === currentFrame || e.level === 0) continue;
     const t = e.lastUsed;
     let n = out.length;
     if (n === overflow) {

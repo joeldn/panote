@@ -2,12 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   effectiveVFovDeg,
   viewProjection,
-  projectDir,
   unprojectNDC,
   frustumFromViewProj,
   intersectsSphere,
 } from './projection.js';
-import { dirFromYawPitch } from '../project.js';
+import { dirFromYawPitch, projectDir } from '../test-support/oracles.js';
 
 // Reference values captured from three@0.171.0 (see plan Task 1 Step 1).
 const VIEW_A = { yaw: 0.3, pitch: 0.1, fov: 60 };

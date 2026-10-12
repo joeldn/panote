@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FACES, faceUVToDir, tileCornersUV, type Face } from './cube.js';
+import { FACES, faceUVToDir, type Face } from './cube.js';
 import { BaseTileLoadError, TileLayer, type TileLayerOptions } from './tile-layer.js';
 import { urlTemplateSource, type CubeTileSource, type TileLoadInit } from './source.js';
 import { viewProjection } from './render/projection.js';
-import { dirFromYawPitch } from './project.js';
 import { ContextLostError, type GLRenderer } from './render/gl-renderer.js';
 import { TileHttpError } from './tile-retry.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch, tileCornersUV } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {
@@ -594,7 +594,7 @@ describe('TileLayer failure handling', () => {
       // its response arrived keeps decoding. Its slot is freed at the abort,
       // which is right: the layer only counts loads it can still cancel.
       const inflight = (l: TileLayer) =>
-        (l as unknown as { inflight: Map<string, AbortController> }).inflight;
+        (l as unknown as { inflight: Map<string, unknown> }).inflight;
       const decoding = new Set<number>();
       const held: (() => void)[] = [];
       const signals: AbortSignal[] = [];
@@ -649,11 +649,11 @@ describe('TileLayer failure handling', () => {
     /** The layer's private maps, read to check its accounting directly. */
     function internals(layer: TileLayer): {
       cache: Map<string, unknown>;
-      inflight: Map<string, AbortController>;
+      inflight: Map<string, unknown>;
     } {
       return layer as unknown as {
         cache: Map<string, unknown>;
-        inflight: Map<string, AbortController>;
+        inflight: Map<string, unknown>;
       };
     }
 

@@ -5,9 +5,9 @@ import * as tileCache from './tile-cache.js';
 import { TileLayer } from './tile-layer.js';
 import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { RADIUS } from './tile-geometry.js';
-import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch, tileCornersUV } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {
@@ -79,7 +79,7 @@ function bruteForce(viewProj: Float32Array, level: number): Set<string> {
   for (const face of cube.FACES) {
     for (let y = 0; y < g; y++) {
       for (let x = 0; x < g; x++) {
-        const p = cube.tileCornersUV(level, x, y).map((c) => {
+        const p = tileCornersUV(level, x, y).map((c) => {
           const d = cube.faceUVToDir(face, c.u, c.v);
           return [d.x * RADIUS, d.y * RADIUS, d.z * RADIUS] as const;
         });
@@ -214,7 +214,7 @@ describe('TileLayer cull', () => {
       cube.FACES.forEach((face, f) => {
         for (let y = 0; y < g; y++) {
           for (let x = 0; x < g; x++) {
-            const corners = cube.tileCornersUV(level, x, y);
+            const corners = tileCornersUV(level, x, y);
             const p = corners.map((c) => {
               const d = cube.faceUVToDir(face, c.u, c.v);
               return { x: d.x * RADIUS, y: d.y * RADIUS, z: d.z * RADIUS };

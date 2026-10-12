@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { FACES, faceUVToDir, tileCornersUV } from './cube.js';
+import { FACES, faceUVToDir } from './cube.js';
 import { buildTileGeometry, RADIUS } from './tile-geometry.js';
+import { tileCornersUV } from './test-support/oracles.js';
 
 describe('buildTileGeometry', () => {
   it('produces a flat 4-vert quad on the cube face as plain typed arrays', () => {
-    const { pos, uv, index } = buildTileGeometry('pz', 0, 0, 0);
+    const { pos, uv, index } = buildTileGeometry({ face: 'pz', level: 0, x: 0, y: 0 });
     expect(pos).toBeInstanceOf(Float32Array);
     expect(uv).toBeInstanceOf(Float32Array);
     expect(index).toBeInstanceOf(Uint16Array);
@@ -30,8 +31,8 @@ describe('buildTileGeometry', () => {
   });
 
   it('shares one uv and index array across tiles', () => {
-    const a = buildTileGeometry('pz', 0, 0, 0);
-    const b = buildTileGeometry('nx', 2, 1, 3);
+    const a = buildTileGeometry({ face: 'pz', level: 0, x: 0, y: 0 });
+    const b = buildTileGeometry({ face: 'nx', level: 2, x: 1, y: 3 });
     expect(b.uv).toBe(a.uv);
     expect(b.index).toBe(a.index);
     expect(b.pos).not.toBe(a.pos);
@@ -49,7 +50,7 @@ describe('buildTileGeometry', () => {
           const d = faceUVToDir(face, c.u, c.v);
           return [d.x * RADIUS, d.y * RADIUS, d.z * RADIUS];
         });
-        expect(buildTileGeometry(face, level, x, y).pos).toEqual(new Float32Array(want));
+        expect(buildTileGeometry({ face, level, x, y }).pos).toEqual(new Float32Array(want));
       }
     }
   });

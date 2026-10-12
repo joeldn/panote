@@ -1,7 +1,8 @@
 import { faceUVToDir, FRONT_FACE } from '@panote/core';
 import { describe, it, expect } from 'vitest';
 
-import { dirFromYawPitch, dirInto, ndcToPixel, isBehind } from './project.js';
+import { dirInto, ndcToPixel, isBehind } from './project.js';
+import { dirFromYawPitch } from './test-support/oracles.js';
 
 describe('ndcToPixel', () => {
   it('maps NDC center to container center', () => {
