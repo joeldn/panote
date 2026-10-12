@@ -15,10 +15,9 @@ import {
 import { isChunkLoadError } from '../chunk-reload.js';
 import { loadShare, shareChunk } from './share-chunk.js';
 
-const lazySheet = () => lazy(async () => ({ default: (await loadShare()).ShareModal }));
 // A rejected lazy() stays rejected, so the retry needs its own. Made per mount, so a
-// remount (or the next test) starts from a fresh pair.
-const lazySheets = () => ({ first: lazySheet(), retry: lazySheet() });
+// remount (or the next test) starts afresh.
+const lazySheet = () => lazy(async () => ({ default: (await loadShare()).ShareModal }));
 
 /** Catches the sheet's failure so it never reaches the tour route's error element. */
 class SheetBoundary extends Component<
@@ -37,8 +36,6 @@ class SheetBoundary extends Component<
   }
 }
 
-type Attempt = 'first' | 'retry' | 'failed';
-
 /**
  * Suspense's fallback: reports that the sheet is on its way for as long as it is mounted.
  * A layout effect, so Share stops spinning in the same frame the sheet appears. A chunk
@@ -50,12 +47,12 @@ function Pending({
   onStall,
 }: {
   open: boolean;
-  onPending: ((pending: boolean) => void) | undefined;
+  onPending: (pending: boolean) => void;
   onStall: (stalled: boolean) => void;
 }) {
   useLayoutEffect(() => {
-    onPending?.(true);
-    return () => onPending?.(false);
+    onPending(true);
+    return () => onPending(false);
   }, [onPending]);
   useEffect(() => {
     if (!open) return;
@@ -69,7 +66,7 @@ export interface LazyShareSheetProps extends ShareModalProps {
   /** A published tour's: the fallback always has a link to offer. */
   slug: string;
   /** True while the sheet's chunk is loading, false once it is up or has failed. */
-  onPending?: (pending: boolean) => void;
+  onPending: (pending: boolean) => void;
 }
 
 /**
@@ -80,22 +77,23 @@ export interface LazyShareSheetProps extends ShareModalProps {
  * the visitor is in the middle of a tour.
  */
 export function LazyShareSheet({ onPending, ...props }: LazyShareSheetProps) {
-  const [attempt, setAttempt] = useState<Attempt>('first');
-  const [sheets] = useState(lazySheets);
+  // 0 on the first attempt, 1 on the retry, 2 once both failed.
+  const [tries, setTries] = useState(0);
+  const [Sheet, setSheet] = useState(lazySheet);
   const [stalled, setStalled] = useState(false);
   if (stalled && !props.open) setStalled(false);
-  if (attempt === 'failed' || stalled) return props.open ? <ShareFallback {...props} /> : null;
-  const Sheet = attempt === 'first' ? sheets.first : sheets.retry;
+  if (tries > 1 || stalled) return props.open ? <ShareFallback {...props} /> : null;
   return (
     <SheetBoundary
-      key={attempt}
+      key={tries}
       onError={(error) => {
-        if (attempt === 'first' && isChunkLoadError(error)) {
-          setAttempt('retry');
+        if (!tries && isChunkLoadError(error)) {
+          setSheet(lazySheet);
+          setTries(1);
           return;
         }
         console.error('share sheet failed to load', error);
-        setAttempt('failed');
+        setTries(2);
       }}
     >
       <Suspense fallback={<Pending open={props.open} onPending={onPending} onStall={setStalled} />}>
