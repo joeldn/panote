@@ -32,6 +32,21 @@ export type ViewerFactory = (container: HTMLElement, options: ViewerOptions) => 
 const HOLDS_ROTATION =
   ':is(.pn-stage__viewer *,.pn-anchors *,.pn-hspanel,.pn-hspanel *):focus-visible';
 
+/**
+ * What the viewer counts as an interaction (its idle timer restarts on these): a
+ * press, a drag, a wheel, a pinch, a double-click or a key. A pointermove counts
+ * only with a button down or a finger on the screen, as a hover doesn't move the camera.
+ */
+const INTERACTIONS = [
+  'pointerdown',
+  'pointermove',
+  'wheel',
+  'dblclick',
+  'keydown',
+  'gesturestart',
+  'gesturechange',
+] as const;
+
 const defaultFactory: ViewerFactory = (container, options) => new PanoViewer(container, options);
 
 /**
@@ -190,13 +205,14 @@ export function PanoStage({
   const [unsupported, setUnsupported] = useState(false);
   // The viewer, a marker or a point's panel has keyboard focus: auto-rotate holds still.
   const [held, setHeld] = useState(false);
-  // The viewer's idle window, what auto-rotate was last set to on it, and the resume
-  // in waiting.
+  // The viewer's idle window, what auto-rotate was last set to on it, the resume in
+  // waiting (undefined when there is none), and how to (re)start that resume.
   const rotation = useRef<{
     idle?: number;
     on?: boolean;
     held?: boolean | undefined;
-    timer?: ReturnType<typeof setTimeout>;
+    timer?: ReturnType<typeof setTimeout> | undefined;
+    resume?: () => void;
   }>({});
 
   // Latest props for use inside long-lived effects without re-running them.
@@ -281,12 +297,33 @@ export function PanoStage({
         callbacks.current.onLoadError?.(error, id);
       }),
     ];
+    // A resume waits out the idle window from the last interaction, as the viewer's
+    // own does: setAutoRotate(true) starts turning at once, so the stage restarts the
+    // wait on every interaction while one is pending. The viewer doesn't see these
+    // while auto-rotate is off, so it can't wait for them itself.
+    const r = rotation.current;
+    r.resume = () => {
+      clearTimeout(r.timer);
+      r.timer = setTimeout(() => {
+        r.timer = undefined;
+        v.setAutoRotate(true);
+      }, r.idle);
+    };
+    // Captured on the container, so the viewer's own handlers on the canvas can't
+    // hide them.
+    const onInteraction = (e: Event) => {
+      if (r.timer === undefined) return;
+      if (e.type === 'pointermove' && (e as PointerEvent).buttons === 0) return;
+      r.resume?.();
+    };
+    for (const type of INTERACTIONS) host.addEventListener(type, onInteraction, true);
     setViewer(v);
     callbacks.current.onViewer?.(v);
     return () => {
       loaded.current = null;
       landed.current = null;
       clearTimeout(rotation.current.timer);
+      for (const type of INTERACTIONS) host.removeEventListener(type, onInteraction, true);
       for (const off of unsubscribe) off();
       callbacks.current.onViewer?.(null);
       setViewer(null);
@@ -442,8 +479,9 @@ export function PanoStage({
     r.held = holding;
     if (!viewer || r.on === on) return;
     clearTimeout(r.timer);
+    r.timer = undefined;
     // A hold that lets go waits out the idle window first, as after a drag.
-    if (on && wasHeld) r.timer = setTimeout(() => viewer.setAutoRotate(true), r.idle);
+    if (on && wasHeld) r.resume?.();
     else viewer.setAutoRotate(on);
     r.on = on;
   });
