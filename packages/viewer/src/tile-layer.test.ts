@@ -366,6 +366,19 @@ describe('TileLayer', () => {
   });
 
   describe('low-resolution base layer', () => {
+    it('counts the base as pending while it loads, before any frame has said what is in view', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise(() => {})),
+      );
+      const layer = makeLayer();
+      void layer.loadBase();
+      await flush();
+      expect(layer.hasPending()).toBe(true);
+      layer.dispose();
+      expect(layer.hasPending()).toBe(false);
+    });
+
     it('loads exactly one level-0 tile per cube face — the whole panorama, coarsely', async () => {
       const layer = makeLayer();
 
