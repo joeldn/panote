@@ -386,8 +386,10 @@ export class GLRenderer {
     this.viewProj = viewProj;
   }
 
-  /** Upload N-vertex geometry and its texture. The image goes up unflipped, so
-   *  `geom.uv` must address its first row as v = 0. */
+  /**
+   * Upload N-vertex geometry and its texture. The image goes up unflipped, so
+   * `geom.uv` must address its first row as v = 0.
+   */
   uploadTile(geom: TileGeometry, bitmap: TileImage): TileHandle {
     if (this.lost) throw new ContextLostError();
     const gl = this.gl;

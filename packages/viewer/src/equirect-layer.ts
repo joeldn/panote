@@ -30,7 +30,7 @@ export interface PreviewPatch {
  *   rect, in which case it is stretched over it, but normally it is `w` × `h`.
  * - Images are upright (top row first). Do not decode with `imageOrientation:
  *   'flipY'`.
- * - Neither image side may exceed {@link PREVIEW_MAX_PATCH_PX} (4096), nor the
+ * - Neither image side may exceed {@link PREVIEW_MAX_PATCH_PX}, nor the
  *   GPU's MAX_TEXTURE_SIZE; `showPreview` throws otherwise.
  * - Together the patches should tile the whole source. To hide seams, interior
  *   edges carry a gutter: neighbouring rects overlap by
