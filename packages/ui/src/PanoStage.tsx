@@ -257,7 +257,7 @@ export function PanoStage({
         const cur = loaded.current;
         // No load is current (the stage was emptied): this one is stale.
         if (!cur) return;
-        landed.current = cur && cur.viewer === v && cur.panoId === id ? cur : null;
+        landed.current = cur.viewer === v && cur.panoId === id ? cur : null;
         callbacks.current.onSceneChange?.(id);
       }),
       v.on('context-restored', () => setRestores((n) => n + 1)),
