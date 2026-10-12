@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 // Core is imported here only to prove the vendored conventions match the
 // tiler's: tiles are written with core's faceUVToDir and drawn with ours.
 import * as core from '@panote/core';
-import { FACES, equirectUVToDir, faceUVToDir, tileCornersUV, tilesPerEdge } from './cube.js';
+import { FACES, equirectUVToDir, faceUVToDir, tilesPerEdge } from './cube.js';
+import { tileCornersUV } from './test-support/oracles.js';
 
 const near = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
 

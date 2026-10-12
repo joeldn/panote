@@ -1,9 +1,13 @@
 import type { CubeTileSource, SourceResolver, TileImage } from './source.js';
 
+/** A camera: where it looks and how wide. */
 export interface View {
-  yaw: number; // radians, around +y
-  pitch: number; // radians, [-π/2, π/2]
-  fov: number; // vertical fov in degrees
+  /** Radians around +y; 0 looks at the centre of the `nz` face. */
+  yaw: number;
+  /** Radians, within [-π/2, π/2]; positive looks up. */
+  pitch: number;
+  /** Vertical field of view, degrees. */
+  fov: number;
 }
 
 /** A direction on screen, from `PanoViewer.project()`. */
@@ -27,8 +31,11 @@ export interface ProjectedPoint {
  */
 export type WheelMode = 'always' | 'engaged' | 'off';
 
-// Every default lives in defaults.ts (VIEWER_DEFAULTS); the notes here only
-// say what each option means. Every field at every depth is optional.
+/**
+ * Options for `new PanoViewer()`. Every field at every depth is optional;
+ * the defaults are `VIEWER_DEFAULTS` (defaults.ts), and the notes here only
+ * say what each option means.
+ */
 export interface ViewerOptions {
   /**
    * Turns the ids given to load() and prefetch() into tile sources. Needed
@@ -47,6 +54,7 @@ export interface ViewerOptions {
   autoRotate?: boolean | AutoRotateOptions | undefined;
 }
 
+/** `ViewerOptions.camera`: limits and feel of the camera. */
 export interface CameraOptions {
   /** Vertical fov limits, degrees. */
   minFov?: number | undefined;
@@ -66,12 +74,13 @@ export interface CameraOptions {
   north?: number | undefined;
 }
 
+/** `ViewerOptions.interaction`: input, focus and accessible name. */
 export interface InteractionOptions {
   /** False builds no input handling at all: the camera moves only through the API. */
   enabled?: boolean | undefined;
   /** The canvas's accessible name (aria-label). Change it at runtime with `setLabel()`. */
   label?: string | undefined;
-  /** Give the canvas `role="application"` and the label. */
+  /** Give the canvas a role (`application`, or `img` with `enabled` false) and the label. */
   a11y?: boolean | undefined;
   /** Show the grab / grabbing cursor over the canvas. */
   cursor?: boolean | undefined;
@@ -91,11 +100,13 @@ export interface InteractionOptions {
   inertia?: boolean | undefined;
 }
 
+/** `InteractionOptions.keyboard`: arrow-key and +/- steps. */
 export interface KeyboardOptions {
   panStepPx?: number | undefined;
   zoomStep?: number | undefined;
 }
 
+/** `ViewerOptions.rendering`: the canvas and how tiles are drawn. */
 export interface RenderingOptions {
   /** Cap on devicePixelRatio. */
   maxPixelRatio?: number | undefined;
@@ -118,6 +129,7 @@ export interface RenderingOptions {
   lodBias?: number | undefined;
 }
 
+/** `ViewerOptions.network`: how tile requests go out. */
 export interface NetworkOptions {
   /** Most tile requests in flight at once. */
   maxConcurrent?: number | undefined;
@@ -134,11 +146,15 @@ export interface NetworkOptions {
   retry?: RetryOptions | undefined;
 }
 
+/** `NetworkOptions.retry`. */
 export interface RetryOptions {
+  /** Attempts per tile in all, the first included. */
   maxAttempts?: number | undefined;
+  /** Wait before the first retry, ms; it doubles for each one after. */
   baseDelayMs?: number | undefined;
 }
 
+/** `ViewerOptions.memory`: how many tiles stay resident. */
 export interface MemoryOptions {
   /**
    * Resident tile textures, in MB of VRAM. `'auto'` is 128 on a
@@ -154,6 +170,7 @@ export interface MemoryOptions {
   minResidentTiles?: number | undefined;
 }
 
+/** `ViewerOptions.transition`: the crossfade of `load()` with `transition`. */
 export interface TransitionOptions {
   /** The crossfade of a `load()` with `transition`, ms. */
   durationMs?: number | undefined;
@@ -161,7 +178,9 @@ export interface TransitionOptions {
   respectReducedMotion?: boolean | undefined;
 }
 
+/** `ViewerOptions.autoRotate`: turning the camera while nobody interacts. */
 export interface AutoRotateOptions {
+  /** Turn when idle. `setAutoRotate()` changes it at runtime. */
   enabled?: boolean | undefined;
   /** Radians of yaw per second. */
   speed?: number | undefined;
@@ -227,6 +246,7 @@ export type PanoViewerEvents = {
   'load-error': { id: string; error: unknown };
 };
 
+/** Options for `PanoViewer.load()`. */
 export interface LoadOptions {
   /**
    * Camera for the incoming scene, applied when it swaps in rather than eased
@@ -240,6 +260,7 @@ export interface LoadOptions {
   transition?: boolean | undefined;
 }
 
+/** Options for `PanoViewer.showPreview()`. */
 export interface ShowPreviewOptions {
   /**
    * For a replace: the `version` of the source the preview replaces (`''`
@@ -253,6 +274,7 @@ export interface ShowPreviewOptions {
   view?: Partial<View> | undefined;
 }
 
+/** Options for `PanoViewer.prefetch()`. */
 export interface PrefetchOptions {
   /** Aborting cancels the resolve and every request still in flight. */
   signal?: AbortSignal | undefined;

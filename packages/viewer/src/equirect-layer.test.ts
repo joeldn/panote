@@ -10,7 +10,7 @@ import {
   type PreviewSource,
 } from './equirect-layer.js';
 import type { TileGeometry } from './tile-geometry.js';
-import { dirFromYawPitch } from './project.js';
+import { dirFromYawPitch } from './test-support/oracles.js';
 
 const G = PREVIEW_GUTTER_PX;
 

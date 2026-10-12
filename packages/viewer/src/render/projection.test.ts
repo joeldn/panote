@@ -2,14 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   effectiveVFovDeg,
   viewProjection,
-  projectDir,
   unprojectNDC,
   frustumFromViewProj,
   intersectsSphere,
 } from './projection.js';
-import { dirFromYawPitch } from '../project.js';
+import { dirFromYawPitch, projectDir } from '../test-support/oracles.js';
 
-// Reference values captured from three@0.171.0 (see plan Task 1 Step 1).
+// Golden values, captured from three.js 0.171 when the viewer still used it.
 const VIEW_A = { yaw: 0.3, pitch: 0.1, fov: 60 };
 const ASPECT_A = 16 / 9;
 const MAXH = 100; // maxHorizontalFov, uncapped here (60 < cap 67.67)
@@ -58,7 +57,7 @@ describe('projectDir', () => {
     near(p.y, 0);
     near(p.z, 0.8018018018);
   });
-  it('projects an off-centre direction to the three reference NDC', () => {
+  it('projects an off-centre direction to the golden NDC', () => {
     const p = projectDir(dirFromYawPitch(0.5, 0.2), vp);
     near(p.x, 0.1944522833);
     near(p.y, 0.1807101916);
@@ -67,7 +66,7 @@ describe('projectDir', () => {
 });
 
 describe('unprojectNDC', () => {
-  it('unprojects an NDC point to the three reference ray direction', () => {
+  it('unprojects an NDC point to the golden ray direction', () => {
     const vp = viewProjection(VIEW_A, ASPECT_A, MAXH);
     const d = unprojectNDC(0.4, -0.3, vp);
     near(d.x, 0.6315170768);
@@ -115,7 +114,7 @@ describe('frustumFromViewProj + intersectsSphere', () => {
   });
 });
 
-// Property-based checks (three.js is removed — no golden values).
+// Property-based checks, with no golden values.
 const allFinite = (m: Float32Array): boolean => Array.from(m).every((v) => Number.isFinite(v));
 
 describe('pole stability', () => {

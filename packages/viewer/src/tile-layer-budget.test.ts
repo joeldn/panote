@@ -5,9 +5,9 @@ import { TileLayer } from './tile-layer.js';
 import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { defaultTextureBudgetMB } from './texture-budget.js';
 import { viewProjection, effectiveVFovDeg } from './render/projection.js';
-import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {
@@ -27,7 +27,7 @@ const LAYER_DEFAULTS = {
 
 /** 800 CSS px tall on a devicePixelRatio-2 display — what the renderer rasterises. */
 const DEVICE_PIXEL_HEIGHT = 1600;
-/** The same viewport measured the way PanoViewer measured it before 084c1ea. */
+/** The same viewport in CSS px, which would pick a level too coarse. */
 const CSS_PIXEL_HEIGHT = 800;
 /** 1200 CSS px tall at devicePixelRatio 2: tall enough to select level 3. */
 const TALL_PIXEL_HEIGHT = 2400;

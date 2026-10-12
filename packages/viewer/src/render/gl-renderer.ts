@@ -386,16 +386,18 @@ export class GLRenderer {
     this.viewProj = viewProj;
   }
 
-  /** Upload N-vertex geometry and its texture. The image goes up unflipped, so
-   *  `geom.uv` must address its first row as v = 0. */
+  /**
+   * Upload N-vertex geometry and its texture. The image goes up unflipped, so
+   * `geom.uv` must address its first row as v = 0.
+   */
   uploadTile(geom: TileGeometry, bitmap: TileImage): TileHandle {
     if (this.lost) throw new ContextLostError();
     const gl = this.gl;
     const count = geom.pos.length / 3;
     if (!Number.isInteger(count) || geom.uv.length !== count * 2) {
-      throw new Error('uploadTile: pos and uv describe different vertex counts');
+      throw new TypeError('uploadTile: pos and uv describe different vertex counts');
     }
-    if (count > 65536) throw new Error(`uploadTile: ${count} vertices exceed 16-bit indices`);
+    if (count > 65536) throw new RangeError(`uploadTile: ${count} vertices exceed 16-bit indices`);
     // Interleave pos (3) + uv (2) into one VBO: [px,py,pz,u,v] × N.
     const interleaved = new Float32Array(count * 5);
     for (let i = 0; i < count; i++) {

@@ -7,6 +7,7 @@ import {
   isAbortError,
 } from './tile-retry.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { attemptsFor } from './test-support/oracles.js';
 
 const RETRY = VIEWER_DEFAULTS.network.retry;
 const DEFAULT_MAX_ATTEMPTS = RETRY.maxAttempts;
@@ -17,8 +18,8 @@ afterEach(() => {
 });
 
 // Everything here runs on an injected clock, never on wall time or timers, so
-// the whole policy is exercised deterministically under plain Node (this
-// package has no jsdom and no fake-timer dependency — see vitest.config.ts).
+// the whole policy is exercised deterministically under plain Node, with no
+// fake timers.
 function fakeClock(start = 0): { now: () => number; advance: (ms: number) => void } {
   let t = start;
   return {
@@ -64,7 +65,7 @@ describe('classifyFailure', () => {
     expect(classifyFailure(new TileHttpError(503))).toBe('transient');
   });
 
-  it('keeps the thrown message shape used before the split', () => {
+  it('formats the message as `tile <status>`', () => {
     expect(new TileHttpError(500).message).toBe('tile 500');
   });
 
@@ -109,7 +110,7 @@ describe('TileRetryBudget', () => {
     const clock = fakeClock();
     const budget = new TileRetryBudget(RETRY, clock.now);
     expect(budget.eligible('2/px/0-0')).toBe(true);
-    expect(budget.attemptsFor('2/px/0-0')).toBe(0);
+    expect(attemptsFor(budget, '2/px/0-0')).toBe(0);
   });
 
   it('makes a transiently-failed tile eligible again once its cooldown elapses', () => {
@@ -142,7 +143,7 @@ describe('TileRetryBudget', () => {
       budget.recordFailure('k', 'transient');
       clock.advance(60_000);
     }
-    expect(budget.attemptsFor('k')).toBe(DEFAULT_MAX_ATTEMPTS);
+    expect(attemptsFor(budget, 'k')).toBe(DEFAULT_MAX_ATTEMPTS);
     expect(budget.eligible('k')).toBe(false);
   });
 
@@ -160,7 +161,7 @@ describe('TileRetryBudget', () => {
     budget.recordFailure('k', 'permanent');
     clock.advance(24 * 60 * 60 * 1_000);
     expect(budget.eligible('k')).toBe(false);
-    expect(budget.attemptsFor('k')).toBe(0);
+    expect(attemptsFor(budget, 'k')).toBe(0);
   });
 
   it('forgets a tile that eventually loaded', () => {
@@ -169,7 +170,7 @@ describe('TileRetryBudget', () => {
     budget.recordFailure('k', 'transient');
     budget.recordSuccess('k');
     expect(budget.eligible('k')).toBe(true);
-    expect(budget.attemptsFor('k')).toBe(0);
+    expect(attemptsFor(budget, 'k')).toBe(0);
   });
 
   it('clear() drops both transient and permanent history', () => {

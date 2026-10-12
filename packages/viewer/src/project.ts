@@ -38,12 +38,7 @@ export function isBehind(dir: Vec3, forward: Vec3): boolean {
   return dir.x * forward.x + dir.y * forward.y + dir.z * forward.z <= 0;
 }
 
-/** Unit direction for a (yaw,pitch), matching the camera convention. */
-export function dirFromYawPitch(yaw: number, pitch: number): Vec3 {
-  return dirInto({ x: 0, y: 0, z: 0 }, yaw, pitch);
-}
-
-/** {@link dirFromYawPitch} written into `out`. */
+/** Unit direction for a (yaw, pitch), matching the camera convention, written into `out`. */
 export function dirInto(out: Vec3, yaw: number, pitch: number): Vec3 {
   const cp = Math.cos(pitch);
   out.x = Math.sin(yaw) * cp;

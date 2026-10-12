@@ -9,62 +9,14 @@ import {
   type TileAddress,
   type TileLoadInit,
 } from './source.js';
+import { flushTasks as flush } from './test-support/fake-dom.js';
 
 // The viewer with nothing of panote's: no options, sources built here, and
-// (for the loadTile cases) no network at all. Same harness as
-// PanoViewer.test.ts: GLRenderer is faked, and window, rAF and the observers
-// are the minimum the constructor touches.
+// (for the loadTile cases) no network at all. GLRenderer is the shared fake
+// (test-support/fake-gl-renderer.ts), and window and rAF are the minimum the
+// constructor touches.
 
-vi.mock('./render/gl-renderer.js', () => {
-  class ContextLostError extends Error {
-    override name = 'ContextLostError';
-  }
-  class FakeGLRenderer {
-    canvas = {
-      width: 0,
-      height: 0,
-      style: {} as Record<string, string>,
-      tabIndex: 0,
-      attributes: {} as Record<string, string>,
-      setAttribute(name: string, value: string) {
-        this.attributes[name] = value;
-      },
-      focus: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
-    };
-    nextHandle = 1;
-    lost = false;
-    dispose = vi.fn();
-    uploadTile = vi.fn(() => {
-      if (this.lost) throw new ContextLostError();
-      return this.nextHandle++;
-    });
-    removeTile = vi.fn();
-    constructor(
-      _container: unknown,
-      readonly opts: { onContextLost?: () => void; onContextRestored?: () => void } = {},
-    ) {}
-    resize = vi.fn((w: number, h: number): boolean => {
-      this.canvas.width = w * 2;
-      this.canvas.height = h * 2;
-      return true;
-    });
-    setCamera(): void {}
-    render = vi.fn();
-    snapshot = vi.fn(() => null);
-    loseContext(): void {
-      this.lost = true;
-      this.opts.onContextLost?.();
-    }
-    restoreContext(): void {
-      this.lost = false;
-      this.opts.onContextRestored?.();
-    }
-  }
-  return { GLRenderer: FakeGLRenderer, ContextLostError };
-});
+vi.mock('./render/gl-renderer.js', () => import('./test-support/fake-gl-renderer.js'));
 
 type FakeRenderer = {
   uploadTile: ReturnType<typeof vi.fn>;
@@ -74,7 +26,6 @@ type FakeRenderer = {
 const rendererOf = (v: PanoViewer) => (v as unknown as { renderer: FakeRenderer }).renderer;
 
 const container = () => ({ clientWidth: 400, clientHeight: 800 }) as unknown as HTMLElement;
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 let frames: FrameRequestCallback[];
 let fetchSpy: ReturnType<typeof vi.fn>;
@@ -217,7 +168,9 @@ describe('PanoViewer with no options and a loadTile source', () => {
 
   it('rejects an id when there is no resolveSource, fetching nothing', async () => {
     const viewer = new PanoViewer(container());
-    await expect(viewer.load('pano-a')).rejects.toThrow(/no resolveSource/);
+    await expect(viewer.load('pano-a')).rejects.toThrow(
+      new TypeError('tile source "pano-a": an id needs the resolveSource option'),
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
     viewer.dispose();
   });

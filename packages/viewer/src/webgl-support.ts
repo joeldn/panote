@@ -7,7 +7,7 @@ export class WebGLUnavailableError extends Error {
   override name = 'WebGLUnavailableError';
 
   constructor() {
-    super('PanoViewer needs WebGL2, which this browser does not provide.');
+    super('PanoViewer needs WebGL2, which this browser does not provide');
   }
 }
 

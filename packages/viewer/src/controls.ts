@@ -61,7 +61,7 @@ interface SafariGestureEvent extends UIEvent {
   clientY: number;
 }
 
-// Ring buffer size for drag samples. 100 ms of 240 Hz input fits in 24.
+// Ring buffer size for drag samples: 100 ms of 240 Hz input is 24, with headroom.
 const SAMPLES = 32;
 
 export class Controls {
@@ -390,7 +390,7 @@ export class Controls {
     if (!keys) return;
     // Keys move the target, not the camera, so damping smooths key repeat
     // into a glide instead of 40 px jumps.
-    const panStep = keys.panStepPx; // px-equivalent
+    const panStep = keys.panStepPx;
     switch (e.key) {
       case 'ArrowLeft':
         this.host.panTargetByPixels(panStep, 0);

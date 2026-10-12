@@ -22,7 +22,7 @@ export default tseslint.config(
     // workspace package. Tests may import @panote/core to check parity with
     // the tiler's conventions (it is a devDependency for that alone).
     files: ['packages/viewer/src/**/*.ts'],
-    ignores: ['packages/viewer/src/**/*.test.ts'],
+    ignores: ['packages/viewer/src/**/*.test.ts', 'packages/viewer/src/test-support/**'],
     rules: {
       'no-restricted-imports': [
         'error',

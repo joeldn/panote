@@ -6,8 +6,9 @@ import type { ResolvedViewerOptions } from './types.js';
  *
  * `TileRetryBudget` is per tile and per panorama load: it answers "may this
  * tile be fetched again yet?" from an attempt count and a per-tile cooldown.
- * `TileLayer` is rebuilt for every load (see PanoViewer.load()), so the budget
- * is scoped to one load. The attempt cap is what bounds the traffic during an
+ * The viewer builds a new `TileLayer`, and so a new budget, for every load
+ * and for the reload after a context restore, so the budget is scoped to one
+ * load. The attempt cap is what bounds the traffic during an
  * outage: at most visible × attempts requests per load.
  */
 
@@ -82,16 +83,15 @@ interface AttemptRecord {
 /**
  * Per-tile retry accounting for a single panorama load.
  *
- * Replaces the old permanent `failed` set. A tile that fails transiently stays
- * eligible until it has used its attempt budget; a tile that fails permanently
- * is never fetched again for this load.
+ * A tile that fails transiently stays eligible until it has used its attempt
+ * budget; a tile that fails permanently is never fetched again for this load.
  *
  * The per-tile cooldown matters as much as the cap does: `update()` rebuilds
  * the candidate list every frame, so without it a tile that is still on screen
- * would burn its whole budget within three frames (~50 ms) of a blip — no
- * better in practice than the blacklist it replaces. Spacing attempts by 1s
- * then 2s means a tile only exhausts its budget after ~3s of sustained
- * failure, and a pan back seconds later still finds attempts left.
+ * would burn its whole budget within three frames (~50 ms) of a blip, as if
+ * the first failure had been final. With the default `network.retry` (1 s,
+ * doubling) a tile only exhausts its budget after ~3 s of sustained failure,
+ * and a pan back seconds later still finds attempts left.
  */
 export class TileRetryBudget {
   private readonly attempts = new Map<string, AttemptRecord>();
@@ -131,11 +131,6 @@ export class TileRetryBudget {
   /** A tile that loaded gets its history dropped — it is in the cache now. */
   recordSuccess(key: string): void {
     this.attempts.delete(key);
-  }
-
-  /** Attempts spent on a tile so far (0 when it has never failed). */
-  attemptsFor(key: string): number {
-    return this.attempts.get(key)?.count ?? 0;
   }
 
   /**

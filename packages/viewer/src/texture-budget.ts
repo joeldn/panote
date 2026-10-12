@@ -12,7 +12,7 @@
  *
  * The tile count the viewer *needs* is set by the pyramid level, and the level
  * is chosen from the framebuffer's device-pixel height (see `selectLevel` in
- * lod.ts, and PanoViewer's `update()` call). On a DPR-2 display that is one
+ * lod.ts, and the `layer.update()` call in PanoViewer's frame loop). On a DPR-2 display that is one
  * level finer than on DPR 1, and one level finer is about four times as many
  * tiles per degree: the measured visible set for a 70° FOV on an 800 CSS-px
  * tall 16:9 viewport is 12 tiles at level 1 on DPR 1 and 24 at level 2 on
@@ -95,8 +95,8 @@ function positive(value: number | undefined, fallback: number): number {
  * device.
  *
  * `devicePixelRatio` may be `undefined` (or 0, or `NaN`) — a non-browser host,
- * or an environment that does not report one — and is then treated as 1, which
- * reproduces the pre-scaling budget exactly. The result is never below
+ * or an environment that does not report one — and is then treated as 1,
+ * which gives `BASE_TEXTURE_BUDGET_MB`. The result is never below
  * `BASE_TEXTURE_BUDGET_MB`: a sub-1 pixel ratio renders fewer device pixels than
  * CSS pixels, but the level selection floor is level 0 and the base layer is
  * pinned, so there is nothing to be gained by shrinking the budget below what

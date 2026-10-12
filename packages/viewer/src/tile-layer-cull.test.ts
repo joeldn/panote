@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as cube from './cube.js';
 import * as projection from './render/projection.js';
 import * as tileCache from './tile-cache.js';
-import { TileLayer } from './tile-layer.js';
+import { TileLayer, levelTable } from './tile-layer.js';
 import { urlTemplateSource, type CubeTileSource } from './source.js';
 import { RADIUS } from './tile-geometry.js';
-import { dirFromYawPitch } from './project.js';
 import type { GLRenderer } from './render/gl-renderer.js';
 import { VIEWER_DEFAULTS } from './defaults.js';
+import { dirFromYawPitch, tileCornersUV } from './test-support/oracles.js';
 
 /** The resolved defaults a viewer hands every layer it builds. */
 const LAYER_DEFAULTS = {
@@ -79,7 +79,7 @@ function bruteForce(viewProj: Float32Array, level: number): Set<string> {
   for (const face of cube.FACES) {
     for (let y = 0; y < g; y++) {
       for (let x = 0; x < g; x++) {
-        const p = cube.tileCornersUV(level, x, y).map((c) => {
+        const p = tileCornersUV(level, x, y).map((c) => {
           const d = cube.faceUVToDir(face, c.u, c.v);
           return [d.x * RADIUS, d.y * RADIUS, d.z * RADIUS] as const;
         });
@@ -194,27 +194,25 @@ describe('TileLayer cull', () => {
       () => {},
       { ...LAYER_DEFAULTS, textureBudgetMB: 512, now: () => 0, sleep: () => Promise.resolve() },
     );
-    const table = (l: TileLayer, level: number): unknown =>
-      (l as unknown as { table(level: number): unknown }).table(level);
-    for (let level = 0; level <= 4; level++) expect(table(next, level)).toBe(table(layer, level));
+    // The same view at level 4 for 1024 px tiles: twice the height.
+    const viewProj = projection.viewProjection({ yaw: 0, pitch: 0, fov: 70 }, 16 / 9, 179);
+    const vfov = projection.effectiveVFovDeg(70, 179, 16 / 9);
+    next.update(viewProj, vfov, dirFromYawPitch(0, 0), 2 * heightFor(4, vfov));
+    expect(projection.intersectsSphere).toHaveBeenCalled();
     expect(cube.faceUVInto).not.toHaveBeenCalled();
     next.dispose();
   });
 
   it('builds the same spheres, centre directions and keys as the per-corner formula', () => {
     for (let level = 0; level <= 3; level++) {
-      const { g, data, keys } = (
-        layer as unknown as {
-          table(level: number): { g: number; data: Float32Array; keys: string[] };
-        }
-      ).table(level);
+      const { g, data, keys } = levelTable(level);
       expect(g).toBe(cube.tilesPerEdge(level));
       const want = new Float32Array(data.length);
       const wantKeys: string[] = [];
       cube.FACES.forEach((face, f) => {
         for (let y = 0; y < g; y++) {
           for (let x = 0; x < g; x++) {
-            const corners = cube.tileCornersUV(level, x, y);
+            const corners = tileCornersUV(level, x, y);
             const p = corners.map((c) => {
               const d = cube.faceUVToDir(face, c.u, c.v);
               return { x: d.x * RADIUS, y: d.y * RADIUS, z: d.z * RADIUS };
