@@ -400,6 +400,43 @@ describe('PanoStage', () => {
       expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
     });
 
+    it('waits an idle window from a drag made while a resume is waiting', () => {
+      const { v, canvas, focus, button } = stage();
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      // A drag 1 s before the resume was due.
+      wait(IDLE_MS - 1000);
+      fireEvent.pointerDown(canvas, { buttons: 1 });
+      fireEvent.pointerMove(canvas, { buttons: 1 });
+      wait(IDLE_MS - 1);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
+      wait(1);
+      expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
+    });
+
+    it("doesn't wait longer for a pointer that only hovers", () => {
+      const { v, canvas, focus, button } = stage();
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      v.setAutoRotate.mockClear();
+      wait(IDLE_MS - 1000);
+      fireEvent.pointerMove(canvas, { buttons: 0 });
+      wait(1000);
+      expect(v.setAutoRotate).toHaveBeenCalledExactlyOnceWith(true);
+    });
+
+    it('leaves auto-rotate alone on a drag with no resume waiting', () => {
+      const { v, canvas, focus, button } = stage();
+      focus(canvas, 'keyboard');
+      focus(button('Outside'), 'keyboard');
+      wait(IDLE_MS);
+      v.setAutoRotate.mockClear();
+      fireEvent.pointerDown(canvas, { buttons: 1 });
+      wait(IDLE_MS);
+      expect(v.setAutoRotate).not.toHaveBeenCalled();
+    });
+
     it('turns at once when switched back on after a hold let go while it was off', () => {
       const { v, canvas, focus, button, setAutoRotate } = stage();
       focus(canvas, 'keyboard');
