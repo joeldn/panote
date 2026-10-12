@@ -8,13 +8,16 @@ type ShareModule = typeof ShareExports;
  * The visitor share sheet's chunk. Most visitors never open it, so it stays off the
  * tour's entry and loads on the first reach for Share. `load` is a test seam, and
  * `pending` the import in flight or done (cleared when it fails, so a retry fetches).
+ * `stallMs` is how long an open sheet waits on the chunk before the plain link shows.
  */
 export const shareChunk: {
   load: () => Promise<ShareModule>;
   pending: Promise<ShareModule> | null;
+  stallMs: number;
 } = {
   load: () => import('@internal/ui/share'),
   pending: null,
+  stallMs: 8000,
 };
 
 /** The sheet module, fetched once; a failed fetch is forgotten so the next call retries. */

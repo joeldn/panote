@@ -736,6 +736,42 @@ describe('visitor share', () => {
     }
   });
 
+  it('shows the plain link while a hanging chunk keeps the sheet waiting, then tries again', async () => {
+    let arrive!: () => void;
+    const arrived = new Promise<void>((r) => (arrive = r));
+    load.mockImplementation(async () => {
+      await arrived;
+      return import('@internal/ui/share');
+    });
+    const stallMs = shareChunk.stallMs;
+    shareChunk.stallMs = 20;
+    try {
+      renderAt('/s/old-town');
+      await shown('square');
+      const viewer = lastViewer();
+      const share = screen.getByRole('button', { name: 'Share' });
+      fireEvent.click(share);
+      const fallback = await screen.findByRole('alert', {}, LAZY);
+      expect(within(fallback).getByRole('button', { name: 'Copy link' })).toBeTruthy();
+      expect(share.getAttribute('aria-busy')).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      tourStillUp(viewer);
+      fireEvent.click(within(fallback).getByRole('button', { name: 'Close' }));
+      expect(screen.queryByRole('alert')).toBeNull();
+      // The chunk turns up after all: the next Share opens the sheet.
+      shareChunk.stallMs = stallMs;
+      arrive();
+      fireEvent.click(share);
+      expect(await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY)).toBeTruthy();
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(load).toHaveBeenCalledOnce();
+    } finally {
+      shareChunk.stallMs = stallMs;
+      arrive();
+      await arrived;
+    }
+  });
+
   it('retries a chunk that failed to load once, then opens the sheet', async () => {
     load.mockRejectedValueOnce(staleChunk());
     renderAt('/s/old-town');
