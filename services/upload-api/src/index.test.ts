@@ -449,6 +449,22 @@ describe('upload-url owner quotas', () => {
     expect(r.status).toBe(200);
   });
 
+  it('a pano being deleted (tombstoned) counts toward neither limit', async () => {
+    vi.stubGlobal(
+      'fetch',
+      storage([
+        ...pano('a', 9 * MiB),
+        ...pano('b', 9 * MiB),
+        { key: `${prefix}b/deleting`, size: 0 },
+      ]),
+    );
+    const r = await call(
+      { contentType: 'image/jpeg', size: MiB },
+      { MAX_PANOS_PER_OWNER: '2', MAX_BYTES_PER_OWNER: String(10 * MiB) },
+    );
+    expect(r.status).toBe(200);
+  });
+
   it('fails closed with 502 when the listing errors', async () => {
     vi.stubGlobal(
       'fetch',

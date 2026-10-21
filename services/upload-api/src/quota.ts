@@ -42,6 +42,11 @@ export interface QuotaRequest {
  * The upload-URL issuing path's quota hook. Null when the upload fits (or no
  * limit is set), otherwise the reason it doesn't. Counts what is in the
  * owner's prefix now, so it is a soft cap: concurrent requests can each pass.
+ * A pano with a delete tombstone (`deleting`) is on its way out and doesn't count.
+ *
+ * Known cost: with a limit set, every upload-URL request lists the owner's whole
+ * panos/ prefix (one LIST per 1,000 objects, several objects per pano). Unset,
+ * nothing is listed.
  */
 export const checkQuota = async (
   r2: Pick<R2S3Client, 'listObjects'>,
@@ -51,15 +56,24 @@ export const checkQuota = async (
 ): Promise<QuotaRefusal | null> => {
   if (limits.maxPanos === null && limits.maxBytes === null) return null;
   const prefix = userPanosPrefix(sub);
+  const originalBytes = new Map<string, number>();
   const panoIds = new Set<string>();
-  let bytes = 0;
+  const deleting = new Set<string>();
   for (const { key, size } of await r2.listObjects(prefix)) {
     const [panoId, name] = key.slice(prefix.length).split('/');
     if (!panoId) continue;
     panoIds.add(panoId);
-    if (name === 'original' && panoId !== req.replacing) bytes += size;
+    if (name === 'deleting') deleting.add(panoId);
+    if (name === 'original') originalBytes.set(panoId, size);
   }
-  if (limits.maxPanos !== null && req.replacing === undefined && panoIds.size >= limits.maxPanos) {
+  let panos = 0;
+  let bytes = 0;
+  for (const panoId of panoIds) {
+    if (deleting.has(panoId)) continue;
+    panos += 1;
+    if (panoId !== req.replacing) bytes += originalBytes.get(panoId) ?? 0;
+  }
+  if (limits.maxPanos !== null && req.replacing === undefined && panos >= limits.maxPanos) {
     return 'pano limit reached';
   }
   if (limits.maxBytes !== null && bytes + req.size > limits.maxBytes) {
