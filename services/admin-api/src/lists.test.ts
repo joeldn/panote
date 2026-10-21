@@ -9,6 +9,7 @@ import {
   parseListLimit,
   resolvePanoTitle,
   resolveTourFields,
+  tourCoverPanoId,
   tourCustomMetadata,
 } from './lists.js';
 
@@ -151,11 +152,46 @@ describe('resolveTourFields', () => {
     expect(legacyRead).toHaveBeenCalledTimes(1);
   });
 
+  it('takes a legacy tour cover from its start scene', async () => {
+    const fields = await resolveTourFields(undefined, async () => ({
+      tourId: 't1',
+      title: 'Legacy Tour',
+      scenes: [{ panoId: 'legacy-p1' }, { panoId: 'legacy-p2' }],
+      startPanoId: 'legacy-p2',
+    }));
+    expect(fields.coverPanoId).toBe('legacy-p2');
+  });
+
+  it('has no cover when the legacy read finds nothing', async () => {
+    const fields = await resolveTourFields(undefined, async () => null);
+    expect(fields).toEqual({ title: '', sceneCount: 0, coverPanoId: null });
+  });
+
   it('falls back when customMetadata is missing sceneCount (partial/foreign metadata)', async () => {
     const legacyRead = vi.fn(async () => ({ tourId: 't1', title: 'Legacy', scenes: [] }));
     const fields = await resolveTourFields({ title: 'Ignored' }, legacyRead);
     expect(fields.title).toBe('Legacy');
     expect(legacyRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('tourCoverPanoId', () => {
+  const scenes = [{ panoId: 'p1' }, { panoId: 'p2' }, { panoId: 'p3' }];
+
+  it('is the starred start scene, not the first one', () => {
+    expect(tourCoverPanoId({ scenes, startPanoId: 'p2' })).toBe('p2');
+  });
+
+  it('falls back to the first scene when no start scene is set', () => {
+    expect(tourCoverPanoId({ scenes })).toBe('p1');
+  });
+
+  it('falls back to the first scene when the start scene is no longer in the tour', () => {
+    expect(tourCoverPanoId({ scenes, startPanoId: 'gone' })).toBe('p1');
+  });
+
+  it('is null for a tour with no scenes, even with a stale start scene', () => {
+    expect(tourCoverPanoId({ scenes: [], startPanoId: 'gone' })).toBeNull();
   });
 });
 
@@ -193,6 +229,17 @@ describe('tourCustomMetadata / configCustomMetadata', () => {
         scenes: [{ panoId: 'p1' }, { panoId: 'p2' }],
       }),
     ).toEqual({ title: 'My Tour', sceneCount: '2', coverPanoId: 'p1' });
+  });
+
+  it('writes coverPanoId from the starred start scene when there is one', () => {
+    expect(
+      tourCustomMetadata({
+        tourId: 't1',
+        title: 'My Tour',
+        scenes: [{ panoId: 'p1' }, { panoId: 'p2' }],
+        startPanoId: 'p2',
+      }),
+    ).toEqual({ title: 'My Tour', sceneCount: '2', coverPanoId: 'p2' });
   });
 
   it('writes an empty coverPanoId string for a tour with no scenes', () => {

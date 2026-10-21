@@ -41,6 +41,15 @@ export const computeTilingStatus = (params: {
 
 export type TourFields = { title: string; sceneCount: number; coverPanoId: string | null };
 
+// The dashboard cover is the tour's starred start scene, falling back to the
+// first scene (as every consumer of startPanoId does) when it is unset or no
+// longer in the tour; null for a tour with no scenes.
+export const tourCoverPanoId = (tour: Pick<TourDoc, 'scenes' | 'startPanoId'>): string | null => {
+  const { scenes, startPanoId } = tour;
+  if (startPanoId !== undefined && scenes.some((s) => s.panoId === startPanoId)) return startPanoId;
+  return scenes[0]?.panoId ?? null;
+};
+
 // Prefers customMetadata (no extra read); falls back to one legacy read for
 // a tour.json written before this unit started stamping metadata.
 export const resolveTourFields = async (
@@ -58,7 +67,7 @@ export const resolveTourFields = async (
   return {
     title: doc?.title ?? '',
     sceneCount: doc?.scenes.length ?? 0,
-    coverPanoId: doc?.scenes[0]?.panoId ?? null,
+    coverPanoId: doc ? tourCoverPanoId(doc) : null,
   };
 };
 
@@ -101,7 +110,7 @@ const truncateForMetadata = (title: string): string => {
 export const tourCustomMetadata = (tour: TourDoc): Record<string, string> => ({
   title: truncateForMetadata(tour.title),
   sceneCount: String(tour.scenes.length),
-  coverPanoId: tour.scenes[0]?.panoId ?? '',
+  coverPanoId: tourCoverPanoId(tour) ?? '',
 });
 
 export const configCustomMetadata = (config: SceneConfig): Record<string, string> => ({
