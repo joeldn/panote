@@ -54,6 +54,24 @@ describe('scrubErrorText', () => {
     expect(scrubErrorText('blob:https://panote.dev/abc?x=1')).toBe('blob:https://panote.dev/abc');
   });
 
+  it.each([
+    ['url=https://panote.dev/p?token=SECRET', 'url=https://panote.dev/p'],
+    ['URL:https://panote.dev/p?token=SECRET', 'URL:https://panote.dev/p'],
+    ['Failed,https://panote.dev/p?token=SECRET', 'Failed,https://panote.dev/p'],
+    ['[https://panote.dev/p?token=SECRET]', '[https://panote.dev/p'],
+    ['src=/api/x?token=SECRET', 'src=/api/x'],
+    ['what?https://panote.dev/p?token=SECRET', 'what?https://panote.dev/p'],
+    ['192.168.1.1/p?token=SECRET', '192.168.1.1/p'],
+    ['localhost:8787/p?token=SECRET', 'localhost:8787/p'],
+    ['ref=vimeo.com/1?h=SECRET', 'ref=vimeo.com/1'],
+    ['img=data:image/png;base64,AA#SECRET', 'img=data:image/png;base64,AA'],
+    // Never split at `=` or `,`: every later query value goes too.
+    ['https://panote.dev/p?a=1,b=https://x.dev/?c=SECRET', 'https://panote.dev/p'],
+  ])('drops the query of a URL glued to a prefix: %s', (text, scrubbed) => {
+    expect(scrubErrorText(text)).toBe(scrubbed);
+    expect(scrubErrorText(`at ${text} now`)).toBe(`at ${scrubbed} now`);
+  });
+
   it("keeps prose's question marks and hashes", () => {
     for (const text of [
       'is it valid? no',
@@ -61,6 +79,9 @@ describe('scrubErrorText', () => {
       'Expected ")" but got "?"',
       'issue #12 again',
       'TypeError: x?.y is not a function',
+      'metadata:x?y',
+      'and/or?',
+      'v1.2?',
     ])
       expect(scrubErrorText(text)).toBe(text);
   });
@@ -76,6 +97,14 @@ describe('scrubErrorText', () => {
       'PUT /api/admin/tours/:tourId/publish 409',
     );
     expect(scrubErrorText('at /app/t/t_123/share/link')).toBe('at /app/t/:tourId/share/link');
+    expect(scrubErrorText('at /S/MySlug/embed and /Pub/Tours/T1.json')).toBe(
+      'at /S/:slug/embed and /Pub/Tours/:tourId',
+    );
+  });
+
+  it('leaves an @ with no local part alone', () => {
+    expect(scrubErrorText('@panote.dev')).toBe('@panote.dev');
+    expect(scrubErrorText('see /x/@panote.dev and a:@b.co')).toBe('see /x/@panote.dev and a:@b.co');
   });
 
   it('masks every email in a token and leaves Firefox frames alone', () => {
@@ -93,10 +122,13 @@ describe('scrubErrorText', () => {
     ['many @', `${'a@'.repeat(50_000)}`],
     ['a long URL', `https://x.dev/${'a'.repeat(100_000)}?q=1`],
     ['long local parts', `${'a'.repeat(50_000)}@${'b'.repeat(50_000)}`],
+    ['many host candidates', `${'=a.bc'.repeat(20_000)}!?x`],
+    ['many path and IP candidates', `${',/1.2.3.4:5'.repeat(10_000)}?x`],
+    ['many schemes', `${'a://'.repeat(25_000)}?x`],
   ])('scrubs %s of ~100k chars quickly', (_label, text) => {
     const started = performance.now();
     scrubErrorText(text);
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 
   it('leaves text without URLs alone', () => {

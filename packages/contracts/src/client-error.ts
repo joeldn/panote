@@ -24,12 +24,19 @@ export const ERROR_RELEASE_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 // A run of text with no whitespace, quote, paren or angle bracket: the most a
 // URL can be inside a message or a stack frame.
 const TOKEN = /[^\s()'"<>`]+/g;
-// What may come before a `?` or `#` for the token to count as a URL: an absolute
-// URL, a data: or blob: URL, a path starting with `/`, or a host.tld (with an
-// optional port and path). Anchored, after an optional `fn@` (a Firefox frame).
-// "is it valid? no" has none of these, so prose keeps its question marks.
-const URL_HEAD =
-  /^(?:[^@]*@)?(?:[a-z][a-z0-9+.-]*:\/\/|(?:data|blob):|\/|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?::\d+)?(?:\/|$))/i;
+// Where a URL can start inside a token, glued to whatever precedes it
+// (`url=https://...`, `[https://...]`, `src=/api/x?...`). Each pattern does
+// constant work per position, so the search stays linear.
+// A data: or blob: URL, not the end of a word like `metadata:`.
+const DATA_URL = /(?:^|[^a-z0-9])(?:data|blob):/i;
+// A path: `/` at the token start or right after `=`, `:`, `,` or `[`.
+const PATH_START = /(?:^|[=:,[])\//;
+const IP_OR_LOCALHOST = /(?:\b\d{1,3}(?:\.\d{1,3}){3}|\blocalhost)(?::\d+)?\//i;
+// A host.tld (optional port), followed by a path, query, fragment or the end.
+// Sticky: only tried at the token start and right after `=` `:` `,` `[` `@`.
+const HOST = /[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?::\d+)?(?=[/?#]|$)/iy;
+const HOST_AFTER = new Set(['=', ':', ',', '[', '@']);
+const SCHEME_CHAR = /[a-z0-9+.-]/i;
 // The `:line:col` a stack frame puts after a URL, which is kept.
 const LINE_COL = /:\d+:\d+$/;
 // Sticky, so it only runs from the character after an `@`.
@@ -37,13 +44,42 @@ const EMAIL_DOMAIN = /[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/iy;
 const NOT_LOCAL_PART = new Set(['/', ':', '@', ',', ';', '=']);
 // A tour's slug can be its only secret (an unlisted tour), and its id points at
 // one owner's content, wherever they show up: page paths, API paths, R2 keys.
-const ID_SEGMENT = /\/(s|slugs|pub\/tours|api\/tours|api\/admin\/tours|app\/t)\/[^/\s?#()'"<>`]+/g;
+const ID_SEGMENT = /\/(s|slugs|pub\/tours|api\/tours|api\/admin\/tours|app\/t)\/[^/\s?#()'"<>`]+/gi;
 
-// Drops what follows the first `?` or `#` of a URL-like token, keeping a frame's
-// trailing `:line:col`.
+// Index of the first place a URL starts in the token, or -1.
+const urlStart = (token: string): number => {
+  const starts: number[] = [];
+  const scheme = token.indexOf('://');
+  if (scheme !== -1) {
+    let at = scheme;
+    while (at > 0 && SCHEME_CHAR.test(token[at - 1]!)) at--;
+    starts.push(at);
+  }
+  for (const re of [DATA_URL, PATH_START, IP_OR_LOCALHOST]) {
+    const m = re.exec(token);
+    if (m) starts.push(m.index);
+  }
+  const before = starts.length ? Math.min(...starts) : token.length;
+  for (let at = 0; at < before; at++) {
+    if (at > 0 && !HOST_AFTER.has(token[at - 1]!)) continue;
+    HOST.lastIndex = at;
+    if (HOST.test(token)) {
+      starts.push(at);
+      break;
+    }
+  }
+  return starts.length ? Math.min(...starts) : -1;
+};
+
+// Drops everything from the first `?` or `#` after a URL starts in the token,
+// keeping a frame's trailing `:line:col`. The token is never split at `=` or `,`:
+// that would cut a query into pieces and keep the later ones.
 const stripQuery = (token: string): string => {
-  const q = token.search(/[?#]/);
-  if (q === -1 || !URL_HEAD.test(token.slice(0, q))) return token;
+  const start = urlStart(token);
+  if (start === -1) return token;
+  const rest = token.slice(start).search(/[?#]/);
+  if (rest === -1) return token;
+  const q = start + rest;
   return token.slice(0, q) + (LINE_COL.exec(token.slice(q))?.[0] ?? '');
 };
 
@@ -67,15 +103,15 @@ const maskEmails = (token: string): string => {
 };
 
 /**
- * Drops query strings and fragments from URL-like tokens (absolute, data: and
- * blob: URLs, paths starting with `/`, host.tld/...), and masks emails, tour
- * slugs and tour ids.
+ * Drops query strings and fragments from URLs wherever they start in a token
+ * (absolute, data: and blob: URLs, paths, IPv4/localhost and host.tld hosts),
+ * and masks emails, tour slugs and tour ids.
  */
 export const scrubErrorText = (text: string): string =>
   text
     .replace(TOKEN, (token) => maskEmails(stripQuery(token)))
     .replace(ID_SEGMENT, (_m, prefix: string) =>
-      prefix === 's' || prefix === 'slugs' ? `/${prefix}/:slug` : `/${prefix}/:tourId`,
+      /^s(lugs)?$/i.test(prefix) ? `/${prefix}/:slug` : `/${prefix}/:tourId`,
     );
 
 export const ClientErrorReportSchema = z.object({
