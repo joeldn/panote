@@ -1503,14 +1503,25 @@ each app's `main.tsx`). No third-party service. The report (`ClientErrorReportSc
 `@internal/contracts`) is `app`, `release` (the build's entry chunk hash, `local` on a dev server),
 `kind`, `message` (≤300 chars), `stack` (top 5 frames, ≤200 chars each) and `path` (pathname
 only, ≤120 chars). Nothing identifies the visitor: no user, client id, query string, fragment or
-full page URL. Before sending, the reporter strips query strings and fragments from every URL in
-the message and frames, masks emails, and masks tour slugs (`/s/:slug`, `/slugs/:slug`); admin also
-masks tour ids in its path (`/app/t/:tourId`). `public-api` validates the shape and scrubs again.
+full page URL. Before sending, the reporter scrubs the message, frames and path
+(`scrubErrorText`): it drops the query string and fragment from every URL-like token, meaning an
+absolute URL, a `data:` or `blob:` URL, a path starting with `/` or a `host.tld[/...]` (a `?` in
+plain prose, as in "valid? no", is kept), keeping a frame's trailing `:line:col`; it masks emails as
+`<email>`, tour slugs as `/s/:slug` and `/slugs/:slug`, and tour ids as `/pub/tours/:tourId`,
+`/api/tours/:tourId`, `/api/admin/tours/:tourId` and `/app/t/:tourId`. A URL inside a token with
+none of those shapes (e.g. `api/x?y` with no leading `/`) keeps its query. The scrub is linear in
+the text, and the reporter slices each field to 4× its cap before scrubbing. `public-api` validates
+the shape, scrubs again and re-caps each field, since masking can lengthen it.
 
 - **Volume.** A page load reports at all with probability 1 off production and 0.25 in production
   (`errorSampleRate`), decided once per load; it sends at most 5 reports, never the same error
   twice, and ignores `Script error.`, ResizeObserver loop notices and errors whose top frame is a
   browser extension. On the server, `ERRORS_LIMITER` (20/min per client IP, see Rate limits).
+- **Same origin only.** A request whose `Sec-Fetch-Site` is present and not `same-origin`, or whose
+  `Origin` is present and not the request's own origin, gets `403 {"error":"cross-origin"}`,
+  before the limiter. Non-browser clients send neither header and are let through. So a local
+  Vite dev server (`localhost:5173`/`5174`, proxying `/api` to `panote.dev`) has its reports
+  refused: its `Origin` is localhost.
 - **Transport.** `sendBeacon` with a text body, else a `keepalive` `fetch` without cookies, the
   same helper as the viewer analytics. The reporter never throws and never reports its own errors.
 - **CSP.** The endpoint is same-origin (`VITE_API_BASE` is empty), which `connect-src 'self'`
@@ -1518,6 +1529,8 @@ masks tour ids in its path (`/app/t/:tourId`). `public-api` validates the shape 
 - **Reading them.** Each valid report is one `console.error` object in `public-api`'s Workers Logs,
   `{ event: "client-error", app, release, kind, message, stack, path }`: filter on
   `event = client-error`. Nothing is stored anywhere else. The client IP is only the limiter's key.
+  Reports are unauthenticated, so anyone can forge one or send noise (within the limit): treat them
+  as hints to go and reproduce, never as proof of what a visitor saw.
 - **Not covered.** Errors a React Router `errorElement` catches never reach `window`, so they are
   not reported.
 
