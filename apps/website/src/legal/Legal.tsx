@@ -5,7 +5,7 @@ import { Link } from 'react-router';
 
 import { CONTACT_EMAIL } from '../landing/content.js';
 
-const UPDATED = '1 October 2026';
+const UPDATED = '21 October 2026';
 
 const Mail = () => <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>;
 
@@ -68,8 +68,10 @@ export function Privacy() {
 
       <h2>Your choices</h2>
       <p>
-        You can edit, unpublish or delete your tours at any time. To delete your account, or to ask
-        what we hold about you, email <Mail />.
+        You can edit, unpublish or delete your tours at any time. You can also delete your whole
+        account yourself: once signed in, open the account menu and choose Delete account. That
+        removes your tours, panoramas, share links and visit counts, and your sign-in record is
+        removed within 30 days. To ask what we hold about you, email <Mail />.
       </p>
 
       <h2>Changes</h2>
