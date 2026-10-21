@@ -7,6 +7,7 @@ import {
   originalKey,
   publishKey,
   pubTourKey,
+  encodeId,
   storedSlugKey,
   tileVersionPrefix,
   tourKey,
@@ -23,15 +24,16 @@ import {
   sweepAccountDeletions,
   type AccountDeps,
 } from './delete-account.js';
-import { unpublish } from './publish.js';
+import { publishTour, unpublish } from './publish.js';
 
 // Storage is shared between it() cases in this file, so each case uses its own
 // subs, tourIds, panoIds and slugs.
+const verify = vi.fn(async (t: string) => {
+  if (t.startsWith('good:')) return { sub: `auth0|${t.slice(5)}` };
+  throw new Error('bad');
+});
 beforeAll(() => {
-  setTestJwtVerifier(async (t) => {
-    if (t.startsWith('good:')) return { sub: `auth0|${t.slice(5)}` };
-    return Promise.reject(new Error('bad'));
-  });
+  setTestJwtVerifier((t) => verify(t));
 });
 
 const bearer = (who: string) => ({ Authorization: `Bearer good:${who}` });
@@ -254,5 +256,170 @@ describe('sweepAccountDeletions', () => {
     expect(await has(originalKey(sub, 'acct-sweep-next-p'))).toBe(false);
     expect(await has('accounts/garbage-owner/deletion.json')).toBe(true);
     await env.BUCKET.delete('accounts/garbage-owner/deletion.json');
+  });
+});
+
+describe('a publish that slips in while the tour is being deleted', () => {
+  it('is taken down again, so no bundle or slug is orphaned', async () => {
+    const sub = subOf('acct-race');
+    const seeded = await seedAccount(sub, 'acct-race');
+    const clock = { now: new Date('2026-10-20T10:00:00.000Z'), aliasDays: 30 };
+    let slipped = false;
+    const deps = depsWith({
+      unpublishTour: async (owner, tourId) => {
+        const files = await unpublish(env.BUCKET, owner, tourId);
+        // A publish queued on the TourPublisher behind this unpublish: tour.json
+        // still exists, so it republishes under the same slug.
+        if (!slipped) {
+          slipped = true;
+          const out = await publishTour(env.BUCKET, owner, tourId, { slug: seeded.slug }, clock);
+          expect(out.status).toBe(200);
+          expect(await has(pubTourKey(tourId))).toBe(true);
+        }
+        return files;
+      },
+    });
+    await deleteAccount(deps, sub, clock.now);
+    expect(slipped).toBe(true);
+    expect(await has(pubTourKey(seeded.tourId))).toBe(false);
+    expect(await has(storedSlugKey(seeded.slug)!)).toBe(false);
+    expect(await has(publishKey(sub, seeded.tourId))).toBe(false);
+    expect(await has(tourKey(sub, seeded.tourId))).toBe(false);
+  });
+});
+
+describe('aliases', () => {
+  it("leaves a stale alias that now belongs to another owner's tour", async () => {
+    const sub = subOf('acct-alias');
+    const seeded = await seedAccount(sub, 'acct-alias');
+    // The old slug lapsed and another owner's tour claimed it since.
+    const stale = 'acct-alias-claimed';
+    await put(publishKey(sub, seeded.tourId), {
+      slug: seeded.slug,
+      visibility: 'public',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+      aliases: [seeded.alias, stale],
+    });
+    await put(storedSlugKey(stale)!, { v: 1, kind: 'tour', tourId: 'someone-elses-tour' });
+
+    await deleteAccount(depsWith(), sub, new Date('2026-10-20T10:00:00.000Z'));
+    expect(await has(storedSlugKey(seeded.alias)!)).toBe(false);
+    expect(
+      (await getJson<{ tourId: string }>(env.BUCKET, storedSlugKey(stale)!))?.value.tourId,
+    ).toBe('someone-elses-tour');
+  });
+});
+
+describe('sweep: retention, budget and order', () => {
+  const day = 24 * 60 * 60 * 1000;
+
+  it('past retention, deletes what is left first and keeps the marker if that fails', async () => {
+    const sub = subOf('acct-late30');
+    const done = new Date('2026-08-01T00:00:00.000Z');
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: done.toISOString(),
+      completedAt: done.toISOString(),
+    });
+    await put(tourKey(sub, 'acct-late30-tour'), { tourId: 'acct-late30-tour', scenes: [] });
+    const expiry = new Date(done.getTime() + (ACCOUNT_MARKER_DAYS + 1) * day);
+
+    const failing = depsWith({ clearStats: vi.fn().mockRejectedValue(new Error('down')) });
+    await sweepAccountDeletions(failing, expiry);
+    expect(await marker(sub)).not.toBeNull();
+
+    await sweepAccountDeletions(depsWith(), expiry);
+    expect(await has(tourKey(sub, 'acct-late30-tour'))).toBe(false);
+    expect(await marker(sub)).toBeNull();
+  });
+
+  it('caps each account, so a big one cannot starve the next', async () => {
+    const big = subOf('acct-big');
+    const small = subOf('acct-small');
+    // big was requested first, so it goes first.
+    await put(accountDeletionKey(big), { v: 1, sub: big, requestedAt: '2026-01-01T00:00:00.000Z' });
+    await put(accountDeletionKey(small), {
+      v: 1,
+      sub: small,
+      requestedAt: '2026-01-02T00:00:00.000Z',
+    });
+    for (const n of [1, 2, 3]) await put(originalKey(big, `acct-big-p${n}`), 'bytes');
+    await put(originalKey(small, 'acct-small-p1'), 'bytes');
+
+    const now = new Date('2026-10-20T03:17:00.000Z');
+    await sweepAccountDeletions(depsWith(), now, { items: 100 }, 2);
+    const bigLeft = await env.BUCKET.list({ prefix: `panos/${encodeId(big)}/` });
+    expect(bigLeft.objects).toHaveLength(1);
+    expect((await marker(big))?.completedAt).toBeUndefined();
+    expect(await has(originalKey(small, 'acct-small-p1'))).toBe(false);
+    expect((await marker(small))?.completedAt).toBe(now.toISOString());
+
+    await sweepAccountDeletions(depsWith(), now, { items: 100 }, 2);
+    expect((await env.BUCKET.list({ prefix: `panos/${encodeId(big)}/` })).objects).toHaveLength(0);
+    expect((await marker(big))?.completedAt).toBe(now.toISOString());
+  });
+
+  it('stops at the run budget and leaves the rest for the next run', async () => {
+    const sub = subOf('acct-budget');
+    await put(accountDeletionKey(sub), { v: 1, sub, requestedAt: '2026-10-19T00:00:00.000Z' });
+    for (const n of [1, 2]) await put(originalKey(sub, `acct-budget-p${n}`), 'bytes');
+    await sweepAccountDeletions(depsWith(), new Date('2026-10-20T00:00:00.000Z'), { items: 0 });
+    expect((await env.BUCKET.list({ prefix: `panos/${encodeId(sub)}/` })).objects).toHaveLength(2);
+    expect((await marker(sub))?.completedAt).toBeUndefined();
+  });
+
+  it('only LISTs a finished, still-empty account', async () => {
+    const sub = subOf('acct-cheap');
+    const at = '2026-10-19T00:00:00.000Z';
+    await put(accountDeletionKey(sub), { v: 1, sub, requestedAt: at, completedAt: at });
+    const owner = encodeId(sub);
+    const listed: { prefix?: string; delimiter?: string; limit?: number }[] = [];
+    const bucket = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'list') {
+          return (opts: R2ListOptions) => {
+            if (opts.prefix?.includes(owner)) listed.push(opts);
+            return target.list(opts);
+          };
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const clearStats = vi.fn(async () => {});
+    await sweepAccountDeletions(
+      depsWith({ bucket, clearStats }),
+      new Date('2026-10-20T00:00:00.000Z'),
+    );
+    expect(listed.every((o) => o.limit === 1 && o.delimiter === undefined)).toBe(true);
+    expect(listed).toHaveLength(2);
+    expect(await marker(sub)).not.toBeNull();
+  });
+
+  it("skips a marker whose sub isn't its own key", async () => {
+    const victim = subOf('acct-victim');
+    await put(originalKey(victim, 'acct-victim-p'), 'bytes');
+    await put('accounts/not-the-victim/deletion.json', {
+      v: 1,
+      sub: victim,
+      requestedAt: '2026-10-19T00:00:00.000Z',
+    });
+    await sweepAccountDeletions(depsWith(), new Date('2026-10-20T00:00:00.000Z'));
+    expect(await has(originalKey(victim, 'acct-victim-p'))).toBe(true);
+    await env.BUCKET.delete('accounts/not-the-victim/deletion.json');
+  });
+});
+
+describe('write gate', () => {
+  it('verifies the JWT once per write', async () => {
+    verify.mockClear();
+    const r = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: bearer('acct-once'),
+      body: JSON.stringify({ title: 'Once', scenes: [] }),
+    });
+    expect(r.status).toBe(201);
+    expect(verify).toHaveBeenCalledTimes(1);
   });
 });

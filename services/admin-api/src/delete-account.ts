@@ -6,6 +6,7 @@ import {
   SlugRecordSchema,
   storedSlugKey,
   tilesPrefix,
+  tourKey,
   userPanosPrefix,
   userToursPrefix,
   type AccountDeletionRecord,
@@ -22,6 +23,10 @@ import { REFERENCE_CONCURRENCY } from './references.js';
 // Matches the "sign-in record removed within 30 days" promise in the UI copy.
 export const ACCOUNT_MARKER_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Every log line about account deletion starts with this, so the operator can
+// filter Workers observability for it. Lines never carry the sub or a key.
+export const LOG_PREFIX = '[account-deletion]';
 
 export type AccountDeps = {
   bucket: R2Bucket;
@@ -70,6 +75,9 @@ const markComplete = async (bucket: R2Bucket, sub: string, now: Date): Promise<v
   const record = await readMarker(bucket, sub);
   if (!record || record.completedAt) return;
   await putJson(bucket, accountDeletionKey(sub), { ...record, completedAt: now.toISOString() });
+  console.warn(
+    `${LOG_PREFIX} account deleted: remove its Auth0 user within ${ACCOUNT_MARKER_DAYS} days (delete-account.ts --list)`,
+  );
 };
 
 // Redirect aliases this tour still owns. unpublish only removes the live slug and
@@ -91,38 +99,83 @@ const deleteAliases = async (bucket: R2Bucket, sub: string, tourId: string): Pro
 // The name only: R2 error messages can carry keys, and keys carry the owner.
 const errorName = (e: unknown): string => (e instanceof Error ? e.name : 'unknown error');
 
+// What one sweep run deletes at most, counted in tours plus panos, and the most
+// one account may take of it, so a huge account can't starve the others. What
+// a run doesn't reach waits for the next day; nothing is lost.
+export const SWEEP_ITEM_BUDGET = 400;
+export const SWEEP_ACCOUNT_ITEM_BUDGET = 100;
+
+/** Items still allowed; deleteAccountData counts it down. */
+export type Budget = { items: number };
+
+const take = (ids: readonly string[], budget: Budget | undefined): readonly string[] => {
+  if (!budget) return ids;
+  const taken = ids.slice(0, Math.max(0, budget.items));
+  budget.items -= taken.length;
+  return taken;
+};
+
 const inBatches = async (ids: readonly string[], run: (id: string) => Promise<void>) => {
   for (let i = 0; i < ids.length; i += REFERENCE_CONCURRENCY) {
     await Promise.all(ids.slice(i, i + REFERENCE_CONCURRENCY).map(run));
   }
 };
 
+const deleteOwnedTour = async (
+  deps: AccountDeps,
+  sub: string,
+  tourId: string,
+  purge: CdnPurge,
+): Promise<void> => {
+  const { bucket } = deps;
+  // Tour ids come from the same crypto.randomUUID() and PANO_PATTERN check as pano
+  // ids (POST and tourIdError in index.ts), so PANO_PATTERN is their validator too.
+  // An id that fails it can't have a publish.json or a bundle (publishKey and
+  // pubTourKey refuse it), so only its stats and its prefix are left to delete.
+  if (PANO_PATTERN.test(tourId)) {
+    const unpublish = async () => {
+      purge.files.push(...(await deleteAliases(bucket, sub, tourId)));
+      purge.files.push(...(await deps.unpublishTour(sub, tourId)));
+    };
+    await unpublish();
+    // While tour.json exists a retry lists this tour again, so stats go before it.
+    await deps.clearStats(tourId);
+    await bucket.delete(tourKey(sub, tourId));
+    // As tour delete does: a publish queued behind the first unpublish still saw
+    // tour.json and republished. Any publish after this sees no tour.json and
+    // unpublishes itself (publish.ts commit).
+    await unpublish();
+  }
+  // Again for a valid id: counts a republished tour picked up in between.
+  await deps.clearStats(tourId);
+  await deletePrefix(bucket, `${userToursPrefix(sub)}${tourId}/`);
+};
+
 /**
  * Deletes every tour (with its slug, aliases, public bundle and stats) and every
  * pano (original, config, tiles) the owner has. Idempotent: each tour's or pano's
- * own prefix goes last, so after an interruption it still lists and a rerun
- * finishes it. Adds what to purge from the CDN to `purge` as it goes, so a
- * partial run's purge isn't lost.
+ * own key or prefix goes last, so after an interruption it still lists and a
+ * rerun finishes it. Adds what to purge from the CDN to `purge` as it goes, so a
+ * partial run's purge isn't lost. With a `budget`, stops after that many tours
+ * and panos; returns whether it got through everything.
  */
 export const deleteAccountData = async (
   deps: AccountDeps,
   sub: string,
   purge: CdnPurge,
-): Promise<void> => {
+  budget?: Budget,
+): Promise<boolean> => {
   const { bucket } = deps;
-  const toursRoot = userToursPrefix(sub);
   // Tours first: a published tour comes down before any of its images do.
-  await inBatches(await listChildren(bucket, toursRoot), async (tourId) => {
-    // An id no route could have written can't be published either.
-    if (PANO_PATTERN.test(tourId)) {
-      purge.files.push(...(await deleteAliases(bucket, sub, tourId)));
-      purge.files.push(...(await deps.unpublishTour(sub, tourId)));
-      await deps.clearStats(tourId);
-    }
-    await deletePrefix(bucket, `${toursRoot}${tourId}/`);
-  });
+  const tourIds = await listChildren(bucket, userToursPrefix(sub));
+  const tours = take(tourIds, budget);
+  await inBatches(tours, (tourId) => deleteOwnedTour(deps, sub, tourId, purge));
+  if (tours.length < tourIds.length) return false;
+
   const panosRoot = userPanosPrefix(sub);
-  await inBatches(await listChildren(bucket, panosRoot), async (panoId) => {
+  const panoIds = await listChildren(bucket, panosRoot);
+  const panos = take(panoIds, budget);
+  await inBatches(panos, async (panoId) => {
     if (!PANO_PATTERN.test(panoId)) {
       await deletePrefix(bucket, `${panosRoot}${panoId}/`);
       return;
@@ -131,6 +184,7 @@ export const deleteAccountData = async (
       purge.prefixes.push(tilesPrefix(panoId));
     }
   });
+  return panos.length === panoIds.length;
 };
 
 export type AccountDeleteResult = { status: 'deleted' | 'pending'; purge: CdnPurge };
@@ -149,43 +203,88 @@ export const deleteAccount = async (
   try {
     await deleteAccountData(deps, sub, purge);
   } catch (e) {
-    // Never log the sub. The sweep retries the whole account.
-    console.error('account delete interrupted, the daily sweep resumes it:', errorName(e));
+    console.error(`${LOG_PREFIX} delete interrupted, the daily sweep resumes it:`, errorName(e));
     return { status: 'pending', purge: mergePurges(purge) };
   }
   await markComplete(deps.bucket, sub, now);
   return { status: 'deleted', purge: mergePurges(purge) };
 };
 
-/**
- * Daily cron: reruns every marked account (finishing interrupted deletes and
- * catching late uploads), and drops markers ACCOUNT_MARKER_DAYS after completion.
- * One account failing doesn't stop the others.
- */
-export const sweepAccountDeletions = async (deps: AccountDeps, now: Date): Promise<CdnPurge> => {
-  const purge: CdnPurge = { prefixes: [], files: [] };
+// One cheap LIST per prefix: whether anything is left (a late upload, say).
+const hasData = async (bucket: R2Bucket, sub: string): Promise<boolean> => {
+  for (const prefix of [userToursPrefix(sub), userPanosPrefix(sub)]) {
+    if ((await bucket.list({ prefix, limit: 1 })).objects.length > 0) return true;
+  }
+  return false;
+};
+
+type Marker = { key: string; record: AccountDeletionRecord };
+
+const listMarkers = async (bucket: R2Bucket): Promise<Marker[]> => {
+  const markers: Marker[] = [];
   let cursor: string | undefined;
   do {
-    const page = await deps.bucket.list({ prefix: ACCOUNTS_ROOT, ...(cursor ? { cursor } : {}) });
+    const page = await bucket.list({ prefix: ACCOUNTS_ROOT, ...(cursor ? { cursor } : {}) });
     for (const obj of page.objects) {
-      const record = await readParsed(deps.bucket, obj.key, AccountDeletionRecordSchema);
-      if (!record) {
-        console.error('account deletion marker unreadable, skipped');
+      const record = await readParsed(bucket, obj.key, AccountDeletionRecordSchema);
+      // The sub decides which prefixes get deleted, so it must be this marker's own.
+      if (!record || accountDeletionKey(record.sub) !== obj.key) {
+        console.error(`${LOG_PREFIX} marker unreadable or misfiled, skipped`);
         continue;
       }
-      const { sub, completedAt } = record;
-      if (completedAt && now.getTime() - Date.parse(completedAt) >= ACCOUNT_MARKER_DAYS * DAY_MS) {
-        await deps.bucket.delete(obj.key);
-        continue;
-      }
-      try {
-        await deleteAccountData(deps, sub, purge);
-        await markComplete(deps.bucket, sub, now);
-      } catch (e) {
-        console.error('account deletion sweep failed for one account:', errorName(e));
-      }
+      markers.push({ key: obj.key, record });
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
+  // Interrupted deletes first, oldest request first; finished ones after them.
+  return markers.sort(
+    (a, b) =>
+      Number(!!a.record.completedAt) - Number(!!b.record.completedAt) ||
+      a.record.requestedAt.localeCompare(b.record.requestedAt),
+  );
+};
+
+/**
+ * Daily cron: finishes interrupted deletes, catches anything written after a
+ * finished one (a finished account only costs a LIST per prefix unless something
+ * is there), and drops a marker ACCOUNT_MARKER_DAYS after completion, once the
+ * account is still empty. One account failing doesn't stop the others.
+ */
+export const sweepAccountDeletions = async (
+  deps: AccountDeps,
+  now: Date,
+  budget: Budget = { items: SWEEP_ITEM_BUDGET },
+  perAccount = SWEEP_ACCOUNT_ITEM_BUDGET,
+): Promise<CdnPurge> => {
+  const purge: CdnPurge = { prefixes: [], files: [] };
+  let retained = 0;
+  for (const { key, record } of await listMarkers(deps.bucket)) {
+    const { sub, completedAt } = record;
+    try {
+      let done = true;
+      if (!completedAt || (await hasData(deps.bucket, sub))) {
+        const mine: Budget = { items: Math.min(budget.items, perAccount) };
+        const allowed = mine.items;
+        done = await deleteAccountData(deps, sub, purge, mine);
+        budget.items -= allowed - mine.items;
+      }
+      if (!done) continue;
+      const expired =
+        !!completedAt && now.getTime() - Date.parse(completedAt) >= ACCOUNT_MARKER_DAYS * DAY_MS;
+      if (expired) {
+        await deps.bucket.delete(key);
+        continue;
+      }
+      if (!completedAt) await markComplete(deps.bucket, sub, now);
+      retained += 1;
+    } catch (e) {
+      console.error(`${LOG_PREFIX} sweep failed for one account:`, errorName(e));
+    }
+  }
+  if (retained > 0) {
+    console.warn(
+      `${LOG_PREFIX} ${retained} deleted account(s) in their ${ACCOUNT_MARKER_DAYS}-day window: check each Auth0 user is removed (delete-account.ts --list)`,
+    );
+  }
   return mergePurges(purge);
 };

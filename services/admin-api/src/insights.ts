@@ -136,7 +136,10 @@ export const getInsights = async (
   };
 };
 
-export const insightsRoute = async (c: Context<{ Bindings: Env }>, tourId: string) => {
+export const insightsRoute = async (
+  c: Context<{ Bindings: Env; Variables: { sub: string | undefined } }>,
+  tourId: string,
+) => {
   const { sub } = await authenticate(c.req.raw, c.env);
   c.header('Cache-Control', 'private, no-store');
   if (!PANO_PATTERN.test(tourId))
