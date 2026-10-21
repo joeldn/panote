@@ -1,6 +1,14 @@
-import { accountDeletionKey, deletingKey, originalKey, PANO_PATTERN } from '@internal/contracts';
-import { authenticate, toErrorResponse, WorkerError } from '@internal/worker-kit';
+import {
+  accountDeletionKey,
+  accountDisabledKey,
+  deletingKey,
+  originalKey,
+  PANO_PATTERN,
+} from '@internal/contracts';
+import { authenticate, rateLimit, toErrorResponse, WorkerError } from '@internal/worker-kit';
 import { createR2S3Client, type R2HeadResult } from '@internal/worker-kit/r2-s3';
+
+import { checkQuota, quotaLimits } from './quota.js';
 
 // Mirrors the MAX_ORIGINAL_BYTES wrangler var (services/tiler-consumer/wrangler.jsonc:55,92).
 const MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
@@ -9,6 +17,9 @@ const MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
 const assertHeadIsDefinitive = (head: R2HeadResult): void => {
   if (!head.ok && head.status !== 404) throw new WorkerError('storage unavailable', 502);
 };
+// The UPLOAD_URL_LIMITER binding's `simple.period` (wrangler.jsonc), sent as the
+// 429's Retry-After. The limit itself lives in wrangler.jsonc, per env.
+export const UPLOAD_URL_RATE_PERIOD_SECONDS = 60;
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 interface UploadUrlBody {
@@ -25,6 +36,9 @@ export default {
     }
     try {
       const { sub } = await authenticate(req, env);
+      // Per owner, before any R2 request: a runaway client can't run up S3 calls.
+      const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS);
+      if (limited) return limited;
       const body = ((await req.json().catch(() => null)) ?? {}) as UploadUrlBody;
 
       const contentType = body.contentType;
@@ -59,11 +73,17 @@ export default {
         retries: 2,
       });
 
-      // An account marked for deletion gets no new upload URL (admin-api's 410 on
-      // writes). Fails closed like the HEADs below: no clear answer, no URL.
-      const deletion = await r2.head(accountDeletionKey(sub));
+      // An account marked for deletion (410) or disabled by the operator (403) gets
+      // no new upload URL, as admin-api refuses its writes. Fails closed like the
+      // HEADs below: no clear answer, no URL.
+      const [deletion, disabled] = await Promise.all([
+        r2.head(accountDeletionKey(sub)),
+        r2.head(accountDisabledKey(sub)),
+      ]);
       assertHeadIsDefinitive(deletion);
+      assertHeadIsDefinitive(disabled);
       if (deletion.ok) return Response.json({ error: 'account deleted' }, { status: 410 });
+      if (disabled.ok) return Response.json({ error: 'account disabled' }, { status: 403 });
 
       // panoId given -> replace-image: only an existing, non-tombstoned
       // original under the caller's own prefix may be re-presigned.
@@ -88,6 +108,18 @@ export default {
       } else {
         panoId = crypto.randomUUID();
       }
+
+      // Owner quotas, last before signing: only a request that would otherwise get
+      // a URL pays for the listing, and only when a limit is set.
+      const limits = quotaLimits(env);
+      const refusal = await checkQuota(r2, sub, limits, {
+        size,
+        replacing: 'panoId' in body ? panoId : undefined,
+      }).catch(() => {
+        // A failed listing is no answer either: fail closed, as for the HEADs.
+        throw new WorkerError('storage unavailable', 502);
+      });
+      if (refusal) return Response.json({ error: refusal }, { status: 403 });
 
       const key = originalKey(sub, panoId);
       const putUrl = await r2.presignPut(key, { headers: { 'content-type': contentType } });
