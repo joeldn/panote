@@ -17,19 +17,6 @@ import { Unavailable } from './Unavailable.js';
 import { useIsOwner } from './use-owner.js';
 import { useTourStats } from './use-stats.js';
 
-// Inline media must come from the CDN: that is all the CSP's img-src/media-src allow.
-// try/catch, not URL.canParse: that is Safari 17+, and this runs while rendering.
-const cdnMatcher = (cdnBase: string) => {
-  const cdn = new URL(cdnBase).origin;
-  return (url: string): boolean => {
-    try {
-      return new URL(url).origin === cdn;
-    } catch {
-      return false;
-    }
-  };
-};
-
 // Mounted only once a scene is shown, so an unavailable tour never records a view.
 function TourStats({
   tourId,
@@ -62,7 +49,6 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
   const createViewer = useContext(StageFactoryContext);
   const [params] = useSearchParams();
   const vt = useMemo(() => publishedToViewerTour(tour), [tour]);
-  const isCdnUrl = useMemo(() => cdnMatcher(config.cdnBase), [config.cdnBase]);
 
   const requested = params.get('pano');
   const requestedOk = requested !== null && !!vt.tour?.scenes[requested];
@@ -94,7 +80,6 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
       // In someone else's page the wheel scrolls it until the visitor engages
       // the viewer; the full-page tour keeps every wheel for zooming.
       embed={embed}
-      isAllowedMediaUrl={isCdnUrl}
       {...(createViewer && { createViewer })}
       {...(!embed && {
         bar: {
