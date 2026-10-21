@@ -1,4 +1,5 @@
 import {
+  AccountDeleteOkSchema,
   DEFAULT_INSIGHTS_DAYS,
   InsightsOkSchema,
   InsightsUnavailableSchema,
@@ -21,6 +22,7 @@ import {
   TourOkSchema,
   ToursListOkSchema,
   TourWithConfigsOkSchema,
+  type AccountDeleteOk,
   type InsightsOk,
   type PanoDeleteConflict,
   type PanosListOk,
@@ -121,6 +123,11 @@ export interface AdminApi {
   setVisibility(tourId: string, visibility: Visibility): Promise<VisibilityOk>;
   unpublishTour(tourId: string): Promise<void>;
   getInsights(tourId: string, days?: number): Promise<InsightsResult>;
+  /**
+   * Deletes the signed-in account and everything in it. `confirm` is the phrase
+   * the owner typed; the server checks it against ACCOUNT_DELETE_CONFIRMATION.
+   */
+  deleteAccount(confirm: string): Promise<AccountDeleteOk>;
 }
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
@@ -329,6 +336,11 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
     setVisibility: async (tourId, visibility) =>
       write('PATCH', `${tourPath(tourId)}/visibility`, { visibility }, VisibilityOkSchema),
     unpublishTour: async (tourId) => del(`${tourPath(tourId)}/publish`),
+    deleteAccount: async (confirm) => {
+      const { res, url, body } = await send('DELETE', '/api/admin/account', { body: { confirm } });
+      if (!res.ok) throw new ApiError(res.status, body);
+      return parseWith(AccountDeleteOkSchema, url, body);
+    },
     getInsights: async (tourId, days = DEFAULT_INSIGHTS_DAYS) => {
       const { res, url, body } = await send('GET', `${tourPath(tourId)}/insights?days=${days}`);
       if (res.status === 404) {
