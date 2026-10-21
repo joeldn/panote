@@ -1,4 +1,4 @@
-import { HotspotMediaSchema, type HotspotMedia } from '@internal/contracts';
+import { HotspotMediaSchema, VIMEO_HASH_PATTERN, type HotspotMedia } from '@internal/contracts';
 
 /** The editor's media picker: YouTube and Vimeo share one choice, as in the design. */
 export type MediaChoice = 'image' | 'audio' | 'video' | 'embed' | 'link';
@@ -9,7 +9,6 @@ export const choiceOf = (m: HotspotMedia): MediaChoice =>
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 const VIMEO_ID = /^\d{1,15}$/;
-const VIMEO_HASH = /^[A-Za-z0-9]{1,32}$/;
 const VIMEO_HOSTS = new Set(['vimeo.com', 'www.vimeo.com', 'player.vimeo.com']);
 
 /** A YouTube video id from a bare id or a watch/share/embed/shorts URL. */
@@ -41,7 +40,8 @@ export function vimeoVideo(input: string): { id: string; hash?: string } | null 
   const id = parts[at];
   if (!id || !VIMEO_ID.test(id)) return null;
   const hash = url.searchParams.get('h') ?? parts[at + 1];
-  return hash && VIMEO_HASH.test(hash) ? { id, hash } : { id };
+  // Only a segment shaped like an unlisted hash is one: vimeo.com/123/settings isn't.
+  return hash && VIMEO_HASH_PATTERN.test(hash) ? { id, hash } : { id };
 }
 
 function embedOf(input: string): HotspotMedia | null {

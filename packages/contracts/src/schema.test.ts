@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   HotspotSchema,
+  isHttpsMediaUrl,
   MAX_HOTSPOT_BODY_LENGTH,
   MAX_HOTSPOT_ID_LENGTH,
   MAX_HOTSPOTS,
@@ -492,6 +493,18 @@ describe('HotspotSchema icon/size/media/body', () => {
     }
   });
 
+  it.each([
+    ['https://example.com/a', true],
+    ['HTTPS://example.com/a', true],
+    ['https://user:pass@example.com/a', false],
+    ['https://user@example.com/a', false],
+    ['https://', false],
+    ['http://example.com/a', false],
+    ['javascript:alert(1)', false],
+  ])('isHttpsMediaUrl(%j) is %j', (url, ok) => {
+    expect(isHttpsMediaUrl(url)).toBe(ok);
+  });
+
   it('accepts an upper-case https scheme and trims surrounding space', () => {
     const r = HotspotSchema.parse({
       ...base,
@@ -528,6 +541,9 @@ describe('HotspotSchema icon/size/media/body', () => {
     { kind: 'vimeo', id: '1/../2' },
     { kind: 'vimeo', id: '1'.repeat(16) },
     { kind: 'vimeo', id: '76979871', hash: 'a&b=c' },
+    { kind: 'vimeo', id: '76979871', hash: 'settings' },
+    { kind: 'vimeo', id: '76979871', hash: '8272103f6' },
+    { kind: 'vimeo', id: '76979871', hash: '8272103F6E' },
     { kind: 'vimeo', url: 'https://vimeo.com/76979871' },
   ])('rejects an invalid vimeo media %j', (media) => {
     expect(() => HotspotSchema.parse({ ...base, media })).toThrow();
