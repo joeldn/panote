@@ -9,6 +9,7 @@ import { FloorLinks } from './FloorLinks.js';
 import { HotspotMarkers } from './HotspotMarkers.js';
 import { HotspotPanel } from './HotspotPanel.js';
 import { SceneMap } from './SceneMap.js';
+import type { ViewerHotspot } from './types.js';
 import { ViewerControls } from './ViewerControls.js';
 
 function fakeViewer() {
@@ -476,72 +477,82 @@ describe('HotspotPanel', () => {
     );
   });
 
-  const cdnOnly = (url: string) => new URL(url).origin === 'https://cdn.test';
+  const panel = (media: NonNullable<ViewerHotspot['media']>, id = 'a') =>
+    render(<HotspotPanel hotspot={{ ...base, id, media }} onClose={() => {}} />);
 
-  it('renders CDN image and video media inline', () => {
-    const { container, rerender } = render(
-      <HotspotPanel
-        hotspot={{ ...base, media: { kind: 'image', url: 'https://cdn.test/a.jpg' } }}
-        onClose={() => {}}
-        isAllowedMediaUrl={cdnOnly}
-      />,
+  it('embeds Vimeo through its do-not-track player, with the unlisted hash', () => {
+    panel({ kind: 'vimeo', id: '76979871', hash: '8272103f6e' });
+    const frame = screen.getByTitle('Kitchen');
+    expect(frame.getAttribute('src')).toBe(
+      'https://player.vimeo.com/video/76979871?dnt=1&h=8272103f6e',
     );
-    expect(container.querySelector('img')!.getAttribute('src')).toBe('https://cdn.test/a.jpg');
-    rerender(
-      <HotspotPanel
-        hotspot={{ ...base, id: 'b', media: { kind: 'video', url: 'https://cdn.test/a.mp4' } }}
-        onClose={() => {}}
-        isAllowedMediaUrl={cdnOnly}
-      />,
-    );
-    expect(container.querySelector('video')!.getAttribute('src')).toBe('https://cdn.test/a.mp4');
+    expect(frame.getAttribute('loading')).toBe('lazy');
+    // No autoplay: neither the player url nor the frame's permissions ask for it.
+    expect(frame.getAttribute('allow')).not.toContain('autoplay');
+    expect(frame.getAttribute('src')).not.toContain('autoplay');
   });
 
+  it('renders linked image, audio and video inline from any https host, without autoplay', () => {
+    const { container } = panel({ kind: 'image', url: 'https://images.example/a.jpg' });
+    const img = container.querySelector('img')!;
+    expect(img.getAttribute('src')).toBe('https://images.example/a.jpg');
+    expect(img.getAttribute('referrerpolicy')).toBe('no-referrer');
+    expect(img.getAttribute('loading')).toBe('lazy');
+    cleanup();
+
+    const audio = panel({
+      kind: 'audio',
+      url: 'https://sounds.example/a.mp3',
+    }).container.querySelector('audio')!;
+    expect(audio.getAttribute('src')).toBe('https://sounds.example/a.mp3');
+    expect(audio.hasAttribute('controls')).toBe(true);
+    expect(audio.hasAttribute('autoplay')).toBe(false);
+    cleanup();
+
+    const video = panel({
+      kind: 'video',
+      url: 'https://clips.example/a.mp4',
+    }).container.querySelector('video')!;
+    expect(video.getAttribute('src')).toBe('https://clips.example/a.mp4');
+    expect(video.hasAttribute('controls')).toBe(true);
+    expect(video.hasAttribute('playsinline')).toBe(true);
+    expect(video.hasAttribute('autoplay')).toBe(false);
+  });
+
+  it('renders a link media as an external link to its host', () => {
+    const { container } = panel({ kind: 'link', url: 'https://example.org/history' });
+    const link = screen.getByRole('link', { name: 'Visit example.org ↗' });
+    expect(link.getAttribute('href')).toBe('https://example.org/history');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(container.querySelector('img, audio, video, iframe')).toBeNull();
+  });
+
+  it.each(['javascript:alert(1)', 'data:text/html,hi', 'http://example.org/a'])(
+    'renders nothing for a non-https url %j',
+    (url) => {
+      for (const kind of ['image', 'audio', 'video', 'link'] as const) {
+        const { container } = panel({ kind, url });
+        expect(container.querySelector('a, img, audio, video')).toBeNull();
+        cleanup();
+      }
+    },
+  );
+
   it.each([
-    ['image', 'Open image ↗'],
-    ['video', 'Open video ↗'],
-  ] as const)('links %s media from another origin instead of loading it', (kind, label) => {
-    const url = `https://elsewhere.test/a.${kind === 'image' ? 'jpg' : 'mp4'}`;
-    const { container } = render(
-      <HotspotPanel
-        hotspot={{ ...base, media: { kind, url } }}
-        onClose={() => {}}
-        isAllowedMediaUrl={cdnOnly}
-      />,
-    );
-    expect(container.querySelector('img, video')).toBeNull();
+    ['image', 'img', 'Open image ↗'],
+    ['audio', 'audio', 'Open audio ↗'],
+    ['video', 'video', 'Open video ↗'],
+  ] as const)('falls back to a link when %s media fails to load', (kind, tag, label) => {
+    const url = `https://elsewhere.test/a.${tag}`;
+    const { container } = panel({ kind, url });
+    fireEvent.error(container.querySelector(tag)!);
+    expect(container.querySelector('img, audio, video')).toBeNull();
     const link = screen.getByRole('link', { name: label });
     expect(link.getAttribute('href')).toBe(url);
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
-
-  it('links media by default, when no origin is allowed', () => {
-    render(
-      <HotspotPanel
-        hotspot={{ ...base, media: { kind: 'image', url: 'https://cdn.test/a.jpg' } }}
-        onClose={() => {}}
-      />,
-    );
-    expect(screen.getByRole('link', { name: 'Open image ↗' })).toBeTruthy();
-  });
-
-  it.each(['image', 'video'] as const)(
-    'falls back to a link when %s media fails to load',
-    (kind) => {
-      const url = `https://cdn.test/a.${kind === 'image' ? 'jpg' : 'mp4'}`;
-      const { container } = render(
-        <HotspotPanel
-          hotspot={{ ...base, media: { kind, url } }}
-          onClose={() => {}}
-          isAllowedMediaUrl={cdnOnly}
-        />,
-      );
-      fireEvent.error(container.querySelector(kind === 'image' ? 'img' : 'video')!);
-      expect(container.querySelector('img, video')).toBeNull();
-      expect(screen.getByRole('link', { name: /^Open / }).getAttribute('href')).toBe(url);
-    },
-  );
 });
 
 describe('SceneMap', () => {

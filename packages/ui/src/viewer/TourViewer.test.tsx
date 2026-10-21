@@ -137,7 +137,6 @@ function renderViewer(props: Partial<TourViewerProps> = {}) {
       title="Old town"
       baseUrl="https://cdn.test/tiles/"
       start="square"
-      isAllowedMediaUrl={() => true}
       createViewer={createViewer}
       {...props}
     />,
@@ -347,7 +346,6 @@ describe('TourViewer', () => {
         title="Old town"
         baseUrl="https://cdn.test/tiles/"
         start="square"
-        isAllowedMediaUrl={() => true}
         bar={{ home: null }}
         onLoadError={onLoadError}
         createViewer={() => {
@@ -677,7 +675,6 @@ describe('TourViewer', () => {
         data: many(),
         title: 'Old town',
         start: 'square',
-        isAllowedMediaUrl: () => true,
         prefetch,
         createViewer,
       };
