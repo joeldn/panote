@@ -12,6 +12,7 @@
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 
 import {
+  assertOwnsTour,
   describeOwner,
   disableOwner,
   enableOwner,
@@ -31,6 +32,8 @@ async function main(): Promise<void> {
   const tourId = args.slug !== undefined ? await tourIdForSlug(r2, args.slug) : args.tourId;
   const sub = args.sub ?? (tourId !== undefined ? await findTourOwner(r2, tourId) : undefined);
   if (sub === undefined) throw new Error('no owner to act on');
+  // A --sub given with a tour must be that tour's owner, before anything is written.
+  if (args.sub !== undefined && tourId !== undefined) await assertOwnsTour(r2, sub, tourId);
   if (tourId !== undefined) console.log(`tour ${tourId}`);
   console.log(describeOwner(sub, await readOwnerStatus(r2, sub)));
 

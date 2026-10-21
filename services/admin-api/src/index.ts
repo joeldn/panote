@@ -475,7 +475,8 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
       ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
       : { prefixes: [], files: await stub.unpublish(sub, tourId) };
   purgeLater(c, purge);
-  console.warn(`[takedown] operator ${action} done`);
+  // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
+  console.warn(`[takedown] operator ${action} of tour ${tourId} done`);
   return c.json({ action, purged: purge.prefixes.length + purge.files.length });
 });
 

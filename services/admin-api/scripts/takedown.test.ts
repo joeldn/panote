@@ -11,6 +11,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  assertOwnsTour,
   decodeOwner,
   describeOwner,
   disableOwner,
@@ -96,6 +97,19 @@ describe('parseTakedownArgs', () => {
   it('makes a non-dev bucket be named twice, like delete-account', () => {
     const prod = { ...ENV, R2_BUCKET: 'pano-content' };
     expect(() => parseTakedownArgs(['--sub', SUB], prod)).toThrow(/--allow-bucket/);
+  });
+
+  it('refuses an ADMIN_API_ORIGIN other than the bucket default unless the bucket is named twice', () => {
+    const argv = ['--slug', 'a', '--unpublish'];
+    const toProd = { ...ENV, ADMIN_API_ORIGIN: 'https://panote.io' };
+    expect(() => parseTakedownArgs(argv, toProd)).toThrow(/--allow-bucket pano-content-dev/);
+    expect(
+      parseTakedownArgs([...argv, '--allow-bucket', 'pano-content-dev'], toProd).api?.origin,
+    ).toBe('https://panote.io');
+    // Spelling out the default is fine.
+    expect(
+      parseTakedownArgs(argv, { ...ENV, ADMIN_API_ORIGIN: 'https://panote.dev' }).api?.origin,
+    ).toBe('https://panote.dev');
   });
 
   it('needs OPERATOR_TOKEN and a usable origin only for a tour action', () => {
@@ -204,6 +218,24 @@ describe('findTourOwner', () => {
     const { store } = memoryStore({ [tourKey(SUB, 'tour-1')]: '{}' });
     store.head = async () => ({ ok: false, status: 503, etag: null });
     await expect(findTourOwner(store, 'tour-1')).rejects.toThrow(/503/);
+  });
+});
+
+describe('assertOwnsTour', () => {
+  it('passes for the owner, by tour.json or publish.json', async () => {
+    const { store } = memoryStore({
+      [tourKey(SUB, 'tour-1')]: '{}',
+      [publishKey(SUB, 'tour-2')]: '{}',
+    });
+    await expect(assertOwnsTour(store, SUB, 'tour-1')).resolves.toBeUndefined();
+    await expect(assertOwnsTour(store, SUB, 'tour-2')).resolves.toBeUndefined();
+  });
+
+  it('refuses a --sub that is not the owner, so a typo disables nobody', async () => {
+    const { store } = memoryStore({ [tourKey(SUB, 'tour-1')]: '{}' });
+    await expect(assertOwnsTour(store, 'google-oauth2|1235', 'tour-1')).rejects.toThrow(
+      /doesn't own tour tour-1/,
+    );
   });
 });
 

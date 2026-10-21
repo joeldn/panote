@@ -110,11 +110,19 @@ export function parseTakedownArgs(
   if (tourAction) {
     const token = env.OPERATOR_TOKEN;
     if (!token) throw new Error('missing env OPERATOR_TOKEN (admin-api secret of the same name)');
-    const origin = env.ADMIN_API_ORIGIN || DEFAULT_ORIGINS[r2.bucket];
+    const fallback = DEFAULT_ORIGINS[r2.bucket];
+    const origin = env.ADMIN_API_ORIGIN || fallback;
     if (!origin)
       throw new Error(`no default admin-api origin for ${r2.bucket}; set ADMIN_API_ORIGIN`);
     if (!/^https:\/\/[^/]+$/.test(origin)) {
       throw new Error('ADMIN_API_ORIGIN must be an https origin with no path');
+    }
+    // An override must not quietly point one env's bucket at another env's admin-api
+    // (a dev bucket at panote.io, say): anything but the default is named twice too.
+    if (origin !== fallback && values['--allow-bucket'] !== r2.bucket) {
+      throw new Error(
+        `ADMIN_API_ORIGIN ${origin} isn't the default for ${r2.bucket}; pass --allow-bucket ${r2.bucket} to use it`,
+      );
     }
     api = { origin, token };
   }
@@ -188,6 +196,22 @@ export async function findTourOwner(store: TakedownStore, tourId: string): Promi
   const sub = decodeOwner(found[0]!);
   if (sub === null) throw new Error(`tour ${tourId} is under an owner segment that doesn't decode`);
   return sub;
+}
+
+/**
+ * Refuses unless `sub` holds the tour (tour.json or publish.json under its own
+ * prefix), so a mistyped --sub can't disable an account that has nothing to do with it.
+ */
+export async function assertOwnsTour(
+  store: TakedownStore,
+  sub: string,
+  tourId: string,
+): Promise<void> {
+  const prefix = `tours/${encodeId(sub)}/${tourId}/`;
+  const hits = await Promise.all(
+    ['tour.json', 'publish.json'].map((name) => headExists(store, `${prefix}${name}`)),
+  );
+  if (!hits.some(Boolean)) throw new Error(`--sub ${sub} doesn't own tour ${tourId}; nothing done`);
 }
 
 export interface OwnerStatus {

@@ -12,7 +12,7 @@ import {
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { sweepAccountDeletions } from './delete-account.js';
 import worker from './index.js';
@@ -75,6 +75,20 @@ describe('POST /api/admin/operator/takedown', () => {
     expect(await has(publishKey(sub, s.tourId))).toBe(false);
     expect(await has(tourKey(sub, s.tourId))).toBe(true);
     expect(await has(originalKey(sub, s.panoId))).toBe(true);
+  });
+
+  it('logs an audit line naming the action and the tour, never the owner', async () => {
+    const sub = subOf('op-audit');
+    const s = await seedTour(sub, 'op-audit');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await takedown({ sub, tourId: s.tourId, action: 'unpublish' })).status).toBe(200);
+      const lines = warn.mock.calls.map((args) => args.join(' '));
+      expect(lines).toContain(`[takedown] operator unpublish of tour ${s.tourId} done`);
+      expect(lines.join('\n')).not.toContain(sub);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('delete removes the tour and the panos only it used, unpublishing first', async () => {
