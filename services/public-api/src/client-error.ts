@@ -1,4 +1,13 @@
-import { scrubErrorText, type ClientErrorReport } from '@internal/contracts';
+import {
+  MAX_ERROR_FRAME_LENGTH,
+  MAX_ERROR_MESSAGE_LENGTH,
+  MAX_ERROR_PATH_LENGTH,
+  scrubErrorText,
+  type ClientErrorReport,
+} from '@internal/contracts';
+
+// Capped again after the scrub: masking can lengthen a field (`a@b.co` -> `<email>`).
+const scrub = (text: string, max: number): string => scrubErrorText(text).slice(0, max);
 
 /**
  * One structured line per report, which Workers Logs indexes field by field
@@ -12,8 +21,8 @@ export const logClientError = (report: ClientErrorReport): void => {
     app: report.app,
     release: report.release,
     kind: report.kind,
-    message: scrubErrorText(report.message),
-    stack: report.stack.map(scrubErrorText),
-    path: scrubErrorText(report.path),
+    message: scrub(report.message, MAX_ERROR_MESSAGE_LENGTH),
+    stack: report.stack.map((frame) => scrub(frame, MAX_ERROR_FRAME_LENGTH)),
+    path: scrub(report.path, MAX_ERROR_PATH_LENGTH),
   });
 };

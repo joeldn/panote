@@ -61,6 +61,18 @@ app.post(
   '/api/tours/:tourId/like',
   limitByIp((env) => env.LIKE_LIMITER),
 );
+// Error reports only come from our own pages, which are same-origin. A browser
+// marks a cross-site request with Sec-Fetch-Site and Origin; a non-browser
+// client sends neither and is let through (the limiter is its brake). Checked
+// before the limiter, so a cross-site page can't spend a visitor's quota.
+app.post('/api/errors', async (c, next) => {
+  const site = c.req.header('Sec-Fetch-Site');
+  const origin = c.req.header('Origin');
+  if ((site && site !== 'same-origin') || (origin && origin !== new URL(c.req.url).origin)) {
+    return c.json({ error: 'cross-origin' }, 403);
+  }
+  await next();
+});
 app.post(
   '/api/errors',
   limitByIp((env) => env.ERRORS_LIMITER),
