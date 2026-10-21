@@ -63,22 +63,40 @@ const ICON_PATTERN = /^[a-z0-9-]{1,40}$/;
 export const MAX_MEDIA_URL_LENGTH = 2048;
 // A YouTube video id is always exactly 11 base64url-ish characters.
 const YOUTUBE_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+// Vimeo video ids are numeric; an unlisted video also needs its share hash (`?h=`).
+const VIMEO_ID_PATTERN = /^\d{1,15}$/;
+const VIMEO_HASH_PATTERN = /^[A-Za-z0-9]{1,32}$/;
+
+// Panote only links to media, never hosts it, so the url is any https page or
+// file. Parsed, not prefix-matched: the scheme is case-insensitive, and a url
+// carrying credentials (https://user:pass@host) is a phishing shape, not media.
+const isHttpsUrl = (u: string): boolean => {
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+};
 
 const mediaUrl = () =>
-  z
-    .string()
-    .url()
-    .max(MAX_MEDIA_URL_LENGTH)
-    .refine((u) => u.startsWith('https://'), 'media url must be https');
+  z.string().trim().url().max(MAX_MEDIA_URL_LENGTH).refine(isHttpsUrl, 'media url must be https');
 
-// Discriminated on kind: image/video require url, youtube requires id
-// (rendered via youtube-nocookie.com) - neither is optional per its variant.
+// Discriminated on kind: image/audio/video/link require url; youtube requires id
+// (rendered via youtube-nocookie.com); vimeo requires id, plus hash when unlisted.
 export const HotspotMediaSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('image'), url: mediaUrl() }),
+  z.object({ kind: z.literal('audio'), url: mediaUrl() }),
   z.object({ kind: z.literal('video'), url: mediaUrl() }),
+  z.object({ kind: z.literal('link'), url: mediaUrl() }),
   z.object({
     kind: z.literal('youtube'),
     id: z.string().regex(YOUTUBE_ID_PATTERN, `id must match ${YOUTUBE_ID_PATTERN}`),
+  }),
+  z.object({
+    kind: z.literal('vimeo'),
+    id: z.string().regex(VIMEO_ID_PATTERN, `id must match ${VIMEO_ID_PATTERN}`),
+    hash: z.string().regex(VIMEO_HASH_PATTERN, `hash must match ${VIMEO_HASH_PATTERN}`).optional(),
   }),
 ]);
 export type HotspotMedia = z.infer<typeof HotspotMediaSchema>;
