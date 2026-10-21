@@ -53,7 +53,7 @@ pnpm format
 - `docs/decisions.md` — architectural decisions and their rationale
 - `docs/deploy.md` — provisioning and deploy runbook: what deploys where, one-time setup, first dev deploy checklist, production status
 - `docs/design/NOTES.md` — how to read the UI design handoff bundle against the current code
-- `docs/CLAUDE.md` — pointer file for AI coding agents working in this repo
+- `CLAUDE.md` — standing guidance for AI coding agents working in this repo
 
 ## Environments
 
