@@ -4,6 +4,7 @@ import { ACCOUNT_DELETE_CONFIRMATION } from '@internal/contracts';
 import { ConfirmModal } from '@internal/ui';
 import { useId, useState } from 'react';
 
+import { useAuthEnv } from '../auth-context.js';
 import type { Session } from '../session.js';
 
 export interface DeleteAccountModalProps {
@@ -18,6 +19,7 @@ export interface DeleteAccountModalProps {
  * account is already read-only and the daily sweep removes what's left.
  */
 export function DeleteAccountModal({ open, session, onClose }: DeleteAccountModalProps) {
+  const { origins, assign } = useAuthEnv();
   const inputId = useId();
   const [typed, setTyped] = useState('');
   const matches = typed.trim() === ACCOUNT_DELETE_CONFIRMATION;
@@ -33,7 +35,12 @@ export function DeleteAccountModal({ open, session, onClose }: DeleteAccountModa
     } catch {
       throw new Error('Your account couldn’t be deleted. Try again in a moment.');
     }
-    await session.signOut();
+    // The account is gone either way: a failed sign-out must not offer a retry.
+    try {
+      await session.signOut();
+    } catch {
+      assign(`${origins.website}/`);
+    }
   };
 
   return (

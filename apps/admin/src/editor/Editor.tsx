@@ -1,6 +1,5 @@
 import { DEFAULT_TOUR_SETTINGS, type Hotspot } from '@internal/contracts';
 import {
-  AccountMenu,
   Button,
   Compass,
   ConfirmModal,
@@ -30,6 +29,7 @@ import './editor.css';
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { writeCurrentTour } from '../dashboard/current-tour.js';
+import { OwnerAccountMenu } from '../account/OwnerAccountMenu.js';
 import { useSession } from '../session.js';
 import { useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
@@ -190,7 +190,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const config = useConfig();
   const session = useSession();
   const uploads = useUploads();
-  const { origins, fetch: authFetch } = useAuthEnv();
+  const { fetch: authFetch } = useAuthEnv();
   const createViewer = useContext(StageFactoryContext);
   const [params, setParams] = useSearchParams();
   const [viewer, setViewer] = useState<Viewer | null>(null);
@@ -548,11 +548,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           <Link className="pn-btn pn-btn--accent pn-btn--pill" to="share/link">
             Share
           </Link>
-          <AccountMenu
-            user={session.user}
-            items={[{ label: 'Home page', icon: 'fa-solid fa-house', href: `${origins.website}/` }]}
-            onSignOut={session.signOut}
-          />
+          <OwnerAccountMenu session={session} />
         </div>
       </header>
       {settingsOpen && (

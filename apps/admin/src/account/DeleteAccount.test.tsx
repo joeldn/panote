@@ -56,6 +56,21 @@ describe('Delete account', () => {
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ confirm: 'delete my account' });
   });
 
+  it('never offers a retry when sign-out fails after the delete: leaves for the website', async () => {
+    const auth = fakeAuth({
+      signOut: vi.fn(async () => Promise.reject(new Error('popup blocked'))),
+    });
+    const { assign } = renderAdmin('/app/', {
+      auth,
+      fetch: server(() => json({ status: 'deleted' })),
+    });
+    await openDialog();
+    fireEvent.change(phraseInput(), { target: { value: 'delete my account' } });
+    fireEvent.click(deleteButton());
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('http://localhost:5174/'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('treats a pending delete as done', async () => {
     const auth = fakeAuth();
     renderAdmin('/app/', { auth, fetch: server(() => json({ status: 'pending' }, 202)) });
