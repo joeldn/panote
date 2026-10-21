@@ -207,6 +207,11 @@ describe('createAdminApi', () => {
     await expect(api.deletePano('p1')).rejects.toMatchObject({ status: 500 });
   });
 
+  it('a write refused because the account was deleted says so', async () => {
+    const { api } = setup(json({ error: 'account deleted' }, 410));
+    await expect(api.createTour({ title: 'T' })).rejects.toThrow('This account has been deleted.');
+  });
+
   it('deleteAccount sends the typed phrase and accepts deleted or pending', async () => {
     const { api, call } = setup(
       json({ status: 'deleted' }),

@@ -41,6 +41,8 @@ export class ApiSchemaError extends Error {
 
 function errorMessage(status: number, body: unknown): string {
   if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
+    // admin-api and upload-api refuse every write once the account is marked for deletion.
+    if (status === 410 && body.error === 'account deleted') return 'This account has been deleted.';
     return `${status}: ${body.error}`;
   }
   return `request failed with ${status}`;
