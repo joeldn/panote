@@ -1,9 +1,9 @@
+import { isHttpsMediaUrl } from '@internal/contracts';
 import { useState } from 'react';
 
 import type { ViewerMedia } from './types.js';
 
 const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';
-// dnt=1 is Vimeo's do-not-track player: no cookies or session data, like youtube-nocookie.
 const VIMEO_EMBED = 'https://player.vimeo.com/video/';
 
 const LINK_LABEL = {
@@ -11,9 +11,6 @@ const LINK_LABEL = {
   audio: 'Open audio ↗',
   video: 'Open video ↗',
 } as const;
-
-// The schema only stores https urls; this keeps a hand-built ViewerMedia to that too.
-const isHttps = (url: string) => /^https:\/\//i.test(url);
 
 function hostOf(url: string): string {
   try {
@@ -24,6 +21,7 @@ function hostOf(url: string): string {
 }
 
 function vimeoSrc(id: string, hash: string | undefined): string {
+  // dnt=1 is Vimeo's do-not-track player: no cookies or session data, like youtube-nocookie.
   const params = new URLSearchParams({ dnt: '1' });
   if (hash) params.set('h', hash);
   return `${VIMEO_EMBED}${encodeURIComponent(id)}?${params}`;
@@ -68,7 +66,8 @@ export function MediaEmbed({ media, title }: MediaEmbedProps) {
       />
     );
   }
-  if (!isHttps(media.url)) return null;
+  // The schema only stores plain https urls; a hand-built ViewerMedia is held to that too.
+  if (!isHttpsMediaUrl(media.url)) return null;
   if (media.kind === 'link') {
     return <ExternalLink href={media.url}>{`Visit ${hostOf(media.url)} ↗`}</ExternalLink>;
   }

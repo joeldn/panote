@@ -528,16 +528,20 @@ describe('HotspotPanel', () => {
     expect(container.querySelector('img, audio, video, iframe')).toBeNull();
   });
 
-  it.each(['javascript:alert(1)', 'data:text/html,hi', 'http://example.org/a'])(
-    'renders nothing for a non-https url %j',
-    (url) => {
-      for (const kind of ['image', 'audio', 'video', 'link'] as const) {
-        const { container } = panel({ kind, url });
-        expect(container.querySelector('a, img, audio, video')).toBeNull();
-        cleanup();
-      }
-    },
-  );
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,hi',
+    'http://example.org/a',
+    'https://user:pass@example.org/a',
+    'https://user@example.org/a',
+    'https://',
+  ])('renders nothing for a url %j that is not plain https', (url) => {
+    for (const kind of ['image', 'audio', 'video', 'link'] as const) {
+      const { container } = panel({ kind, url });
+      expect(container.querySelector('a, img, audio, video')).toBeNull();
+      cleanup();
+    }
+  });
 
   it.each([
     ['image', 'img', 'Open image ↗'],
