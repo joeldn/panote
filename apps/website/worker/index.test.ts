@@ -22,19 +22,32 @@ const putSlug = (slug: string, body: unknown) =>
   env.BUCKET.put(`slugs/${slug}.json`, typeof body === 'string' ? body : JSON.stringify(body));
 
 const CDN = 'https://cdn.test/';
+// index.html's site-wide description and link preview tags, as written there. The `&amp;`
+// checks they go back out exactly as they came, not escaped twice.
+const SITE_METAS = [
+  '<meta name="description" content="Tours &amp; panoramas" />',
+  '<meta property="og:title" content="panote" />',
+  `<meta property="og:image" content="${ORIGIN}/og.jpg" />`,
+  '<meta name="twitter:card" content="summary_large_image" />',
+];
 // The shape `vite build` writes, including the cdnPreconnect plugin's link.
 const PAGE =
   '<!doctype html><html lang="en"><head><meta charset="UTF-8" /><title>panote</title>' +
+  '<meta name="theme-color" content="#faf8f4" />' +
+  SITE_METAS.join('') +
   '<script type="module" crossorigin src="/assets/index-x.js"></script>' +
   `<link rel="preconnect" href="https://cdn.test" crossorigin data-cdn-base="${CDN}">` +
   '</head><body><div id="root"></div></body></html>';
 
 // What a live tour page streams when the R2 reads give nothing to inline: the plain page,
-// with its title moved to the end of the head (it is held back until the reads settle).
-const PLAIN = PAGE.replace('<title>panote</title>', '').replace(
-  '</head>',
-  '<title>panote</title></head>',
-);
+// with its title and site-wide preview tags moved to the end of the head (they are held
+// back until the reads settle).
+const PLAIN = SITE_METAS.reduce((page, tag) => page.replace(tag, ''), PAGE)
+  .replace('<title>panote</title>', '')
+  .replace(
+    '</head>',
+    `<title>panote</title>${SITE_METAS.map((tag) => tag.replace(' />', '>')).join('')}</head>`,
+  );
 
 const assets = {
   fetch: vi.fn(
@@ -728,11 +741,22 @@ describe('link previews', () => {
     expect(html).not.toContain('<i>');
   });
 
-  it('adds nothing when the page is served plain', async () => {
+  it('keeps only the site-wide tags when the page is served plain', async () => {
     await env.BUCKET.delete(`pub/tours/${TOUR}.json`);
     const html = await (await call('/s/new-name')).text();
     expect(html).toBe(PLAIN);
-    expect(metasOf(html)).toEqual([]);
+    expect(metasOf(html)).toEqual(SITE_METAS.map((tag) => tag.replace(' />', '>')));
+  });
+
+  it("replaces the site-wide description and preview tags with the tour's own", async () => {
+    const html = await (await call('/s/new-name')).text();
+    expect(html).not.toContain('Tours &amp; panoramas');
+    expect(html).not.toContain(`${ORIGIN}/og.jpg`);
+    expect(html.match(/name="description"/g)).toHaveLength(1);
+    expect(html.match(/property="og:title"/g)).toHaveLength(1);
+    expect(html.match(/name="twitter:card"/g)).toHaveLength(1);
+    // Not a preview tag: it stays where it was.
+    expect(html).toContain('<meta name="theme-color" content="#faf8f4" />');
   });
 
   it('adds nothing when the reads outlast the budget', async () => {
@@ -974,12 +998,43 @@ describe('routing through the assets router', () => {
     expect(await res.text()).toBe('User-agent: *\nDisallow: /\n');
   });
 
+  it('serves the dev sitemap.xml as a file that lists nothing', async () => {
+    const res = await SELF.fetch(`${ORIGIN}/sitemap.xml`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('xml');
+    const xml = await res.text();
+    expect(xml).toContain('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">');
+    expect(xml).not.toContain('<url>');
+  });
+
+  it.each(['/favicon.ico', '/favicon.svg', '/apple-touch-icon.png', '/og.jpg'])(
+    'serves %s as a file',
+    async (path) => {
+      const res = await SELF.fetch(`${ORIGIN}${path}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).not.toContain('text/html');
+    },
+  );
+
+  it("gives the landing page the site's description and a dev-origin preview image", async () => {
+    const html = await (await SELF.fetch(`${ORIGIN}/`)).text();
+    expect(html).toMatch(/<meta\s+name="description"\s+content="Host 360° panorama tours/);
+    expect(html).toContain('<meta property="og:image" content="https://panote.dev/og.jpg" />');
+    expect(html).toContain('<meta name="theme-color" content="#faf8f4" />');
+    expect(html).not.toContain('https://panote.io');
+    expect(html).not.toContain('%SITE_ORIGIN%');
+  });
+
   it('primes the built index.html, using the CDN root Vite wrote into it', async () => {
     await publish();
     const res = await SELF.fetch(`${ORIGIN}/s/new-name`);
     const html = await res.text();
     expect(html).toContain('<script type="module"');
     expect(html).toContain('<title>Old town · panote</title>');
+    // The built page's site-wide tags are gone, the tour's own in their place.
+    expect(html).not.toContain('Host 360° panorama tours');
+    expect(html).not.toContain('https://panote.dev/og.jpg');
+    expect(html.match(/name="description"/g)).toHaveLength(1);
     // Revalidated every time and with no validator, so no cache can reuse a primed page
     // (crawler or person) without asking the Worker again; no Vary needed.
     expect(res.headers.get('Cache-Control')).toBe('public, max-age=0, must-revalidate');
