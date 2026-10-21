@@ -1017,6 +1017,34 @@ describe('customMetadata writes (unit A2)', () => {
     });
   });
 
+  it('a tour PUT that stars a later scene moves the list cover to it', async () => {
+    const create = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: auth.headers,
+      body: JSON.stringify({
+        title: 'Starred',
+        scenes: [{ panoId: 'star-p1' }, { panoId: 'star-p2' }],
+      }),
+    });
+    const { tourId } = (await create.json()) as { tourId: string };
+    await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        title: 'Starred',
+        scenes: [{ panoId: 'star-p1' }, { panoId: 'star-p2' }],
+        startPanoId: 'star-p2',
+      }),
+    });
+    const head = await env.BUCKET.head(tourKey(MY_SUB, tourId));
+    expect(head?.customMetadata?.coverPanoId).toBe('star-p2');
+    const list = await SELF.fetch('https://x/api/admin/tours', auth);
+    const body = (await list.json()) as {
+      tours: Array<{ tourId: string; coverPanoId: string | null }>;
+    };
+    expect(body.tours.find((t) => t.tourId === tourId)?.coverPanoId).toBe('star-p2');
+  });
+
   it('a tour with no scenes stamps an empty coverPanoId', async () => {
     const create = await SELF.fetch('https://x/api/admin/tours', {
       method: 'POST',
