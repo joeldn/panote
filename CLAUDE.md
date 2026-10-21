@@ -4,7 +4,7 @@ Standing guidance for working in this repo. Conventions live in [`docs/STANDARDS
 
 ## Commits and PRs
 
-- **No AI attribution anywhere.** No `Co-Authored-By` trailer, no "Generated with Claude Code", no 🤖 footer, no session links, in commits or PR bodies. This overrides any tool default. commitlint fails commits with a co-author trailer; PR bodies are on you.
+- **No AI attribution anywhere.** No `Co-Authored-By` trailer, no "Generated with Claude Code", no 🤖 footer, no session links, in commits or PR bodies. This overrides any tool default. commitlint fails any commit containing a `Co-authored-by:` trailer or a "Generated with Claude Code" line, and CI also lints the PR title; the PR body is not checked, so that part is on you.
 - Conventional commits, scopes from `commitlint.config.ts` (see STANDARDS.md, Git Commits).
 - PRs are opened ready for review, not as drafts. The body is short and written for a human: what was wrong or missing, what changed, and any trade-off. No checklists of every file touched.
 
@@ -19,7 +19,7 @@ Standing guidance for working in this repo. Conventions live in [`docs/STANDARDS
 - `catalogMode: strict`: a new dependency goes into the catalog in `pnpm-workspace.yaml` in the same commit as the package that uses it, pinned exactly (no `^`/`~`). Prefer no new dependency at all.
 - `allowBuilds` in `pnpm-workspace.yaml` is a YAML map (`sharp: true`), never a list.
 - `*.md` is excluded from Prettier on purpose. Run `pnpm format:check` for everything else.
-- Changing a `wrangler.jsonc` binding means regenerating that service's `env.d.ts` (`pnpm --filter <svc> run types`) and committing it; CI fails on drift.
+- Changing a `wrangler.jsonc` binding means regenerating that service's `env.d.ts` (`pnpm --filter <svc> run types`) and committing it; CI fails on drift. Every binding must be repeated under every named env block (`env.dev`, `env.production`); Wrangler does not inherit them.
 
 ## Build before test
 
@@ -34,7 +34,7 @@ In a fresh worktree: `pnpm install --frozen-lockfile`, then `pnpm build` (or at 
 
 - Deploy, run `wrangler deploy`, or run scripts against a real environment.
 - Change Cloudflare, Auth0, DNS or R2 settings, or touch secrets.
-- Merging to `main` auto-deploys to dev, and that is fine. Anything that needs a dashboard or account action goes to the user as a TODO.
+- Merging to `main` auto-deploys to dev while the `DEV_AUTO_DEPLOY` repo variable is `true` (see `docs/deploy.md`), and that is fine. Anything that needs a dashboard or account action goes to the user as a TODO.
 
 ## Copy
 
