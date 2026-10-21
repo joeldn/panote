@@ -91,6 +91,12 @@ export const tourKey = (u: string, t: string): string =>
 // Private publish sidecar ({ slug, visibility, publishedAt }), never CDN-served.
 export const publishKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/publish.json`;
+// Account deletion marker: written first, so the delete is resumable and the
+// account read-only until it finishes. Owner-scoped like panos/ and tours/:
+// the CDN's WAF rule only lets tiles/, pub/ and slugs/ through.
+export const ACCOUNTS_ROOT = 'accounts/';
+export const accountDeletionKey = (u: string): string =>
+  `${ACCOUNTS_ROOT}${encodeId(u)}/deletion.json`;
 
 // Owner-free: base64url(sub) is reversible, so these must stay safe for a
 // public bucket - panoId alone (a server-generated UUID) is unique enough.

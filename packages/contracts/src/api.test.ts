@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  ACCOUNT_DELETE_CONFIRMATION,
+  AccountDeleteRequestSchema,
+  AccountDeletionRecordSchema,
   PANO_DELETE_CONFLICTS,
   PanoConfigOkSchema,
   PanoDeleteConflictSchema,
@@ -74,5 +77,24 @@ describe('PanoDeleteConflictSchema', () => {
       expect(PanoDeleteConflictSchema.safeParse({ error }).success).toBe(true);
     }
     expect(PanoDeleteConflictSchema.safeParse({ error: 'conflict' }).success).toBe(false);
+  });
+});
+
+describe('AccountDeleteRequestSchema', () => {
+  it('accepts only the exact confirmation phrase', () => {
+    expect(
+      AccountDeleteRequestSchema.safeParse({ confirm: ACCOUNT_DELETE_CONFIRMATION }).success,
+    ).toBe(true);
+    for (const confirm of ['Delete my account', 'delete my account ', '', undefined]) {
+      expect(AccountDeleteRequestSchema.safeParse({ confirm }).success).toBe(false);
+    }
+  });
+});
+
+describe('AccountDeletionRecordSchema', () => {
+  it('needs the sub, so the sweep can rebuild the owner keys', () => {
+    const record = { v: 1, sub: 'auth0|abc', requestedAt: '2026-10-01T00:00:00.000Z' };
+    expect(AccountDeletionRecordSchema.safeParse(record).success).toBe(true);
+    expect(AccountDeletionRecordSchema.safeParse({ ...record, sub: '' }).success).toBe(false);
   });
 });
