@@ -62,22 +62,30 @@ export function parseDeleteAccountArgs(
     throw new Error('--sub has leading or trailing whitespace');
   }
 
+  return { mode, sub: sub ?? '', r2: r2ConfigFromEnv(env, allowBucket) };
+}
+
+export type R2Config = DeleteAccountArgs['r2'];
+
+/**
+ * The R2 S3 credentials from the environment, shared by the operator scripts.
+ * Same guard as the og.jpg backfill: anything but a -dev bucket is named twice.
+ */
+export function r2ConfigFromEnv(
+  env: Record<string, string | undefined>,
+  allowBucket: string | undefined,
+): R2Config {
   const missing = ENV_NAMES.filter((n) => !env[n]);
   if (missing.length) throw new Error(`missing env ${missing.join(', ')}`);
   const bucket = env.R2_BUCKET!;
-  // Same guard as the og.jpg backfill: anything but a -dev bucket is named twice.
   if (!bucket.endsWith('-dev') && allowBucket !== bucket) {
     throw new Error(`R2_BUCKET is ${bucket}; pass --allow-bucket ${bucket} to run against it`);
   }
   return {
-    mode,
-    sub: sub ?? '',
-    r2: {
-      accountId: env.R2_ACCOUNT_ID!,
-      bucket,
-      accessKeyId: env.R2_ACCESS_KEY_ID!,
-      secretAccessKey: env.R2_SECRET_ACCESS_KEY!,
-    },
+    accountId: env.R2_ACCOUNT_ID!,
+    bucket,
+    accessKeyId: env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY!,
   };
 }
 

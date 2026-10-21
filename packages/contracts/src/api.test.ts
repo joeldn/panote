@@ -3,6 +3,9 @@ import {
   ACCOUNT_DELETE_CONFIRMATION,
   AccountDeleteRequestSchema,
   AccountDeletionRecordSchema,
+  AccountDisabledRecordSchema,
+  CLIENT_ID_PATTERN,
+  OperatorTakedownRequestSchema,
   PANO_DELETE_CONFLICTS,
   PanoConfigOkSchema,
   PanoDeleteConflictSchema,
@@ -96,5 +99,54 @@ describe('AccountDeletionRecordSchema', () => {
     const record = { v: 1, sub: 'auth0|abc', requestedAt: '2026-10-01T00:00:00.000Z' };
     expect(AccountDeletionRecordSchema.safeParse(record).success).toBe(true);
     expect(AccountDeletionRecordSchema.safeParse({ ...record, sub: '' }).success).toBe(false);
+  });
+});
+
+describe('AccountDisabledRecordSchema', () => {
+  it('needs a disabledAt; the reason is optional and bounded', () => {
+    const record = { v: 1, disabledAt: '2026-10-01T00:00:00.000Z' };
+    expect(AccountDisabledRecordSchema.safeParse(record).success).toBe(true);
+    expect(AccountDisabledRecordSchema.safeParse({ ...record, reason: 'ticket 12' }).success).toBe(
+      true,
+    );
+    expect(AccountDisabledRecordSchema.safeParse({ v: 1 }).success).toBe(false);
+    expect(
+      AccountDisabledRecordSchema.safeParse({ ...record, reason: 'x'.repeat(501) }).success,
+    ).toBe(false);
+  });
+});
+
+describe('CLIENT_ID_PATTERN', () => {
+  it('takes what crypto.randomUUID() returns', () => {
+    for (let i = 0; i < 20; i++) expect(CLIENT_ID_PATTERN.test(crypto.randomUUID())).toBe(true);
+  });
+
+  it.each([
+    '',
+    'anon-1',
+    '6F9619FF-8B86-4D01-B42D-00CF4FC964FF',
+    '6f9619ff-8b86-1d01-b42d-00cf4fc964ff',
+    '6f9619ff-8b86-4d01-b42d-00cf4fc964ff ',
+    '6f9619ff-8b86-4d01-b42d-00cf4fc964ff6f9619ff',
+    '6f9619ff8b864d01b42d00cf4fc964ff',
+  ])('refuses %j', (id) => {
+    expect(CLIENT_ID_PATTERN.test(id)).toBe(false);
+  });
+});
+
+describe('OperatorTakedownRequestSchema', () => {
+  const ok = { sub: 'auth0|abc', tourId: 'tour-1', action: 'unpublish' };
+
+  it('takes a sub, a tourId and one of the two actions', () => {
+    expect(OperatorTakedownRequestSchema.safeParse(ok).success).toBe(true);
+    expect(OperatorTakedownRequestSchema.safeParse({ ...ok, action: 'delete' }).success).toBe(true);
+  });
+
+  it.each([
+    ['an empty sub', { ...ok, sub: '' }],
+    ['a tourId with a slash', { ...ok, tourId: 'a/b' }],
+    ['another action', { ...ok, action: 'disable' }],
+  ])('refuses %s', (_label, body) => {
+    expect(OperatorTakedownRequestSchema.safeParse(body).success).toBe(false);
   });
 });

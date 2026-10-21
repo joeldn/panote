@@ -10,6 +10,7 @@
     "dev": "wrangler dev --env dev",
     "deploy": "wrangler deploy --env dev",
     "delete-account": "node scripts/delete-account.ts",
+    "takedown": "node scripts/takedown.ts",
     "types": "wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",

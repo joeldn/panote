@@ -58,6 +58,16 @@ export interface R2S3Client {
    * every page of them, each ending in `/`. Throws on a non-2xx response.
    */
   listPrefixes(prefix: string): Promise<string[]>;
+  /**
+   * Every object under `prefix` (ListObjectsV2, no delimiter), every page of
+   * them, with its size in bytes. Throws on a non-2xx response.
+   */
+  listObjects(prefix: string): Promise<R2ListedObject[]>;
+}
+
+export interface R2ListedObject {
+  readonly key: string;
+  readonly size: number;
 }
 
 const XML_ENTITIES: Record<string, string> = {
@@ -113,6 +123,25 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
   });
   const base = `https://${config.accountId}.r2.cloudflarestorage.com/${config.bucket}`;
 
+  // ListObjectsV2, one response body per page, following continuation tokens.
+  async function* listPages(prefix: string, delimiter?: string): AsyncGenerator<string> {
+    let token: string | undefined;
+    do {
+      const url = new URL(base);
+      url.searchParams.set('list-type', '2');
+      url.searchParams.set('prefix', prefix);
+      if (delimiter !== undefined) url.searchParams.set('delimiter', delimiter);
+      if (token !== undefined) url.searchParams.set('continuation-token', token);
+      const res = await aws.fetch(url.toString());
+      if (!res.ok) throw new Error(`R2 LIST ${prefix} -> ${res.status}`);
+      const xml = await res.text();
+      yield xml;
+      const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+      const next = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(xml)?.[1];
+      token = truncated && next ? unescapeXml(next) : undefined;
+    } while (token !== undefined);
+  }
+
   return {
     async presignPut(key, opts) {
       const expiresInSeconds = opts?.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRY_SECONDS;
@@ -143,24 +172,24 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
 
     async listPrefixes(prefix) {
       const found: string[] = [];
-      let token: string | undefined;
-      do {
-        const url = new URL(base);
-        url.searchParams.set('list-type', '2');
-        url.searchParams.set('prefix', prefix);
-        url.searchParams.set('delimiter', '/');
-        if (token !== undefined) url.searchParams.set('continuation-token', token);
-        const res = await aws.fetch(url.toString());
-        if (!res.ok) throw new Error(`R2 LIST ${prefix} -> ${res.status}`);
-        const xml = await res.text();
+      for await (const xml of listPages(prefix, '/')) {
         for (const m of xml.matchAll(
           /<CommonPrefixes>\s*<Prefix>([^<]*)<\/Prefix>\s*<\/CommonPrefixes>/g,
         ))
           found.push(unescapeXml(m[1]!));
-        const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
-        const next = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(xml)?.[1];
-        token = truncated && next ? unescapeXml(next) : undefined;
-      } while (token !== undefined);
+      }
+      return found;
+    },
+
+    async listObjects(prefix) {
+      const found: R2ListedObject[] = [];
+      for await (const xml of listPages(prefix)) {
+        for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+          const key = /<Key>([^<]*)<\/Key>/.exec(m[1]!)?.[1];
+          const size = /<Size>(\d+)<\/Size>/.exec(m[1]!)?.[1];
+          if (key !== undefined) found.push({ key: unescapeXml(key), size: Number(size ?? 0) });
+        }
+      }
       return found;
     },
 

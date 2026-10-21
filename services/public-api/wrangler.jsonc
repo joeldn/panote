@@ -23,6 +23,21 @@
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
       // AE creates the dataset on first write; no provisioning step.
       "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "panote_events_dev" }],
+      // namespace_id is ours to choose (any integer, unique in the account; nothing to
+      // create), dev 12xx and production 22xx. Each `period` (10 or 60) must match
+      // RATE_PERIOD_SECONDS in src/index.ts, which is the 429's Retry-After.
+      // Per client IP (CF-Connecting-IP) per minute, one namespace per route.
+      "ratelimits": [
+        { "name": "VIEW_LIMITER", "namespace_id": "1201", "simple": { "limit": 30, "period": 60 } },
+        { "name": "LIKE_LIMITER", "namespace_id": "1202", "simple": { "limit": 10, "period": 60 } },
+        {
+          "name": "EVENTS_LIMITER",
+          "namespace_id": "1203",
+          "simple": { "limit": 120, "period": 60 },
+        },
+      ],
+      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist.
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
@@ -40,6 +55,18 @@
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
       "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "panote_events" }],
+      // Per client IP (CF-Connecting-IP) per minute, one namespace per route.
+      "ratelimits": [
+        { "name": "VIEW_LIMITER", "namespace_id": "2201", "simple": { "limit": 30, "period": 60 } },
+        { "name": "LIKE_LIMITER", "namespace_id": "2202", "simple": { "limit": 10, "period": 60 } },
+        {
+          "name": "EVENTS_LIMITER",
+          "namespace_id": "2203",
+          "simple": { "limit": 120, "period": 60 },
+        },
+      ],
+      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist.
+      "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
         // only with the real tenant URL, never another fake name.

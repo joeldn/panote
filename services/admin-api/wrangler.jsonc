@@ -18,7 +18,8 @@
       "routes": [{ "pattern": "panote.dev/api/admin/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read)
-      // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6).
+      // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
+      // enables the operator takedown route, docs/deploy.md "Takedown").
       // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
@@ -53,7 +54,8 @@
       "routes": [{ "pattern": "panote.io/api/admin/*", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env production (Account Analytics: Read)
-      // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6).
+      // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
+      // enables the operator takedown route, docs/deploy.md "Takedown").
       // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).

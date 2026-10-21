@@ -39,6 +39,8 @@ export default defineWorkerTestConfig({
         // see auth.ts. NEVER set this in wrangler.jsonc; it must stay confined to
         // the test-only miniflare bindings here.
         TEST_JWT_SEAM: 'enabled',
+        // A secret in a real env; operator.test.ts also runs without it.
+        OPERATOR_TOKEN: 'test-operator-token',
       },
       workers: [
         {

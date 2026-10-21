@@ -9,6 +9,7 @@ import './tour.css';
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { useViewerAnalytics } from './analytics.js';
+import { reportHref } from './report.js';
 import { prefetchShareSheet } from './share-chunk.js';
 import { LazyShareSheet } from './share-sheet.js';
 import { StageFactoryContext } from './stage-factory.js';
@@ -39,6 +40,17 @@ function OwnerEdit({ tourId }: { tourId: string }) {
   return (
     <a className="pn-tourbar__btn" href={`${origins.admin}/app/t/${encodeURIComponent(tourId)}`}>
       Edit
+    </a>
+  );
+}
+
+/** Report, by mail with the share link filled in; never in the embed. */
+function ReportLink({ slug }: { slug: string }) {
+  const { siteOrigin } = useConfig();
+  return (
+    <a className="tour-report" href={reportHref(siteOrigin, slug)} aria-label="Report this tour">
+      <i className="fa-solid fa-flag" aria-hidden="true" />
+      <span className="tour-report__label">Report</span>
     </a>
   );
 }
@@ -90,7 +102,12 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
           ),
           extras: (panoId: string) =>
             shown && <TourStats tourId={tour.tourId} visible view={{ panoId, surface }} />,
-          end: <OwnerEdit tourId={tour.tourId} />,
+          end: (
+            <>
+              <ReportLink slug={tour.slug} />
+              <OwnerEdit tourId={tour.tourId} />
+            </>
+          ),
         },
         // Visitor share sheet (design README 7); the embed links back here instead.
         onShare: () => {

@@ -22,6 +22,7 @@ export {
   type CreateAuthOptions,
   type SignInConnection,
 } from './auth.js';
+export { CONTACT_EMAIL } from './contact.js';
 export {
   ApiError,
   ApiSchemaError,

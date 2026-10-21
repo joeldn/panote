@@ -508,8 +508,9 @@ works.
 
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
-for tour insights (see "Insights (unit B5)" below) and the optional `CF_PURGE_TOKEN` (see "CDN
-purge on delete" below). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
+for tour insights (see "Insights (unit B5)" below), the optional `CF_PURGE_TOKEN` (see "CDN
+purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" below; unset, the
+operator route answers `404`). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
 interactive `secret put` if scripting this. **Status: set for dev, outstanding for production** —
 `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
 environments; production has neither yet. `CF_ANALYTICS_TOKEN` and `CF_PURGE_TOKEN` are set on
@@ -1053,7 +1054,7 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
 
 1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
-   under `/api/admin/*`, except the account route itself) and `upload-api`'s
+   under `/api/admin/*`, except the account route itself and the operator route) and `upload-api`'s
    `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing
    closed), so nothing can recreate what the delete is removing. Reads still answer, with whatever
    is left. `accounts/` is owner-scoped like `panos/` and `tours/`: the CDN's WAF rule (above)
@@ -1094,7 +1095,9 @@ including for a partial run.
   fails, the marker stays and the account stays read-only. After that the same Auth0 user could sign
   in again to an empty account, so the Auth0 user has to be gone by then (below).
 - A marker that doesn't parse, or whose `sub` doesn't match its own key, is logged and skipped;
-  one account failing doesn't stop the others.
+  one account failing doesn't stop the others. Only `deletion.json` keys count as markers: the
+  operator's `disabled.json` (see "Takedown") lives under the same `accounts/<owner>/` and is left
+  alone, so a disabled owner who deletes their account stays disabled.
 
 Every log line about this starts with `[account-deletion]` and never carries a sub or a key (the
 owner segment of a key is reversible). The ones to watch in the Worker's observability logs:
@@ -1160,6 +1163,142 @@ trailing whitespace is refused. The next daily sweep (03:17 UTC) then does the w
 
 For a deletion requested by email: `--sub` to mark it, `--status` the next day, then delete the
 Auth0 user as above and reply to the request.
+
+---
+
+## Abuse controls
+
+Groundwork only: no per-owner quota is set yet. Code: `services/public-api/src/index.ts`,
+`services/upload-api/src/{index,quota}.ts`, `services/admin-api/src/operator.ts` and
+`services/admin-api/scripts/takedown.ts`.
+
+### Rate limits
+
+Workers Rate Limiting bindings (`ratelimits` in each `wrangler.jsonc`, repeated in both env
+blocks). public-api keys by client IP (`CF-Connecting-IP`): an IPv4 address as is, an IPv6
+address by its /64 (the first four hextets, `::` expanded), since one IPv6 client usually holds a
+whole /64 and could otherwise rotate past any limit. Over the limit the route answers `429 {"error":"rate limited"}` with `Retry-After: 60`
+(the binding's `period`; it doesn't report when the window resets). The counters are per
+Cloudflare location and eventually consistent: a brake, not an exact count. If the binding itself
+errors the request goes through and `rate limiter unavailable` is logged.
+
+| Worker | Binding | Route | Key | Limit | namespace_id dev / production |
+|---|---|---|---|---|---|
+| `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
+| `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
+| `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
+| `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
+
+`namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
+to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
+the same id share counters, so every binding and every env has its own. The dashboard doesn't show
+these limits: watch for `429`s in Workers Logs. To change a limit, edit `simple.limit` in both env
+blocks; `period` may only be `10` or `60`, and if it changes, change the matching constant
+(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
+office or a carrier NAT shares one IP, which is why those limits are well above what one browser
+sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
+the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
+`TourStats` still never see it (the privacy rule in `docs/wave6-plan.md` holds).
+
+### Likes
+
+`POST /api/tours/:id/like` now refuses (`400 {"error":"invalid X-Client-Id"}`) an anonymous
+`X-Client-Id` that isn't a lowercase v4 UUID (`CLIENT_ID_PATTERN` in `@internal/contracts`; the
+website mints `crypto.randomUUID()` and replaces a stored id that doesn't match). A signed-in like
+still dedupes by sub and ignores the header. It answers `404 {"error":"tour not found"}`, and
+creates no Durable Object or key, unless the tour's public bundle `pub/tours/<tourId>.json` exists:
+`public-api` has a read-only `BUCKET` binding to `pano-content(-dev)` for that one `HEAD`. Inside
+`TourStats`, one tour keeps at most `MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a
+new liker is neither counted nor stored, so storage per tour is bounded. Views and stats reads
+don't check the bundle (a view stores one counter per tourId); the per-IP limit is their brake.
+
+### Owner quotas
+
+`upload-api` calls `checkQuota` (`src/quota.ts`) last before it signs an upload URL, after the
+auth, rate limit, body checks and the account markers. Two optional vars:
+
+- `MAX_PANOS_PER_OWNER`: most panos (directories under `panos/<owner>/`) one owner may hold. A
+  replace doesn't count as a new pano.
+- `MAX_BYTES_PER_OWNER`: most bytes of originals one owner may hold, counting the declared `size`
+  of the upload; a replace frees the old original's bytes.
+
+Unset or empty means unlimited, and costs nothing: the owner's prefix is only listed (S3
+`ListObjectsV2`, one Class A operation per 1,000 objects) when a limit is set. That listing is a
+known cost: with a limit on, it runs in full on every upload-URL request. A pano with a delete
+tombstone (`deleting`) counts toward neither limit. Over a limit:
+`403 {"error":"pano limit reached"}` or `403 {"error":"storage limit reached"}`. A listing that
+fails is a `502`, and a value that isn't a non-negative integer refuses every upload (`500`), so a
+typo can't silently lift the limit. It is a soft cap: it counts what's stored now and the declared
+size, so concurrent requests can each pass, and the uploaded file can differ from the declared
+size (up to the 150 MiB cap). To turn a limit on, add it to `vars` in both env blocks of
+`services/upload-api/wrangler.jsonc`, delete its optional line from `src/env.d.ts`, run
+`pnpm --filter @service/upload-api run types` and deploy.
+
+### Report link
+
+The visitor viewer (`/s/<slug>`, not the embed) has a **Report** chip at the end of the tour bar
+(a flag only, on a phone). It's a `mailto:hello@panote.io` with the subject "Report a tour" and the
+tour's share link in the body. Reports arrive at the Email Routing address like any other mail; act
+on them with the takedown script below.
+
+### Takedown
+
+Two ways to stop abuse, usually together:
+
+- **Take a tour down.** admin-api's operator-only route `POST /api/admin/operator/takedown`
+  (`{ sub, tourId, action: "unpublish" | "delete" }`, header `X-Operator-Token`) runs exactly what
+  the owner's own unpublish or tour delete runs, through the tour's `TourPublisher`, with the CDN
+  purge. `unpublish` removes the share link, bundle and slug and keeps the tour and panos; `delete`
+  also deletes the tour and every pano no other tour of that owner uses. It answers `404` for a
+  missing or wrong token, and always while the `OPERATOR_TOKEN` secret isn't set on that env, so
+  the route doesn't exist until you set it. It skips the write gate (no Auth0 user).
+- **Disable the owner.** A marker `accounts/<owner>/disabled.json` (`{ v, disabledAt, reason? }`).
+  While it exists every `admin-api` write and `upload-api`'s upload URL answer
+  `403 {"error":"account disabled"}` (one more R2 `HEAD` each, in parallel with the deletion
+  marker's, failing closed); reads still work, and so does the owner's own account delete. A
+  deleted account answers `410` first. The account-deletion sweep never touches it, so it outlives
+  an account delete and the same sign-in stays blocked. Removing it re-enables the owner. It
+  doesn't take anything down by itself.
+
+`services/admin-api/scripts/takedown.ts` does both. It runs like the account-delete script: Node 24
+straight from TypeScript, a built workspace, the same R2 S3 credentials, and the same rule that
+anything but a `-dev` bucket is named twice with `--allow-bucket`. Tour actions also need
+`OPERATOR_TOKEN` (the same value as the `admin-api` secret) and call `https://panote.dev` for
+`pano-content-dev` and `https://panote.io` for `pano-content`. `ADMIN_API_ORIGIN` overrides that,
+but any origin other than the bucket's default also needs `--allow-bucket <bucket>`, so a dev
+bucket can't quietly be sent to production's admin-api.
+
+```bash
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+export OPERATOR_TOKEN=...    # only for --unpublish / --delete
+# Report only: which tour the share link is, who owns it, whether they're disabled
+node services/admin-api/scripts/takedown.ts --slug old-town
+# What it would do, without doing it
+node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disable-owner --dry-run
+# Take the tour down and block its owner, noting why (never shown to the owner)
+node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disable-owner --reason 'report 2026-10-21'
+# Or delete it outright; --tour takes a tourId instead of a slug
+node services/admin-api/scripts/takedown.ts --tour <tourId> --delete
+# An owner alone, by Auth0 user id
+node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --disable-owner
+node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --enable-owner
+```
+
+`--dry-run` writes nothing and calls no admin-api route, but it still makes the read-only R2
+requests above (the slug `GET`, the owner scan, the marker `GET`/`HEAD`), so it needs the same R2
+credentials and shows up in R2 request metrics.
+
+Finding the owner: tour keys carry the owner and `pub/` deliberately doesn't, so with only a slug or
+tourId the script lists `tours/` and `HEAD`s that tourId under each owner (one request per owner).
+Pass `--sub` as well to skip that scan; the script then checks that this sub really holds the tour
+(its `tour.json` or `publish.json`) and stops before writing anything if not, so a mistyped sub
+can't disable someone else. A slug that is now a redirect alias still names its tour.
+The owner is disabled before the tour comes down, so they can't republish in between. Both steps
+are idempotent: rerunning is harmless, and disabling again only rewrites `disabledAt`/`reason`.
+
+Setup, once per environment: generate a long random token (`openssl rand -hex 32`), then
+`pnpm --filter @service/admin-api exec wrangler secret put OPERATOR_TOKEN --env dev` (and
+`--env production`). Keep it with the R2 credentials; rotate it by putting a new value.
 
 ---
 

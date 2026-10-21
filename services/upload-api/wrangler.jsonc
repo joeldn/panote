@@ -17,6 +17,17 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.dev/api/upload-url", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
+      // namespace_id is ours to choose (any integer, unique in the account; nothing to
+      // create), dev 11xx and production 21xx. `period` (10 or 60) must match
+      // UPLOAD_URL_RATE_PERIOD_SECONDS in src/index.ts, which is the 429's Retry-After.
+      // Upload URLs per owner (Auth0 sub) per minute.
+      "ratelimits": [
+        {
+          "name": "UPLOAD_URL_LIMITER",
+          "namespace_id": "1101",
+          "simple": { "limit": 60, "period": 60 },
+        },
+      ],
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env dev ; wrangler secret put R2_SECRET_ACCESS_KEY --env dev
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
@@ -32,6 +43,14 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.io/api/upload-url", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
+      // Upload URLs per owner (Auth0 sub) per minute.
+      "ratelimits": [
+        {
+          "name": "UPLOAD_URL_LIMITER",
+          "namespace_id": "2101",
+          "simple": { "limit": 60, "period": 60 },
+        },
+      ],
       // secrets (per env): wrangler secret put R2_ACCESS_KEY_ID --env production ; wrangler secret put R2_SECRET_ACCESS_KEY --env production
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
