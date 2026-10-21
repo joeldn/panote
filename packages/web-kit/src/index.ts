@@ -23,6 +23,17 @@ export {
   type SignInConnection,
 } from './auth.js';
 export { CONTACT_EMAIL } from './contact.js';
+export { sendBeaconOrFetch, type BeaconSend } from './beacon.js';
+export {
+  createErrorReporter,
+  errorSampleRate,
+  installErrorReporter,
+  MAX_ERROR_REPORTS_PER_PAGE,
+  releaseFromModuleUrl,
+  type ErrorReporter,
+  type ErrorReporterOptions,
+  type InstallErrorReporterOptions,
+} from './error-reporter.js';
 export {
   ApiError,
   ApiSchemaError,
