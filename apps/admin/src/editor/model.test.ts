@@ -1,4 +1,4 @@
-import type { TourWithConfigsOk } from '@internal/contracts';
+import { MAX_TITLE_LENGTH, type TourWithConfigsOk } from '@internal/contracts';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -8,6 +8,7 @@ import {
   fromServer,
   mergeAppendedScenes,
   normalizeAngle,
+  pointSizeForDrag,
   sameValue,
   yawDegrees,
   type EditorAction,
@@ -101,6 +102,79 @@ describe('editor model', () => {
     expect(configOf(docs, 'a').current.hotspots[0]).not.toHaveProperty('icon');
     docs = editorReducer(docs, { type: 'point/remove', panoId: 'a', id: 'p1' })!;
     expect(configOf(docs, 'a').current.hotspots).toEqual([]);
+  });
+
+  it('moves a point by patching yaw (canonical) and pitch', () => {
+    const docs = run(
+      {
+        type: 'point/add',
+        panoId: 'a',
+        hotspot: { id: 'p1', type: 'info', yaw: 0, pitch: 0, title: 'Fountain' },
+      },
+      { type: 'point/update', panoId: 'a', id: 'p1', patch: { yaw: 4, pitch: -0.3 } },
+    );
+    const moved = configOf(docs, 'a').current.hotspots[0]!;
+    expect(moved.yaw).toBeCloseTo(4 - 2 * Math.PI);
+    expect(moved.pitch).toBe(-0.3);
+  });
+
+  it('duplicates a point next to the original, offset round, with its content copied', () => {
+    const original = {
+      id: 'p1',
+      type: 'info' as const,
+      yaw: Math.PI - 0.05,
+      pitch: 0.2,
+      title: 'Fountain',
+      body: '**Old**',
+      icon: 'star',
+      size: 2,
+      media: { kind: 'youtube' as const, id: 'dQw4w9WgXcQ' },
+    };
+    const docs = run(
+      { type: 'point/add', panoId: 'a', hotspot: original },
+      {
+        type: 'point/add',
+        panoId: 'a',
+        hotspot: { id: 'p2', type: 'info', yaw: 1, pitch: 0, title: 'Bench' },
+      },
+      { type: 'point/duplicate', panoId: 'a', id: 'p1', newId: 'p3' },
+    );
+    const hotspots = configOf(docs, 'a').current.hotspots;
+    expect(hotspots.map((h) => h.id)).toEqual(['p1', 'p3', 'p2']);
+    expect(hotspots[0]).toEqual(original);
+    expect(hotspots[1]).toEqual({
+      ...original,
+      id: 'p3',
+      title: 'Fountain (copy)',
+      // Offset past π, so it wraps like every stored yaw.
+      yaw: expect.closeTo(Math.PI + 0.05 - 2 * Math.PI),
+    });
+  });
+
+  it('keeps a duplicate’s title within the limit', () => {
+    const title = 'x'.repeat(MAX_TITLE_LENGTH);
+    const docs = run(
+      {
+        type: 'point/add',
+        panoId: 'a',
+        hotspot: { id: 'p1', type: 'info', yaw: 0, pitch: 0, title },
+      },
+      { type: 'point/duplicate', panoId: 'a', id: 'p1', newId: 'p2' },
+    );
+    const copy = configOf(docs, 'a').current.hotspots[1]!;
+    expect(copy.title).toHaveLength(MAX_TITLE_LENGTH);
+    expect(copy.title.endsWith(' (copy)')).toBe(true);
+  });
+
+  it('sizes a point from a placing drag: the marker radius in slider steps, clamped', () => {
+    expect(pointSizeForDrag(17)).toBeNull();
+    expect(pointSizeForDrag(34)).toBe(2);
+    expect(pointSizeForDrag(25.5)).toBe(1.5);
+    expect(pointSizeForDrag(1000)).toBe(3);
+  });
+
+  it('leaves the default size for a wobbly click or tap inside the marker', () => {
+    for (const d of [0, 5, 8, 12, 16.9]) expect(pointSizeForDrag(d)).toBeNull();
   });
 
   it('removing the start scene clears startPanoId; start view and north are canonical', () => {
