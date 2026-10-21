@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { TILE_FORMATS } from './manifest.js';
+import { PANO_PATTERN } from './keys.js';
 import { VisibilitySchema } from './publish.js';
 import { SceneConfigSchema, TourDocSchema } from './schema.js';
 
@@ -253,3 +254,43 @@ export const AccountDeletionRecordSchema = z.object({
   completedAt: z.string().optional(),
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
+
+// --- Operator takedown (abuse groundwork) ---
+
+// 403 from every owner write (and upload-url) while the operator has the account disabled.
+export const AccountDisabledSchema = z.object({ error: z.literal('account disabled') });
+
+// The marker at accountDisabledKey. Written only by the operator script.
+export const AccountDisabledRecordSchema = z.object({
+  v: z.literal(1),
+  disabledAt: z.string(),
+  // The operator's own note (a ticket or the report's date); never shown to the owner.
+  reason: z.string().max(500).optional(),
+});
+export type AccountDisabledRecord = z.infer<typeof AccountDisabledRecordSchema>;
+
+// admin-api's operator-only takedown route, guarded by the OPERATOR_TOKEN secret
+// sent in OPERATOR_TOKEN_HEADER. `delete` is the owner's own tour delete (it
+// unpublishes first); `unpublish` only takes the share link, bundle and slug down.
+export const OPERATOR_TAKEDOWN_PATH = '/api/admin/operator/takedown';
+export const OPERATOR_TOKEN_HEADER = 'X-Operator-Token';
+export const OPERATOR_TAKEDOWN_ACTIONS = ['unpublish', 'delete'] as const;
+export type OperatorTakedownAction = (typeof OPERATOR_TAKEDOWN_ACTIONS)[number];
+export const OperatorTakedownRequestSchema = z.object({
+  sub: z.string().min(1),
+  tourId: z.string().regex(PANO_PATTERN),
+  action: z.enum(OPERATOR_TAKEDOWN_ACTIONS),
+});
+export type OperatorTakedownRequest = z.infer<typeof OperatorTakedownRequestSchema>;
+// 200: done. `purged` counts the public keys queued for a CDN purge.
+export const OperatorTakedownOkSchema = z.object({
+  action: z.enum(OPERATOR_TAKEDOWN_ACTIONS),
+  purged: z.number().int().nonnegative(),
+});
+export type OperatorTakedownOk = z.infer<typeof OperatorTakedownOkSchema>;
+
+// The anonymous like identity (X-Client-Id): what crypto.randomUUID() returns,
+// a lowercase v4 UUID. public-api refuses anything else, so made-up ids can't
+// be arbitrary strings, and the website replaces a stored id that isn't one.
+export const CLIENT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

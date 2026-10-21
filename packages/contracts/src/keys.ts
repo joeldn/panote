@@ -97,6 +97,11 @@ export const publishKey = (u: string, t: string): string =>
 export const ACCOUNTS_ROOT = 'accounts/';
 export const accountDeletionKey = (u: string): string =>
   `${ACCOUNTS_ROOT}${encodeId(u)}/deletion.json`;
+// Operator takedown marker: while it exists the owner gets no upload URL and no
+// admin write (403), like the deletion marker's 410. Only the operator script
+// writes or removes it; account deletion leaves it, so a disabled owner stays so.
+export const accountDisabledKey = (u: string): string =>
+  `${ACCOUNTS_ROOT}${encodeId(u)}/disabled.json`;
 
 // Owner-free: base64url(sub) is reversible, so these must stay safe for a
 // public bucket - panoId alone (a server-generated UUID) is unique enough.

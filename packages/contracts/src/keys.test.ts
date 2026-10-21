@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   accountDeletionKey,
+  accountDisabledKey,
   configKey,
   deletingKey,
   originalKey,
@@ -39,6 +40,10 @@ describe('keys', () => {
 
   it('builds an account deletion marker key under accounts/, owner encoded', () => {
     expect(accountDeletionKey('auth0|abc')).toBe(`accounts/${encodeId('auth0|abc')}/deletion.json`);
+  });
+
+  it('accountDisabledKey sits next to the deletion marker, owner encoded', () => {
+    expect(accountDisabledKey('auth0|abc')).toBe(`accounts/${encodeId('auth0|abc')}/disabled.json`);
   });
 
   describe('encodeId (owner only)', () => {

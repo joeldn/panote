@@ -364,3 +364,71 @@ describe('listPrefixes', () => {
     await expect(client.listPrefixes('tiles/')).rejects.toThrow(/R2 LIST tiles\/ -> 403/);
   });
 });
+
+describe('listObjects', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const page = (objects: { key: string; size: number }[], next?: string): Response =>
+    new Response(
+      `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>mybucket</Name>` +
+        `<IsTruncated>${next ? 'true' : 'false'}</IsTruncated>` +
+        (next ? `<NextContinuationToken>${next}</NextContinuationToken>` : '') +
+        objects
+          .map(
+            (o) =>
+              `<Contents><Key>${o.key}</Key><LastModified>2026-01-01T00:00:00.000Z</LastModified>` +
+              `<ETag>"x"</ETag><Size>${o.size}</Size><StorageClass>STANDARD</StorageClass></Contents>`,
+          )
+          .join('') +
+        `</ListBucketResult>`,
+      { status: 200, headers: { 'content-type': 'application/xml' } },
+    );
+
+  it('lists every object under a prefix with its size, without a delimiter', async () => {
+    const fetchMock = vi.fn(async (_req: Request) =>
+      page([
+        { key: 'panos/o/p1/original', size: 1024 },
+        { key: 'panos/o/a&amp;b/config.json', size: 12 },
+      ]),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client(config);
+
+    expect(await client.listObjects('panos/o/')).toEqual([
+      { key: 'panos/o/p1/original', size: 1024 },
+      { key: 'panos/o/a&b/config.json', size: 12 },
+    ]);
+    const url = new URL(fetchMock.mock.calls[0]![0].url);
+    expect(url.searchParams.get('list-type')).toBe('2');
+    expect(url.searchParams.get('prefix')).toBe('panos/o/');
+    expect(url.searchParams.has('delimiter')).toBe(false);
+  });
+
+  it('follows continuation tokens', async () => {
+    const fetchMock = vi
+      .fn(async (_req: Request) => page([]))
+      .mockResolvedValueOnce(page([{ key: 'a', size: 1 }], 'tok'))
+      .mockResolvedValueOnce(page([{ key: 'b', size: 2 }]));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createR2S3Client(config);
+
+    expect(await client.listObjects('')).toEqual([
+      { key: 'a', size: 1 },
+      { key: 'b', size: 2 },
+    ]);
+    expect(new URL(fetchMock.mock.calls[1]![0].url).searchParams.get('continuation-token')).toBe(
+      'tok',
+    );
+  });
+
+  it('throws on a non-2xx response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('denied', { status: 403 })),
+    );
+    const client = createR2S3Client(config);
+    await expect(client.listObjects('panos/')).rejects.toThrow(/R2 LIST panos\/ -> 403/);
+  });
+});

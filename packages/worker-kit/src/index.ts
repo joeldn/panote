@@ -7,3 +7,4 @@ export {
 } from './errors.js';
 export { bearerToken } from './bearer.js';
 export { authenticate, authenticateOptional } from './auth.js';
+export { rateLimit, type RateLimiter } from './rate-limit.js';
