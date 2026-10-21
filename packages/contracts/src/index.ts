@@ -7,3 +7,4 @@ export * from './api.js';
 export * from './analytics.js';
 export * from './slug.js';
 export * from './publish.js';
+export * from './client-error.js';

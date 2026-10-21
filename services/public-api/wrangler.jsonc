@@ -15,7 +15,10 @@
       // panote.dev (docs/deploy.md, Cloudflare Access).
       "workers_dev": false,
       "preview_urls": false,
-      "routes": [{ "pattern": "panote.dev/api/tours/*", "zone_name": "panote.dev" }],
+      "routes": [
+        { "pattern": "panote.dev/api/tours/*", "zone_name": "panote.dev" },
+        { "pattern": "panote.dev/api/errors", "zone_name": "panote.dev" },
+      ],
       "observability": { "enabled": true },
       "durable_objects": {
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
@@ -35,6 +38,11 @@
           "namespace_id": "1203",
           "simple": { "limit": 120, "period": 60 },
         },
+        {
+          "name": "ERRORS_LIMITER",
+          "namespace_id": "1204",
+          "simple": { "limit": 20, "period": 60 },
+        },
       ],
       // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
@@ -48,7 +56,10 @@
       "name": "panote-public-api",
       "workers_dev": false,
       "preview_urls": false,
-      "routes": [{ "pattern": "panote.io/api/tours/*", "zone_name": "panote.io" }],
+      "routes": [
+        { "pattern": "panote.io/api/tours/*", "zone_name": "panote.io" },
+        { "pattern": "panote.io/api/errors", "zone_name": "panote.io" },
+      ],
       "observability": { "enabled": true },
       "durable_objects": {
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
@@ -63,6 +74,11 @@
           "name": "EVENTS_LIMITER",
           "namespace_id": "2203",
           "simple": { "limit": 120, "period": 60 },
+        },
+        {
+          "name": "ERRORS_LIMITER",
+          "namespace_id": "2204",
+          "simple": { "limit": 20, "period": 60 },
         },
       ],
       // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist.

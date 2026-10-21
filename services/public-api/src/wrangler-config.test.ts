@@ -15,6 +15,7 @@ describe('wrangler.jsonc ratelimits', () => {
   it.each(['dev', 'production'])('%s: every limiter period is RATE_PERIOD_SECONDS', (env) => {
     const limiters = config.env[env]?.ratelimits ?? [];
     expect(limiters.map((l) => l.name).sort()).toEqual([
+      'ERRORS_LIMITER',
       'EVENTS_LIMITER',
       'LIKE_LIMITER',
       'VIEW_LIMITER',

@@ -2,6 +2,7 @@ import {
   AnalyticsContentIdSchema,
   AnalyticsEventBatchSchema,
   CLIENT_ID_PATTERN,
+  ClientErrorReportSchema,
   pubTourKey,
   ViewBeaconSchema,
 } from '@internal/contracts';
@@ -14,6 +15,7 @@ import { createMiddleware } from 'hono/factory';
 import { authenticateOptional, rateLimit, type RateLimiter } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 
+import { logClientError } from './client-error.js';
 import { readJsonBody, toDataPoint } from './events.js';
 import { rateLimitKeyForIp } from './ip-key.js';
 import { TourStats } from './stats.js';
@@ -59,6 +61,22 @@ app.post(
   '/api/tours/:tourId/like',
   limitByIp((env) => env.LIKE_LIMITER),
 );
+// Error reports only come from our own pages, which are same-origin. A browser
+// marks a cross-site request with Sec-Fetch-Site and Origin; a non-browser
+// client sends neither and is let through (the limiter is its brake). Checked
+// before the limiter, so a cross-site page can't spend a visitor's quota.
+app.post('/api/errors', async (c, next) => {
+  const site = c.req.header('Sec-Fetch-Site');
+  const origin = c.req.header('Origin');
+  if ((site && site !== 'same-origin') || (origin && origin !== new URL(c.req.url).origin)) {
+    return c.json({ error: 'cross-origin' }, 403);
+  }
+  await next();
+});
+app.post(
+  '/api/errors',
+  limitByIp((env) => env.ERRORS_LIMITER),
+);
 
 app.post('/api/tours/:tourId/view', async (c) => {
   const body = await readJsonBody(c.req.raw);
@@ -103,6 +121,16 @@ app.post('/api/tours/:tourId/like', async (c) => {
   return stat(c, tourId).fetch(`https://do/like?u=${encodeURIComponent(who)}`, {
     method: 'POST',
   });
+});
+
+// Frontend error reports (both SPAs). Logged to Workers Logs, stored nowhere else.
+app.post('/api/errors', async (c) => {
+  const body = await readJsonBody(c.req.raw);
+  if (!body.ok) return c.json({ error: 'invalid body' }, body.status);
+  const parsed = ClientErrorReportSchema.safeParse(body.value);
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  logClientError(parsed.data);
+  return c.body(null, 204);
 });
 
 app.get('/api/tours/:tourId/stats', async (c) => {

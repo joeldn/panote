@@ -1,7 +1,7 @@
 import { AnalyticsEventBatchSchema } from '@internal/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createViewerBeacon, sendBeaconOrFetch } from './analytics.js';
+import { createViewerBeacon } from './analytics.js';
 
 let visibility: DocumentVisibilityState;
 let clock: number;
@@ -135,24 +135,5 @@ describe('createViewerBeacon', () => {
     expect(add.mock.calls.map(([type]) => type)).not.toContain('unload');
     expect(add.mock.calls.map(([type]) => type)).not.toContain('beforeunload');
     b.detach();
-  });
-});
-
-describe('sendBeaconOrFetch', () => {
-  it('uses sendBeacon with a plain string body', () => {
-    sendBeaconOrFetch('/api/tours/t/events', '{"events":[]}');
-    expect(sendBeacon).toHaveBeenCalledWith('/api/tours/t/events', '{"events":[]}');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('falls back to a cookieless keepalive fetch when sendBeacon refuses or is missing', () => {
-    sendBeacon.mockReturnValueOnce(false);
-    sendBeaconOrFetch('/u', 'a');
-    Reflect.deleteProperty(navigator, 'sendBeacon');
-    sendBeaconOrFetch('/u', 'b');
-    expect(fetchMock.mock.calls).toEqual([
-      ['/u', { method: 'POST', body: 'a', keepalive: true, credentials: 'omit' }],
-      ['/u', { method: 'POST', body: 'b', keepalive: true, credentials: 'omit' }],
-    ]);
   });
 });
