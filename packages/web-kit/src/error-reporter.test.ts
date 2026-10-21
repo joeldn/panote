@@ -75,6 +75,17 @@ describe('createErrorReporter', () => {
     expect(report!.path).toBe('/app/t/:tourId/share/link');
   });
 
+  // Generous bound: the main thread must not stall on a huge error; a regression
+  // is seconds, not milliseconds.
+  it('reports a ~100k-char message and stack quickly', () => {
+    const { reporter, sent } = setup();
+    const word = 'a'.repeat(100_000);
+    const started = performance.now();
+    reporter.report('error', boom(word, `TypeError: ${word}\n    at f (${word}:1:2)`));
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(sent()[0]!.message).toHaveLength(300);
+  });
+
   it('masks an email and a signed URL in the message', () => {
     const { reporter, sent } = setup();
     reporter.report('error', boom('no user a.b@example.com at https://x.dev/p?sig=secret'));

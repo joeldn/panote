@@ -58,7 +58,10 @@ export interface ErrorReporter {
   report(kind: ClientErrorKind, error: unknown, frame?: string): void;
 }
 
-const cap = (text: string, max: number): string => scrubErrorText(text).slice(0, max);
+// Sliced before scrubbing too, so the scrub's cost is bounded whatever the error
+// holds; the slack covers masking that shortens text.
+const cap = (text: string, max: number): string =>
+  scrubErrorText(text.slice(0, max * 4)).slice(0, max);
 
 const describe = (error: unknown): { message: string; stack: string } => {
   if (error instanceof Error) {
