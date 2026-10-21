@@ -137,12 +137,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // The UI and privacy page promise the sign-in record goes within 30 days of the request.
 export const AUTH0_REMOVAL_DAYS = 30;
 
-/** Every marker in the bucket, oldest request first; unreadable ones are skipped. */
+/** Every marker in the bucket, oldest request first; unparsable ones are skipped. */
 export async function listAccountDeletions(store: MarkerStore): Promise<AccountDeletionRecord[]> {
   const records: AccountDeletionRecord[] = [];
   for (const prefix of await store.listPrefixes(ACCOUNTS_ROOT)) {
     const res = await store.get(`${prefix}deletion.json`);
-    if (!res.ok) continue;
+    // Gone since the listing: nothing to report. Anything else must not hide an account.
+    if (res.status === 404) continue;
+    if (!res.ok) throw new Error(`R2 GET -> ${res.status}`);
     const parsed = AccountDeletionRecordSchema.safeParse(await res.json().catch(() => null));
     if (parsed.success) records.push(parsed.data);
   }

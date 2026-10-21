@@ -423,3 +423,51 @@ describe('write gate', () => {
     expect(verify).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('sweep: run budget across accounts, and order', () => {
+  const now = new Date('2026-10-20T03:17:00.000Z');
+  const panosLeft = async (sub: string) =>
+    (await env.BUCKET.list({ prefix: `panos/${encodeId(sub)}/` })).objects.length;
+
+  it('counts the run budget down across accounts until it is spent', async () => {
+    const subs = [1, 2, 3].map((n) => subOf(`acct-glob-${n}`));
+    for (const [i, sub] of subs.entries()) {
+      await put(accountDeletionKey(sub), {
+        v: 1,
+        sub,
+        requestedAt: `2025-01-0${i + 1}T00:00:00.000Z`,
+      });
+      for (const n of [1, 2]) await put(originalKey(sub, `acct-glob-${i + 1}-p${n}`), 'bytes');
+    }
+    // Three items for the run, ten per account: the first takes 2, the second 1, the third none.
+    await sweepAccountDeletions(depsWith(), now, { items: 3 }, 10);
+    expect(await Promise.all(subs.map(panosLeft))).toEqual([0, 1, 2]);
+    expect((await marker(subs[0]!))?.completedAt).toBe(now.toISOString());
+    expect((await marker(subs[1]!))?.completedAt).toBeUndefined();
+    expect((await marker(subs[2]!))?.completedAt).toBeUndefined();
+  });
+
+  it('works on interrupted deletes before finished ones', async () => {
+    // The finished account sorts first both by key and by requestedAt.
+    const finished = subOf('acct-order-done');
+    const interrupted = subOf('acct-order-open');
+    expect(accountDeletionKey(finished) < accountDeletionKey(interrupted)).toBe(true);
+    await put(accountDeletionKey(finished), {
+      v: 1,
+      sub: finished,
+      requestedAt: '2024-01-01T00:00:00.000Z',
+      completedAt: '2024-01-01T00:00:00.000Z',
+    });
+    await put(accountDeletionKey(interrupted), {
+      v: 1,
+      sub: interrupted,
+      requestedAt: '2024-02-01T00:00:00.000Z',
+    });
+    await put(originalKey(finished, 'acct-order-done-late'), 'bytes');
+    await put(originalKey(interrupted, 'acct-order-open-p'), 'bytes');
+
+    await sweepAccountDeletions(depsWith(), now, { items: 1 }, 10);
+    expect(await panosLeft(interrupted)).toBe(0);
+    expect(await panosLeft(finished)).toBe(1);
+  });
+});

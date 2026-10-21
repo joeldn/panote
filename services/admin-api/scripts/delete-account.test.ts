@@ -176,4 +176,16 @@ describe('listAccountDeletions', () => {
       'auth0|a\t2026-10-05T00:00:00.000Z\t-\t2026-11-04T00:00:00.000Z',
     ]);
   });
+
+  it('throws on a failed GET instead of leaving that account out', async () => {
+    const a = { v: 1, sub: 'auth0|a', requestedAt: '2026-10-05T00:00:00.000Z' };
+    const { store } = memoryStore({ [accountDeletionKey(a.sub)]: JSON.stringify(a) });
+    store.get = async () => new Response(null, { status: 503 });
+    await expect(listAccountDeletions(store)).rejects.toThrow(/503/);
+  });
+
+  it('skips a marker deleted between the listing and its GET', async () => {
+    const { store } = memoryStore({ 'accounts/gone/x': '' });
+    expect(await listAccountDeletions(store)).toEqual([]);
+  });
 });
