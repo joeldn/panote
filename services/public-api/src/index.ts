@@ -15,6 +15,7 @@ import { authenticateOptional, rateLimit, type RateLimiter } from '@internal/wor
 import { errorHandler } from '@internal/worker-kit/hono';
 
 import { readJsonBody, toDataPoint } from './events.js';
+import { rateLimitKeyForIp } from './ip-key.js';
 import { TourStats } from './stats.js';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -25,12 +26,13 @@ const stat = (c: { env: Env }, tourId: string) => c.env.STATS.get(c.env.STATS.id
 // Retry-After. The limits themselves live in wrangler.jsonc, per env.
 export const RATE_PERIOD_SECONDS = 60;
 
-// Per client IP. Cloudflare always sets CF-Connecting-IP in front of a Worker;
-// without it (a test, a local dev request) every caller shares one key.
+// Per client IP, an IPv6 client per /64 (ip-key.ts). Cloudflare always sets
+// CF-Connecting-IP in front of a Worker; without it (a test, a local dev
+// request) every caller shares one key.
 const limitByIp = (pick: (env: Env) => RateLimiter) =>
   createMiddleware<{ Bindings: Env }>(async (c, next) => {
     const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
-    const limited = await rateLimit(pick(c.env), ip, RATE_PERIOD_SECONDS);
+    const limited = await rateLimit(pick(c.env), rateLimitKeyForIp(ip), RATE_PERIOD_SECONDS);
     if (limited) return limited;
     await next();
   });

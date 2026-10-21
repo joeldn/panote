@@ -191,6 +191,26 @@ describe('rate limits (per client IP)', () => {
     expect(limit).toHaveBeenCalledWith({ key: '198.51.100.7' });
   });
 
+  it('two IPv6 addresses in the same /64 share one counter; another /64 has its own', async () => {
+    // One request per key, like a real limiter whose limit is 1.
+    const seen = new Set<string>();
+    const limit = vi.fn(async ({ key }: { key: string }) => {
+      const success = !seen.has(key);
+      seen.add(key);
+      return { success };
+    });
+    const view = (ip: string) =>
+      call('/api/tours/rl-v6/view', { VIEW_LIMITER: { limit } }, { 'CF-Connecting-IP': ip });
+    expect((await view('2001:db8:1:2::1')).status).toBe(200);
+    expect((await view('2001:db8:1:2:ffff:eeee:dddd:9')).status).toBe(429);
+    expect((await view('2001:db8:1:3::1')).status).toBe(200);
+    expect(limit.mock.calls.map(([o]) => o.key)).toEqual([
+      '2001:db8:1:2::/64',
+      '2001:db8:1:2::/64',
+      '2001:db8:1:3::/64',
+    ]);
+  });
+
   it('a limited view never reaches the counter', async () => {
     await call('/api/tours/rl-view-count/view', { VIEW_LIMITER: { limit: limited() } });
     const stats = await SELF.fetch('https://x/api/tours/rl-view-count/stats');
