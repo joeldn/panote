@@ -155,8 +155,10 @@ it has `preview: true`, with card `summary_large_image` and `og:image:alt` set t
 There is no cube-face fallback: face tiles are stored mirrored left to right (`faceUVToDir` in
 `@panote/core`) and a scraper can't flip them back. No og.jpg or preview, no manifest, or a CDN
 root that isn't absolute `https://` means no image and a `summary` card. Public and unlisted tours both get the tags: sharing the link is the point of
-unlisted, and its `noindex` stays. A page served plain (missing bundle, R2 error, budget: 300 ms, or 5 s
-for a crawler) gets none, the same as a slug with no live tour. With `?pano=` the image is that scene's, while
+unlisted, and its `noindex` stays. `index.html` carries site-wide tags for the landing page (a
+description, `og:*` with the static `/og.jpg` card, `twitter:card`); the script lifts those out of
+the head as it streams (like the `<title>`), so a primed tour page has only its own. A page served plain (missing bundle, R2 error, budget: 300 ms, or 5 s
+for a crawler) gets the site-wide tags back instead, the same as a slug with no live tour. With `?pano=` the image is that scene's, while
 `og:url` stays the canonical page.
 
 Scrapers fetch the page and the image anonymously. On dev, `panote.dev/s/*` is behind Cloudflare
@@ -221,7 +223,16 @@ missing or new mode fails safe to noindex. Production has to be explicit: `deplo
   to the SPA's `index.html`. Dev: `User-agent: *` / `Disallow: /`; production: `Allow: /`. On the
   zone only the website's copy is reachable (admin's routes stop at `/app`); admin's would only
   matter if its `workers.dev` URL were turned back on. `Disallow` alone doesn't keep a URL out of the index (it can still be indexed
-  from links), so the header is the real guard.
+  from links), so the header is the real guard. The website's production `robots.txt` also names
+  `Sitemap: <VITE_SITE_ORIGIN>/sitemap.xml`; dev's doesn't.
+- `sitemap.xml` (website only): production lists `/`, `/privacy` and `/terms` under
+  `VITE_SITE_ORIGIN`; tours aren't listed (an unlisted one must not be). Dev writes an empty
+  `<urlset>`, so the path is still a real file and never the SPA fallback.
+- Link previews and icons: `index.html` has the description, `og:*`/`twitter:*` tags, `theme-color`
+  (`#faf8f4`, paper) and the favicon set (`favicon.ico`, `favicon.svg`, `apple-touch-icon.png`,
+  from `apps/website/public/`). `og:image` is absolute: the `siteOrigin` plugin in
+  `apps/website/vite.config.ts` swaps `%SITE_ORIGIN%` for the mode's `VITE_SITE_ORIGIN`, so a dev
+  build points at panote.dev, never panote.io.
 - The website's `/s/*` script: `_headers` doesn't apply to Worker-generated responses, so the
   script sets the header itself on the 308 and on whatever `env.ASSETS.fetch` returns, unless the
   wrangler var `INDEXABLE` is `"true"` (dev `"false"`, production `"true"`; missing counts as dev).

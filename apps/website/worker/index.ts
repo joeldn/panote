@@ -22,16 +22,18 @@ const escapeText = (value: string): string =>
 
 /**
  * What goes at the end of the head once the R2 reads settle: for a tour, its title, robots
- * meta, link preview tags, preloads and boot data; without one, just the page's own title,
- * back as it was (no preview tags, the same as any page the script doesn't prime).
+ * meta, link preview tags, preloads and boot data; without one, the page's own title and
+ * site-wide preview tags, back as they were (the same as any page the script doesn't prime).
  */
 function headTail(
   boot: TourBoot | null,
-  plainTitle: string | null,
+  plain: PlainHead,
   cdnBase: string,
   canonical: string,
 ): string {
-  if (!boot) return plainTitle === null ? '' : `<title>${plainTitle}</title>`;
+  if (!boot) {
+    return (plain.title === null ? '' : `<title>${plain.title}</title>`) + plain.metas.join('');
+  }
   const data = scriptJson({ slug: boot.slug, record: boot.record, tour: boot.tour });
   const tilesBase = CDN_BASE.test(cdnBase) ? `${cdnBase}tiles/` : null;
   const preloads =
@@ -44,6 +46,30 @@ function headTail(
     `<script type="application/json" id="pn-boot">${data}</script>`
   );
 }
+
+/** What the tour page lifts out of the static head, to write back if there is no tour. */
+interface PlainHead {
+  title: string | null;
+  /** The site-wide description and preview tags, serialized as they came. */
+  metas: string[];
+}
+
+// index.html carries the landing page's description and link preview tags. A tour page
+// has its own, so the static ones must not reach it: a scraper reads the first og:title.
+const SITE_META = [
+  'head > meta[name="description"]',
+  'head > meta[property^="og:"]',
+  'head > meta[name^="twitter:"]',
+];
+
+// Attribute values come back as written in the source (entities still encoded), and
+// index.html quotes them with `"`, so only a stray `"` needs escaping on the way back out.
+const serializeMeta = (el: Element): string => {
+  const attrs = [...el.attributes].map(
+    ([name, value = '']) => `${name}="${value.replace(/"/g, '&quot;')}"`,
+  );
+  return `<meta ${attrs.join(' ')}>`;
+};
 
 /** A stream of one string, produced once `html` settles. It never errors. */
 function htmlStream(html: Promise<string>): ReadableStream<Uint8Array> {
@@ -68,6 +94,8 @@ function htmlStream(html: Promise<string>): ReadableStream<Uint8Array> {
  *
  * The page's own `<title>` sits above the module script, so it is lifted out and written
  * back at `</head>` (the tour's title, or the original when there is nothing to inline).
+ * The site-wide description and preview tags (SITE_META) are lifted out the same way: the
+ * tour's own replace them, or they go back as they were.
  * The insertion is a stream from a sync end-tag handler: an async handler would hold back
  * the bytes before it until it resolved, and HTMLRewriter flushes them for a stream.
  * `#pn-boot` lands inside `<head>`, and a module script runs only after the whole document
@@ -78,18 +106,26 @@ function primeHtml(
   boot: Promise<TourBoot | null>,
   canonical: string,
 ): Response {
-  let plainTitle: string | null = null;
+  const plain: PlainHead = { title: null, metas: [] };
   let cdnBase = '';
-  const rewritten = new HTMLRewriter()
-    .on('head > title', {
+  let rewriter = new HTMLRewriter().on('head > title', {
+    element(el) {
+      plain.title ??= '';
+      el.remove();
+    },
+    text(chunk) {
+      plain.title = (plain.title ?? '') + chunk.text;
+    },
+  });
+  for (const selector of SITE_META) {
+    rewriter = rewriter.on(selector, {
       element(el) {
-        plainTitle ??= '';
+        plain.metas.push(serializeMeta(el));
         el.remove();
       },
-      text(chunk) {
-        plainTitle = (plainTitle ?? '') + chunk.text;
-      },
-    })
+    });
+  }
+  const rewritten = rewriter
     .on('link[data-cdn-base]', {
       element(el) {
         cdnBase = el.getAttribute('data-cdn-base') ?? '';
@@ -99,12 +135,13 @@ function primeHtml(
       element(el) {
         el.onEndTag((end) => {
           // Everything the tail needs from the head has been seen by now.
-          const [title, base] = [plainTitle, cdnBase];
+          const head = { title: plain.title, metas: [...plain.metas] };
+          const base = cdnBase;
           const tail = boot
-            .then((b) => headTail(b, title, base, canonical))
+            .then((b) => headTail(b, head, base, canonical))
             .catch((err: unknown) => {
               console.error('tour page priming failed', err);
-              return headTail(null, title, base, canonical);
+              return headTail(null, head, base, canonical);
             });
           end.before(htmlStream(tail), { html: true });
         });
