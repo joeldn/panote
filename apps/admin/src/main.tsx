@@ -2,7 +2,15 @@ import '@internal/ui/styles.css';
 import '@internal/ui/icons.css';
 import './app.css';
 
-import { appOrigins, callbackUrl, createAuth, loadConfig } from '@internal/web-kit';
+import {
+  appOrigins,
+  callbackUrl,
+  createAuth,
+  errorSampleRate,
+  installErrorReporter,
+  loadConfig,
+  releaseFromModuleUrl,
+} from '@internal/web-kit';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter } from 'react-router';
@@ -10,10 +18,18 @@ import { RouterProvider } from 'react-router/dom';
 
 import { AuthEnvContext, type AuthEnv } from './auth-context.js';
 import { ConfigContext } from './config-context.js';
+import { redactAdminPath } from './error-path.js';
 import { routes } from './routes.js';
 
 const root = createRoot(document.getElementById('root')!);
 const config = loadConfig(import.meta.env);
+installErrorReporter(window, {
+  app: 'admin',
+  release: releaseFromModuleUrl(import.meta.url),
+  baseUrl: config.apiBase,
+  sampleRate: errorSampleRate(import.meta.env.MODE),
+  redactPath: redactAdminPath,
+});
 const origins = appOrigins(config.siteOrigin, import.meta.env.DEV);
 // One auth instance per page load; both apps share the session through localStorage.
 const authEnv: AuthEnv = {
