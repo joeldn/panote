@@ -487,6 +487,35 @@
   justify-content: space-between;
 }
 
+.ed-point__tools {
+  display: flex;
+  gap: 6px;
+}
+
+.ed-format {
+  display: flex;
+  gap: 2px;
+}
+
+.ed-format__btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: transparent;
+  font: 400 13px var(--fbody);
+  color: var(--ink-62);
+  cursor: pointer;
+}
+
+.ed-format__btn:hover {
+  background: var(--ink-06);
+  color: var(--ink);
+}
+
 /* --- Tour panel --- */
 .ed-scenes {
   flex: 1;
@@ -654,6 +683,12 @@
   position: absolute;
   inset: 0;
   cursor: crosshair;
+  /* A drag here sizes or moves a point; it must not scroll or zoom the page. */
+  touch-action: none;
+}
+
+.ed-placing--move {
+  cursor: move;
 }
 
 .ed-placing__hint {

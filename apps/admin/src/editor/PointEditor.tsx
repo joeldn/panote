@@ -1,9 +1,17 @@
 import { MAX_HOTSPOT_BODY_LENGTH, MAX_TITLE_LENGTH, type Hotspot } from '@internal/contracts';
 import { Button, FALLBACK_ICON, MediaEmbed, pointIcon, Segmented } from '@internal/ui';
-import { useId, useState } from 'react';
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 
 import { searchIcons } from './icons.js';
-import type { HotspotPatch } from './model.js';
+import { applyFormat, formatForKey, IS_MAC, type MarkdownFormat } from './markdown-format.js';
+import { POINT_SIZE_MAX, POINT_SIZE_MIN, POINT_SIZE_STEP, type HotspotPatch } from './model.js';
 import { choiceOf, mediaInput, parseMedia, type MediaChoice } from './media.js';
 
 type MediaPick = 'none' | MediaChoice;
@@ -15,6 +23,19 @@ const MEDIA_OPTIONS: Array<{ value: MediaPick; label: string }> = [
   { value: 'video', label: 'Video' },
   { value: 'embed', label: 'YouTube / Vimeo' },
   { value: 'link', label: 'Link' },
+];
+
+// Letters rather than icons for the text styles: the icon subset has none for them.
+const FORMATS: Array<{ format: MarkdownFormat; label: string; glyph: ReactNode; keys: string }> = [
+  { format: 'bold', label: 'Bold', glyph: <b>B</b>, keys: 'B' },
+  { format: 'italic', label: 'Italic', glyph: <em>I</em>, keys: 'I' },
+  { format: 'heading', label: 'Heading', glyph: <b>H</b>, keys: 'Alt+2' },
+  {
+    format: 'link',
+    label: 'Link',
+    glyph: <i className="fa-solid fa-link" aria-hidden="true" />,
+    keys: 'K',
+  },
 ];
 
 const MEDIA_PLACEHOLDER: Record<MediaChoice, string> = {
@@ -38,11 +59,88 @@ export interface PointEditorProps {
   onChange: (patch: HotspotPatch) => void;
   /** Turn the view to face the point (while sizing it). */
   onFace: () => void;
+  /** Start (or, while `moving`, cancel) moving the point to a new spot on the pano. */
+  onMove: () => void;
+  moving: boolean;
+  onDuplicate: () => void;
   onDelete: () => void;
   onDone: () => void;
 }
 
-function MediaField({ point, onChange }: Pick<PointEditorProps, 'point' | 'onChange'>) {
+type FieldProps = Pick<PointEditorProps, 'point' | 'onChange'>;
+
+/** The markdown body, with a toolbar (and its shortcuts) for the syntax the viewer renders. */
+function BodyField({ point, onChange }: FieldProps) {
+  const id = useId();
+  const area = useRef<HTMLTextAreaElement>(null);
+  // Where the selection goes once the formatted text has rendered.
+  const selectAfter = useRef<[number, number] | null>(null);
+  const body = point.body ?? '';
+
+  useLayoutEffect(() => {
+    const sel = selectAfter.current;
+    if (!sel || !area.current) return;
+    selectAfter.current = null;
+    area.current.setSelectionRange(sel[0], sel[1]);
+  }, [body]);
+
+  const format = (f: MarkdownFormat) => {
+    const el = area.current;
+    if (!el) return;
+    const next = applyFormat(
+      { value: el.value, start: el.selectionStart, end: el.selectionEnd },
+      f,
+    );
+    el.focus();
+    if (next.value.length > MAX_HOTSPOT_BODY_LENGTH) return;
+    selectAfter.current = [next.start, next.end];
+    onChange({ body: next.value ? next.value : null });
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    const f = formatForKey(e);
+    if (!f) return;
+    e.preventDefault();
+    format(f);
+  };
+
+  return (
+    <div className="ed-field">
+      <label className="ed-label" htmlFor={`${id}-body`}>
+        Text <span className="ed-label__hint">markdown</span>
+      </label>
+      <div className="ed-format" role="group" aria-label="Formatting">
+        {FORMATS.map(({ format: f, label, glyph, keys }) => (
+          <button
+            key={f}
+            type="button"
+            className="ed-format__btn"
+            aria-label={label}
+            title={`${label} (${IS_MAC ? `⌘+${keys.replace('Alt', '⌥')}` : `Ctrl+${keys}`})`}
+            aria-keyshortcuts={`${IS_MAC ? 'Meta' : 'Control'}+${keys}`}
+            // Keep the textarea's selection: format it, don't blur it.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => format(f)}
+          >
+            {glyph}
+          </button>
+        ))}
+      </div>
+      <textarea
+        ref={area}
+        id={`${id}-body`}
+        className="ed-input ed-textarea"
+        value={body}
+        maxLength={MAX_HOTSPOT_BODY_LENGTH}
+        rows={4}
+        onKeyDown={onKeyDown}
+        onChange={(e) => onChange({ body: e.target.value ? e.target.value : null })}
+      />
+    </div>
+  );
+}
+
+function MediaField({ point, onChange }: FieldProps) {
   const id = useId();
   const stored = point.media;
   const [kind, setKind] = useState<MediaPick>(stored ? choiceOf(stored) : 'none');
@@ -119,7 +217,16 @@ function MediaField({ point, onChange }: Pick<PointEditorProps, 'point' | 'onCha
 }
 
 /** The selected point's panel: title, markdown body, icon, size and media. */
-export function PointEditor({ point, onChange, onFace, onDelete, onDone }: PointEditorProps) {
+export function PointEditor({
+  point,
+  onChange,
+  onFace,
+  onMove,
+  moving,
+  onDuplicate,
+  onDelete,
+  onDone,
+}: PointEditorProps) {
   const id = useId();
   const [iconQuery, setIconQuery] = useState('');
   // The parent keys this component by point id, so this starts fresh per point.
@@ -149,19 +256,7 @@ export function PointEditor({ point, onChange, onFace, onDelete, onDone }: Point
           onBlur={() => setTitle(point.title)}
         />
       </div>
-      <div className="ed-field">
-        <label className="ed-label" htmlFor={`${id}-body`}>
-          Text <span className="ed-label__hint">markdown</span>
-        </label>
-        <textarea
-          id={`${id}-body`}
-          className="ed-input ed-textarea"
-          value={point.body ?? ''}
-          maxLength={MAX_HOTSPOT_BODY_LENGTH}
-          rows={4}
-          onChange={(e) => onChange({ body: e.target.value ? e.target.value : null })}
-        />
-      </div>
+      <BodyField point={point} onChange={onChange} />
       <div className="ed-field">
         <label className="ed-label" htmlFor={`${id}-icon`}>
           Icon
@@ -205,9 +300,9 @@ export function PointEditor({ point, onChange, onFace, onDelete, onDone }: Point
         <input
           id={`${id}-size`}
           type="range"
-          min={0.5}
-          max={3}
-          step={0.1}
+          min={POINT_SIZE_MIN}
+          max={POINT_SIZE_MAX}
+          step={POINT_SIZE_STEP}
           value={size}
           onFocus={onFace}
           onPointerDown={onFace}
@@ -218,6 +313,20 @@ export function PointEditor({ point, onChange, onFace, onDelete, onDone }: Point
         />
       </div>
       <MediaField key={point.id} point={point} onChange={onChange} />
+      <div className="ed-point__tools">
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={moving ? 'fa-solid fa-xmark' : 'fa-solid fa-crosshairs'}
+          aria-pressed={moving}
+          onClick={onMove}
+        >
+          {moving ? 'Cancel move' : 'Move'}
+        </Button>
+        <Button variant="ghost" size="sm" icon="fa-solid fa-clone" onClick={onDuplicate}>
+          Duplicate
+        </Button>
+      </div>
       <div className="ed-point__actions">
         <Button variant="ghost" size="sm" icon="fa-solid fa-trash" onClick={onDelete}>
           Delete point

@@ -14,15 +14,7 @@ import {
   type ViewerLinkArrow,
 } from '@internal/ui';
 import { MAX_TOUR_SCENES, tilesBaseUrl } from '@internal/web-kit';
-import {
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent,
-  type ReactNode,
-} from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, Outlet, useBlocker, useParams, useSearchParams } from 'react-router';
 
 import './editor.css';
@@ -35,8 +27,9 @@ import { useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
 import { LibraryPicker } from './LibraryPicker.js';
-import { newId, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
+import { newId, pointSizeForDrag, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
+import { PointerLayer, type LayerPoint } from './PointerLayer.js';
 import {
   isLanding,
   isLookOnly,
@@ -62,6 +55,14 @@ const FOV_MAX = 80;
 type Confirm =
   | { kind: 'remove-pano'; panoId: string }
   | { kind: 'delete-point'; panoId: string; id: string; title: string };
+
+/** A point being moved, and where it was, for Esc to put it back. */
+interface Moving {
+  panoId: string;
+  id: string;
+  yaw: number;
+  pitch: number;
+}
 
 const toViewerHotspot = (h: Hotspot): ViewerHotspot => {
   const v: ViewerHotspot = { id: h.id, yaw: h.yaw, pitch: h.pitch, title: h.title };
@@ -196,6 +197,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [activePoint, setActivePoint] = useState<string | null>(null);
   const [placing, setPlacing] = useState(false);
+  const [moving, setMoving] = useState<Moving | null>(null);
+  // A point dropped by a placing drag that is still sizing it (Esc takes it back out).
+  const sizing = useRef<{ panoId: string; id: string; size: number | null } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -302,28 +306,18 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     }
   }, [uploading, setParams]);
 
+  // A move belongs to the open point: opening another (or none) ends it where it is.
+  const openPoint = (id: string | null) => {
+    setActivePoint(id);
+    setMoving(null);
+  };
+
   const select = (panoId: string) => {
-    setActivePoint(null);
+    openPoint(null);
     setPlacing(false);
     setFailedLoad(null);
     setParams({ pano: panoId }, { replace: true });
   };
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        // Commit a field that is still being typed in (inline titles commit on blur).
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        // A no-op while a conflict is open: that is resolved from the conflict banner.
-        void editor.save();
-      } else if (e.key === 'Escape') {
-        setPlacing(false);
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [editor]);
 
   // Look-only: nothing can be placed or edited on this scene (see `point` below).
   const placingNow = placing && !lookOnly;
@@ -333,6 +327,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const points = useMemo(() => (cfg ? cfg.hotspots.filter((h) => h.type === 'info') : []), [cfg]);
   const markers = useMemo(() => points.map(toViewerHotspot), [points]);
   const point = lookOnly ? null : (points.find((h) => h.id === activePoint) ?? null);
+  const movingNow =
+    moving && point?.id === moving.id && moving.panoId === currentId ? moving : null;
   const links = useMemo<ViewerLinkArrow[]>(
     () =>
       cfg
@@ -350,25 +346,84 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   );
 
   const view = () => viewer?.getView();
-  const place = (e: MouseEvent<HTMLDivElement>) => {
-    if (!viewer || !currentId || lookOnly) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const { yaw, pitch } = viewer.directionAtPixel(e.clientX - rect.left, e.clientY - rect.top);
+  const direction = (at: LayerPoint) => {
+    if (!viewer) return null;
+    const { yaw, pitch } = viewer.directionAtPixel(at.x, at.y);
+    return { yaw, pitch };
+  };
+  const drop = (at: LayerPoint): string | null => {
+    const dir = direction(at);
+    if (!dir || !currentId || lookOnly) return null;
     const id = newId('pt');
     dispatch({
       type: 'point/add',
       panoId: currentId,
-      hotspot: { id, type: 'info', yaw, pitch, title: 'New point' },
+      hotspot: { id, type: 'info', ...dir, title: 'New point' },
     });
-    setPlacing(false);
-    setActivePoint(id);
+    return id;
   };
+  const placed = (id: string | null) => {
+    setPlacing(false);
+    if (id) openPoint(id);
+  };
+  // Dragging out from the drop spot sizes the new point: its marker's edge follows the pointer.
+  const sizeDrag = (at: LayerPoint, start: LayerPoint) => {
+    if (!currentId) return;
+    if (!sizing.current) {
+      const id = drop(start);
+      if (!id) return;
+      sizing.current = { panoId: currentId, id, size: null };
+    }
+    const size = pointSizeForDrag(Math.hypot(at.x - start.x, at.y - start.y));
+    if (size === sizing.current.size) return;
+    sizing.current.size = size;
+    const { panoId, id } = sizing.current;
+    dispatch({ type: 'point/update', panoId, id, patch: { size } });
+  };
+  const moveTo = (at: LayerPoint) => {
+    const dir = direction(at);
+    if (!dir || !movingNow) return;
+    if (dir.yaw === point?.yaw && dir.pitch === point.pitch) return;
+    dispatch({ type: 'point/update', panoId: movingNow.panoId, id: movingNow.id, patch: dir });
+  };
+
+  // Esc, or a drag the browser cancelled: a point a placing drag dropped goes back out,
+  // and a point being moved goes back where it was.
+  const cancelPlacing = () => {
+    setPlacing(false);
+    if (!sizing.current) return;
+    dispatch({ type: 'point/remove', panoId: sizing.current.panoId, id: sizing.current.id });
+    sizing.current = null;
+  };
+  const cancelMove = () => {
+    if (!movingNow) return;
+    const { panoId, id, yaw, pitch } = movingNow;
+    dispatch({ type: 'point/update', panoId, id, patch: { yaw, pitch } });
+    setMoving(null);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        // Commit a field that is still being typed in (inline titles commit on blur).
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        // A no-op while a conflict is open: that is resolved from the conflict banner.
+        void editor.save();
+      } else if (e.key === 'Escape') {
+        cancelPlacing();
+        cancelMove();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // Every render: Esc has to undo the move or the placing drag as it stands now.
+  });
 
   const removeScene = (panoId: string) => {
     dispatch({ type: 'tour/remove-scene', panoId });
     if (panoId === currentId) {
       const next = sceneIds.find((id) => id !== panoId);
-      setActivePoint(null);
+      openPoint(null);
       setParams(next ? { pano: next } : {}, { replace: true });
     }
   };
@@ -423,15 +478,38 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             onOpen={(h) => {
               if (lookOnly) return;
               setPlacing(false);
-              setActivePoint(h.id);
+              openPoint(h.id);
             }}
           />
           {placingNow && (
-            <div className="ed-placing" onClick={place} role="presentation">
-              <span className="ed-placing__hint">
-                Click the pano to drop the point · Esc to cancel
-              </span>
-            </div>
+            <PointerLayer
+              className="ed-placing"
+              hint="Click the pano to drop the point, or drag to size it · Esc to cancel"
+              onPick={(at) => placed(drop(at))}
+              onDrag={sizeDrag}
+              onDragEnd={(at, start) => {
+                sizeDrag(at, start);
+                placed(sizing.current?.id ?? null);
+                sizing.current = null;
+              }}
+              onCancel={cancelPlacing}
+            />
+          )}
+          {movingNow && (
+            <PointerLayer
+              className="ed-placing ed-placing--move"
+              hint="Click the new spot, or drag the point there · Esc to cancel"
+              onPick={(at) => {
+                moveTo(at);
+                setMoving(null);
+              }}
+              onDrag={moveTo}
+              onDragEnd={(at) => {
+                moveTo(at);
+                setMoving(null);
+              }}
+              onCancel={cancelMove}
+            />
           )}
           {settings.showCompass && <Compass className="ed-compass" />}
           <ViewerControls fullscreenTarget={frame} position={settings.controls} />
@@ -579,7 +657,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               disabled={!cfg || !viewer || lookOnly}
               aria-pressed={placingNow}
               onClick={() => {
-                setActivePoint(null);
+                openPoint(null);
                 setPlacing((p) => !p);
               }}
             >
@@ -638,6 +716,20 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 dispatch({ type: 'point/update', panoId: currentId, id: point.id, patch })
               }
               onFace={() => viewer?.setView({ yaw: point.yaw, pitch: point.pitch })}
+              moving={movingNow !== null}
+              onMove={() => {
+                if (movingNow) {
+                  cancelMove();
+                  return;
+                }
+                setPlacing(false);
+                setMoving({ panoId: currentId, id: point.id, yaw: point.yaw, pitch: point.pitch });
+              }}
+              onDuplicate={() => {
+                const id = newId('pt');
+                dispatch({ type: 'point/duplicate', panoId: currentId, id: point.id, newId: id });
+                openPoint(id);
+              }}
               onDelete={() =>
                 setConfirm({
                   kind: 'delete-point',
@@ -646,7 +738,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                   title: point.title,
                 })
               }
-              onDone={() => setActivePoint(null)}
+              onDone={() => openPoint(null)}
             />
           ) : (
             points.length > 0 && (
@@ -657,7 +749,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                       type="button"
                       className="ed-points__item"
                       disabled={lookOnly}
-                      onClick={() => setActivePoint(h.id)}
+                      onClick={() => openPoint(h.id)}
                     >
                       <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
                       {h.title}
@@ -744,7 +836,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         onConfirm={() => {
           if (confirm?.kind === 'delete-point') {
             dispatch({ type: 'point/remove', panoId: confirm.panoId, id: confirm.id });
-            setActivePoint(null);
+            openPoint(null);
           }
           setConfirm(null);
         }}

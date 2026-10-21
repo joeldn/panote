@@ -502,6 +502,239 @@ describe('editor: points, connections, views and settings', () => {
     expect(ui.queryByRole('button', { name: 'Go to Square' })).toBeNull();
   });
 
+  describe('moving, duplicating and sizing points on the stage', () => {
+    // The stage maps a pixel straight to a direction: x/100 is yaw, y/100 is pitch.
+    const stageReady = async (ui: ReturnType<typeof within>) => {
+      await loaded(ui);
+      await waitFor(() =>
+        expect(lastViewer().load).toHaveBeenCalledWith('square', { view: undefined }),
+      );
+      lastViewer().directionAtPixel.mockImplementation((x: number, y: number) => ({
+        yaw: x / 100,
+        pitch: y / 100,
+      }));
+    };
+    const openFountain = (ui: ReturnType<typeof within>) => {
+      fireEvent.click(ui.getAllByRole('button', { name: 'Fountain' })[0]!);
+      return within(ui.getByRole('group', { name: 'Edit point Fountain' }));
+    };
+    const layer = (hint: RegExp) => screen.getByText(hint).parentElement!;
+    const drag = (el: Element, from: [number, number], ...to: Array<[number, number]>) => {
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: from[0], clientY: from[1] });
+      for (const [x, y] of to) fireEvent.pointerMove(el, { pointerId: 1, clientX: x, clientY: y });
+      const [x, y] = to.at(-1)!;
+      fireEvent.pointerUp(el, { pointerId: 1, clientX: x, clientY: y });
+      fireEvent.click(el, { clientX: x, clientY: y });
+    };
+    const savedInfo = async (ui: ReturnType<typeof within>) => {
+      fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+      await ui.findByText('Saved');
+      const saved = server.configs.get('square')!.body.hotspots as Array<Record<string, unknown>>;
+      return saved.filter((h) => h.type === 'info');
+    };
+
+    it('moves a point to a clicked spot', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(openFountain(ui).getByRole('button', { name: 'Move' }));
+      fireEvent.click(layer(/Click the new spot/), { clientX: 150, clientY: 30 });
+      expect(screen.queryByText(/Click the new spot/)).toBeNull();
+      expect(await savedInfo(ui)).toEqual([
+        { id: 'i1', type: 'info', yaw: 1.5, pitch: 0.3, title: 'Fountain' },
+      ]);
+    });
+
+    it('moves a point by dragging it; the marker follows the pointer', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(openFountain(ui).getByRole('button', { name: 'Move' }));
+      const el = layer(/drag the point there/);
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 20, clientY: 10 });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 60, clientY: 10 });
+      // Mid-drag the point is already there (and the doc dirty), from the next frame.
+      await ui.findByRole('button', { name: 'Save' });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 80, clientY: -20 });
+      fireEvent.pointerUp(el, { pointerId: 1, clientX: 80, clientY: -20 });
+      fireEvent.click(el, { clientX: 80, clientY: -20 });
+      expect(screen.queryByText(/drag the point there/)).toBeNull();
+      expect(await savedInfo(ui)).toEqual([
+        { id: 'i1', type: 'info', yaw: 0.8, pitch: -0.2, title: 'Fountain' },
+      ]);
+    });
+
+    it('puts a point back where it was on Escape or Cancel move', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      const panel = openFountain(ui);
+      fireEvent.click(panel.getByRole('button', { name: 'Move' }));
+      const el = layer(/Click the new spot/);
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 20, clientY: 10 });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 90, clientY: 40 });
+      await ui.findByRole('button', { name: 'Save' });
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.queryByText(/Click the new spot/)).toBeNull();
+      // Back where it was: nothing to save.
+      expect(ui.getByText('Saved')).toBeTruthy();
+
+      fireEvent.click(panel.getByRole('button', { name: 'Move' }));
+      drag(layer(/Click the new spot/), [20, 10], [90, 40]);
+      expect(ui.queryByText('Saved')).toBeNull();
+      fireEvent.click(panel.getByRole('button', { name: 'Move' }));
+      fireEvent.pointerMove(layer(/Click the new spot/), { pointerId: 2, clientX: 5, clientY: 5 });
+      fireEvent.click(panel.getByRole('button', { name: 'Cancel move' }));
+      expect(screen.queryByText(/Click the new spot/)).toBeNull();
+      expect(await savedInfo(ui)).toEqual([
+        { id: 'i1', type: 'info', yaw: 0.9, pitch: 0.4, title: 'Fountain' },
+      ]);
+    });
+
+    it('duplicates a point a little round from it, content and all, and opens the copy', async () => {
+      server.setConfig('square', {
+        title: 'Square',
+        hotspots: [
+          {
+            id: 'i1',
+            type: 'info',
+            yaw: 0.2,
+            pitch: 0.1,
+            title: 'Fountain',
+            body: '**Old**',
+            icon: 'star',
+            size: 2,
+          },
+        ],
+      });
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(openFountain(ui).getByRole('button', { name: 'Duplicate' }));
+      const copy = within(ui.getByRole('group', { name: 'Edit point Fountain (copy)' }));
+      expect((copy.getByLabelText(/Text/) as HTMLTextAreaElement).value).toBe('**Old**');
+      expect(ui.getByRole('heading', { name: /Points 2/ })).toBeTruthy();
+      const [original, dup] = await savedInfo(ui);
+      expect(original).toMatchObject({ id: 'i1', yaw: 0.2 });
+      expect(dup).toEqual({
+        id: expect.not.stringMatching(/^i1$/),
+        type: 'info',
+        yaw: expect.closeTo(0.3),
+        pitch: 0.1,
+        title: 'Fountain (copy)',
+        body: '**Old**',
+        icon: 'star',
+        size: 2,
+      });
+    });
+
+    it('sizes a new point by dragging out from where it drops', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
+      // 34 px out is twice a default marker's radius.
+      drag(layer(/drag to size it/), [100, 50], [110, 50], [134, 50]);
+      const panel = await ui.findByRole('group', { name: 'Edit point New point' });
+      expect(within(panel).getByText('2.0×')).toBeTruthy();
+      expect(screen.queryByText(/drag to size it/)).toBeNull();
+      const [, placed] = await savedInfo(ui);
+      expect(placed).toMatchObject({ yaw: 1, pitch: 0.5, title: 'New point', size: 2 });
+    });
+
+    it('keeps the default size for a wobbly click or tap', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
+      // Past the drag threshold, but still inside a default marker.
+      drag(layer(/drag to size it/), [100, 50], [106, 50], [110, 52]);
+      const panel = await ui.findByRole('group', { name: 'Edit point New point' });
+      expect(within(panel).getByText('1.0×')).toBeTruthy();
+      const [, placed] = await savedInfo(ui);
+      expect(placed).toEqual({
+        id: expect.any(String),
+        type: 'info',
+        yaw: 1,
+        pitch: 0.5,
+        title: 'New point',
+      });
+    });
+
+    it('undoes a drag the browser cancels: no point dropped, a moved one put back', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
+      let el = layer(/drag to size it/);
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 100, clientY: 50 });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 150, clientY: 50 });
+      await ui.findByRole('heading', { name: /Points 2/ });
+      fireEvent.pointerCancel(el, { pointerId: 1 });
+      expect(ui.getByRole('heading', { name: /Points 1/ })).toBeTruthy();
+      expect(screen.queryByText(/drag to size it/)).toBeNull();
+      expect(ui.getByText('Saved')).toBeTruthy();
+
+      fireEvent.click(openFountain(ui).getByRole('button', { name: 'Move' }));
+      el = layer(/drag the point there/);
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 20, clientY: 10 });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 90, clientY: 40 });
+      await ui.findByRole('button', { name: 'Save' });
+      fireEvent.pointerCancel(el, { pointerId: 1 });
+      expect(screen.queryByText(/drag the point there/)).toBeNull();
+      expect(ui.getByText('Saved')).toBeTruthy();
+    });
+
+    it('ends a move when another point is opened, so Esc no longer rolls it back', async () => {
+      server.setConfig('square', {
+        title: 'Square',
+        hotspots: [
+          { id: 'i1', type: 'info', yaw: 0.2, pitch: 0.1, title: 'Fountain' },
+          { id: 'i2', type: 'info', yaw: 1, pitch: 0, title: 'Bench' },
+        ],
+      });
+      const { ui } = openTab();
+      await stageReady(ui);
+      const panel = openFountain(ui);
+      fireEvent.click(panel.getByRole('button', { name: 'Move' }));
+      const el = layer(/drag the point there/);
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 20, clientY: 10 });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 90, clientY: 40 });
+      await ui.findByRole('button', { name: 'Save' });
+      // Open Bench from its marker, then Fountain again the same way.
+      const marker = (id: string) => document.querySelector(`[data-hotspot-id="${id}"]`)!;
+      fireEvent.click(marker('i2'));
+      await ui.findByRole('group', { name: 'Edit point Bench' });
+      fireEvent.click(marker('i1'));
+      await ui.findByRole('group', { name: 'Edit point Fountain' });
+      // Reopened: not moving any more, and Esc leaves the point where the drag put it.
+      expect(ui.getByRole('button', { name: 'Move' })).toBeTruthy();
+      expect(screen.queryByText(/drag the point there/)).toBeNull();
+      fireEvent.keyDown(document, { key: 'Escape' });
+      const [moved] = await savedInfo(ui);
+      expect(moved).toMatchObject({ id: 'i1', yaw: 0.9, pitch: 0.4 });
+    });
+
+    it('drops a default-size point on a plain click, and none when Esc ends a sizing drag', async () => {
+      const { ui } = openTab();
+      await stageReady(ui);
+      fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
+      const el = layer(/drag to size it/);
+      fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 100, clientY: 50 });
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 150, clientY: 50 });
+      await ui.findByRole('heading', { name: /Points 2/ });
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(ui.getByRole('heading', { name: /Points 1/ })).toBeTruthy();
+      expect(ui.getByText('Saved')).toBeTruthy();
+
+      fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
+      // A wobble under the drag threshold is still a click.
+      drag(layer(/drag to size it/), [100, 50], [102, 51]);
+      await ui.findByRole('group', { name: 'Edit point New point' });
+      const [, placed] = await savedInfo(ui);
+      expect(placed).toEqual({
+        id: expect.any(String),
+        type: 'info',
+        yaw: 1.02,
+        pitch: 0.51,
+        title: 'New point',
+      });
+    });
+  });
+
   it('deletes a point through the confirm modal', async () => {
     const { ui } = openTab();
     await loaded(ui);
