@@ -1,6 +1,7 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { tileFailedKeyFromOriginalKey } from '@internal/contracts';
+import { ALERT_THROTTLE_MS, alertThrottleKey } from './alert.js';
 import worker from './consumer.js';
 
 // Owner segment for the log-hygiene tests. Distinctive, so a substring
@@ -724,6 +725,8 @@ describe('DLQ alert email', () => {
         attempts: 4,
       },
     ]);
+  // Storage is shared between cases in a file: start every case outside the window.
+  beforeEach(() => env.BUCKET.delete(alertThrottleKey('pano-uploads-dlq-dev')));
 
   it('sends one email per batch listing every key, including a message with no object.key', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -910,5 +913,138 @@ describe('DLQ alert email', () => {
     expect(result.explicitAcks).toEqual(['msg-main-unprocessable']);
     expect(result.retryMessages).toEqual([{ msgId: 'msg-main-retry' }]);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('DLQ alert throttle', () => {
+  const QUEUE = 'pano-uploads-dlq-dev';
+  const T0 = new Date('2026-03-01T10:00:00.000Z').getTime();
+  type Sent = { subject: string; text: string };
+  const withAlert = (send: (...args: unknown[]) => Promise<unknown>) =>
+    ({
+      ...env,
+      ALERT_EMAIL_TO: 'owner@example.com',
+      ALERT_EMAIL: { send },
+    }) as unknown as typeof env;
+  const dlqBatch = (...ids: string[]) =>
+    createMessageBatch(
+      QUEUE,
+      ids.map((id) => ({
+        id,
+        timestamp: new Date(),
+        body: { object: { key: `panos/u1/${id}/original`, size: 10 }, action: 'PutObject' },
+        attempts: 4,
+      })),
+    );
+  // Runs one DLQ batch at `at` (ms) and returns its queue result.
+  const runAt = async (at: number, e: typeof env, ...ids: string[]) => {
+    vi.setSystemTime(at);
+    const batch = dlqBatch(...ids);
+    const ctx = createExecutionContext();
+    await worker.queue(batch, e, ctx);
+    return getQueueResult(batch, ctx);
+  };
+  const state = async () =>
+    (await (await env.BUCKET.get(alertThrottleKey(QUEUE)))?.json()) as
+      { lastSentAt: number; held: number } | undefined;
+
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await env.BUCKET.delete(alertThrottleKey(QUEUE));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends one email per window and counts what it held back in the next one', async () => {
+    const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    const e = withAlert(send);
+
+    await runAt(T0, e, 'thr-a');
+    const held = await runAt(T0 + 60_000, e, 'thr-b', 'thr-c');
+    await runAt(T0 + ALERT_THROTTLE_MS - 1, e, 'thr-d');
+    expect(send).toHaveBeenCalledTimes(1);
+    // A held batch is still acked like any other.
+    expect(held.explicitAcks.slice().sort()).toEqual(['thr-b', 'thr-c']);
+    expect(await state()).toEqual({ lastSentAt: T0, held: 3 });
+    expect(warnSpy).toHaveBeenCalledWith(
+      `DLQ alert throttled for ${QUEUE}: 1 failure(s) held, 3 since the last email`,
+    );
+
+    await runAt(T0 + ALERT_THROTTLE_MS, e, 'thr-e');
+    expect(send).toHaveBeenCalledTimes(2);
+    const [second] = send.mock.calls[1]!;
+    expect(second.subject).toBe(`[panote] tiling failed permanently (1 + 3 earlier) - ${QUEUE}`);
+    expect(second.text).toContain('panos/u1/thr-e/original');
+    expect(second.text).not.toContain('thr-b');
+    expect(second.text).toContain(
+      `Plus 3 earlier failure(s) not emailed since ${new Date(T0).toISOString()}`,
+    );
+    expect(await state()).toEqual({ lastSentAt: T0 + ALERT_THROTTLE_MS, held: 0 });
+  });
+
+  it('a send that fails opens no window, and its items carry over to the next email', async () => {
+    let fail = true;
+    const send = vi.fn(async (_m: Sent) => {
+      if (fail) throw Object.assign(new Error('nope'), { code: 'E_INTERNAL' });
+      return { messageId: 'm' };
+    });
+    const e = withAlert(send);
+
+    await runAt(T0, e, 'thr-fail-a', 'thr-fail-b');
+    expect(await state()).toEqual({ lastSentAt: 0, held: 2 });
+    fail = false;
+    await runAt(T0 + 1000, e, 'thr-fail-c');
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1]![0].subject).toBe(
+      `[panote] tiling failed permanently (1 + 2 earlier) - ${QUEUE}`,
+    );
+    expect(send.mock.calls[1]![0].text).toContain('Plus 2 earlier failure(s) not emailed:');
+  });
+
+  it('sends anyway when the state cannot be read, and still acks when it cannot be saved', async () => {
+    const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    const e = withAlert(send);
+    await runAt(T0, e, 'thr-read-a');
+
+    const get = vi.spyOn(env.BUCKET, 'get').mockRejectedValue(new Error('get boom'));
+    const put = vi.spyOn(env.BUCKET, 'put').mockRejectedValue(new Error('put boom'));
+    const result = await runAt(T0 + 1000, e, 'thr-read-b');
+    get.mockRestore();
+    put.mockRestore();
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(result.explicitAcks).toEqual(['thr-read-b']);
+    expect(errorSpy).toHaveBeenCalledWith(`DLQ alert throttle unreadable for ${QUEUE}: Error`);
+    expect(errorSpy).toHaveBeenCalledWith(`DLQ alert throttle not saved for ${QUEUE}: Error`);
+  });
+
+  it('keeps one window per queue', async () => {
+    const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    const e = withAlert(send);
+    await runAt(T0, e, 'thr-q-a');
+    vi.setSystemTime(T0 + 1000);
+    const batch = createMessageBatch('pano-uploads-dlq', [
+      {
+        id: 'thr-q-b',
+        timestamp: new Date(),
+        body: { object: { key: 'panos/u1/thr-q-b/original', size: 10 }, action: 'PutObject' },
+        attempts: 4,
+      },
+    ]);
+    await worker.queue(batch, e, createExecutionContext());
+    await env.BUCKET.delete(alertThrottleKey('pano-uploads-dlq'));
+    expect(send).toHaveBeenCalledTimes(2);
+    // The first queue's window is still open.
+    await runAt(T0 + 2000, e, 'thr-q-c');
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps its state under ops/, outside every public or owner prefix', () => {
+    expect(alertThrottleKey(QUEUE)).toBe('ops/dlq-alert/pano-uploads-dlq-dev.json');
   });
 });
