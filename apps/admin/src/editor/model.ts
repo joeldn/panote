@@ -6,7 +6,7 @@ import type {
   TourWithConfigsOk,
   View,
 } from '@internal/contracts';
-import { DEFAULT_TOUR_SETTINGS } from '@internal/contracts';
+import { DEFAULT_TOUR_SETTINGS, MAX_TITLE_LENGTH } from '@internal/contracts';
 
 // Editor state: every document keeps the version it was loaded (or last saved) as,
 // the edited version, and the ETag that Save sends as If-Match.
@@ -15,6 +15,14 @@ export const UNTITLED_PANO = 'Untitled pano';
 const TWO_PI = Math.PI * 2;
 // A link's floor chevron sits below the horizon; the viewer only uses its yaw.
 export const LINK_PITCH = -0.4;
+// A point's size, a multiple of the default marker (the slider's and the placing drag's range).
+export const POINT_SIZE_MIN = 0.5;
+export const POINT_SIZE_MAX = 3;
+export const POINT_SIZE_STEP = 0.1;
+// How far a duplicate lands from its original (about 6°), so the two don't overlap.
+export const DUPLICATE_OFFSET = 0.1;
+// Half a size-1 marker in px: dragging this far from the drop spot makes a size-1 point.
+const MARKER_RADIUS = 17;
 
 export interface TourState {
   etag: string;
@@ -162,6 +170,21 @@ export function normalizeAngle(a: number): number {
 export const yawDegrees = (yaw: number): number =>
   ((Math.round((yaw * 180) / Math.PI) % 360) + 360) % 360;
 
+/**
+ * The size a drag of `distance` px from the drop spot sets: the marker's radius follows
+ * the pointer, in slider steps. `null` is the default size, which isn't stored.
+ */
+export function pointSizeForDrag(distance: number): number | null {
+  const raw = Math.round(distance / MARKER_RADIUS / POINT_SIZE_STEP) * POINT_SIZE_STEP;
+  const size = Math.min(POINT_SIZE_MAX, Math.max(POINT_SIZE_MIN, Number(raw.toFixed(1))));
+  return size === 1 ? null : size;
+}
+
+const copyTitle = (title: string): string => {
+  const suffix = ' (copy)';
+  return title.slice(0, MAX_TITLE_LENGTH - suffix.length) + suffix;
+};
+
 export const findLink = (config: SceneConfig, to: string): Hotspot | undefined =>
   config.hotspots.find((h) => h.type === 'link' && h.targetPanoId === to);
 
@@ -178,6 +201,7 @@ export type EditorAction =
   | { type: 'point/add'; panoId: string; hotspot: Hotspot }
   | { type: 'point/update'; panoId: string; id: string; patch: HotspotPatch }
   | { type: 'point/remove'; panoId: string; id: string }
+  | { type: 'point/duplicate'; panoId: string; id: string; newId: string }
   | { type: 'link/set'; from: string; to: string; yaw: number; title: string }
   | { type: 'link/nudge'; from: string; to: string; delta: number }
   | { type: 'link/remove'; from: string; to: string }
@@ -284,6 +308,26 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
         setHotspots(
           c,
           c.hotspots.filter((h) => h.id !== action.id),
+        ),
+      );
+    case 'point/duplicate':
+      // Right after the original in the list, nudged round so both markers can be seen.
+      return withConfig(docs, action.panoId, (c) =>
+        setHotspots(
+          c,
+          c.hotspots.flatMap((h) =>
+            h.id === action.id
+              ? [
+                  h,
+                  {
+                    ...h,
+                    id: action.newId,
+                    title: copyTitle(h.title),
+                    yaw: normalizeAngle(h.yaw + DUPLICATE_OFFSET),
+                  },
+                ]
+              : [h],
+          ),
         ),
       );
     case 'link/set':

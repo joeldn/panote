@@ -210,7 +210,7 @@ export class FakeViewer implements ReturnType<ViewerFactory> {
   getView = () => ({ ...this.view });
   isSettled = () => false;
   focus = vi.fn();
-  directionAtPixel = vi.fn(() => ({ ...this.pointAt }));
+  directionAtPixel = vi.fn((_x: number, _y: number) => ({ ...this.pointAt }));
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   showPreview = vi.fn();
