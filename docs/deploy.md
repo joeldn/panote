@@ -20,7 +20,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` / `panote.io/api/tours/*` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
@@ -70,7 +70,7 @@ Cloudflare resolves that by specificity: "When more than one route pattern could
 URL, the most specific route pattern wins" (Workers docs, [Routes → Matching
 behavior](https://developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior),
 with the example that `example.com/hello/*` takes precedence over `example.com/*`). So
-`/api/admin/*`, `/api/tours/*` and `/api/upload-url` stay on the API Workers and `/app`, `/app/*`
+`/api/admin/*`, `/api/tours/*`, `/api/errors` and `/api/upload-url` stay on the API Workers and `/app`, `/app/*`
 on admin; everything else lands on the website. The docs' known issue about trailing `/*`
 specificity (`/images/*` vs `/images*` on the same zone,
 [Known issues](https://developers.cloudflare.com/workers/platform/known-issues/)) doesn't apply:
@@ -1188,6 +1188,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
+| `public-api` | `ERRORS_LIMITER` | `POST /api/errors` | client IP (IPv6 per /64) | 20/min | `1204` / `2204` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
@@ -1383,7 +1384,7 @@ Setup, once per environment: generate a long random token (`openssl rand -hex 32
   ```bash
   pnpm --filter @service/tiler-consumer exec wrangler queues info pano-uploads-dlq-dev
   ```
-- **Alerting — email per dead-lettered batch.** After acking every message in a DLQ batch, the
+- **Alerting — email per dead-lettered batch, throttled.** After acking every message in a DLQ batch, the
   consumer sends one plain-text email through a `send_email` binding (`ALERT_EMAIL`,
   `services/tiler-consumer/src/alert.ts`). Subject `[panote] tiling failed permanently (N) - <queue>`;
   the body lists each key (or the message id, for a message with no `object.key`), whether its
@@ -1394,7 +1395,18 @@ Setup, once per environment: generate a long random token (`openssl rand -hex 32
   out of the repo; Cloudflare still only delivers to verified Email Routing destinations. The send
   never throws and never changes ack behaviour: a failure logs `failed to send DLQ alert` with only the
   error's `code` and `name` (never its message, which may echo the recipient), and a missing
-  `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM` or binding logs a warning and skips. The main queue never sends. This uses the structured `send({ to, from, subject, text })`
+  `ALERT_EMAIL_TO`, `ALERT_EMAIL_FROM` or binding logs a warning and skips. The main queue never sends.
+  **Throttle:** at most one email per queue per 30 minutes (`ALERT_THROTTLE_MS`). A batch inside
+  the window sends nothing and logs `DLQ alert throttled for <queue>: N failure(s) held, M since the
+  last email`; the next email after the window lists its own keys and says how many failures it
+  left out (subject `(N + M earlier)`), whose keys are in the logs (`tile job dead-lettered`) and
+  their tile-failed markers. A send that fails opens no window, so its items carry over too. The
+  state is one small JSON object per queue in the content bucket, `ops/dlq-alert/<queue>.json`
+  (`{ lastSentAt, held }`): no new resource, `ops/` is outside the CDN WAF rule's three public
+  prefixes and the R2 notification's `panos/` prefix, and the DLQ consumer's `max_concurrency: 1`
+  keeps its read-then-write from racing. If the state can't be read the email goes out anyway.
+  Failures held back by the throttle are only emailed when a later batch arrives after the window:
+  there is no timer that flushes them on its own. This uses the structured `send({ to, from, subject, text })`
   API ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)).
   Chosen over a Tail Worker (needs log-string matching) and over Workers Observability / Cloudflare
   Notifications (no alert type for this, per current docs). **This is code and config only — it
@@ -1480,6 +1492,34 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
   wait a minute or two for AE ingestion, then `GET /api/admin/tours/<tourId>/insights` as the
   owner and check `daily` shows today's views. The same token can run ad-hoc queries against
   the SQL API directly; `SHOW TABLES` lists the datasets.
+
+---
+
+## Error reporting
+
+Both SPAs report uncaught errors and unhandled promise rejections to `public-api`'s
+`POST /api/errors` (`installErrorReporter` in `packages/web-kit/src/error-reporter.ts`, set up in
+each app's `main.tsx`). No third-party service. The report (`ClientErrorReportSchema` in
+`@internal/contracts`) is `app`, `release` (the build's entry chunk hash, `local` on a dev server),
+`kind`, `message` (≤300 chars), `stack` (top 5 frames, ≤200 chars each) and `path` (pathname
+only, ≤120 chars). Nothing identifies the visitor: no user, client id, query string, fragment or
+full page URL. Before sending, the reporter strips query strings and fragments from every URL in
+the message and frames, masks emails, and masks tour slugs (`/s/:slug`, `/slugs/:slug`); admin also
+masks tour ids in its path (`/app/t/:tourId`). `public-api` validates the shape and scrubs again.
+
+- **Volume.** A page load reports at all with probability 1 off production and 0.25 in production
+  (`errorSampleRate`), decided once per load; it sends at most 5 reports, never the same error
+  twice, and ignores `Script error.`, ResizeObserver loop notices and errors whose top frame is a
+  browser extension. On the server, `ERRORS_LIMITER` (20/min per client IP, see Rate limits).
+- **Transport.** `sendBeacon` with a text body, else a `keepalive` `fetch` without cookies, the
+  same helper as the viewer analytics. The reporter never throws and never reports its own errors.
+- **CSP.** The endpoint is same-origin (`VITE_API_BASE` is empty), which `connect-src 'self'`
+  already allows in both apps; an absolute `VITE_API_BASE` is added to `connect-src` too.
+- **Reading them.** Each valid report is one `console.error` object in `public-api`'s Workers Logs,
+  `{ event: "client-error", app, release, kind, message, stack, path }`: filter on
+  `event = client-error`. Nothing is stored anywhere else. The client IP is only the limiter's key.
+- **Not covered.** Errors a React Router `errorElement` catches never reach `window`, so they are
+  not reported.
 
 ---
 
@@ -1580,5 +1620,7 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
   can't list bucket objects without S3 credentials.
-- **The DLQ alert email has no volume throttle** (follow-up): it sends one email per DLQ batch,
-  so a burst of failures means a burst of emails.
+- **The DLQ alert email is throttled, not batched on a timer.** At most one email per queue per
+  30 minutes; a burst sends the first email at once and counts the rest into the next one (see
+  "Tiling failure marker and alerting"). If no failure follows the burst, the held count is never
+  emailed: it stays in `ops/dlq-alert/<queue>.json` and the Worker logs until the next one.
