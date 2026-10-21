@@ -5,6 +5,9 @@ import {
   configKey,
   deletingKey,
   MAX_TOUR_SCENES,
+  OPERATOR_TAKEDOWN_PATH,
+  OPERATOR_TOKEN_HEADER,
+  OperatorTakedownRequestSchema,
   originalKey,
   PANO_DELETE_CONFLICTS,
   PANO_PATTERN,
@@ -44,6 +47,7 @@ import {
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
+import { isAccountDisabled, isOperator, tourExists } from './operator.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { referencedPanoIds } from './references.js';
@@ -131,13 +135,20 @@ const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ACCOUNT_PATH = '/api/admin/account';
 
 // Once an account is marked for deletion it is read-only: no write may recreate
-// what the delete is removing. The account route itself stays open for retries.
+// what the delete is removing. The account route itself stays open for retries,
+// and for a disabled owner too: they may still delete their own account. The
+// operator route has no Auth0 user; its own secret guards it.
 app.use('/api/admin/*', async (c, next) => {
   if (!WRITE_METHODS.has(c.req.method) || c.req.path === ACCOUNT_PATH) return next();
+  if (c.req.path === OPERATOR_TAKEDOWN_PATH) return next();
   const { sub: verified } = await authenticate(c.req.raw, c.env);
-  if (await isAccountDeleted(c.env.BUCKET, verified)) {
-    return c.json({ error: 'account deleted' }, 410);
-  }
+  const [deleted, disabled] = await Promise.all([
+    isAccountDeleted(c.env.BUCKET, verified),
+    isAccountDisabled(c.env.BUCKET, verified),
+  ]);
+  if (deleted) return c.json({ error: 'account deleted' }, 410);
+  // Taken down by the operator (scripts/takedown.ts): reads only, like a deleted account.
+  if (disabled) return c.json({ error: 'account disabled' }, 403);
   c.set('sub', verified);
   return next();
 });
@@ -443,6 +454,29 @@ app.delete(ACCOUNT_PATH, async (c) => {
   const { status, purge } = await deleteAccount(accountDeps(c.env), sub, new Date());
   purgeLater(c, purge);
   return c.json({ status }, status === 'deleted' ? 200 : 202);
+});
+
+// Operator takedown (scripts/takedown.ts): the same unpublish and tour delete an
+// owner gets, CDN purge included, for a tour the operator names by owner and id.
+// A wrong or missing token, or no OPERATOR_TOKEN in this env, is a plain 404.
+app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
+  if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const body = OperatorTakedownRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const { sub, tourId, action } = body.data;
+  if (!(await tourExists(c.env.BUCKET, sub, tourId))) {
+    return c.json({ error: 'tour not found' }, 404);
+  }
+  const stub = publisher(c.env, tourId);
+  const purge =
+    action === 'delete'
+      ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
+      : { prefixes: [], files: await stub.unpublish(sub, tourId) };
+  purgeLater(c, purge);
+  console.warn(`[takedown] operator ${action} done`);
+  return c.json({ action, purged: purge.prefixes.length + purge.files.length });
 });
 
 app.onError(errorHandler);

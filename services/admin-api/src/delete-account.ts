@@ -226,6 +226,8 @@ const listMarkers = async (bucket: R2Bucket): Promise<Marker[]> => {
   do {
     const page = await bucket.list({ prefix: ACCOUNTS_ROOT, ...(cursor ? { cursor } : {}) });
     for (const obj of page.objects) {
+      // accounts/<owner>/ also holds the operator's disabled.json, which isn't ours.
+      if (!obj.key.endsWith('/deletion.json')) continue;
       const record = await readParsed(bucket, obj.key, AccountDeletionRecordSchema);
       // The sub decides which prefixes get deleted, so it must be this marker's own.
       if (!record || accountDeletionKey(record.sub) !== obj.key) {
