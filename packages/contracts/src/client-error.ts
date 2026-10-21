@@ -18,21 +18,65 @@ export const MAX_ERROR_PATH_LENGTH = 120;
 // The build's entry chunk hash (e.g. `BxR2v9Qe`), or `local` for a dev server.
 export const ERROR_RELEASE_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
-// A URL's query string or fragment, up to the `:line:col` a stack frame puts
-// after it (`.../index-x.js?v=1:10:5`), which is kept.
-const URL_QUERY =
-  /(\b[a-z][a-z0-9+.-]*:\/\/[^\s?#()'"<>]*)[?#][^\s()'"<>]*?(?=(?::\d+:\d+)?(?:[\s()'"<>]|$))/gi;
-// A Firefox frame (`fn@https://...`) has an `@` too, but no dotted host right after it.
-const EMAIL = /[^\s@'"<>()/:]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi;
-// A tour's slug can be its only secret (an unlisted tour), wherever it shows up.
-const SLUG_SEGMENT = /\/(s|slugs)\/[^/\s?#()'"<>]+/g;
+// Everything here is linear in the text: one pass over its tokens, then plain
+// scans inside each. (A backtracking regex over a long word took seconds.)
 
-/** Drops query strings and fragments from URLs, and masks emails and tour slugs. */
+// A run of text with no whitespace, quote, paren or angle bracket: the most a
+// URL can be inside a message or a stack frame.
+const TOKEN = /[^\s()'"<>`]+/g;
+// What may come before a `?` or `#` for the token to count as a URL: an absolute
+// URL, a data: or blob: URL, a path starting with `/`, or a host.tld (with an
+// optional port and path). Anchored, after an optional `fn@` (a Firefox frame).
+// "is it valid? no" has none of these, so prose keeps its question marks.
+const URL_HEAD =
+  /^(?:[^@]*@)?(?:[a-z][a-z0-9+.-]*:\/\/|(?:data|blob):|\/|[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?::\d+)?(?:\/|$))/i;
+// The `:line:col` a stack frame puts after a URL, which is kept.
+const LINE_COL = /:\d+:\d+$/;
+// Sticky, so it only runs from the character after an `@`.
+const EMAIL_DOMAIN = /[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/iy;
+const NOT_LOCAL_PART = new Set(['/', ':', '@', ',', ';', '=']);
+// A tour's slug can be its only secret (an unlisted tour), and its id points at
+// one owner's content, wherever they show up: page paths, API paths, R2 keys.
+const ID_SEGMENT = /\/(s|slugs|pub\/tours|api\/tours|api\/admin\/tours|app\/t)\/[^/\s?#()'"<>`]+/g;
+
+// Drops what follows the first `?` or `#` of a URL-like token, keeping a frame's
+// trailing `:line:col`.
+const stripQuery = (token: string): string => {
+  const q = token.search(/[?#]/);
+  if (q === -1 || !URL_HEAD.test(token.slice(0, q))) return token;
+  return token.slice(0, q) + (LINE_COL.exec(token.slice(q))?.[0] ?? '');
+};
+
+// `local@host.tld` becomes `<email>`. A Firefox frame (`fn@https://...`) has an
+// `@` too, but no dotted host right after it.
+const maskEmails = (token: string): string => {
+  let out = '';
+  let last = 0;
+  for (let at = token.indexOf('@'); at !== -1; at = token.indexOf('@', at + 1)) {
+    let start = at;
+    while (start > last && !NOT_LOCAL_PART.has(token[start - 1]!)) start--;
+    if (start === at) continue;
+    EMAIL_DOMAIN.lastIndex = at + 1;
+    const domain = EMAIL_DOMAIN.exec(token);
+    if (!domain) continue;
+    out += `${token.slice(last, start)}<email>`;
+    last = at + 1 + domain[0].length;
+    at = last - 1;
+  }
+  return out + token.slice(last);
+};
+
+/**
+ * Drops query strings and fragments from URL-like tokens (absolute, data: and
+ * blob: URLs, paths starting with `/`, host.tld/...), and masks emails, tour
+ * slugs and tour ids.
+ */
 export const scrubErrorText = (text: string): string =>
   text
-    .replace(URL_QUERY, '$1')
-    .replace(EMAIL, '<email>')
-    .replace(SLUG_SEGMENT, (_m, prefix: string) => `/${prefix}/:slug`);
+    .replace(TOKEN, (token) => maskEmails(stripQuery(token)))
+    .replace(ID_SEGMENT, (_m, prefix: string) =>
+      prefix === 's' || prefix === 'slugs' ? `/${prefix}/:slug` : `/${prefix}/:tourId`,
+    );
 
 export const ClientErrorReportSchema = z.object({
   app: z.enum(CLIENT_ERROR_APPS),

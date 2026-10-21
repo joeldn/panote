@@ -37,6 +37,68 @@ describe('scrubErrorText', () => {
     expect(scrubErrorText('at /s/my-secret-tour/embed')).toBe('at /s/:slug/embed');
   });
 
+  it('drops a query string or fragment from relative paths, bare hosts and data: URLs', () => {
+    expect(
+      scrubErrorText('response from /api/admin/tours/x?include=configs failed validation'),
+    ).toBe('response from /api/admin/tours/:tourId failed validation');
+    expect(scrubErrorText('GET /api/upload-url?owner=me#frag')).toBe('GET /api/upload-url');
+    expect(scrubErrorText('embed vimeo.com/123?h=SECRET failed')).toBe(
+      'embed vimeo.com/123 failed',
+    );
+    expect(scrubErrorText('at player.vimeo.com:443/v?h=s:1:2')).toBe(
+      'at player.vimeo.com:443/v:1:2',
+    );
+    expect(scrubErrorText('load data:image/png;base64,AAAA#xywh=1 failed')).toBe(
+      'load data:image/png;base64,AAAA failed',
+    );
+    expect(scrubErrorText('blob:https://panote.dev/abc?x=1')).toBe('blob:https://panote.dev/abc');
+  });
+
+  it("keeps prose's question marks and hashes", () => {
+    for (const text of [
+      'is it valid? no',
+      'what now?!',
+      'Expected ")" but got "?"',
+      'issue #12 again',
+      'TypeError: x?.y is not a function',
+    ])
+      expect(scrubErrorText(text)).toBe(text);
+  });
+
+  it('masks tour ids in page, API and R2 key paths', () => {
+    expect(scrubErrorText('GET https://cdn.panote.dev/pub/tours/t_123.json 404')).toBe(
+      'GET https://cdn.panote.dev/pub/tours/:tourId 404',
+    );
+    expect(scrubErrorText('POST /api/tours/t_123/like failed')).toBe(
+      'POST /api/tours/:tourId/like failed',
+    );
+    expect(scrubErrorText('PUT /api/admin/tours/t_123/publish 409')).toBe(
+      'PUT /api/admin/tours/:tourId/publish 409',
+    );
+    expect(scrubErrorText('at /app/t/t_123/share/link')).toBe('at /app/t/:tourId/share/link');
+  });
+
+  it('masks every email in a token and leaves Firefox frames alone', () => {
+    expect(scrubErrorText('a@b.co,c.d@e-f.example.org')).toBe('<email>,<email>');
+    expect(scrubErrorText('render@https://panote.dev/a.js:1:2')).toBe(
+      'render@https://panote.dev/a.js:1:2',
+    );
+  });
+
+  // Linear, not backtracking: these took seconds each before. The bound is
+  // generous on purpose; a regression is orders of magnitude slower.
+  it.each([
+    ['one long word', 'a'.repeat(100_000)],
+    ['a long dotted host', `${'a.'.repeat(50_000)}!?x`],
+    ['many @', `${'a@'.repeat(50_000)}`],
+    ['a long URL', `https://x.dev/${'a'.repeat(100_000)}?q=1`],
+    ['long local parts', `${'a'.repeat(50_000)}@${'b'.repeat(50_000)}`],
+  ])('scrubs %s of ~100k chars quickly', (_label, text) => {
+    const started = performance.now();
+    scrubErrorText(text);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it('leaves text without URLs alone', () => {
     const text = "Cannot read properties of undefined (reading 'x')";
     expect(scrubErrorText(text)).toBe(text);
