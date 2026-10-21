@@ -3,7 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>panote</title>
+    <title>panote · free 360° tours at full resolution</title>
+    <meta name="theme-color" content="#faf8f4" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!--
+      Site-wide description and link preview tags. The /s/* script swaps them for a tour's
+      own (worker/index.ts, SITE_META). No og:url: every SPA path serves this file. The
+      image URL is absolute: vite.config.ts fills in the build mode's VITE_SITE_ORIGIN.
+    -->
+    <meta
+      name="description"
+      content="Host 360° panorama tours for free, at full resolution. Upload a panorama, link your scenes, add hotspots and share a link. Unlimited tours, no watermark, no paywall."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="panote" />
+    <meta property="og:title" content="panote · free 360° tours at full resolution" />
+    <meta
+      property="og:description"
+      content="Upload a panorama, link your scenes, add hotspots, share a link. Unlimited tours, no watermark, no paywall."
+    />
+    <meta property="og:image" content="%SITE_ORIGIN%/og.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="panote: Your 360° tours. Full resolution. Free." />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <div id="root"></div>
