@@ -1175,7 +1175,9 @@ Groundwork only: no per-owner quota is set yet. Code: `services/public-api/src/i
 ### Rate limits
 
 Workers Rate Limiting bindings (`ratelimits` in each `wrangler.jsonc`, repeated in both env
-blocks). Over the limit the route answers `429 {"error":"rate limited"}` with `Retry-After: 60`
+blocks). public-api keys by client IP (`CF-Connecting-IP`): an IPv4 address as is, an IPv6
+address by its /64 (the first four hextets, `::` expanded), since one IPv6 client usually holds a
+whole /64 and could otherwise rotate past any limit. Over the limit the route answers `429 {"error":"rate limited"}` with `Retry-After: 60`
 (the binding's `period`; it doesn't report when the window resets). The counters are per
 Cloudflare location and eventually consistent: a brake, not an exact count. If the binding itself
 errors the request goes through and `rate limiter unavailable` is logged.
@@ -1183,9 +1185,9 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | Worker | Binding | Route | Key | Limit | namespace_id dev / production |
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
-| `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | `CF-Connecting-IP` | 30/min | `1201` / `2201` |
-| `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | `CF-Connecting-IP` | 10/min | `1202` / `2202` |
-| `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | `CF-Connecting-IP` | 120/min | `1203` / `2203` |
+| `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
+| `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
+| `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
@@ -1221,7 +1223,9 @@ auth, rate limit, body checks and the account markers. Two optional vars:
   of the upload; a replace frees the old original's bytes.
 
 Unset or empty means unlimited, and costs nothing: the owner's prefix is only listed (S3
-`ListObjectsV2`, one Class A operation per 1,000 objects) when a limit is set. Over a limit:
+`ListObjectsV2`, one Class A operation per 1,000 objects) when a limit is set. That listing is a
+known cost: with a limit on, it runs in full on every upload-URL request. A pano with a delete
+tombstone (`deleting`) counts toward neither limit. Over a limit:
 `403 {"error":"pano limit reached"}` or `403 {"error":"storage limit reached"}`. A listing that
 fails is a `502`, and a value that isn't a non-negative integer refuses every upload (`500`), so a
 typo can't silently lift the limit. It is a soft cap: it counts what's stored now and the declared
@@ -1260,7 +1264,9 @@ Two ways to stop abuse, usually together:
 straight from TypeScript, a built workspace, the same R2 S3 credentials, and the same rule that
 anything but a `-dev` bucket is named twice with `--allow-bucket`. Tour actions also need
 `OPERATOR_TOKEN` (the same value as the `admin-api` secret) and call `https://panote.dev` for
-`pano-content-dev` and `https://panote.io` for `pano-content` (override with `ADMIN_API_ORIGIN`).
+`pano-content-dev` and `https://panote.io` for `pano-content`. `ADMIN_API_ORIGIN` overrides that,
+but any origin other than the bucket's default also needs `--allow-bucket <bucket>`, so a dev
+bucket can't quietly be sent to production's admin-api.
 
 ```bash
 export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
@@ -1278,9 +1284,15 @@ node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --disable
 node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --enable-owner
 ```
 
+`--dry-run` writes nothing and calls no admin-api route, but it still makes the read-only R2
+requests above (the slug `GET`, the owner scan, the marker `GET`/`HEAD`), so it needs the same R2
+credentials and shows up in R2 request metrics.
+
 Finding the owner: tour keys carry the owner and `pub/` deliberately doesn't, so with only a slug or
 tourId the script lists `tours/` and `HEAD`s that tourId under each owner (one request per owner).
-Pass `--sub` as well to skip that scan. A slug that is now a redirect alias still names its tour.
+Pass `--sub` as well to skip that scan; the script then checks that this sub really holds the tour
+(its `tour.json` or `publish.json`) and stops before writing anything if not, so a mistyped sub
+can't disable someone else. A slug that is now a redirect alias still names its tour.
 The owner is disabled before the tour comes down, so they can't republish in between. Both steps
 are idempotent: rerunning is harmless, and disabling again only rewrites `disabledAt`/`reason`.
 
