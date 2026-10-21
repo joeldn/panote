@@ -1504,13 +1504,18 @@ each app's `main.tsx`). No third-party service. The report (`ClientErrorReportSc
 `kind`, `message` (≤300 chars), `stack` (top 5 frames, ≤200 chars each) and `path` (pathname
 only, ≤120 chars). Nothing identifies the visitor: no user, client id, query string, fragment or
 full page URL. Before sending, the reporter scrubs the message, frames and path
-(`scrubErrorText`): it drops the query string and fragment from every URL-like token, meaning an
-absolute URL, a `data:` or `blob:` URL, a path starting with `/` or a `host.tld[/...]` (a `?` in
-plain prose, as in "valid? no", is kept), keeping a frame's trailing `:line:col`; it masks emails as
-`<email>`, tour slugs as `/s/:slug` and `/slugs/:slug`, and tour ids as `/pub/tours/:tourId`,
-`/api/tours/:tourId`, `/api/admin/tours/:tourId` and `/app/t/:tourId`. A URL inside a token with
-none of those shapes (e.g. `api/x?y` with no leading `/`) keeps its query. The scrub is linear in
-the text, and the reporter slices each field to 4× its cap before scrubbing. `public-api` validates
+(`scrubErrorText`). In each whitespace-free token it finds where a URL starts, even glued to a
+prefix (`url=https://...`, `[https://...`, `src=/api/x?...`): `scheme://` or a `data:`/`blob:` URL
+anywhere, a `/` at the token start or right after `=` `:` `,` `[`, an IPv4 address or `localhost`
+followed by an optional port and `/`, or a `host.tld` at the token start or after one of those
+characters. It drops everything from the first `?` or `#` after that point to the end of the
+token, keeping a frame's trailing `:line:col`; the token is never split at `=` or `,`, so later
+query values go too. A `?` in plain prose ("valid? no") is kept, and so is the query of a URL
+with none of those shapes (e.g. `api/x?y`, with no leading `/`). It masks emails as `<email>`, tour
+slugs as `/s/:slug` and `/slugs/:slug`, and tour ids as `/pub/tours/:tourId`, `/api/tours/:tourId`,
+`/api/admin/tours/:tourId` and `/app/t/:tourId` (any case). The scrub is linear in the text. The
+reporter slices each field to 4× its cap before scrubbing and drops the token that slice cut
+through (back to the last whitespace, if any), so half an email can't get past the mask. `public-api` validates
 the shape, scrubs again and re-caps each field, since masking can lengthen it.
 
 - **Volume.** A page load reports at all with probability 1 off production and 0.25 in production
@@ -1525,7 +1530,8 @@ the shape, scrubs again and re-caps each field, since masking can lengthen it.
 - **Transport.** `sendBeacon` with a text body, else a `keepalive` `fetch` without cookies, the
   same helper as the viewer analytics. The reporter never throws and never reports its own errors.
 - **CSP.** The endpoint is same-origin (`VITE_API_BASE` is empty), which `connect-src 'self'`
-  already allows in both apps; an absolute `VITE_API_BASE` is added to `connect-src` too.
+  already allows in both apps. An absolute `VITE_API_BASE` is added to `connect-src` too, but if
+  it is on another origin every report gets a `403` from the same-origin check above.
 - **Reading them.** Each valid report is one `console.error` object in `public-api`'s Workers Logs,
   `{ event: "client-error", app, release, kind, message, stack, path }`: filter on
   `event = client-error`. Nothing is stored anywhere else. The client IP is only the limiter's key.
