@@ -144,7 +144,10 @@ export const sendDlqAlert = async (
     }
     const state = await readThrottle(env.BUCKET, queue);
     const now = Date.now();
-    if (state.lastSentAt && now - state.lastSentAt < ALERT_THROTTLE_MS) {
+    // A lastSentAt in the future (a clock that jumped back, a hand-edited state)
+    // counts as an expired window, or it would mute alerts until the clock caught up.
+    const age = now - state.lastSentAt;
+    if (state.lastSentAt && age >= 0 && age < ALERT_THROTTLE_MS) {
       const held = state.held + items.length;
       console.warn(
         `DLQ alert throttled for ${queue}: ${items.length} failure(s) held, ${held} since the last email`,

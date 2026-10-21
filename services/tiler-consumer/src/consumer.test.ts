@@ -1023,6 +1023,20 @@ describe('DLQ alert throttle', () => {
     expect(errorSpy).toHaveBeenCalledWith(`DLQ alert throttle not saved for ${QUEUE}: Error`);
   });
 
+  it('treats a lastSentAt in the future as an expired window', async () => {
+    const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    await env.BUCKET.put(
+      alertThrottleKey(QUEUE),
+      JSON.stringify({ lastSentAt: T0 + 60 * 60 * 1000, held: 4 }),
+    );
+    await runAt(T0, withAlert(send), 'thr-future');
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0].subject).toBe(
+      `[panote] tiling failed permanently (1 + 4 earlier) - ${QUEUE}`,
+    );
+    expect(await state()).toEqual({ lastSentAt: T0, held: 0 });
+  });
+
   it('keeps one window per queue', async () => {
     const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
     const e = withAlert(send);
