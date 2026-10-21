@@ -1,8 +1,11 @@
 import { accountDeletionKey } from '@internal/contracts';
+import { R2PreconditionFailedError } from '@internal/worker-kit/r2-s3';
 import { describe, expect, it } from 'vitest';
 
 import {
   describeAccountDeletion,
+  formatAccountDeletions,
+  listAccountDeletions,
   parseDeleteAccountArgs,
   readAccountDeletion,
   requestAccountDeletion,
@@ -29,6 +32,7 @@ describe('parseDeleteAccountArgs', () => {
   it.each([
     [['--sub', SUB, '--dry-run'], 'dry-run'],
     [['--status', '--sub', SUB], 'status'],
+    [['--list'], 'list'],
   ])('%j is %s', (argv, mode) => {
     expect(parseDeleteAccountArgs(argv, ENV).mode).toBe(mode);
   });
@@ -38,6 +42,10 @@ describe('parseDeleteAccountArgs', () => {
     [['--sub'], /--sub needs a value/],
     [['--sub', '--status'], /--sub needs a value/],
     [['--sub', SUB, '--dry-run', '--status'], /exclusive/],
+    [['--list', '--status'], /exclusive/],
+    [['--list', '--sub', SUB], /drop --sub/],
+    [['--sub', ` ${SUB}`], /whitespace/],
+    [['--sub', `${SUB}\n`], /whitespace/],
     [['--sub', SUB, '--force'], /unknown argument --force/],
   ])('rejects %j', (argv, error) => {
     expect(() => parseDeleteAccountArgs(argv, ENV)).toThrow(error);
@@ -62,7 +70,17 @@ describe('parseDeleteAccountArgs', () => {
 function memoryStore(seed: Record<string, string> = {}) {
   const objects = new Map(Object.entries(seed));
   const puts: string[] = [];
+  let existsBeforePut = false;
   const store: MarkerStore = {
+    async listPrefixes(prefix) {
+      const found = new Set<string>();
+      for (const key of objects.keys()) {
+        if (!key.startsWith(prefix)) continue;
+        const rest = key.slice(prefix.length);
+        if (rest.includes('/')) found.add(prefix + rest.slice(0, rest.indexOf('/') + 1));
+      }
+      return [...found];
+    },
     async head(key) {
       return { ok: objects.has(key), status: objects.has(key) ? 200 : 404, etag: null };
     },
@@ -70,12 +88,18 @@ function memoryStore(seed: Record<string, string> = {}) {
       const body = objects.get(key);
       return body === undefined ? new Response(null, { status: 404 }) : new Response(body);
     },
-    async put(key, body) {
+    async put(key, body, opts) {
       puts.push(key);
+      if (existsBeforePut) objects.set(key, JSON.stringify({ v: 1, sub: SUB, requestedAt: 'x' }));
+      if (opts.ifNoneMatch === '*' && objects.has(key)) throw new R2PreconditionFailedError(key);
       objects.set(key, String(body));
     },
   };
-  return { store, objects, puts };
+  /** Simulates the owner's own marker landing between the HEAD and the PUT. */
+  const raceOnPut = () => {
+    existsBeforePut = true;
+  };
+  return { store, objects, puts, raceOnPut };
 }
 
 describe('requestAccountDeletion', () => {
@@ -103,6 +127,14 @@ describe('requestAccountDeletion', () => {
     expect(puts).toEqual([]);
   });
 
+  it('keeps a marker that appears between its HEAD and its PUT (create-only)', async () => {
+    const { store, objects, raceOnPut } = memoryStore();
+    raceOnPut();
+    const out = await requestAccountDeletion(store, SUB, now);
+    expect(out.created).toBe(false);
+    expect(JSON.parse(objects.get(accountDeletionKey(SUB))!).requestedAt).toBe('x');
+  });
+
   it('refuses to write when R2 gives no clear answer', async () => {
     const { store, puts } = memoryStore();
     store.head = async () => ({ ok: false, status: 503, etag: null });
@@ -119,5 +151,29 @@ describe('describeAccountDeletion', () => {
     expect(
       describeAccountDeletion({ ...requested, completedAt: '2026-10-02T03:17:00.000Z' }),
     ).toMatch(/^deleted 2026-10-02/);
+  });
+});
+
+describe('listAccountDeletions', () => {
+  it('lists every marker, oldest first, with the Auth0 removal due date', async () => {
+    const a = { v: 1, sub: 'auth0|a', requestedAt: '2026-10-05T00:00:00.000Z' };
+    const b = {
+      v: 1,
+      sub: 'auth0|b',
+      requestedAt: '2026-10-01T00:00:00.000Z',
+      completedAt: '2026-10-01T00:00:01.000Z',
+    };
+    const { store } = memoryStore({
+      [accountDeletionKey(a.sub)]: JSON.stringify(a),
+      [accountDeletionKey(b.sub)]: JSON.stringify(b),
+      'accounts/junk/deletion.json': 'not json',
+    });
+    const records = await listAccountDeletions(store);
+    expect(records.map((r) => r.sub)).toEqual(['auth0|b', 'auth0|a']);
+    expect(formatAccountDeletions(records)).toEqual([
+      'sub\trequestedAt\tcompletedAt\tauth0RemovalDueBy',
+      'auth0|b\t2026-10-01T00:00:00.000Z\t2026-10-01T00:00:01.000Z\t2026-10-31T00:00:00.000Z',
+      'auth0|a\t2026-10-05T00:00:00.000Z\t-\t2026-11-04T00:00:00.000Z',
+    ]);
   });
 });

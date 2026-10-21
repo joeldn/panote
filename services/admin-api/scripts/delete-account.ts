@@ -12,6 +12,8 @@ import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 
 import {
   describeAccountDeletion,
+  formatAccountDeletions,
+  listAccountDeletions,
   parseDeleteAccountArgs,
   readAccountDeletion,
   requestAccountDeletion,
@@ -25,6 +27,11 @@ async function main(): Promise<void> {
     return;
   }
   const r2 = createR2S3Client({ ...args.r2, retries: 3 });
+  if (args.mode === 'list') {
+    // The weekly check (docs/deploy.md): every account whose Auth0 user may still need removing.
+    for (const line of formatAccountDeletions(await listAccountDeletions(r2))) console.log(line);
+    return;
+  }
   if (args.mode === 'status') {
     console.log(describeAccountDeletion(await readAccountDeletion(r2, args.sub)));
     return;
