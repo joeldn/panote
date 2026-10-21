@@ -54,8 +54,10 @@ export function Privacy() {
         addresses. We use no cookies for analytics and no third-party trackers.
       </p>
       <p>
-        Liking a tour stores a random id in your browser’s local storage so a like counts once. It
-        isn’t linked to an account. Tour owners see totals only.
+        So a like counts once, liking a tour while signed out stores a random id in your browser’s
+        local storage, and liking it while signed in records your account id against that tour. Tour
+        owners see totals only. Deleting your account doesn’t remove likes you gave on other
+        people’s tours.
       </p>
 
       <h2>Who helps us run Panote</h2>

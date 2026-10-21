@@ -39,6 +39,14 @@ describe('website routes', () => {
     expect(text).not.toContain('To delete your account, or to ask');
   });
 
+  it('privacy is accurate about signed-in likes', async () => {
+    renderAt('/privacy');
+    await screen.findByRole('heading', { name: 'Visitors and analytics' });
+    const page = screen.getByRole('article').textContent ?? '';
+    expect(page).toContain('records your account id against that tour');
+    expect(page).not.toContain('isn’t linked to an account');
+  });
+
   it('falls back to a 404 page', async () => {
     renderAt('/nope/deeper');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();
