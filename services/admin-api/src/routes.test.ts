@@ -1806,6 +1806,53 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
     });
   });
 
+  it('round-trips linked audio, vimeo and link media from any https host', async () => {
+    const panoId = 'b1-config-linked-media-p1';
+    const media = [
+      { kind: 'audio', url: 'https://sounds.example.com/bell.mp3' },
+      { kind: 'vimeo', id: '76979871', hash: '8272103f6e' },
+      { kind: 'link', url: 'https://example.org/history' },
+      { kind: 'image', url: 'https://images.example.net/a.jpg' },
+    ];
+    const hotspots = media.map((m, i) => ({
+      id: `h${i}`,
+      type: 'info',
+      yaw: 0,
+      pitch: 0,
+      title: 'Info',
+      media: m,
+    }));
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({ panoId, title: 'Hall', hotspots }),
+    });
+    expect(put.status).toBe(200);
+    const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
+    const got = (await get.json()) as { config: { hotspots: Array<{ media: unknown }> } };
+    expect(got.config.hotspots.map((h) => h.media)).toEqual(media);
+  });
+
+  it.each([
+    { kind: 'link', url: 'javascript:alert(1)' },
+    { kind: 'image', url: 'data:image/png;base64,iVBORw0KGgo=' },
+    { kind: 'audio', url: 'http://sounds.example.com/bell.mp3' },
+    { kind: 'vimeo', id: 'not-a-number' },
+  ])('400s a config PUT with unsafe or malformed media %j', async (media) => {
+    const panoId = 'b1-config-bad-media-p1';
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...auth.headers, 'If-Match': '*' },
+      body: JSON.stringify({
+        panoId,
+        title: 'Hall',
+        hotspots: [{ id: 'h1', type: 'info', yaw: 0, pitch: 0, title: 'Info', media }],
+      }),
+    });
+    expect(put.status).toBe(400);
+    expect(await env.BUCKET.get(configKey(MY_SUB, panoId))).toBeNull();
+  });
+
   it('wraps a finite out-of-range north instead of 400ing (the viewer produces such values)', async () => {
     const panoId = 'b1-config-wrap-north-p1';
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
