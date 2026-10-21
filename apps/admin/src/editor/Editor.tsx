@@ -199,7 +199,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const [placing, setPlacing] = useState(false);
   const [moving, setMoving] = useState<Moving | null>(null);
   // A point dropped by a placing drag that is still sizing it (Esc takes it back out).
-  const sizing = useRef<{ panoId: string; id: string } | null>(null);
+  const sizing = useRef<{ panoId: string; id: string; size: number | null } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -306,39 +306,18 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     }
   }, [uploading, setParams]);
 
-  const select = (panoId: string) => {
-    setActivePoint(null);
-    setPlacing(false);
+  // A move belongs to the open point: opening another (or none) ends it where it is.
+  const openPoint = (id: string | null) => {
+    setActivePoint(id);
     setMoving(null);
+  };
+
+  const select = (panoId: string) => {
+    openPoint(null);
+    setPlacing(false);
     setFailedLoad(null);
     setParams({ pano: panoId }, { replace: true });
   };
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        // Commit a field that is still being typed in (inline titles commit on blur).
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-        // A no-op while a conflict is open: that is resolved from the conflict banner.
-        void editor.save();
-      } else if (e.key === 'Escape') {
-        setPlacing(false);
-        if (sizing.current) {
-          dispatch({ type: 'point/remove', ...sizing.current });
-          setActivePoint(null);
-          sizing.current = null;
-        }
-        if (moving) {
-          const { panoId, id, yaw, pitch } = moving;
-          dispatch({ type: 'point/update', panoId, id, patch: { yaw, pitch } });
-          setMoving(null);
-        }
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [editor, dispatch, moving]);
 
   // Look-only: nothing can be placed or edited on this scene (see `point` below).
   const placingNow = placing && !lookOnly;
@@ -385,7 +364,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   };
   const placed = (id: string | null) => {
     setPlacing(false);
-    if (id) setActivePoint(id);
+    if (id) openPoint(id);
   };
   // Dragging out from the drop spot sizes the new point: its marker's edge follows the pointer.
   const sizeDrag = (at: LayerPoint, start: LayerPoint) => {
@@ -393,23 +372,58 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     if (!sizing.current) {
       const id = drop(start);
       if (!id) return;
-      sizing.current = { panoId: currentId, id };
+      sizing.current = { panoId: currentId, id, size: null };
     }
     const size = pointSizeForDrag(Math.hypot(at.x - start.x, at.y - start.y));
-    dispatch({ type: 'point/update', ...sizing.current, patch: { size } });
+    if (size === sizing.current.size) return;
+    sizing.current.size = size;
+    const { panoId, id } = sizing.current;
+    dispatch({ type: 'point/update', panoId, id, patch: { size } });
   };
   const moveTo = (at: LayerPoint) => {
     const dir = direction(at);
-    if (dir && moving) {
-      dispatch({ type: 'point/update', panoId: moving.panoId, id: moving.id, patch: dir });
-    }
+    if (!dir || !movingNow) return;
+    if (dir.yaw === point?.yaw && dir.pitch === point.pitch) return;
+    dispatch({ type: 'point/update', panoId: movingNow.panoId, id: movingNow.id, patch: dir });
   };
+
+  // Esc, or a drag the browser cancelled: a point a placing drag dropped goes back out,
+  // and a point being moved goes back where it was.
+  const cancelPlacing = () => {
+    setPlacing(false);
+    if (!sizing.current) return;
+    dispatch({ type: 'point/remove', panoId: sizing.current.panoId, id: sizing.current.id });
+    sizing.current = null;
+  };
+  const cancelMove = () => {
+    if (!movingNow) return;
+    const { panoId, id, yaw, pitch } = movingNow;
+    dispatch({ type: 'point/update', panoId, id, patch: { yaw, pitch } });
+    setMoving(null);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        // Commit a field that is still being typed in (inline titles commit on blur).
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        // A no-op while a conflict is open: that is resolved from the conflict banner.
+        void editor.save();
+      } else if (e.key === 'Escape') {
+        cancelPlacing();
+        cancelMove();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // Every render: Esc has to undo the move or the placing drag as it stands now.
+  });
 
   const removeScene = (panoId: string) => {
     dispatch({ type: 'tour/remove-scene', panoId });
     if (panoId === currentId) {
       const next = sceneIds.find((id) => id !== panoId);
-      setActivePoint(null);
+      openPoint(null);
       setParams(next ? { pano: next } : {}, { replace: true });
     }
   };
@@ -464,7 +478,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             onOpen={(h) => {
               if (lookOnly) return;
               setPlacing(false);
-              setActivePoint(h.id);
+              openPoint(h.id);
             }}
           />
           {placingNow && (
@@ -478,6 +492,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 placed(sizing.current?.id ?? null);
                 sizing.current = null;
               }}
+              onCancel={cancelPlacing}
             />
           )}
           {movingNow && (
@@ -493,6 +508,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 moveTo(at);
                 setMoving(null);
               }}
+              onCancel={cancelMove}
             />
           )}
           {settings.showCompass && <Compass className="ed-compass" />}
@@ -641,8 +657,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               disabled={!cfg || !viewer || lookOnly}
               aria-pressed={placingNow}
               onClick={() => {
-                setActivePoint(null);
-                setMoving(null);
+                openPoint(null);
                 setPlacing((p) => !p);
               }}
             >
@@ -705,15 +720,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               moving={movingNow !== null}
               onMove={() => {
                 if (movingNow) {
-                  // Cancel: back where it was.
-                  const { yaw, pitch } = movingNow;
-                  dispatch({
-                    type: 'point/update',
-                    panoId: currentId,
-                    id: point.id,
-                    patch: { yaw, pitch },
-                  });
-                  setMoving(null);
+                  cancelMove();
                   return;
                 }
                 setPlacing(false);
@@ -722,8 +729,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               onDuplicate={() => {
                 const id = newId('pt');
                 dispatch({ type: 'point/duplicate', panoId: currentId, id: point.id, newId: id });
-                setMoving(null);
-                setActivePoint(id);
+                openPoint(id);
               }}
               onDelete={() =>
                 setConfirm({
@@ -733,10 +739,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                   title: point.title,
                 })
               }
-              onDone={() => {
-                setMoving(null);
-                setActivePoint(null);
-              }}
+              onDone={() => openPoint(null)}
             />
           ) : (
             points.length > 0 && (
@@ -747,7 +750,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                       type="button"
                       className="ed-points__item"
                       disabled={lookOnly}
-                      onClick={() => setActivePoint(h.id)}
+                      onClick={() => openPoint(h.id)}
                     >
                       <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
                       {h.title}
@@ -834,8 +837,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         onConfirm={() => {
           if (confirm?.kind === 'delete-point') {
             dispatch({ type: 'point/remove', panoId: confirm.panoId, id: confirm.id });
-            setActivePoint(null);
-            setMoving(null);
+            openPoint(null);
           }
           setConfirm(null);
         }}

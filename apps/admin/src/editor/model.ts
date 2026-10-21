@@ -22,7 +22,9 @@ export const POINT_SIZE_STEP = 0.1;
 // How far a duplicate lands from its original (about 6°), so the two don't overlap.
 export const DUPLICATE_OFFSET = 0.1;
 // Half a size-1 marker in px: dragging this far from the drop spot makes a size-1 point.
-const MARKER_RADIUS = 17;
+// The marker is drawn by packages/ui: `.pn-hotspot` in styles/viewer.css is 34px square,
+// scaled by `--pn-hs-scale` (the point's size). Keep this in step with that width.
+export const MARKER_RADIUS = 17;
 
 export interface TourState {
   etag: string;
@@ -172,9 +174,12 @@ export const yawDegrees = (yaw: number): number =>
 
 /**
  * The size a drag of `distance` px from the drop spot sets: the marker's radius follows
- * the pointer, in slider steps. `null` is the default size, which isn't stored.
+ * the pointer, in slider steps. `null` is the default size, which isn't stored. A drag
+ * that stays inside a default marker is a wobbly click or tap, not a request for a
+ * small point, so it leaves the size alone: the slider goes below 1×.
  */
 export function pointSizeForDrag(distance: number): number | null {
+  if (distance < MARKER_RADIUS) return null;
   const raw = Math.round(distance / MARKER_RADIUS / POINT_SIZE_STEP) * POINT_SIZE_STEP;
   const size = Math.min(POINT_SIZE_MAX, Math.max(POINT_SIZE_MIN, Number(raw.toFixed(1))));
   return size === 1 ? null : size;

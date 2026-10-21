@@ -88,7 +88,7 @@ function Stateful({ body, onChange }: { body?: string; onChange?: (p: HotspotPat
 const body = () => screen.getByLabelText(/Text/) as HTMLTextAreaElement;
 const select = (start: number, end: number) => body().setSelectionRange(start, end);
 const selected = () => body().value.slice(body().selectionStart, body().selectionEnd);
-const toolbar = () => within(screen.getByRole('toolbar', { name: 'Formatting' }));
+const toolbar = () => within(screen.getByRole('group', { name: 'Formatting' }));
 
 describe('PointEditor markdown toolbar', () => {
   it('formats the selection from the toolbar and keeps the result selected', () => {
@@ -109,7 +109,8 @@ describe('PointEditor markdown toolbar', () => {
     expect(selected()).toBe('https://');
   });
 
-  it('formats from the keyboard: Ctrl/Cmd+B, I, K and Ctrl/Cmd+Alt+2', () => {
+  // jsdom isn't a Mac, so Ctrl is the modifier (formatForKey's tests cover Cmd).
+  it('formats from the keyboard: Ctrl+B, I, K and Ctrl+Alt+2', () => {
     const onChange = vi.fn();
     render(<Stateful body="word" onChange={onChange} />);
     select(0, 4);
@@ -117,7 +118,7 @@ describe('PointEditor markdown toolbar', () => {
     // Handled, so the browser doesn't also act on it.
     expect(bold).toBe(false);
     expect(body().value).toBe('**word**');
-    fireEvent.keyDown(body(), { key: 'i', metaKey: true });
+    fireEvent.keyDown(body(), { key: 'i', ctrlKey: true });
     expect(body().value).toBe('***word***');
     fireEvent.keyDown(body(), { key: 'k', ctrlKey: true });
     expect(body().value).toBe('***[word](https://)***');

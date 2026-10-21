@@ -10,7 +10,7 @@ import {
 } from 'react';
 
 import { searchIcons } from './icons.js';
-import { applyFormat, formatForKey, type MarkdownFormat } from './markdown-format.js';
+import { applyFormat, formatForKey, IS_MAC, type MarkdownFormat } from './markdown-format.js';
 import { POINT_SIZE_MAX, POINT_SIZE_MIN, POINT_SIZE_STEP, type HotspotPatch } from './model.js';
 import { isCdnMedia, mediaInput, parseMedia, type MediaKind } from './media.js';
 
@@ -98,20 +98,15 @@ function BodyField({ point, onChange }: FieldProps) {
       <label className="ed-label" htmlFor={`${id}-body`}>
         Text <span className="ed-label__hint">markdown</span>
       </label>
-      <div
-        className="ed-format"
-        role="toolbar"
-        aria-label="Formatting"
-        aria-controls={`${id}-body`}
-      >
+      <div className="ed-format" role="group" aria-label="Formatting">
         {FORMATS.map(({ format: f, label, glyph, keys }) => (
           <button
             key={f}
             type="button"
             className="ed-format__btn"
             aria-label={label}
-            title={`${label} (Ctrl/⌘+${keys})`}
-            aria-keyshortcuts={`Control+${keys} Meta+${keys}`}
+            title={`${label} (${IS_MAC ? `⌘+${keys.replace('Alt', '⌥')}` : `Ctrl+${keys}`})`}
+            aria-keyshortcuts={`${IS_MAC ? 'Meta' : 'Control'}+${keys}`}
             // Keep the textarea's selection: format it, don't blur it.
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => format(f)}

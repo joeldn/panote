@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent, type MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent, type PointerEvent } from 'react';
 
 /** A spot on the layer, in px from its top-left corner. */
 export interface LayerPoint {
@@ -14,9 +14,12 @@ export interface PointerLayerProps {
   hint: string;
   /** A click with no drag. */
   onPick: (at: LayerPoint) => void;
-  /** Each move once a press has turned into a drag (the first one included). */
+  /** Moves once a press has turned into a drag, at most one per animation frame. */
   onDrag: (at: LayerPoint, start: LayerPoint) => void;
+  /** The drag's release, with its final spot (any move still waiting for a frame is dropped). */
   onDragEnd: (at: LayerPoint, start: LayerPoint) => void;
+  /** The browser cancelled the drag (pointercancel): undo whatever it did. */
+  onCancel: () => void;
 }
 
 const at = (e: { clientX: number; clientY: number; currentTarget: Element }): LayerPoint => {
@@ -28,13 +31,28 @@ const at = (e: { clientX: number; clientY: number; currentTarget: Element }): La
  * Covers the stage while placing or moving a point: tells a click from a drag, and
  * keeps the stage from panning underneath. Esc is the editor's (a document listener).
  */
-export function PointerLayer({ className, hint, onPick, onDrag, onDragEnd }: PointerLayerProps) {
+export function PointerLayer({
+  className,
+  hint,
+  onPick,
+  onDrag,
+  onDragEnd,
+  onCancel,
+}: PointerLayerProps) {
   const press = useRef<{ start: LayerPoint; id: number; dragging: boolean } | null>(null);
   // A drag ends on pointerup; the click the browser sends after it isn't a pick.
   const swallowClick = useRef(false);
+  // Drag moves go out at most once a frame, the latest one winning.
+  const frame = useRef<{ handle: number; at: LayerPoint; start: LayerPoint } | null>(null);
+  const dropFrame = () => {
+    if (frame.current) cancelAnimationFrame(frame.current.handle);
+    frame.current = null;
+  };
+  useEffect(() => dropFrame, []);
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
+    // One press at a time: a second finger mid-drag doesn't start another.
+    if (e.button !== 0 || press.current) return;
     press.current = { start: at(e), id: e.pointerId, dragging: false };
     swallowClick.current = false;
     // Released off the stage still ends the drag here (jsdom has no pointer capture).
@@ -48,21 +66,42 @@ export function PointerLayer({ className, hint, onPick, onDrag, onDragEnd }: Poi
       if (Math.hypot(here.x - p.start.x, here.y - p.start.y) < DRAG_THRESHOLD) return;
       p.dragging = true;
     }
-    onDrag(here, p.start);
+    if (frame.current) {
+      frame.current.at = here;
+      return;
+    }
+    const handle = requestAnimationFrame(() => {
+      const f = frame.current;
+      frame.current = null;
+      if (f) onDrag(f.at, f.start);
+    });
+    frame.current = { handle, at: here, start: p.start };
+  };
+  /** Ends this pointer's press; its start when it was a drag (whose click is then swallowed). */
+  const release = (e: PointerEvent<HTMLDivElement>): LayerPoint | null => {
+    const p = press.current;
+    if (!p || p.id !== e.pointerId) return null;
+    press.current = null;
+    dropFrame();
+    if (!p.dragging) return null;
+    swallowClick.current = true;
+    return p.start;
   };
   const up = (e: PointerEvent<HTMLDivElement>) => {
-    const p = press.current;
-    if (!p || p.id !== e.pointerId) return;
-    press.current = null;
-    if (!p.dragging) return;
-    swallowClick.current = true;
-    onDragEnd(at(e), p.start);
+    const start = release(e);
+    if (start) onDragEnd(at(e), start);
+  };
+  // The browser took the pointer (a scroll, a system gesture): undo the drag, don't commit it.
+  const cancel = (e: PointerEvent<HTMLDivElement>) => {
+    if (release(e)) onCancel();
   };
   const click = (e: MouseEvent<HTMLDivElement>) => {
     if (swallowClick.current) {
       swallowClick.current = false;
       return;
     }
+    // Another pointer's tap while one is pressed isn't a pick either.
+    if (press.current) return;
     onPick(at(e));
   };
 
@@ -73,7 +112,7 @@ export function PointerLayer({ className, hint, onPick, onDrag, onDragEnd }: Poi
       onPointerDown={down}
       onPointerMove={move}
       onPointerUp={up}
-      onPointerCancel={up}
+      onPointerCancel={cancel}
       onClick={click}
     >
       <span className="ed-placing__hint">{hint}</span>

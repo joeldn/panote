@@ -170,8 +170,11 @@ describe('editor model', () => {
     expect(pointSizeForDrag(17)).toBeNull();
     expect(pointSizeForDrag(34)).toBe(2);
     expect(pointSizeForDrag(25.5)).toBe(1.5);
-    expect(pointSizeForDrag(5)).toBe(0.5);
     expect(pointSizeForDrag(1000)).toBe(3);
+  });
+
+  it('leaves the default size for a wobbly click or tap inside the marker', () => {
+    for (const d of [0, 5, 8, 12, 16.9]) expect(pointSizeForDrag(d)).toBeNull();
   });
 
   it('removing the start scene clears startPanoId; start view and north are canonical', () => {

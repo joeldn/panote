@@ -108,18 +108,36 @@ export function applyFormat(edit: TextEdit, format: MarkdownFormat): TextEdit {
   }
 }
 
-/** The format a key press in the body asks for: Ctrl/Cmd+B, I, K, and Ctrl/Cmd+Alt+2. */
-export function formatForKey(e: {
+/** True on Apple platforms, where the shortcuts use Cmd and Ctrl keeps its text-field keys. */
+export const IS_MAC =
+  typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+export interface FormatKey {
   key: string;
   code: string;
   ctrlKey: boolean;
   metaKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
-}): MarkdownFormat | null {
-  if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return null;
-  // Option+2 types a character on a Mac, so the heading goes by the physical key.
-  if (e.altKey) return e.code === 'Digit2' ? 'heading' : null;
+  getModifierState?: (key: 'AltGraph') => boolean;
+}
+
+/**
+ * The format a key press in the body asks for: Cmd (Mac) or Ctrl (elsewhere) with B, I
+ * or K, and with Alt/Option+2 for a heading. Only the platform's own modifier counts, so
+ * Ctrl+B and Ctrl+K keep their Mac text-field meanings.
+ */
+export function formatForKey(e: FormatKey, mac = IS_MAC): MarkdownFormat | null {
+  const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!mod || e.shiftKey) return null;
+  if (e.altKey) {
+    // Option+2 types a character on a Mac, so there the heading goes by the physical key.
+    if (mac) return e.code === 'Digit2' ? 'heading' : null;
+    // Windows reports AltGr as Ctrl+Alt: AltGr+2 types `@`, `~` or `²` on many layouts,
+    // so only a press that still reads as a plain 2 is the shortcut.
+    if (e.getModifierState?.('AltGraph')) return null;
+    return e.key === '2' ? 'heading' : null;
+  }
   switch (e.key.toLowerCase()) {
     case 'b':
       return 'bold';

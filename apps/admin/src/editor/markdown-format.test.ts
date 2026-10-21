@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyFormat,
   formatForKey,
+  type FormatKey,
   type MarkdownFormat,
   type TextEdit,
 } from './markdown-format.js';
@@ -62,23 +63,43 @@ describe('applyFormat', () => {
 });
 
 describe('formatForKey', () => {
-  const key = (k: string, mods: Partial<Parameters<typeof formatForKey>[0]> = {}) =>
-    formatForKey({
-      key: k,
-      code: '',
-      ctrlKey: false,
-      metaKey: false,
-      altKey: false,
-      shiftKey: false,
-      ...mods,
-    });
+  const key = (k: string, mods: Partial<FormatKey> = {}, mac = false) =>
+    formatForKey(
+      { key: k, code: '', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...mods },
+      mac,
+    );
 
-  it('maps Ctrl or Cmd with B, I and K, and Ctrl/Cmd+Alt+2', () => {
+  it('maps Ctrl with B, I, K and Ctrl+Alt+2 off a Mac', () => {
     expect(key('b', { ctrlKey: true })).toBe('bold');
-    expect(key('B', { metaKey: true })).toBe('bold');
+    expect(key('B', { ctrlKey: true })).toBe('bold');
     expect(key('i', { ctrlKey: true })).toBe('italic');
-    expect(key('k', { metaKey: true })).toBe('link');
-    expect(key('™', { metaKey: true, altKey: true, code: 'Digit2' })).toBe('heading');
+    expect(key('k', { ctrlKey: true })).toBe('link');
+    expect(key('2', { ctrlKey: true, altKey: true, code: 'Digit2' })).toBe('heading');
+    // Cmd isn't the modifier here.
+    expect(key('b', { metaKey: true })).toBeNull();
+  });
+
+  it('leaves AltGr alone: Windows reports it as Ctrl+Alt', () => {
+    // Spanish/Swiss AltGr+2 types @, French ~, German ².
+    expect(key('@', { ctrlKey: true, altKey: true, code: 'Digit2' })).toBeNull();
+    expect(key('~', { ctrlKey: true, altKey: true, code: 'Digit2' })).toBeNull();
+    expect(
+      key('2', {
+        ctrlKey: true,
+        altKey: true,
+        code: 'Digit2',
+        getModifierState: (m) => m === 'AltGraph',
+      }),
+    ).toBeNull();
+  });
+
+  it('uses only Cmd on a Mac, so Ctrl+B and Ctrl+K keep their text-field meanings', () => {
+    expect(key('b', { metaKey: true }, true)).toBe('bold');
+    expect(key('i', { metaKey: true }, true)).toBe('italic');
+    expect(key('k', { metaKey: true }, true)).toBe('link');
+    expect(key('™', { metaKey: true, altKey: true, code: 'Digit2' }, true)).toBe('heading');
+    expect(key('b', { ctrlKey: true }, true)).toBeNull();
+    expect(key('k', { ctrlKey: true }, true)).toBeNull();
   });
 
   it('ignores plain keys and other shortcuts', () => {
