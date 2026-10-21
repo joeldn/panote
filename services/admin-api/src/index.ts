@@ -1,4 +1,6 @@
 import {
+  ACCOUNT_DELETE_CONFIRMATION,
+  AccountDeleteRequestSchema,
   checkSlug,
   configKey,
   deletingKey,
@@ -33,6 +35,12 @@ import {
   updateConditional,
   writeConditional,
 } from './conditional.js';
+import {
+  deleteAccount,
+  isAccountDeleted,
+  sweepAccountDeletions,
+  type AccountDeps,
+} from './delete-account.js';
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
@@ -115,6 +123,18 @@ const loadSceneConfigs = async (
 };
 
 const app = new Hono<{ Bindings: Env }>();
+
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const ACCOUNT_PATH = '/api/admin/account';
+
+// Once an account is marked for deletion it is read-only: no write may recreate
+// what the delete is removing. The account route itself stays open for retries.
+app.use('/api/admin/*', async (c, next) => {
+  if (!WRITE_METHODS.has(c.req.method) || c.req.path === ACCOUNT_PATH) return next();
+  const { sub } = await authenticate(c.req.raw, c.env);
+  if (await isAccountDeleted(c.env.BUCKET, sub)) return c.json({ error: 'account deleted' }, 410);
+  return next();
+});
 
 // Runs after the response; purgeCdn never throws, so a failure can't turn a 204 into a 500.
 const purgeLater = (
@@ -391,13 +411,40 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
 
 app.get('/api/admin/tours/:tourId/insights', (c) => insightsRoute(c, c.req.param('tourId')));
 
+// What account delete needs from the rest of the Worker; the sweep uses it too.
+const accountDeps = (env: Env): AccountDeps => ({
+  bucket: env.BUCKET,
+  unpublishTour: (sub, tourId) => publisher(env, tourId).unpublish(sub, tourId),
+  clearStats: async (tourId) => {
+    // public-api's TourStats, one per tourId (see its stats.ts for the protocol).
+    const res = await env.STATS.get(env.STATS.idFromName(tourId)).fetch('https://do/', {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(`stats reset failed: ${res.status}`);
+  },
+});
+
+app.delete(ACCOUNT_PATH, async (c) => {
+  const { sub } = await authenticate(c.req.raw, c.env);
+  const body = AccountDeleteRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) {
+    return c.json({ error: `confirm must be "${ACCOUNT_DELETE_CONFIRMATION}"` }, 400);
+  }
+  const { status, purge } = await deleteAccount(accountDeps(c.env), sub, new Date());
+  purgeLater(c, purge);
+  return c.json({ status }, status === 'deleted' ? 200 : 202);
+});
+
 app.onError(errorHandler);
 
 export default {
   fetch: app.fetch,
-  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6).
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6), and
+  // finishes (or re-sweeps) every account marked for deletion.
   scheduled(controller, env, ctx) {
-    ctx.waitUntil(sweepExpiredAliases(env.BUCKET, new Date(controller.scheduledTime)));
+    const now = new Date(controller.scheduledTime);
+    ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
+    ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
   },
 } satisfies ExportedHandler<Env>;
 

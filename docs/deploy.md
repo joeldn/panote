@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` / `panote.io/api/tours/*` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/`; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
@@ -1026,6 +1026,97 @@ its ownership HEAD check runs once, at presign time, so a presign issued just be
 still land up to 900s later and recreate the original after the delete completed. It stays
 confined to the caller's own owner-scoped prefix either way, so the impact is the same as the
 fresh-upload case above — the pano can simply be deleted again.
+
+---
+
+## Account deletion
+
+An owner deletes their own account from the admin app's account menu ("Delete account", a typed
+confirmation). That calls `DELETE /api/admin/account` on `admin-api` with the body
+`{"confirm":"delete my account"}` (`ACCOUNT_DELETE_CONFIRMATION` in `@internal/contracts`; any
+other body is a `400` and touches nothing). The code is `services/admin-api/src/delete-account.ts`.
+
+**Order, and why a retry finishes the job.**
+
+1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt? }`), is
+   written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
+   under `/api/admin/*`, except the account route itself) answers `410 {"error":"account deleted"}`,
+   so nothing can recreate what the delete is removing. Reads still answer, with whatever is left.
+   `accounts/` is owner-scoped like `panos/` and `tours/`: the CDN's WAF rule (above) only lets
+   `tiles/`, `pub/` and `slugs/` through.
+2. Each tour: the redirect aliases still listed in its `publish.json` (only those still pointing at
+   this tour), then an unpublish through its `TourPublisher` (live slug, `pub/tours/<id>.json`,
+   `publish.json`), then its `TourStats` counters (views, likes and the like-dedupe keys; a
+   `DELETE` to the Durable Object through the `STATS` binding), and last the whole
+   `tours/<owner>/<tourId>/` prefix. Tours go before panos, so a live tour comes down before its
+   images do.
+3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
+   `tiles/<panoId>/`, then the owner prefix). No reference or recent-upload checks: everything goes.
+4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
+
+A tour or pano is only gone once its own prefix is, so an interrupted run leaves it listed and the
+next run picks it up. If any step throws, the route still answers `202 {"status":"pending"}`: the
+account is already read-only, and the daily sweep finishes it. Either way the admin app signs the
+owner out. CDN purges (tiles prefixes, bundles, slugs) are batched as for tour delete (see "CDN
+purge on delete"), including for a partial run.
+
+**Daily sweep.** The existing `17 3 * * *` Cron Trigger also reruns every account that has a
+marker: it finishes interrupted deletes and catches anything that landed afterwards (a presigned
+upload URL stays valid for 900s, and `upload-api` itself doesn't check the marker: its fresh-upload
+path makes no R2 call, and adding one to every upload isn't worth it when the sweep catches the
+result). It keeps the first `completedAt`, and deletes the marker 30 days after it
+(`ACCOUNT_MARKER_DAYS`). After that the same Auth0 user could sign in again to an empty account,
+so the Auth0 user has to be gone by then (below). An unreadable marker is logged and skipped;
+one account failing doesn't stop the others.
+
+**The `STATS` binding** points at the class `public-api` declares (`script_name` in
+`services/admin-api/wrangler.jsonc`), so `public-api` must exist in an environment before
+`admin-api` deploys there. Dev already has it. On the first production deploy the Deploy
+workflow's matrix runs both at once: if `admin-api` fails on the binding, rerun it once
+`public-api` is up. Nothing public reaches the reset: `public-api`'s routes never forward a
+`DELETE` to the Durable Object, and `admin-api` only clears the tours listed under the caller's
+own prefix. In tests, `services/admin-api/vitest.config.ts` stands in a small Worker with that
+name.
+
+**What it doesn't remove.**
+
+- **The Auth0 user.** Nothing here calls the Auth0 Management API. Until that's wired up, delete the
+  user by hand in the Auth0 dashboard (User Management → Users → the user → Delete) within 30
+  days of the request; the admin app and the privacy page promise exactly that. The marker's
+  `sub` is the Auth0 user id to look for.
+- **Likes this user gave on other people's tours.** A signed-in like stores `liked:<sub>` in that
+  tour's `TourStats`, and there's no index from a user to the tours they liked.
+- **Analytics Engine events** for the deleted tours. They're keyed by tourId, hold nothing about
+  the owner, and age out with AE's three-month retention (see Insights).
+- **Redirect aliases past the 20 `publish.json` tracks** (`MAX_ALIASES`). They stop being
+  followed once the tour's live slug is gone and the daily alias sweep removes them when they
+  expire.
+- **Copies already in a browser cache**, and edge copies if the purge isn't configured (see
+  "Deleted panos").
+
+### Deleting an account on request (operator)
+
+For a request by email, `services/admin-api/scripts/delete-account.ts` writes the same marker the
+owner's route writes; the next daily sweep (03:17 UTC) then does the whole deletion above. It uses
+the R2 S3 API with the same credentials as the og.jpg backfill (an R2 API token with Object
+Read & Write on the bucket), runs straight from TypeScript on Node 24, and needs a built
+workspace (`pnpm build`) for its `@internal/*` imports. Like the backfill, anything but a `-dev`
+bucket has to be named twice with `--allow-bucket`.
+
+```bash
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+# The Auth0 user id, e.g. google-oauth2|1234 (Auth0 dashboard: User Management → Users)
+SUB='google-oauth2|1234'
+# Prints the marker key it would write; makes no request at all:
+node services/admin-api/scripts/delete-account.ts --sub "$SUB" --dry-run
+# Marks the account (an existing marker is left as it is):
+node services/admin-api/scripts/delete-account.ts --sub "$SUB"
+# Next day: "deleted <time> …" once the sweep has run:
+node services/admin-api/scripts/delete-account.ts --sub "$SUB" --status
+```
+
+Then delete the Auth0 user by hand, as above, and reply to the request. The script never deletes
+anything itself, so running it twice is harmless.
 
 ---
 

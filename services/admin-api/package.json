@@ -9,10 +9,11 @@
     "build": "echo \"@service/admin-api: nothing to build (wrangler bundles at deploy time)\"",
     "dev": "wrangler dev --env dev",
     "deploy": "wrangler deploy --env dev",
+    "delete-account": "node scripts/delete-account.ts",
     "types": "wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.test.json && tsc -p tsconfig.scripts.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --passWithNoTests"
   },
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@internal/typescript-config": "workspace:*",
+    "@types/node": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
