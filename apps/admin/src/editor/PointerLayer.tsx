@@ -113,6 +113,9 @@ export function PointerLayer({
       onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={cancel}
+      // Capture lost without a pointerup (it also follows one, by then a no-op): the press
+      // must not stay open, or every later click would be ignored as a second pointer.
+      onLostPointerCapture={cancel}
       onClick={click}
     >
       <span className="ed-placing__hint">{hint}</span>

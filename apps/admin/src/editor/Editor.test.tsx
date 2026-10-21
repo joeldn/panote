@@ -692,8 +692,12 @@ describe('editor: points, connections, views and settings', () => {
       fireEvent.pointerDown(el, { pointerId: 1, button: 0, clientX: 20, clientY: 10 });
       fireEvent.pointerMove(el, { pointerId: 1, clientX: 90, clientY: 40 });
       await ui.findByRole('button', { name: 'Save' });
-      fireEvent.click(panel.getByRole('button', { name: 'Done' }));
-      fireEvent.click(ui.getAllByRole('button', { name: 'Fountain' })[0]!);
+      // Open Bench from its marker, then Fountain again the same way.
+      const marker = (id: string) => document.querySelector(`[data-hotspot-id="${id}"]`)!;
+      fireEvent.click(marker('i2'));
+      await ui.findByRole('group', { name: 'Edit point Bench' });
+      fireEvent.click(marker('i1'));
+      await ui.findByRole('group', { name: 'Edit point Fountain' });
       // Reopened: not moving any more, and Esc leaves the point where the drag put it.
       expect(ui.getByRole('button', { name: 'Move' })).toBeTruthy();
       expect(screen.queryByText(/drag the point there/)).toBeNull();

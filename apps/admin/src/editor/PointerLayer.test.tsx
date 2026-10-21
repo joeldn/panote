@@ -68,6 +68,28 @@ describe('PointerLayer', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('cancels on lost pointer capture, so the next click still picks', async () => {
+    const { el, ev, onDragEnd, onCancel, onPick } = setup();
+    fireEvent.pointerDown(el, ev(1, 0));
+    fireEvent.pointerMove(el, ev(1, 30));
+    fireEvent.lostPointerCapture(el, ev(1, 30));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    // The pointerup never came, yet the layer isn't stuck on that press: the next
+    // click (a fresh press) still picks.
+    fireEvent.pointerDown(el, ev(3, 5));
+    fireEvent.pointerUp(el, ev(3, 5));
+    fireEvent.click(el, { clientX: 5, clientY: 0 });
+    expect(onPick.mock.calls).toEqual([[{ x: 5, y: 0 }]]);
+    // After a normal release, the capture loss that follows changes nothing.
+    fireEvent.pointerDown(el, ev(4, 0));
+    fireEvent.pointerMove(el, ev(4, 30));
+    fireEvent.pointerUp(el, ev(4, 30));
+    fireEvent.lostPointerCapture(el, ev(4, 30));
+    await nextFrame();
+    expect(onDragEnd).toHaveBeenCalledTimes(1);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a second pointer while one is pressed', async () => {
     const { el, ev, onDrag, onDragEnd, onPick } = setup();
     fireEvent.pointerDown(el, ev(1, 0));
