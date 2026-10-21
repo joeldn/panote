@@ -1,18 +1,31 @@
 import { AccountMenu, Logo } from '@internal/ui';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, Outlet } from 'react-router';
 
+import { DeleteAccountModal } from './account/DeleteAccount.js';
 import { useAuthEnv } from './auth-context.js';
 import { useOptionalSession, type Session } from './session.js';
 
 function Account({ session }: { session: Session }) {
   const { origins } = useAuthEnv();
+  const [deleting, setDeleting] = useState(false);
   return (
-    <AccountMenu
-      user={session.user}
-      items={[{ label: 'Home page', icon: 'fa-solid fa-house', href: `${origins.website}/` }]}
-      onSignOut={session.signOut}
-    />
+    <>
+      <AccountMenu
+        user={session.user}
+        items={[
+          { label: 'Home page', icon: 'fa-solid fa-house', href: `${origins.website}/` },
+          {
+            label: 'Delete account',
+            icon: 'fa-solid fa-trash-can',
+            danger: true,
+            onSelect: () => setDeleting(true),
+          },
+        ]}
+        onSignOut={session.signOut}
+      />
+      <DeleteAccountModal open={deleting} session={session} onClose={() => setDeleting(false)} />
+    </>
   );
 }
 
