@@ -1,4 +1,4 @@
-import { deletingKey, originalKey, PANO_PATTERN } from '@internal/contracts';
+import { accountDeletionKey, deletingKey, originalKey, PANO_PATTERN } from '@internal/contracts';
 import { authenticate, toErrorResponse, WorkerError } from '@internal/worker-kit';
 import { createR2S3Client, type R2HeadResult } from '@internal/worker-kit/r2-s3';
 
@@ -58,6 +58,12 @@ export default {
         // after aws4fetch's default 10 retries (~30s of backoff).
         retries: 2,
       });
+
+      // An account marked for deletion gets no new upload URL (admin-api's 410 on
+      // writes). Fails closed like the HEADs below: no clear answer, no URL.
+      const deletion = await r2.head(accountDeletionKey(sub));
+      assertHeadIsDefinitive(deletion);
+      if (deletion.ok) return Response.json({ error: 'account deleted' }, { status: 410 });
 
       // panoId given -> replace-image: only an existing, non-tombstoned
       // original under the caller's own prefix may be re-presigned.

@@ -1,14 +1,15 @@
 // services/upload-api/src/index.test.ts
-import { deletingKey, encodeId, originalKey } from '@internal/contracts';
+import { accountDeletionKey, deletingKey, encodeId, originalKey } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { SELF } from 'cloudflare:test';
-import { afterEach, describe, it, expect, beforeAll, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, beforeAll, vi, type Mock } from 'vitest';
 
 // Maps a HEAD's target key suffix to a canned status, so a single mock can
 // drive both the original and tombstone HEADs independently per test.
 const mockHeads = (statuses: { original: number; tombstone: number }): Mock =>
   vi.fn(async (input: Request | string) => {
     const reqUrl = typeof input === 'string' ? input : input.url;
+    if (reqUrl.endsWith('/deletion.json')) return new Response(null, { status: 404 });
     const status = reqUrl.endsWith('/deleting') ? statuses.tombstone : statuses.original;
     return new Response(null, { status });
   });
@@ -32,6 +33,18 @@ const post = (body?: unknown) =>
     headers: { Authorization: 'Bearer good', 'content-type': 'application/json' },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
+
+// Every request HEADs the account deletion marker first: by default there is none
+// (and nothing else exists either). Tests that need other answers stub their own.
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(null, { status: 404 })),
+  );
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('upload-url', () => {
   it('401 without token', async () => {
@@ -169,10 +182,7 @@ describe('upload-url', () => {
     });
 
     it('404 while a delete tombstone exists, even if the original still HEADs ok', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => new Response(null, { status: 200 })),
-      );
+      vi.stubGlobal('fetch', mockHeads({ original: 200, tombstone: 200 }));
       const r = await post({ ...validBody, panoId: 'being-deleted' });
       expect(r.status).toBe(404);
     });
@@ -183,7 +193,9 @@ describe('upload-url', () => {
         const reqUrl = typeof input === 'string' ? input : input.url;
         // Only the caller's own tombstone key HEADs as missing; everything
         // else (the original) HEADs ok - proves the check is owner-scoped.
-        if (reqUrl.includes('/deleting')) return new Response(null, { status: 404 });
+        if (reqUrl.includes('/deleting') || reqUrl.endsWith('/deletion.json')) {
+          return new Response(null, { status: 404 });
+        }
         return new Response(null, { status: 200 });
       });
       vi.stubGlobal('fetch', fetchMock);
@@ -228,5 +240,32 @@ describe('upload-url', () => {
       // 1 initial + a small configured retry count, not 1 + aws4fetch's default of 10.
       expect((fetchMock as Mock).mock.calls.length).toBeLessThan(6);
     });
+  });
+});
+
+describe('upload-url for an account marked for deletion', () => {
+  const markerHead = (status: number) =>
+    vi.fn(async (input: Request | string) => {
+      const reqUrl = typeof input === 'string' ? input : input.url;
+      return new Response(null, { status: reqUrl.endsWith('/deletion.json') ? status : 200 });
+    });
+
+  it.each([
+    ['a fresh upload', validBody],
+    ['a replace', { ...validBody, panoId: 'existing-pano' }],
+  ])('410s %s, after one HEAD of its own marker', async (_label, body) => {
+    const fetchMock = markerHead(200);
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await post(body);
+    expect(r.status).toBe(410);
+    expect(await r.json()).toEqual({ error: 'account deleted' });
+    const urls = fetchMock.mock.calls.map(([req]) => (typeof req === 'string' ? req : req.url));
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain(accountDeletionKey('auth0|me'));
+  });
+
+  it('fails closed with 502 when the marker HEAD errors', async () => {
+    vi.stubGlobal('fetch', markerHead(500));
+    expect((await post(validBody)).status).toBe(502);
   });
 });
