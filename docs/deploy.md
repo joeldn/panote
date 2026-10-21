@@ -190,8 +190,8 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 
 **Headers.** The build also emits `_headers` from the env (`buildHeadersFile` in
 `@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
-`style-src 'self'`, `img-src 'self' <cdn> data: blob:`, `media-src 'self' <cdn>`, `connect-src 'self' <cdn> <auth0 domain>`
-(admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com` (admin adds `'self'`),
+`style-src 'self'`, `img-src 'self' <cdn> https: data: blob:`, `media-src 'self' <cdn> https:`, `connect-src 'self' <cdn> <auth0 domain>`
+(admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com https://player.vimeo.com` (admin adds `'self'`),
 `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
 `strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
 `/s/:slug/embed`, whose rule removes the inherited CSP (`! Content-Security-Policy`) and sets
@@ -264,9 +264,10 @@ CSP notes for the D units:
   `@internal/ui` with a plain stylesheet (`styles/viewer.css`); the viewer's old vanilla UI
   subpath (`@panote/viewer/ui`), which injected one, has been deleted. Inline `style` set from JS
   (CSSOM) is not affected.
-- Hotspot media: video and images load only from `'self'` and the CDN (`media-src`/`img-src`),
-  YouTube only via `www.youtube-nocookie.com` (`frame-src`). The public viewer renders media on any
-  other host (or media that fails to load) as an "Open image/video ↗" link instead.
+- Hotspot media: Panote only links to it, never hosts it, so images, audio and video load from any
+  `https:` host (`img-src`/`media-src`; never `http:`, and the schema only stores `https://` urls).
+  YouTube frames only via `www.youtube-nocookie.com` and Vimeo only via `player.vimeo.com`
+  (`frame-src`). Media that fails to load becomes an "Open image/audio/video ↗" link instead.
 - Admin's CSP adds `frame-src 'self'` for the share modal's embed preview, which loads the
   website's `/s/<slug>/embed` from `VITE_SITE_ORIGIN` (the same origin once deployed). Local dev has
   no `_headers`, so the cross-origin preview from `localhost:5173` isn't blocked there.
