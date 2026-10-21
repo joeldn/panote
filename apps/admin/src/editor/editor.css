@@ -469,6 +469,19 @@
   color: var(--accent);
 }
 
+/* Six media kinds don't fit one row of the panel: wrap, each at its label's width. */
+.ed-media .pn-seg {
+  flex-wrap: wrap;
+}
+
+.ed-media .pn-seg__opt {
+  padding: 8px 10px;
+}
+
+.ed-media__preview .pn-hspanel__media {
+  margin-bottom: 0;
+}
+
 .ed-point__actions {
   display: flex;
   justify-content: space-between;
