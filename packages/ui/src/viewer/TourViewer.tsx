@@ -52,8 +52,6 @@ export interface TourViewerProps {
    * scrolls that page until the visitor engages the viewer. See PanoStage.
    */
   embed?: boolean;
-  /** Inline hotspot media is only shown from URLs this accepts. */
-  isAllowedMediaUrl: (url: string) => boolean;
   /** Left out for chrome-free use (the embed). */
   bar?: TourViewerBar;
   /** Extra chrome over the stage; gets the scene on screen. */
@@ -95,7 +93,6 @@ const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => source;
 
 interface PointsLayerProps {
   panoId: string;
-  isAllowedMediaUrl: (url: string) => boolean;
   hotspots: ViewerHotspot[];
   links: ViewerLinkArrow[];
   active: ViewerHotspot | null;
@@ -104,15 +101,7 @@ interface PointsLayerProps {
 }
 
 // Rendered inside PanoStage so it can report point opens through the stage.
-function PointsLayer({
-  panoId,
-  isAllowedMediaUrl,
-  hotspots,
-  links,
-  active,
-  setActive,
-  onGo,
-}: PointsLayerProps) {
+function PointsLayer({ panoId, hotspots, links, active, setActive, onGo }: PointsLayerProps) {
   const viewer = usePanoViewer();
   const events = useStageEvents();
   const open = (h: ViewerHotspot) => {
@@ -135,13 +124,7 @@ function PointsLayer({
         activeId={active?.id ?? null}
         onOpen={open}
       />
-      {active && (
-        <HotspotPanel
-          hotspot={active}
-          onClose={() => setActive(null)}
-          isAllowedMediaUrl={isAllowedMediaUrl}
-        />
-      )}
+      {active && <HotspotPanel hotspot={active} onClose={() => setActive(null)} />}
     </>
   );
 }
@@ -200,7 +183,6 @@ export function TourViewer({
   start,
   single = false,
   embed = false,
-  isAllowedMediaUrl,
   bar,
   overlay,
   onShare,
@@ -326,7 +308,6 @@ export function TourViewer({
       >
         <LinkPrefetch targets={prefetchTargets} prefetch={prefetch} />
         <PointsLayer
-          isAllowedMediaUrl={isAllowedMediaUrl}
           panoId={panoId}
           hotspots={hotspots}
           links={links}

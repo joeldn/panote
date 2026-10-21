@@ -22,6 +22,9 @@ const PLACEHOLDER = /YOUR_/i;
 
 const originOf = (url: string): string => new URL(url).origin;
 
+// The only players a hotspot embeds (HotspotMedia youtube/vimeo).
+const EMBED_FRAME_SRC = ['https://www.youtube-nocookie.com', 'https://player.vimeo.com'];
+
 /**
  * The CSP both SPAs ship (docs/wave6-plan.md section 5). `frameAncestors` is
  * the only part that differs between routes.
@@ -44,11 +47,12 @@ export function contentSecurityPolicy(
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self'",
-    `img-src 'self' ${cdn} data: blob:`,
-    // Hotspot video (HotspotMedia kind 'video'); media URLs outside the CDN stay blocked.
-    `media-src 'self' ${cdn}`,
+    // Hotspot media (HotspotMedia image/audio/video) is linked from any https host,
+    // never hosted, so these allow https: as a whole. Nothing here runs script.
+    `img-src 'self' ${cdn} https: data: blob:`,
+    `media-src 'self' ${cdn} https:`,
     `connect-src ${src(connect)}`,
-    `frame-src ${[...extraFrameSrc, 'https://www.youtube-nocookie.com'].join(' ')}`,
+    `frame-src ${[...extraFrameSrc, ...EMBED_FRAME_SRC].join(' ')}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

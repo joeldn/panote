@@ -1,70 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, type KeyboardEvent } from 'react';
 
 import { pointIcon } from '../icons/names.js';
 import { renderMarkdown } from '../markdown.js';
 import { usePanoViewer } from '../viewer-context.js';
-import type { ViewerHotspot, ViewerMedia } from './types.js';
-
-const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';
-
-const LINK_LABEL = { image: 'Open image ↗', video: 'Open video ↗' } as const;
-
-interface MediaProps {
-  media: ViewerMedia;
-  title: string;
-  allowMedia: (url: string) => boolean;
-}
-
-function Media({ media, title, allowMedia }: MediaProps) {
-  const [broken, setBroken] = useState(false);
-  if (media.kind === 'youtube') {
-    return (
-      <iframe
-        className="pn-hspanel__media pn-hspanel__media--frame"
-        src={`${YOUTUBE_EMBED}${encodeURIComponent(media.id)}`}
-        title={title}
-        allow="encrypted-media; picture-in-picture; fullscreen"
-        referrerPolicy="strict-origin-when-cross-origin"
-        loading="lazy"
-      />
-    );
-  }
-  // Off-origin media would be blocked by the CSP, so it becomes a plain link instead.
-  if (broken || !allowMedia(media.url)) {
-    return (
-      <a
-        className="pn-hspanel__medialink"
-        href={media.url}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        {LINK_LABEL[media.kind]}
-      </a>
-    );
-  }
-  const onError = () => setBroken(true);
-  return media.kind === 'image' ? (
-    <img className="pn-hspanel__media" src={media.url} alt="" loading="lazy" onError={onError} />
-  ) : (
-    <video
-      className="pn-hspanel__media"
-      src={media.url}
-      controls
-      playsInline
-      preload="metadata"
-      onError={onError}
-    />
-  );
-}
+import { MediaEmbed } from './MediaEmbed.js';
+import type { ViewerHotspot } from './types.js';
 
 export interface HotspotPanelProps {
   hotspot: ViewerHotspot;
   onClose: () => void;
-  /** Whether an image/video URL may load inline (the CSP allows only the CDN); else it's a link. */
-  isAllowedMediaUrl?: (url: string) => boolean;
 }
-
-const NONE = () => false;
 
 /** The point's HotspotMarkers button, rendered alongside the panel (as TourViewer does). */
 function markerFor(panel: HTMLElement | null, id: string): HTMLElement | null {
@@ -74,7 +19,7 @@ function markerFor(panel: HTMLElement | null, id: string): HTMLElement | null {
 }
 
 /** Info-point panel: a side panel on desktop, a bottom sheet at <=600px (CSS). */
-export function HotspotPanel({ hotspot, onClose, isAllowedMediaUrl = NONE }: HotspotPanelProps) {
+export function HotspotPanel({ hotspot, onClose }: HotspotPanelProps) {
   // renderMarkdown escapes all HTML first and only allows http(s)/mailto/relative links.
   const html = useMemo(() => (hotspot.body ? renderMarkdown(hotspot.body) : ''), [hotspot.body]);
 
@@ -128,14 +73,7 @@ export function HotspotPanel({ hotspot, onClose, isAllowedMediaUrl = NONE }: Hot
           ×
         </button>
       </header>
-      {hotspot.media && (
-        <Media
-          key={hotspot.id}
-          media={hotspot.media}
-          title={hotspot.title}
-          allowMedia={isAllowedMediaUrl}
-        />
-      )}
+      {hotspot.media && <MediaEmbed key={hotspot.id} media={hotspot.media} title={hotspot.title} />}
       {html && <div className="pn-hspanel__body" dangerouslySetInnerHTML={{ __html: html }} />}
     </aside>
   );

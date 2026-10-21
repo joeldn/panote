@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   HotspotSchema,
+  isHttpsMediaUrl,
   MAX_HOTSPOT_BODY_LENGTH,
   MAX_HOTSPOT_ID_LENGTH,
   MAX_HOTSPOTS,
@@ -460,26 +461,92 @@ describe('HotspotSchema icon/size/media/body', () => {
     expect(() => HotspotSchema.parse({ ...base, size })).not.toThrow();
   });
 
-  it.each(['image', 'video'] as const)('accepts a %s media with an https url', (kind) => {
-    expect(() =>
-      HotspotSchema.parse({ ...base, media: { kind, url: 'https://example.com/a.jpg' } }),
-    ).not.toThrow();
+  it.each(['image', 'audio', 'video', 'link'] as const)(
+    'accepts a %s media with an https url from any host',
+    (kind) => {
+      const r = HotspotSchema.parse({ ...base, media: { kind, url: 'https://example.com/a' } });
+      expect(r.media).toEqual({ kind, url: 'https://example.com/a' });
+    },
+  );
+
+  it('keeps an existing image/video/youtube media valid', () => {
+    for (const media of [
+      { kind: 'image', url: 'https://cdn.panote.dev/media/a.jpg' },
+      { kind: 'video', url: 'https://cdn.panote.dev/media/a.mp4' },
+      { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+    ]) {
+      expect(HotspotSchema.parse({ ...base, media }).media).toEqual(media);
+    }
   });
 
-  it('rejects a media url that is not https', () => {
+  it.each([
+    'http://example.com/a.jpg',
+    'javascript:alert(1)',
+    'data:image/png;base64,iVBORw0KGgo=',
+    'ftp://example.com/a.jpg',
+    'https://user:pass@example.com/a.jpg',
+    '//example.com/a.jpg',
+    'not a url',
+  ])('rejects a media url %j that is not plain https', (url) => {
+    for (const kind of ['image', 'audio', 'video', 'link'] as const) {
+      expect(() => HotspotSchema.parse({ ...base, media: { kind, url } })).toThrow();
+    }
+  });
+
+  it.each([
+    ['https://example.com/a', true],
+    ['HTTPS://example.com/a', true],
+    ['https://user:pass@example.com/a', false],
+    ['https://user@example.com/a', false],
+    ['https://', false],
+    ['http://example.com/a', false],
+    ['javascript:alert(1)', false],
+  ])('isHttpsMediaUrl(%j) is %j', (url, ok) => {
+    expect(isHttpsMediaUrl(url)).toBe(ok);
+  });
+
+  it('accepts an upper-case https scheme and trims surrounding space', () => {
+    const r = HotspotSchema.parse({
+      ...base,
+      media: { kind: 'link', url: '  HTTPS://example.com/a  ' },
+    });
+    expect(r.media).toEqual({ kind: 'link', url: 'HTTPS://example.com/a' });
+  });
+
+  it('rejects a media kind outside the known set', () => {
     expect(() =>
-      HotspotSchema.parse({ ...base, media: { kind: 'image', url: 'http://example.com/a.jpg' } }),
+      HotspotSchema.parse({ ...base, media: { kind: 'embed', url: 'https://example.com/a' } }),
     ).toThrow();
   });
 
-  it('rejects a media kind outside image/video/youtube', () => {
-    expect(() =>
-      HotspotSchema.parse({ ...base, media: { kind: 'audio', url: 'https://example.com/a.mp3' } }),
-    ).toThrow();
+  it.each(['image', 'audio', 'video', 'link'] as const)(
+    'rejects a %s media with no url',
+    (kind) => {
+      expect(() => HotspotSchema.parse({ ...base, media: { kind } })).toThrow();
+    },
+  );
+
+  it('accepts a vimeo id, with or without an unlisted hash', () => {
+    for (const media of [
+      { kind: 'vimeo', id: '76979871' },
+      { kind: 'vimeo', id: '76979871', hash: '8272103f6e' },
+    ]) {
+      expect(HotspotSchema.parse({ ...base, media }).media).toEqual(media);
+    }
   });
 
-  it.each(['image', 'video'] as const)('rejects a %s media with no url', (kind) => {
-    expect(() => HotspotSchema.parse({ ...base, media: { kind } })).toThrow();
+  it.each([
+    { kind: 'vimeo' },
+    { kind: 'vimeo', id: 'abc' },
+    { kind: 'vimeo', id: '1/../2' },
+    { kind: 'vimeo', id: '1'.repeat(16) },
+    { kind: 'vimeo', id: '76979871', hash: 'a&b=c' },
+    { kind: 'vimeo', id: '76979871', hash: 'settings' },
+    { kind: 'vimeo', id: '76979871', hash: '8272103f6' },
+    { kind: 'vimeo', id: '76979871', hash: '8272103F6E' },
+    { kind: 'vimeo', url: 'https://vimeo.com/76979871' },
+  ])('rejects an invalid vimeo media %j', (media) => {
+    expect(() => HotspotSchema.parse({ ...base, media })).toThrow();
   });
 
   it('rejects a youtube media with no id', () => {

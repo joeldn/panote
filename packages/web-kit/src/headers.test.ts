@@ -18,20 +18,48 @@ describe('contentSecurityPolicy', () => {
     ]);
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self';");
-    expect(csp).toContain("img-src 'self' https://cdn.panote.dev data: blob:");
+    expect(csp).toContain("img-src 'self' https://cdn.panote.dev https: data: blob:;");
     expect(csp).toContain(
       "connect-src 'self' https://cdn.panote.dev https://acct.r2.cloudflarestorage.com https://panote-dev.au.auth0.com;",
     );
-    expect(csp).toContain('frame-src https://www.youtube-nocookie.com;');
+    expect(csp).toContain('frame-src https://www.youtube-nocookie.com https://player.vimeo.com;');
     expect(csp).toMatch(/frame-ancestors 'none'$/);
   });
 
-  it('allows hotspot video from the CDN only', () => {
+  it('allows linked hotspot images, audio and video from any https host, and nothing looser', () => {
     const csp = contentSecurityPolicy(loadConfig(env), "'none'");
-    expect(csp).toContain("media-src 'self' https://cdn.panote.dev;");
-    // YouTube hotspots render through the privacy-enhanced host, nothing else frames.
-    expect(csp).toMatch(/frame-src https:\/\/www\.youtube-nocookie\.com;/);
+    const directive = (name: string) =>
+      csp
+        .split('; ')
+        .find((d) => d.startsWith(`${name} `))
+        ?.split(' ')
+        .slice(1);
+    expect(directive('img-src')).toEqual([
+      "'self'",
+      'https://cdn.panote.dev',
+      'https:',
+      'data:',
+      'blob:',
+    ]);
+    expect(directive('media-src')).toEqual(["'self'", 'https://cdn.panote.dev', 'https:']);
+    for (const d of ['img-src', 'media-src']) {
+      expect(directive(d)).not.toContain('http:');
+      expect(directive(d)).not.toContain('*');
+    }
+    // Scripts, styles and everything else stay same-origin.
+    expect(directive('default-src')).toEqual(["'self'"]);
+    expect(directive('script-src')).toEqual(["'self'"]);
+    expect(directive('style-src')).toEqual(["'self'"]);
+    expect(directive('object-src')).toEqual(["'none'"]);
+  });
+
+  it('frames only the YouTube privacy-enhanced host and the Vimeo player', () => {
+    const csp = contentSecurityPolicy(loadConfig(env), "'none'");
+    expect(csp).toMatch(
+      /frame-src https:\/\/www\.youtube-nocookie\.com https:\/\/player\.vimeo\.com;/,
+    );
     expect(csp).not.toContain('youtube.com ');
+    expect(csp).not.toMatch(/frame-src[^;]*https:[ ;]/);
   });
 
   it('skips a placeholder Auth0 domain and adds a cross-origin API base', () => {
@@ -68,7 +96,9 @@ describe('buildHeadersFile', () => {
   it('adds extra frame-src sources only when asked', () => {
     expect(buildHeadersFile(loadConfig(env))).not.toContain("frame-src 'self'");
     const file = buildHeadersFile(loadConfig(env), { frameSrc: ["'self'"] });
-    expect(file).toContain("frame-src 'self' https://www.youtube-nocookie.com;");
+    expect(file).toContain(
+      "frame-src 'self' https://www.youtube-nocookie.com https://player.vimeo.com;",
+    );
   });
 
   it('emits only the catch-all and assets blocks with no framable paths', () => {

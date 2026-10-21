@@ -2,7 +2,9 @@ import type { View } from '@panote/viewer';
 
 /** Hotspot media; structurally the same as `HotspotMedia` in @internal/contracts. */
 export type ViewerMedia =
-  { kind: 'image' | 'video'; url: string } | { kind: 'youtube'; id: string };
+  | { kind: 'image' | 'audio' | 'video' | 'link'; url: string }
+  | { kind: 'youtube'; id: string }
+  | { kind: 'vimeo'; id: string; hash?: string | undefined };
 
 /** An info point as the chrome draws it (angles in radians, as in the viewer). */
 export interface ViewerHotspot {

@@ -11,6 +11,15 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// try/catch, not URL.canParse: that is Safari 17+, and this runs while rendering.
+function hasHost(url: string): boolean {
+  try {
+    return new URL(url).hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
 // Only allow protocols that can't execute script. Anything else (javascript:,
 // data:, vbscript:) renders as plain text so a description can't smuggle code.
 function safeUrl(url: string): string | null {
@@ -18,7 +27,12 @@ function safeUrl(url: string): string | null {
   // Browsers strip tab, CR and LF from URLs before parsing, so `/\t/evil.com`
   // would pass the relative check below yet resolve as `//evil.com`.
   if (/[\t\n\r]/.test(u)) return null;
-  if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u)) {
+  if (/^https?:\/\//i.test(u)) {
+    // A host is required: `https://` alone (or `https://:80`) is a dead link.
+    // `u` was HTML-escaped first; `&amp;` in a query doesn't affect the host.
+    return hasHost(u) ? u : null;
+  }
+  if (/^mailto:/i.test(u)) {
     return u;
   }
   // Same-origin relative only. `/^\/(?![/\\])/` admits `/foo` but rejects
