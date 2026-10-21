@@ -43,6 +43,18 @@ function errorMessage(status: number, body: unknown): string {
   if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
     // admin-api and upload-api refuse every write once the account is marked for deletion.
     if (status === 410 && body.error === 'account deleted') return 'This account has been deleted.';
+    // The operator disabled the account (scripts/takedown.ts): reads only from then on.
+    if (status === 403 && body.error === 'account disabled') {
+      return 'This account has been disabled. Write to hello@panote.io if you think that is a mistake.';
+    }
+    // upload-api's per-owner quotas.
+    if (status === 403 && body.error === 'pano limit reached') {
+      return 'This account has reached its pano limit.';
+    }
+    if (status === 403 && body.error === 'storage limit reached') {
+      return 'This account has reached its storage limit.';
+    }
+    if (status === 429) return 'Too many requests. Wait a minute and try again.';
     return `${status}: ${body.error}`;
   }
   return `request failed with ${status}`;

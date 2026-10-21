@@ -1,4 +1,6 @@
 // Anonymous like identity (X-Client-Id) and the tours this browser has liked.
+import { CLIENT_ID_PATTERN } from '@internal/contracts';
+
 const CLIENT_ID_KEY = 'panote_client_id';
 const LIKES_KEY = 'panote_likes';
 
@@ -8,7 +10,8 @@ let memoryId: string | null = null;
 export function clientId(): string {
   try {
     const stored = localStorage.getItem(CLIENT_ID_KEY);
-    if (stored) return stored;
+    // public-api refuses anything but a v4 UUID, so replace a value that isn't one.
+    if (stored && CLIENT_ID_PATTERN.test(stored)) return stored;
     const id = crypto.randomUUID();
     localStorage.setItem(CLIENT_ID_KEY, id);
     return id;

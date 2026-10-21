@@ -1010,6 +1010,32 @@ describe('owner Edit', () => {
   });
 });
 
+describe('Report', () => {
+  it('opens a mail to hello@panote.io with the tour link filled in', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    const link = screen.getByRole('link', { name: 'Report this tour' });
+    const href = new URL(link.getAttribute('href')!);
+    expect(href.protocol).toBe('mailto:');
+    expect(href.pathname).toBe('hello@panote.io');
+    expect(href.searchParams.get('subject')).toBe('Report a tour');
+    expect(href.searchParams.get('body')).toContain('Tour: https://panote.test/s/old-town\n');
+    expect(link.textContent).toBe('Report');
+  });
+
+  it('shows for the owner too, beside Edit', async () => {
+    renderAt('/s/old-town', signedIn());
+    await screen.findByRole('link', { name: 'Edit' });
+    expect(screen.getByRole('link', { name: 'Report this tour' })).toBeTruthy();
+  });
+
+  it('is not in the embed', async () => {
+    renderAt('/s/old-town/embed');
+    await shown('square');
+    expect(screen.queryByRole('link', { name: 'Report this tour' })).toBeNull();
+  });
+});
+
 // The real site auth over a fake SDK: `loadSdk` stands in for the lazy chunk import.
 describe('owner Edit with the site auth', () => {
   const auth0 = { ...config.auth0, clientId: 'client-1', configured: true };

@@ -212,6 +212,17 @@ describe('createAdminApi', () => {
     await expect(api.createTour({ title: 'T' })).rejects.toThrow('This account has been deleted.');
   });
 
+  it.each([
+    [403, 'account disabled', /has been disabled/],
+    [403, 'pano limit reached', 'This account has reached its pano limit.'],
+    [403, 'storage limit reached', 'This account has reached its storage limit.'],
+    [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
+    [403, 'forbidden', '403: forbidden'],
+  ] as const)('a %i %s says so in words', async (status, error, message) => {
+    const { api } = setup(json({ error }, status));
+    await expect(api.createTour({ title: 'T' })).rejects.toThrow(message);
+  });
+
   it('deleteAccount sends the typed phrase and accepts deleted or pending', async () => {
     const { api, call } = setup(
       json({ status: 'deleted' }),
