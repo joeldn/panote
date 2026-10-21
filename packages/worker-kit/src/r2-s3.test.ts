@@ -105,6 +105,17 @@ describe('put', () => {
     expect(fetchMock.mock.calls[0]?.[0].headers.get('if-match')).toBe('"abc123"');
   });
 
+  it('sends if-none-match: * for a create-only put', async () => {
+    const fetchMock = vi.fn(async (_req: Request) => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await createR2S3Client(config).put('accounts/o/deletion.json', '{}', {
+      contentType: 'application/json',
+      ifNoneMatch: '*',
+    });
+    expect(fetchMock.mock.calls[0]?.[0].headers.get('if-none-match')).toBe('*');
+    expect(fetchMock.mock.calls[0]?.[0].headers.has('if-match')).toBe(false);
+  });
+
   it('throws R2PreconditionFailedError on a 412, and does not retry it', async () => {
     const fetchMock = vi.fn(async () => new Response('PreconditionFailed', { status: 412 }));
     vi.stubGlobal('fetch', fetchMock);
