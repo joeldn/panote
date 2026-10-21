@@ -55,6 +55,18 @@ the code wins:
 - The 2D floor-plan mini-map — `mapX`/`mapY` already exist on `TourDoc`, but
   the viewer feature itself is not built.
 
+## Where the code deliberately drops part of the design
+
+- **Standalone panos.** The design lets a pano live outside any tour: shared
+  on its own ("Shareable on its own") and later attached with "Add to a
+  tour". That was dropped. The app is tour-centric: every upload goes into a
+  tour, the tour is the only thing that is published, shared or embedded, and
+  a pano has no public page of its own. A pano removed from a tour that no
+  other tour uses isn't deleted; it shows up under **Unused panos** on the
+  dashboard (`/panos/unused`), where the owner can put it back into a tour
+  from the editor's library or delete it for good. (Deleting a whole tour
+  deletes the panos only it used.)
+
 ## Auth
 
 The design's social sign-in fits the existing Auth0 setup (tenant
