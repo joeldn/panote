@@ -1042,43 +1042,64 @@ fresh-upload case above — the pano can simply be deleted again.
 
 ## Account deletion
 
-An owner deletes their own account from the admin app's account menu ("Delete account", a typed
-confirmation). That calls `DELETE /api/admin/account` on `admin-api` with the body
-`{"confirm":"delete my account"}` (`ACCOUNT_DELETE_CONFIRMATION` in `@internal/contracts`; any
-other body is a `400` and touches nothing). The code is `services/admin-api/src/delete-account.ts`.
+An owner deletes their own account from the admin app's account menu ("Delete account", on the
+dashboard and in the editor, behind a typed confirmation). That calls `DELETE /api/admin/account`
+on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_CONFIRMATION` in
+`@internal/contracts`; any other body is a `400` and touches nothing). The code is
+`services/admin-api/src/delete-account.ts`.
 
 **Order, and why a retry finishes the job.**
 
 1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
-   under `/api/admin/*`, except the account route itself) answers `410 {"error":"account deleted"}`,
-   so nothing can recreate what the delete is removing. Reads still answer, with whatever is left.
-   `accounts/` is owner-scoped like `panos/` and `tours/`: the CDN's WAF rule (above) only lets
-   `tiles/`, `pub/` and `slugs/` through.
-2. Each tour: the redirect aliases still listed in its `publish.json` (only those still pointing at
-   this tour), then an unpublish through its `TourPublisher` (live slug, `pub/tours/<id>.json`,
-   `publish.json`), then its `TourStats` counters (views, likes and the like-dedupe keys; a
-   `DELETE` to the Durable Object through the `STATS` binding), and last the whole
-   `tours/<owner>/<tourId>/` prefix. Tours go before panos, so a live tour comes down before its
-   images do.
+   under `/api/admin/*`, except the account route itself) and `upload-api`'s
+   `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing
+   closed), so nothing can recreate what the delete is removing. Reads still answer, with whatever
+   is left. `accounts/` is owner-scoped like `panos/` and `tours/`: the CDN's WAF rule (above)
+   only lets `tiles/`, `pub/` and `slugs/` through.
+2. Each tour, in the same shape as tour delete: the redirect aliases still listed in its
+   `publish.json` (only those still pointing at this tour), an unpublish through its
+   `TourPublisher` (live slug, `pub/tours/<id>.json`, `publish.json`), its `TourStats` counters
+   (views, likes and the like-dedupe keys; a `DELETE` to the Durable Object through the `STATS`
+   binding), then `tour.json`, then aliases and unpublish **again** (a publish already queued on
+   the `TourPublisher` behind the first unpublish still saw `tour.json` and republished; any later
+   one finds no `tour.json` and takes itself down in its own commit), the counters again, and last
+   whatever is left under `tours/<owner>/<tourId>/`. Everything that must not be skipped happens
+   while `tour.json` still exists, so the tour still lists for a retry. Tours go before panos, so a
+   live tour comes down before its images do. Tour ids share pano ids' generator and validator
+   (`crypto.randomUUID()`, `PANO_PATTERN`); an id that fails it can't have been published, so only
+   its counters and prefix are deleted.
 3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
    `tiles/<panoId>/`, then the owner prefix). No reference or recent-upload checks: everything goes.
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
-A tour or pano is only gone once its own prefix is, so an interrupted run leaves it listed and the
-next run picks it up. If any step throws, the route still answers `202 {"status":"pending"}`: the
-account is already read-only, and the daily sweep finishes it. Either way the admin app signs the
-owner out. CDN purges (tiles prefixes, bundles, slugs) are batched as for tour delete (see "CDN
-purge on delete"), including for a partial run.
+If any step throws, the route still answers `202 {"status":"pending"}`: the account is already
+read-only, and the daily sweep finishes it. Either way the admin app signs the owner out (and if
+sign-out itself fails, sends them to the website rather than offering a retry). CDN purges
+(tiles prefixes, bundles, slugs) are batched as for tour delete (see "CDN purge on delete"),
+including for a partial run.
 
-**Daily sweep.** The existing `17 3 * * *` Cron Trigger also reruns every account that has a
-marker: it finishes interrupted deletes and catches anything that landed afterwards (a presigned
-upload URL stays valid for 900s, and `upload-api` itself doesn't check the marker: its fresh-upload
-path makes no R2 call, and adding one to every upload isn't worth it when the sweep catches the
-result). It keeps the first `completedAt`, and deletes the marker 30 days after it
-(`ACCOUNT_MARKER_DAYS`). After that the same Auth0 user could sign in again to an empty account,
-so the Auth0 user has to be gone by then (below). An unreadable marker is logged and skipped;
-one account failing doesn't stop the others.
+**Daily sweep.** The existing `17 3 * * *` Cron Trigger also works through every marker:
+
+- Interrupted deletes (no `completedAt`) first, oldest request first, then finished ones.
+- A finished account costs one `LIST` (`limit: 1`) per owner prefix; only if something turned up
+  there (a presigned upload issued before the marker, valid for 900s) does it run the full delete
+  again.
+- One run deletes at most `SWEEP_ITEM_BUDGET` (400) tours plus panos, and one account at most
+  `SWEEP_ACCOUNT_ITEM_BUDGET` (100) of them, so one huge account can't starve the rest; what's
+  left waits for the next day.
+- `completedAt` keeps its first value. From 30 days after it (`ACCOUNT_MARKER_DAYS`), the sweep
+  deletes the marker, but only after a run that left the account empty: if deleting a leftover
+  fails, the marker stays and the account stays read-only. After that the same Auth0 user could sign
+  in again to an empty account, so the Auth0 user has to be gone by then (below).
+- A marker that doesn't parse, or whose `sub` doesn't match its own key, is logged and skipped;
+  one account failing doesn't stop the others.
+
+Every log line about this starts with `[account-deletion]` and never carries a sub or a key (the
+owner segment of a key is reversible). The ones to watch in the Worker's observability logs:
+`account deleted: remove its Auth0 user within 30 days` when a deletion completes, a daily
+`N deleted account(s) in their 30-day window: check each Auth0 user is removed` while any are,
+and `delete interrupted` / `sweep failed for one account` if something is stuck.
 
 **The `STATS` binding** points at the class `public-api` declares (`script_name` in
 `services/admin-api/wrangler.jsonc`), so `public-api` must exist in an environment before
@@ -1091,12 +1112,12 @@ name.
 
 **What it doesn't remove.**
 
-- **The Auth0 user.** Nothing here calls the Auth0 Management API. Until that's wired up, delete the
-  user by hand in the Auth0 dashboard (User Management → Users → the user → Delete) within 30
-  days of the request; the admin app and the privacy page promise exactly that. The marker's
-  `sub` is the Auth0 user id to look for.
+- **The Auth0 user.** Nothing here calls the Auth0 Management API. Until that's wired up, the
+  operator removes it by hand within 30 days of the request (weekly check below); the admin app
+  and the privacy page promise exactly that.
 - **Likes this user gave on other people's tours.** A signed-in like stores `liked:<sub>` in that
-  tour's `TourStats`, and there's no index from a user to the tours they liked.
+  tour's `TourStats`, and there's no index from a user to the tours they liked. The privacy page
+  says so.
 - **Analytics Engine events** for the deleted tours. They're keyed by tourId, hold nothing about
   the owner, and age out with AE's three-month retention (see Insights).
 - **Redirect aliases past the 20 `publish.json` tracks** (`MAX_ALIASES`). They stop being
@@ -1105,29 +1126,39 @@ name.
 - **Copies already in a browser cache**, and edge copies if the purge isn't configured (see
   "Deleted panos").
 
-### Deleting an account on request (operator)
+### Operator: the account-delete script
 
-For a request by email, `services/admin-api/scripts/delete-account.ts` writes the same marker the
-owner's route writes; the next daily sweep (03:17 UTC) then does the whole deletion above. It uses
-the R2 S3 API with the same credentials as the og.jpg backfill (an R2 API token with Object
-Read & Write on the bucket), runs straight from TypeScript on Node 24, and needs a built
-workspace (`pnpm build`) for its `@internal/*` imports. Like the backfill, anything but a `-dev`
-bucket has to be named twice with `--allow-bucket`.
+`services/admin-api/scripts/delete-account.ts` reads and writes the markers over the R2 S3 API,
+with the same credentials as the og.jpg backfill (an R2 API token with Object Read & Write on the
+bucket). It runs straight from TypeScript on Node 24 and needs a built workspace (`pnpm build`)
+for its `@internal/*` imports. Like the backfill, anything but a `-dev` bucket has to be named
+twice with `--allow-bucket`. It never deletes anything itself, so running it twice is harmless.
 
 ```bash
 export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
-# The Auth0 user id, e.g. google-oauth2|1234 (Auth0 dashboard: User Management → Users)
+# Every marker: sub, requestedAt, completedAt, and the date its Auth0 user must be gone by
+node services/admin-api/scripts/delete-account.ts --list
+# One account, by its Auth0 user id (Auth0 dashboard: User Management → Users), e.g.
 SUB='google-oauth2|1234'
-# Prints the marker key it would write; makes no request at all:
-node services/admin-api/scripts/delete-account.ts --sub "$SUB" --dry-run
-# Marks the account (an existing marker is left as it is):
-node services/admin-api/scripts/delete-account.ts --sub "$SUB"
-# Next day: "deleted <time> …" once the sweep has run:
-node services/admin-api/scripts/delete-account.ts --sub "$SUB" --status
+node services/admin-api/scripts/delete-account.ts --sub "$SUB" --dry-run   # no request at all
+node services/admin-api/scripts/delete-account.ts --sub "$SUB"             # mark it
+node services/admin-api/scripts/delete-account.ts --sub "$SUB" --status    # where it is
 ```
 
-Then delete the Auth0 user by hand, as above, and reply to the request. The script never deletes
-anything itself, so running it twice is harmless.
+Marking writes the same marker as the owner's route, create-only (`If-None-Match: *`), so a
+marker that already exists, the owner's own included, is left as it is. A `--sub` with leading or
+trailing whitespace is refused. The next daily sweep (03:17 UTC) then does the whole deletion.
+
+**Weekly check (Auth0 removal).** Once a week, for each environment:
+
+1. Run `--list`.
+2. For every row, make sure that Auth0 user is deleted (Auth0 dashboard: User Management → Users →
+   search the sub → Delete; a user that's already gone is done). Do it before `auth0RemovalDueBy`.
+3. Rows disappear on their own 30 days after `completedAt`. A row with `completedAt` `-` for more
+   than a day is a stuck delete: look for `[account-deletion]` errors in `admin-api`'s logs.
+
+For a deletion requested by email: `--sub` to mark it, `--status` the next day, then delete the
+Auth0 user as above and reply to the request.
 
 ---
 
