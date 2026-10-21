@@ -23,7 +23,11 @@
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
       "durable_objects": {
-        "bindings": [{ "name": "PUBLISHER", "class_name": "TourPublisher" }],
+        "bindings": [
+          { "name": "PUBLISHER", "class_name": "TourPublisher" },
+          // public-api's per-tour view/like counters; account delete clears them.
+          { "name": "STATS", "class_name": "TourStats", "script_name": "panote-public-api-dev" },
+        ],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       "vars": {
@@ -54,7 +58,11 @@
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
       "durable_objects": {
-        "bindings": [{ "name": "PUBLISHER", "class_name": "TourPublisher" }],
+        "bindings": [
+          { "name": "PUBLISHER", "class_name": "TourPublisher" },
+          // public-api's per-tour view/like counters; account delete clears them.
+          { "name": "STATS", "class_name": "TourStats", "script_name": "panote-public-api" },
+        ],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       "vars": {

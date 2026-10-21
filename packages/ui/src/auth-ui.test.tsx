@@ -94,6 +94,27 @@ describe('AccountMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
   });
 
+  it('runs an action item, drawn as danger, and closes', () => {
+    const onSelect = vi.fn();
+    render(
+      <AccountMenu
+        user={user}
+        items={[
+          { label: 'Home page', icon: 'fa-solid fa-house', href: '/' },
+          { label: 'Delete account', icon: 'fa-solid fa-trash', onSelect, danger: true },
+        ]}
+        onSignOut={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Account/ }));
+    const item = screen.getByRole('menuitem', { name: 'Delete account' });
+    expect(item.tagName).toBe('BUTTON');
+    expect(item.className).toContain('pn-account__item--danger');
+    fireEvent.click(item);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
   it('signs out and closes', () => {
     const onSignOut = vi.fn();
     render(<AccountMenu user={user} onSignOut={onSignOut} />);

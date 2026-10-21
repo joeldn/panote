@@ -12,6 +12,8 @@ export interface ConfirmModalProps {
   cancelLabel?: string;
   /** Destructive actions use the accent-red button (default true). */
   danger?: boolean;
+  /** Holds the confirm button disabled, e.g. until a typed confirmation matches. */
+  confirmDisabled?: boolean;
   /**
    * Runs on confirm. A returned promise keeps the modal busy until it settles;
    * a rejection shows its message and leaves the modal open.
@@ -28,6 +30,7 @@ export function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   danger = true,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -85,6 +88,7 @@ export function ConfirmModal({
             variant={danger ? 'danger' : 'primary'}
             onClick={() => void confirm()}
             busy={busy}
+            disabled={confirmDisabled}
           >
             {confirmLabel}
           </Button>

@@ -80,6 +80,7 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     })),
     unpublishTour: fail,
     getInsights: fail,
+    deleteAccount: fail,
     ...overrides,
   };
 }

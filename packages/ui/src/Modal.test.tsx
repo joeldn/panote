@@ -121,6 +121,20 @@ describe('ConfirmModal', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the confirm button disabled while confirmDisabled is set', () => {
+    const onConfirm = vi.fn();
+    const props = { open: true, title: 'Delete?', body: 'b', onConfirm, onCancel: () => {} };
+    const { rerender } = render(<ConfirmModal {...props} confirmDisabled />);
+    const confirm = screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+    rerender(<ConfirmModal {...props} confirmDisabled={false} />);
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it('stays busy while an async confirm runs and shows a failure', async () => {
     let reject!: (e: Error) => void;
     const onConfirm = vi.fn(

@@ -404,6 +404,14 @@ describe('editor: save', () => {
     );
   });
 
+  it("offers Delete account in the editor's account menu", async () => {
+    const { ui } = openTab('/app/t/t1');
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /^Account:/ }));
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Delete account' }));
+    expect(await screen.findByRole('dialog', { name: 'Delete your account?' })).toBeTruthy();
+  });
+
   it('drops a parked draft whose doc changed on the server meanwhile', async () => {
     localStorage.setItem(
       DRAFT,

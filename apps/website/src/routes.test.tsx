@@ -30,6 +30,23 @@ describe('website routes', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
   });
 
+  it('privacy describes self-serve account deletion', async () => {
+    renderAt('/privacy');
+    const choices = await screen.findByRole('heading', { name: 'Your choices' });
+    const text = choices.nextElementSibling?.textContent ?? '';
+    expect(text).toContain('choose Delete account');
+    expect(text).toContain('sign-in record is removed within 30 days');
+    expect(text).not.toContain('To delete your account, or to ask');
+  });
+
+  it('privacy is accurate about signed-in likes', async () => {
+    renderAt('/privacy');
+    await screen.findByRole('heading', { name: 'Visitors and analytics' });
+    const page = screen.getByRole('article').textContent ?? '';
+    expect(page).toContain('records your account id against that tour');
+    expect(page).not.toContain('isn’t linked to an account');
+  });
+
   it('falls back to a 404 page', async () => {
     renderAt('/nope/deeper');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();

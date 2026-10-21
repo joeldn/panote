@@ -36,6 +36,7 @@ export interface R2S3Client {
    * twice with a short backoff; 4xx responses are never retried. With
    * `ifMatch` (an ETag as `head`/`get` return it), R2 writes only while the
    * object still has that ETag, and a mismatch throws R2PreconditionFailedError.
+   * `ifNoneMatch: '*'` makes it create-only, failing the same way.
    */
   put(
     key: string,
@@ -44,6 +45,8 @@ export interface R2S3Client {
       contentType: string;
       cacheControl?: string | undefined;
       ifMatch?: string | undefined;
+      /** `'*'`: create-only, a key that already exists throws R2PreconditionFailedError. */
+      ifNoneMatch?: '*' | undefined;
     },
   ): Promise<void>;
   /** Signed HEAD. Never throws on a non-2xx - the caller checks `ok`. */
@@ -172,6 +175,7 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
             'content-type': opts.contentType,
             ...(opts.cacheControl ? { 'cache-control': opts.cacheControl } : {}),
             ...(opts.ifMatch ? { 'if-match': opts.ifMatch } : {}),
+            ...(opts.ifNoneMatch ? { 'if-none-match': opts.ifNoneMatch } : {}),
           },
         }),
       );

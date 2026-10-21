@@ -207,6 +207,25 @@ describe('createAdminApi', () => {
     await expect(api.deletePano('p1')).rejects.toMatchObject({ status: 500 });
   });
 
+  it('a write refused because the account was deleted says so', async () => {
+    const { api } = setup(json({ error: 'account deleted' }, 410));
+    await expect(api.createTour({ title: 'T' })).rejects.toThrow('This account has been deleted.');
+  });
+
+  it('deleteAccount sends the typed phrase and accepts deleted or pending', async () => {
+    const { api, call } = setup(
+      json({ status: 'deleted' }),
+      json({ status: 'pending' }, 202),
+      json({ error: 'confirm must be "delete my account"' }, 400),
+    );
+    await expect(api.deleteAccount('delete my account')).resolves.toEqual({ status: 'deleted' });
+    expect(call(0).url).toBe('https://panote.test/api/admin/account');
+    expect(call(0).init.method).toBe('DELETE');
+    expect(JSON.parse(call(0).init.body as string)).toEqual({ confirm: 'delete my account' });
+    await expect(api.deleteAccount('delete my account')).resolves.toEqual({ status: 'pending' });
+    await expect(api.deleteAccount('nope')).rejects.toMatchObject({ status: 400 });
+  });
+
   it('PATCHes visibility and surfaces a 409 as ApiError', async () => {
     const { api, call } = setup(
       json({ visibility: 'public' }),

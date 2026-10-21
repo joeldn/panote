@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  accountDeletionKey,
   configKey,
   deletingKey,
   originalKey,
@@ -34,6 +35,10 @@ describe('keys', () => {
   });
   it('deletingKey throws on an invalid panoId', () => {
     expect(() => deletingKey('u1', 'a/b')).toThrow(/panoId must match/);
+  });
+
+  it('builds an account deletion marker key under accounts/, owner encoded', () => {
+    expect(accountDeletionKey('auth0|abc')).toBe(`accounts/${encodeId('auth0|abc')}/deletion.json`);
   });
 
   describe('encodeId (owner only)', () => {

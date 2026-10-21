@@ -1,20 +1,25 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
+import { cx } from './cx.js';
+
 export interface AccountUser {
   name?: string;
   email?: string;
 }
 
-export interface AccountMenuItem {
+export type AccountMenuItem = {
   label: string;
   /** Font Awesome classes, e.g. `fa-solid fa-layer-group`. */
   icon: string;
-  href: string;
-}
+} & (
+  | { href: string }
+  /** An action instead of a link, e.g. "Delete account"; `danger` draws it in the accent red. */
+  | { onSelect: () => void; danger?: boolean }
+);
 
 export interface AccountMenuProps {
   user: AccountUser;
-  /** Links above the divider ("My tours", "Home page"). */
+  /** Links and actions above the divider ("My tours", "Home page", "Delete account"). */
   items?: readonly AccountMenuItem[];
   onSignOut: () => void | Promise<void>;
 }
@@ -69,12 +74,28 @@ export function AccountMenu({ user, items = [], onSignOut }: AccountMenuProps) {
             {user.name && <div className="pn-account__name">{user.name}</div>}
             {user.email && <div className="pn-account__email">{user.email}</div>}
           </div>
-          {items.map((item) => (
-            <a key={item.href} role="menuitem" className="pn-account__item" href={item.href}>
-              <i className={item.icon} aria-hidden="true" />
-              {item.label}
-            </a>
-          ))}
+          {items.map((item) =>
+            'href' in item ? (
+              <a key={item.label} role="menuitem" className="pn-account__item" href={item.href}>
+                <i className={item.icon} aria-hidden="true" />
+                {item.label}
+              </a>
+            ) : (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                className={cx('pn-account__item', item.danger && 'pn-account__item--danger')}
+                onClick={() => {
+                  setOpen(false);
+                  item.onSelect();
+                }}
+              >
+                <i className={item.icon} aria-hidden="true" />
+                {item.label}
+              </button>
+            ),
+          )}
           {items.length > 0 && <div className="pn-account__divider" role="separator" />}
           <button
             type="button"

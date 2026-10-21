@@ -226,3 +226,30 @@ export type InsightsOk = z.infer<typeof InsightsOkSchema>;
 
 export const InsightsUnavailableSchema = z.object({ error: z.literal('analytics unavailable') });
 export type InsightsUnavailable = z.infer<typeof InsightsUnavailableSchema>;
+
+// --- Account deletion (unit E) ---
+
+// What the owner types to confirm; the server checks it too, so a stray
+// DELETE can't wipe an account.
+export const ACCOUNT_DELETE_CONFIRMATION = 'delete my account';
+export const AccountDeleteRequestSchema = z.object({
+  confirm: z.literal(ACCOUNT_DELETE_CONFIRMATION),
+});
+export type AccountDeleteRequest = z.infer<typeof AccountDeleteRequestSchema>;
+
+// 200 `deleted`: nothing is left. 202 `pending`: the account is marked and
+// read-only, and admin-api's daily sweep removes the rest.
+export const AccountDeleteOkSchema = z.object({ status: z.enum(['deleted', 'pending']) });
+export type AccountDeleteOk = z.infer<typeof AccountDeleteOkSchema>;
+
+// 410 from every owner write (and upload-url) once the account is marked.
+export const AccountDeletedSchema = z.object({ error: z.literal('account deleted') });
+
+// The marker at accountDeletionKey. `sub` lets the sweep rebuild the owner's keys.
+export const AccountDeletionRecordSchema = z.object({
+  v: z.literal(1),
+  sub: z.string().min(1),
+  requestedAt: z.string(),
+  completedAt: z.string().optional(),
+});
+export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;

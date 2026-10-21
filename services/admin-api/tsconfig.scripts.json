@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "_comment": "The operator's account-delete CLI (scripts/, docs/deploy.md). It runs on Node straight from TypeScript (Node 24 strips types), so this config only type-checks it: noEmit, and .ts import extensions as Node needs them.",
+  "extends": "@internal/typescript-config/base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["scripts/**/*.ts"]
+}

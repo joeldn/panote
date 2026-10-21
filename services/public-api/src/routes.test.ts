@@ -112,3 +112,17 @@ describe('GET /api/tours/:tourId/stats', () => {
     expect(await r.json()).toEqual({ views: 0, likes: 0 });
   });
 });
+
+describe('stats reset is not public', () => {
+  it('a DELETE through the public routes never reaches the DO', async () => {
+    await SELF.fetch('https://x/api/tours/stats-no-reset/view', { method: 'POST' });
+    for (const path of ['stats', 'view', 'like']) {
+      const r = await SELF.fetch(`https://x/api/tours/stats-no-reset/${path}`, {
+        method: 'DELETE',
+      });
+      expect(r.status).toBe(404);
+    }
+    const stats = await SELF.fetch('https://x/api/tours/stats-no-reset/stats');
+    expect(await stats.json()).toMatchObject({ views: 1 });
+  });
+});

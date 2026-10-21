@@ -1,11 +1,37 @@
 import { defineWorkerTestConfig } from '@internal/vitest-config/workers';
 
+// The STATS binding points at public-api's TourStats class (script_name in
+// wrangler.jsonc), so miniflare needs a Worker by that name to start at all.
+// This stand-in speaks the same private protocol (services/public-api/src/stats.ts):
+// POST /view counts, DELETE clears, anything else reads.
+const STATS_STAND_IN = `
+export class TourStats {
+  constructor(state) { this.storage = state.storage; }
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (req.method === 'DELETE') {
+      await this.storage.deleteAll();
+      return Response.json({ views: 0, likes: 0 });
+    }
+    const c = (await this.storage.get('counts')) ?? { views: 0, likes: 0 };
+    if (req.method === 'POST' && url.pathname === '/view') {
+      c.views++;
+      await this.storage.put('counts', c);
+    }
+    return Response.json(c);
+  }
+}
+export default { fetch: () => new Response(null, { status: 404 }) };
+`;
+
 // `environment: 'dev'` (the factory's default) is load-bearing - see
 // @internal/vitest-config/src/workers.ts for why: every binding lives under
 // [env.dev], so without it env.BUCKET is undefined and every binding-touching
 // test fails.
 export default defineWorkerTestConfig({
   name: '@service/admin-api',
+  // scripts/ holds the operator's account-delete CLI; its logic is pure enough for this pool.
+  include: ['src/**/*.{test,spec}.ts', 'scripts/**/*.test.ts'],
   cloudflareTestOptions: {
     miniflare: {
       bindings: {
@@ -14,6 +40,14 @@ export default defineWorkerTestConfig({
         // the test-only miniflare bindings here.
         TEST_JWT_SEAM: 'enabled',
       },
+      workers: [
+        {
+          name: 'panote-public-api-dev',
+          modules: true,
+          script: STATS_STAND_IN,
+          durableObjects: { STATS: 'TourStats' },
+        },
+      ],
     },
   },
 });
