@@ -60,8 +60,18 @@ export interface ErrorReporter {
 
 // Sliced before scrubbing too, so the scrub's cost is bounded whatever the error
 // holds; the slack covers masking that shortens text.
+// The pre-slice also drops the token it cut through (back to the last whitespace,
+// if any), so half an email or URL (`jane.doe@exa`) can't slip past the scrub.
+const preSlice = (text: string, limit: number): string => {
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  let end = cut.length;
+  while (end > 0 && !/\s/.test(cut[end - 1]!)) end--;
+  return end > 0 ? cut.slice(0, end) : cut;
+};
+
 const cap = (text: string, max: number): string =>
-  scrubErrorText(text.slice(0, max * 4)).slice(0, max);
+  scrubErrorText(preSlice(text, max * 4)).slice(0, max);
 
 const describe = (error: unknown): { message: string; stack: string } => {
   if (error instanceof Error) {

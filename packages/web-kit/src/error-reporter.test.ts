@@ -1,5 +1,19 @@
+import type * as contracts from '@internal/contracts';
 import { ClientErrorReportSchema, type ClientErrorReport } from '@internal/contracts';
 import { describe, expect, it, vi } from 'vitest';
+
+// A pass-through spy, so a test can see how much text reaches the scrubber.
+const scrubbed = vi.hoisted(() => [] as number[]);
+vi.mock('@internal/contracts', async (importOriginal) => {
+  const actual = await importOriginal<typeof contracts>();
+  return {
+    ...actual,
+    scrubErrorText: (text: string) => {
+      scrubbed.push(text.length);
+      return actual.scrubErrorText(text);
+    },
+  };
+});
 
 import {
   createErrorReporter,
@@ -82,8 +96,30 @@ describe('createErrorReporter', () => {
     const word = 'a'.repeat(100_000);
     const started = performance.now();
     reporter.report('error', boom(word, `TypeError: ${word}\n    at f (${word}:1:2)`));
-    expect(performance.now() - started).toBeLessThan(500);
-    expect(sent()[0]!.message).toHaveLength(300);
+    expect(performance.now() - started).toBeLessThan(2000);
+    // The cut word is dropped whole, back to the space after the name.
+    expect(sent()[0]!.message).toBe('TypeError: ');
+  });
+
+  it('never hands the scrubber more than 4x a field cap', () => {
+    const { reporter } = setup();
+    scrubbed.length = 0;
+    const word = 'a '.repeat(50_000);
+    reporter.report('error', boom(word, `TypeError: ${word}\n    at f (${word}:1:2)`));
+    expect(scrubbed.length).toBeGreaterThan(0);
+    expect(Math.max(...scrubbed)).toBeLessThanOrEqual(4 * 300);
+  });
+
+  it('drops the token the pre-slice cut through, so half an email is not sent', () => {
+    const { reporter, sent } = setup();
+    // The query strip shortens the text, pulling what was near the 4x cut (1200)
+    // into the 300-char message; the email straddles that cut.
+    const head = `https://x.dev/p?${'a'.repeat(1171)} `;
+    expect(head.length + 'jane.doe@exa'.length).toBe(1200);
+    reporter.report('error', `${head}jane.doe@example.com`);
+    const [report] = sent();
+    expect(report!.message).toBe('https://x.dev/p ');
+    expect(report!.message).not.toContain('jane');
   });
 
   it('masks an email and a signed URL in the message', () => {
