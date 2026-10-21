@@ -444,10 +444,12 @@ describe('editor: points, connections, views and settings', () => {
     const url = p.getByLabelText('Media link');
     fireEvent.change(url, { target: { value: 'https://elsewhere.example/a.jpg' } });
     fireEvent.blur(url);
-    expect((await p.findByRole('status')).textContent).toContain('isn’t on the panote CDN');
-    fireEvent.change(url, { target: { value: 'https://cdn.panote.dev/media/a.jpg' } });
-    fireEvent.blur(url);
-    await waitFor(() => expect(p.queryByRole('status')).toBeNull());
+    // Linked from any https host, previewed inline as visitors see it.
+    await waitFor(() =>
+      expect(panel.querySelector('.ed-media__preview img')?.getAttribute('src')).toBe(
+        'https://elsewhere.example/a.jpg',
+      ),
+    );
     fireEvent.change(url, { target: { value: 'not a url' } });
     fireEvent.blur(url);
     expect((await p.findByRole('alert')).textContent).toContain('https://');
@@ -464,7 +466,7 @@ describe('editor: points, connections, views and settings', () => {
       body: '**Tall**',
       icon: 'church',
       size: 2,
-      media: { kind: 'image', url: 'https://cdn.panote.dev/media/a.jpg' },
+      media: { kind: 'image', url: 'https://elsewhere.example/a.jpg' },
     });
   });
 

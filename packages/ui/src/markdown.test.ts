@@ -38,6 +38,18 @@ describe('renderMarkdown', () => {
     expect(renderMarkdown('[rel](/tour)')).toContain('href="/tour"');
   });
 
+  it.each(['https://', 'http://', 'https://:443/a', 'HTTPS://'])(
+    'rejects an http(s) link %j with no host, keeping the text',
+    (url) => {
+      expect(renderMarkdown(`[x](${url})`)).toBe('<p>x</p>');
+    },
+  );
+
+  it('keeps an http(s) link with a host, whatever the case of its scheme', () => {
+    expect(renderMarkdown('[x](HTTPS://example.com/a)')).toContain('href="HTTPS://example.com/a"');
+    expect(renderMarkdown('[x](http://example.com)')).toContain('href="http://example.com"');
+  });
+
   it('rejects protocol-relative links, keeping the text', () => {
     // `//evil.com` starts with `/`, but browsers resolve it as an absolute,
     // cross-origin URL (https://evil.com), not a same-origin relative link.

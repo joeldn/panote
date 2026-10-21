@@ -16,12 +16,6 @@ type Load =
   | { status: 'error'; message: string }
   | { status: 'ready'; data: TourWithConfigsOk };
 
-// Inline media must come from the CDN, as on the public viewer.
-const cdnMatcher = (cdnBase: string) => {
-  const cdn = new URL(cdnBase).origin;
-  return (url: string): boolean => URL.canParse(url) && new URL(url).origin === cdn;
-};
-
 /** Route element for `/app/t/:tourId/preview` (screen 05, owner side). */
 export function Preview() {
   const { tourId = '' } = useParams();
@@ -107,7 +101,6 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
   const createViewer = useContext(StageFactoryContext);
   const { tour: doc, configs, publish } = data;
   const vt = useMemo(() => toViewerTour(doc, configs), [doc, configs]);
-  const isCdnUrl = useMemo(() => cdnMatcher(config.cdnBase), [config.cdnBase]);
   const [sharing, setSharing] = useState(false);
   // The scene whose tiles failed to load, e.g. one still processing.
   const [notReady, setNotReady] = useState<string | null>(null);
@@ -129,7 +122,6 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
       title={doc.title}
       baseUrl={tilesBaseUrl(config)}
       start={vt.tour.start}
-      isAllowedMediaUrl={isCdnUrl}
       {...(createViewer && { createViewer })}
       bar={{
         home: (

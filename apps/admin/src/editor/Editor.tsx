@@ -712,7 +712,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             <PointEditor
               key={point.id}
               point={point}
-              cdnBase={config.cdnBase}
               onChange={(patch) =>
                 dispatch({ type: 'point/update', panoId: currentId, id: point.id, patch })
               }

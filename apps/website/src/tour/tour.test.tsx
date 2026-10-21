@@ -267,43 +267,49 @@ describe('/s/:slug', () => {
     expect(screen.getByText('Church').getAttribute('aria-current')).toBe('location');
   });
 
-  it('loads CDN media inline and links media hosted elsewhere', async () => {
+  it('shows linked media inline from any https host', async () => {
+    const point = (id: string, yaw: number, title: string, media: object) => ({
+      id,
+      type: 'info',
+      yaw,
+      pitch: 0,
+      title,
+      media,
+    });
     objects['pub/tours/tour-a.json'] = bundle({
       scenes: [
         scene('square', 'Square', [
-          {
-            id: 'm1',
-            type: 'info',
-            yaw: 0,
-            pitch: 0,
-            title: 'Plan',
-            media: { kind: 'image', url: `${CDN}media/plan.jpg` },
-          },
-          {
-            id: 'm2',
-            type: 'info',
-            yaw: 1,
-            pitch: 0,
-            title: 'Clip',
-            media: { kind: 'video', url: 'https://other.test/clip.mp4' },
-          },
+          point('m1', 0, 'Plan', { kind: 'image', url: `${CDN}media/plan.jpg` }),
+          point('m2', 0.5, 'Clip', { kind: 'video', url: 'https://other.test/clip.mp4' }),
+          point('m3', 1, 'Bells', { kind: 'audio', url: 'https://sounds.test/bells.mp3' }),
+          point('m4', 1.5, 'Film', { kind: 'vimeo', id: '76979871' }),
+          point('m5', 2, 'History', { kind: 'link', url: 'https://example.org/history' }),
         ]),
       ],
     });
     renderAt('/s/old-town');
     await shown('square');
-    fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
-    expect(screen.getByRole('complementary').querySelector('img')?.getAttribute('src')).toBe(
-      `${CDN}media/plan.jpg`,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Clip' }));
-    expect(screen.getByRole('complementary').querySelector('video')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Open video ↗' }).getAttribute('href')).toBe(
+    const panel = (name: string) => {
+      fireEvent.click(screen.getByRole('button', { name }));
+      return screen.getByRole('complementary');
+    };
+    expect(panel('Plan').querySelector('img')?.getAttribute('src')).toBe(`${CDN}media/plan.jpg`);
+    expect(panel('Clip').querySelector('video')?.getAttribute('src')).toBe(
       'https://other.test/clip.mp4',
+    );
+    expect(panel('Bells').querySelector('audio')?.getAttribute('src')).toBe(
+      'https://sounds.test/bells.mp3',
+    );
+    expect(panel('Film').querySelector('iframe')?.getAttribute('src')).toBe(
+      'https://player.vimeo.com/video/76979871?dnt=1',
+    );
+    panel('History');
+    expect(screen.getByRole('link', { name: 'Visit example.org ↗' }).getAttribute('href')).toBe(
+      'https://example.org/history',
     );
   });
 
-  it('checks media URLs without URL.canParse (Safari 16)', async () => {
+  it('names a link media without URL.canParse (Safari 16)', async () => {
     objects['pub/tours/tour-a.json'] = bundle({
       scenes: [
         scene('square', 'Square', [
@@ -312,8 +318,8 @@ describe('/s/:slug', () => {
             type: 'info',
             yaw: 0,
             pitch: 0,
-            title: 'Plan',
-            media: { kind: 'image', url: `${CDN}media/plan.jpg` },
+            title: 'History',
+            media: { kind: 'link', url: 'https://example.org/history' },
           },
         ]),
       ],
@@ -327,10 +333,8 @@ describe('/s/:slug', () => {
     try {
       renderAt('/s/old-town');
       await shown('square');
-      fireEvent.click(screen.getByRole('button', { name: 'Plan' }));
-      expect(screen.getByRole('complementary').querySelector('img')?.getAttribute('src')).toBe(
-        `${CDN}media/plan.jpg`,
-      );
+      fireEvent.click(screen.getByRole('button', { name: 'History' }));
+      expect(screen.getByRole('link', { name: 'Visit example.org ↗' })).toBeTruthy();
     } finally {
       if (owner && canParse) Object.defineProperty(owner, 'canParse', canParse);
     }

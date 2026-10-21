@@ -1,5 +1,5 @@
 import { MAX_HOTSPOT_BODY_LENGTH, MAX_TITLE_LENGTH, type Hotspot } from '@internal/contracts';
-import { Button, FALLBACK_ICON, pointIcon, Segmented } from '@internal/ui';
+import { Button, FALLBACK_ICON, MediaEmbed, pointIcon, Segmented } from '@internal/ui';
 import {
   useId,
   useLayoutEffect,
@@ -12,15 +12,17 @@ import {
 import { searchIcons } from './icons.js';
 import { applyFormat, formatForKey, IS_MAC, type MarkdownFormat } from './markdown-format.js';
 import { POINT_SIZE_MAX, POINT_SIZE_MIN, POINT_SIZE_STEP, type HotspotPatch } from './model.js';
-import { isCdnMedia, mediaInput, parseMedia, type MediaKind } from './media.js';
+import { choiceOf, mediaInput, parseMedia, type MediaChoice } from './media.js';
 
-type MediaChoice = 'none' | MediaKind;
+type MediaPick = 'none' | MediaChoice;
 
-const MEDIA_OPTIONS: Array<{ value: MediaChoice; label: string }> = [
+const MEDIA_OPTIONS: Array<{ value: MediaPick; label: string }> = [
   { value: 'none', label: 'None' },
   { value: 'image', label: 'Image' },
+  { value: 'audio', label: 'Audio' },
   { value: 'video', label: 'Video' },
-  { value: 'youtube', label: 'YouTube' },
+  { value: 'embed', label: 'YouTube / Vimeo' },
+  { value: 'link', label: 'Link' },
 ];
 
 // Letters rather than icons for the text styles: the icon subset has none for them.
@@ -36,15 +38,24 @@ const FORMATS: Array<{ format: MarkdownFormat; label: string; glyph: ReactNode; 
   },
 ];
 
-const MEDIA_PLACEHOLDER: Record<MediaKind, string> = {
-  image: 'https://cdn.panote.dev/…/photo.jpg',
-  video: 'https://cdn.panote.dev/…/clip.mp4',
-  youtube: 'https://youtu.be/… or video id',
+const MEDIA_PLACEHOLDER: Record<MediaChoice, string> = {
+  image: 'Paste image URL (jpg, png, gif, webp)',
+  audio: 'Paste audio file URL (mp3, wav, ogg)',
+  video: 'Paste video file URL (mp4, webm)',
+  embed: 'Paste a YouTube or Vimeo URL',
+  link: 'Link URL',
+};
+
+const MEDIA_LABEL: Record<MediaChoice, string> = {
+  image: 'Media link',
+  audio: 'Media link',
+  video: 'Media link',
+  embed: 'YouTube or Vimeo link',
+  link: 'Link URL',
 };
 
 export interface PointEditorProps {
   point: Hotspot;
-  cdnBase: string;
   onChange: (patch: HotspotPatch) => void;
   /** Turn the view to face the point (while sizing it). */
   onFace: () => void;
@@ -129,50 +140,48 @@ function BodyField({ point, onChange }: FieldProps) {
   );
 }
 
-function MediaField({ point, cdnBase, onChange }: FieldProps & Pick<PointEditorProps, 'cdnBase'>) {
+function MediaField({ point, onChange }: FieldProps) {
   const id = useId();
   const stored = point.media;
-  const [kind, setKind] = useState<MediaChoice>(stored?.kind ?? 'none');
+  const [kind, setKind] = useState<MediaPick>(stored ? choiceOf(stored) : 'none');
   const [text, setText] = useState(stored ? mediaInput(stored) : '');
   const [error, setError] = useState<string | null>(null);
 
-  const commit = (k: MediaChoice, value: string) => {
-    if (k === 'none') {
+  // `detect` is off when the kind was just picked: an explicit choice isn't second-guessed.
+  const commit = (k: MediaPick, value: string, detect = true) => {
+    if (k === 'none' || !value.trim()) {
       setError(null);
       onChange({ media: null });
       return;
     }
-    if (!value.trim()) {
-      setError(null);
-      onChange({ media: null });
-      return;
-    }
-    const parsed = parseMedia(k, value);
+    const parsed = parseMedia(k, value, detect);
     if (parsed.ok) {
       setError(null);
+      // A YouTube/Vimeo page pasted under another kind is stored as the embed.
+      setKind(choiceOf(parsed.media));
       onChange({ media: parsed.media });
     } else {
       setError(parsed.message);
     }
   };
 
-  const offCdn = stored && !isCdnMedia(stored, cdnBase);
   return (
     <fieldset className="ed-field ed-media">
       <legend className="ed-label">Media</legend>
+      <p className="ed-note">What are you adding? We only link to it — never host it.</p>
       <Segmented
         aria-label="Media type"
         options={MEDIA_OPTIONS}
         value={kind}
         onChange={(k) => {
           setKind(k);
-          commit(k, text);
+          commit(k, text, false);
         }}
       />
       {kind !== 'none' && (
         <>
           <label className="ed-sr" htmlFor={`${id}-url`}>
-            {kind === 'youtube' ? 'YouTube link or id' : 'Media link'}
+            {MEDIA_LABEL[kind]}
           </label>
           <input
             id={`${id}-url`}
@@ -186,7 +195,7 @@ function MediaField({ point, cdnBase, onChange }: FieldProps & Pick<PointEditorP
               if (e.key === 'Enter') commit(kind, text);
             }}
             aria-invalid={error ? true : undefined}
-            aria-describedby={error || offCdn ? `${id}-note` : undefined}
+            aria-describedby={error ? `${id}-note` : undefined}
           />
         </>
       )}
@@ -195,12 +204,12 @@ function MediaField({ point, cdnBase, onChange }: FieldProps & Pick<PointEditorP
           {error}
         </p>
       ) : (
-        offCdn &&
+        stored &&
         kind !== 'none' && (
-          <p id={`${id}-note`} className="ed-note ed-note--warn" role="status">
-            <i className="fa-solid fa-triangle-exclamation" aria-hidden="true" /> This link isn’t on
-            the panote CDN, so visitors see it as a plain link instead of inline.
-          </p>
+          // As visitors see it; keyed by the media so a fixed link retries a failed load.
+          <div className="ed-media__preview">
+            <MediaEmbed key={JSON.stringify(stored)} media={stored} title={point.title} />
+          </div>
         )
       )}
     </fieldset>
@@ -210,7 +219,6 @@ function MediaField({ point, cdnBase, onChange }: FieldProps & Pick<PointEditorP
 /** The selected point's panel: title, markdown body, icon, size and media. */
 export function PointEditor({
   point,
-  cdnBase,
   onChange,
   onFace,
   onMove,
@@ -304,7 +312,7 @@ export function PointEditor({
           }}
         />
       </div>
-      <MediaField key={point.id} point={point} cdnBase={cdnBase} onChange={onChange} />
+      <MediaField key={point.id} point={point} onChange={onChange} />
       <div className="ed-point__tools">
         <Button
           variant="ghost"

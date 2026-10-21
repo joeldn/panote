@@ -321,6 +321,10 @@
   aspect-ratio: 16 / 9;
   height: auto;
 }
+.pn-hspanel__media--audio {
+  height: 40px;
+  background: none;
+}
 .pn-hspanel__body {
   font: 400 14.5px/1.55 var(--fbody);
   color: var(--ink-82);
