@@ -1019,7 +1019,8 @@ describe('Report', () => {
     expect(href.protocol).toBe('mailto:');
     expect(href.pathname).toBe('hello@panote.io');
     expect(href.searchParams.get('subject')).toBe('Report a tour');
-    expect(href.searchParams.get('body')).toContain('Tour: https://panote.test/s/old-town\n');
+    expect(href.searchParams.get('body')).toContain('Tour: https://panote.test/s/old-town\r\n');
+    expect(link.getAttribute('href')).toContain('%0D%0A');
     expect(link.textContent).toBe('Report');
   });
 

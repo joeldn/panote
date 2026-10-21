@@ -170,4 +170,5 @@ export const FAQS = [
   },
 ];
 
-export const CONTACT_EMAIL = 'hello@panote.io';
+// Shared with web-kit's error copy, so the address lives in one place.
+export { CONTACT_EMAIL } from '@internal/web-kit';

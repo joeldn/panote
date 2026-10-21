@@ -1,5 +1,7 @@
 import type { z } from 'zod';
 
+import { CONTACT_EMAIL } from '../contact.js';
+
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export type TokenGetter = () => Promise<string>;
 
@@ -45,7 +47,7 @@ function errorMessage(status: number, body: unknown): string {
     if (status === 410 && body.error === 'account deleted') return 'This account has been deleted.';
     // The operator disabled the account (scripts/takedown.ts): reads only from then on.
     if (status === 403 && body.error === 'account disabled') {
-      return 'This account has been disabled. Write to hello@panote.io if you think that is a mistake.';
+      return `This account has been disabled. Write to ${CONTACT_EMAIL} if you think that is a mistake.`;
     }
     // upload-api's per-owner quotas.
     if (status === 403 && body.error === 'pano limit reached') {

@@ -213,7 +213,7 @@ describe('createAdminApi', () => {
   });
 
   it.each([
-    [403, 'account disabled', /has been disabled/],
+    [403, 'account disabled', /has been disabled\. Write to hello@panote\.io/],
     [403, 'pano limit reached', 'This account has reached its pano limit.'],
     [403, 'storage limit reached', 'This account has reached its storage limit.'],
     [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
