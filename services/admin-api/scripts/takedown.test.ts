@@ -68,6 +68,16 @@ describe('parseTakedownArgs', () => {
     });
   });
 
+  it.each([
+    ['--hide-from-explore', 'hide'],
+    ['--show-on-explore', 'unhide'],
+  ])('%s is a tour action through the operator route', (flag, action) => {
+    expect(parseTakedownArgs(['--slug', 'a', flag], ENV)).toMatchObject({
+      tourAction: action,
+      api: { origin: 'https://panote.dev', token: 'op-token' },
+    });
+  });
+
   it('picks admin-api by bucket, and ADMIN_API_ORIGIN overrides it', () => {
     const prod = { ...ENV, R2_BUCKET: 'pano-content' };
     const argv = ['--slug', 'x', '--unpublish', '--allow-bucket', 'pano-content'];
@@ -83,6 +93,8 @@ describe('parseTakedownArgs', () => {
     [['--slug', 'a', '--unpublish', '--delete'], /exclusive/],
     [['--sub', SUB, '--disable-owner', '--enable-owner'], /exclusive/],
     [['--sub', SUB, '--unpublish'], /needs --slug or --tour/],
+    [['--slug', 'a', '--unpublish', '--hide-from-explore'], /exclusive/],
+    [['--sub', SUB, '--hide-from-explore'], /--hide-from-explore needs --slug or --tour/],
     [['--tour', 'a/b'], /--tour must match/],
     [['--slug', 'Not A Slug'], /not a valid slug/],
     [['--sub', SUB, '--reason', 'x'], /--reason goes with --disable-owner/],

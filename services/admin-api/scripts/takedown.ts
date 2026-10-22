@@ -9,6 +9,7 @@
 //   R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... \
 //   R2_SECRET_ACCESS_KEY=... OPERATOR_TOKEN=... \
 //   node services/admin-api/scripts/takedown.ts --slug <slug> --unpublish --disable-owner
+//   node services/admin-api/scripts/takedown.ts --slug <slug> --hide-from-explore
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 
 import {
@@ -20,6 +21,7 @@ import {
   parseTakedownArgs,
   readOwnerStatus,
   requestTourTakedown,
+  TOUR_ACTION_DONE,
   tourIdForSlug,
   USAGE,
 } from './takedown-lib.ts';
@@ -61,7 +63,7 @@ async function main(): Promise<void> {
       tourId,
       action: args.tourAction,
     });
-    console.log(`tour ${done.action}d; ${done.purged} CDN purge target(s) queued`);
+    console.log(`tour ${TOUR_ACTION_DONE[done.action]}; ${done.purged} CDN purge target(s) queued`);
   }
 }
 

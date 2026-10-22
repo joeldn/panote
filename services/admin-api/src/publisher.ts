@@ -1,6 +1,14 @@
-import { publishKey, tourKey, type Visibility } from '@internal/contracts';
+import {
+  publishKey,
+  pubTourKey,
+  tourKey,
+  type PublishedTour,
+  type Visibility,
+} from '@internal/contracts';
+import { getJson } from '@internal/worker-kit/r2-binding';
 import { DurableObject } from 'cloudflare:workers';
 
+import { setExploreHidden } from './explore.js';
 import {
   NOT_FOUND,
   parseAliasDays,
@@ -69,5 +77,16 @@ export class TourPublisher extends DurableObject<Env> {
   async unpublish(sub: string, tourId: string, stopSharing = false): Promise<string[]> {
     if (!(await this.owns(sub, tourId, true))) return [];
     return this.serial(() => unpublish(this.env.BUCKET, sub, tourId, { stopSharing }));
+  }
+
+  // The operator's hide from (or unhide on) Explore; the tour stays live by link.
+  async setExploreHidden(sub: string, tourId: string, hidden: boolean): Promise<boolean> {
+    if (!(await this.owns(sub, tourId, true))) return false;
+    return this.serial(async () => {
+      const bucket = this.env.BUCKET;
+      const bundle = hidden ? null : await getJson<PublishedTour>(bucket, pubTourKey(tourId));
+      await setExploreHidden(bucket, tourId, hidden, new Date(), bundle?.value ?? null);
+      return true;
+    });
   }
 }

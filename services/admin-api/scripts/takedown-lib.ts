@@ -30,12 +30,13 @@ export interface TakedownArgs {
   reason: string | undefined;
   dryRun: boolean;
   r2: R2Config;
-  /** admin-api's operator route; only set (and required) for --unpublish/--delete. */
+  /** admin-api's operator route; only set (and required) for a tour action. */
   api: { origin: string; token: string } | undefined;
 }
 
 export const USAGE =
-  'usage: takedown.ts (--slug <slug> | --tour <tourId>) [--sub <auth0 user id>] [--unpublish | --delete]\n' +
+  'usage: takedown.ts (--slug <slug> | --tour <tourId>) [--sub <auth0 user id>]\n' +
+  '         [--unpublish | --delete | --hide-from-explore | --show-on-explore]\n' +
   '         [--disable-owner [--reason <text>] | --enable-owner] [--dry-run] [--allow-bucket <bucket>]\n' +
   '       takedown.ts --sub <auth0 user id> [--disable-owner [--reason <text>] | --enable-owner] [--dry-run]\n' +
   '       With no action it only reports: the tour, its owner, and whether the owner is disabled.';
@@ -45,6 +46,17 @@ type ValueFlag = (typeof VALUE_FLAGS)[number];
 const TOUR_FLAGS: Record<string, OperatorTakedownAction> = {
   '--unpublish': 'unpublish',
   '--delete': 'delete',
+  // Explore only: the tour stays live by link.
+  '--hide-from-explore': 'hide',
+  '--show-on-explore': 'unhide',
+};
+const TOUR_FLAG_OF = Object.fromEntries(Object.entries(TOUR_FLAGS).map(([f, a]) => [a, f]));
+/** What the operator sees once an action is done. */
+export const TOUR_ACTION_DONE: Record<OperatorTakedownAction, string> = {
+  unpublish: 'unpublished',
+  delete: 'deleted',
+  hide: 'hidden from Explore',
+  unhide: 'shown on Explore again',
 };
 const OWNER_FLAGS: Record<string, OwnerAction> = {
   '--disable-owner': 'disable',
@@ -70,7 +82,11 @@ export function parseTakedownArgs(
     if (arg === '--dry-run') {
       dryRun = true;
     } else if (TOUR_FLAGS[arg]) {
-      if (tourAction) throw new Error('--unpublish and --delete are exclusive');
+      if (tourAction) {
+        throw new Error(
+          '--unpublish, --delete, --hide-from-explore and --show-on-explore are exclusive',
+        );
+      }
       tourAction = TOUR_FLAGS[arg];
     } else if (OWNER_FLAGS[arg]) {
       if (ownerAction) throw new Error('--disable-owner and --enable-owner are exclusive');
@@ -93,7 +109,7 @@ export function parseTakedownArgs(
     throw new Error('name a tour (--slug or --tour) or an owner (--sub)');
   }
   if (tourAction && slug === undefined && tourId === undefined) {
-    throw new Error(`--${tourAction} needs --slug or --tour`);
+    throw new Error(`${TOUR_FLAG_OF[tourAction]} needs --slug or --tour`);
   }
   if (tourId !== undefined && !PANO_PATTERN.test(tourId)) {
     throw new Error(`--tour must match ${PANO_PATTERN}`);
