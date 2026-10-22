@@ -32,12 +32,25 @@ type TourApi = Pick<AdminApi, 'getTour'>;
 export const tourRoomMessage = (room: number): string =>
   `This tour has room for ${room} more ${room === 1 ? 'pano' : 'panos'}. Choose fewer photos.`;
 
-/** Refuses up front (before any upload) when the tour can't take `count` more panos. */
-export async function assertTourHasRoom(api: TourApi, tourId: string, count = 1): Promise<void> {
+export const TOUR_FULL_PENDING_MESSAGE =
+  'This tour will be full once the photos already uploading are in.';
+
+/**
+ * Refuses up front (before any upload) when the tour can't take `count` more panos,
+ * on top of `reserved` ones already on their way into it (uploading or queued).
+ */
+export async function assertTourHasRoom(
+  api: TourApi,
+  tourId: string,
+  count = 1,
+  reserved = 0,
+): Promise<void> {
   const got = await api.getTour(tourId);
   if (got.status !== 'ok') throw new FinalizeError('This tour no longer exists.', false);
-  const room = MAX_TOUR_SCENES - got.data.tour.scenes.length;
-  if (room <= 0) throw tourFull();
+  const free = MAX_TOUR_SCENES - got.data.tour.scenes.length;
+  if (free <= 0) throw tourFull();
+  const room = free - reserved;
+  if (room <= 0) throw new FinalizeError(TOUR_FULL_PENDING_MESSAGE, false);
   if (count > room) throw new FinalizeError(tourRoomMessage(room), false);
 }
 

@@ -154,6 +154,8 @@ const isUploading = (j: Job): boolean =>
 function limitOf(e: unknown): UploadLimit {
   if (!(e instanceof ApiError)) return null;
   if (e.status === 429) return 'rate';
+  // upload-api answers 403 only for a quota ('pano limit reached', 'storage limit reached',
+  // 'daily upload limit reached') or 'account disabled', and 410 only for 'account deleted'.
   return e.status === 403 || e.status === 410 ? 'quota' : null;
 }
 
@@ -689,7 +691,22 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           const { tourId } = await s.api.createTour({ title, scenes: [] });
           panoTarget = { kind: 'add', tourId };
         } else {
-          if (target.kind === 'add') await assertTourHasRoom(s.api, target.tourId, files.length);
+          if (target.kind === 'add') {
+            const { tourId } = target;
+            // Photos already on their way into this tour need room too: the server's
+            // scenes don't list them until each one lands and is appended.
+            const reserved =
+              queue.current.filter((q) => q.target.tourId === tourId).length +
+              [...jobs.current].filter(
+                (j) =>
+                  j.target.kind === 'add' &&
+                  j.target.tourId === tourId &&
+                  !j.done &&
+                  j.finalize.status !== 'done' &&
+                  j.machine.phase !== 'cancelled',
+              ).length;
+            await assertTourHasRoom(s.api, tourId, files.length, reserved);
+          }
           panoTarget = target;
         }
       } catch (e) {

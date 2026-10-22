@@ -62,11 +62,12 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
   async function start(files: File[]) {
     setStatus({ kind: 'starting' });
     // Every file passes the checks, or none is sent: a partial batch would be easy to miss.
-    const checked = await Promise.all(files.map(validateUploadImage));
-    const invalid = files.flatMap((f, i) => {
-      const bad = checked[i];
-      return bad ? [{ name: f.name, message: bad.message }] : [];
-    });
+    // One at a time, so a big pick never reads many large images at once.
+    const invalid: Array<{ name: string; message: string }> = [];
+    for (const f of files) {
+      const bad = await validateUploadImage(f);
+      if (bad) invalid.push({ name: f.name, message: bad.message });
+    }
     const [first] = invalid;
     if (first && files.length === 1) {
       setStatus({ kind: 'error', message: first.message });
@@ -176,8 +177,9 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
             <p>{status.message}</p>
             {status.files && (
               <ul>
-                {status.files.map((line) => (
-                  <li key={line}>{line}</li>
+                {status.files.map((line, i) => (
+                  // Two photos can share a name and a reason: the position keeps keys apart.
+                  <li key={i}>{line}</li>
                 ))}
               </ul>
             )}

@@ -405,6 +405,42 @@ describe('several photos at once', () => {
     expect(within(chip()).getByText('2 more waiting')).toBeTruthy();
   });
 
+  it('the room check counts photos already uploading or waiting for that tour', async () => {
+    const { backend, router } = setup('/app/new?tour=tour-1');
+    backend.state.tour.scenes = Array.from({ length: 96 }, (_, i) => ({ panoId: `p${i}` }));
+    await tick();
+    await pickMany(three());
+    expect(backend.presigns()).toHaveLength(1);
+
+    // 96 in the tour and 3 on their way: room for 1 more, not 4.
+    await act(() => router.navigate('/new?tour=tour-1'));
+    await pickMany([pngFile('Attic.png'), pngFile('Roof.png')]);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'This tour has room for 1 more pano. Choose fewer photos.',
+    );
+    await pickMany([pngFile('Attic.png')]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(chip()).getByText('3 more waiting')).toBeTruthy();
+
+    await act(() => router.navigate('/new?tour=tour-1'));
+    await pickMany([pngFile('Roof.png')]);
+    expect(screen.getByRole('alert').textContent).toBe(
+      'This tour will be full once the photos already uploading are in.',
+    );
+    expect(backend.presigns()).toHaveLength(1);
+  });
+
+  it('two photos with the same name and problem are both listed', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setup();
+    await tick();
+    const gif = () => new File(['GIF89a'], 'Loft.gif', { type: 'image/gif' });
+    await pickMany([gif(), pngFile('Hall.png'), gif()]);
+    expect(within(screen.getByRole('alert')).getAllByRole('listitem')).toHaveLength(2);
+    expect(errors.mock.calls.some((c) => String(c[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
+  });
+
   it('one photo failing the checks stops the whole pick, and says which', async () => {
     const { backend } = setup();
     await tick();
