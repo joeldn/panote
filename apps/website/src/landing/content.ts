@@ -1,4 +1,11 @@
 // Landing copy (design README, screen 1). Free, not open source: no export/download promises.
+// Limits are real (copy-rule.test bans "unlimited"/"no limits"): state the numbers.
+import { MAX_HOTSPOTS } from '@internal/contracts';
+import { MAX_UPLOAD_BYTES } from '@internal/web-kit';
+
+// Per-account quotas. The server enforces these from its own config
+// (upload-api / admin-api vars), which the site can't import: keep them in step.
+export const ACCOUNT_LIMITS = { panoramas: 500, storageGb: 20, tours: 200 } as const;
 
 export const NAV_SECTIONS = [
   { id: 'features', label: 'Features' },
@@ -15,10 +22,10 @@ export const PILLARS = [
     body: 'Other free hosts crush your panorama to 4K. We keep every pixel, so visitors zoom into the real detail.',
   },
   {
-    icon: 'fa-solid fa-infinity',
-    tag: 'No limits',
-    title: 'Unlimited everything',
-    body: 'Unlimited hotspots, panoramas, and tours. No tiered gates, no counting.',
+    icon: 'fa-solid fa-layer-group',
+    tag: 'Generous limits',
+    title: 'Room for every project',
+    body: `Up to ${ACCOUNT_LIMITS.panoramas} panoramas, ${ACCOUNT_LIMITS.tours} tours and ${ACCOUNT_LIMITS.storageGb} GB per account, with ${MAX_HOTSPOTS} hotspots in every scene. No tiers to climb.`,
   },
   {
     icon: 'fa-solid fa-ban',
@@ -92,8 +99,8 @@ export const FEATURES = [
 
 export const COMPARE_ROWS = [
   { label: 'Max resolution', panote: 'Full', others: '4K cap' },
-  { label: 'Hotspots', panote: 'Unlimited', others: 'Limited' },
-  { label: 'Tours', panote: 'Unlimited', others: 'Limited' },
+  { label: 'Hotspots', panote: `${MAX_HOTSPOTS} per scene`, others: 'Limited' },
+  { label: 'Tours', panote: `${ACCOUNT_LIMITS.tours} per account`, others: 'Limited' },
   { label: 'Watermark', panote: 'None', others: 'Yes' },
   { label: 'Hosted + editor', panote: 'Yes', others: 'Yes' },
   { label: 'Price', panote: 'Free', others: 'Free → paid' },
@@ -146,7 +153,7 @@ export const USE_CASES = [
 export const FAQS = [
   {
     q: 'Is it really free?',
-    a: 'Yes. Uploading, hosting, hotspots, and tours are free with no limits. We don’t ask for a card.',
+    a: `Yes. Uploading, hosting, hotspots, and tours are all free, and we don’t ask for a card. The limits are generous: up to ${ACCOUNT_LIMITS.panoramas} panoramas, ${ACCOUNT_LIMITS.tours} tours and ${ACCOUNT_LIMITS.storageGb} GB per account, ${MAX_HOTSPOTS} hotspots per scene, and files up to ${MAX_UPLOAD_BYTES / 1024 ** 2} MB.`,
   },
   {
     q: 'Are there resolution limits?',

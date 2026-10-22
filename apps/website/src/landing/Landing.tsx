@@ -77,7 +77,7 @@ function Hero({
           Your 360° tours. Full resolution. <em>Free.</em>
         </h1>
         <p className="landing-hero__lede">
-          Upload a panorama, link your scenes, add hotspots, share a link. Unlimited tours, no
+          Upload a panorama, link your scenes, add hotspots, share a link. Full resolution, no
           watermark, no paywall.
         </p>
         <div className="landing-hero__actions">
