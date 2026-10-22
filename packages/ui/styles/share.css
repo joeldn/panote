@@ -242,6 +242,23 @@
   text-transform: uppercase;
   color: var(--ink-45);
 }
+.pn-share__section[for] {
+  display: block;
+}
+.pn-share__lang {
+  width: 100%;
+  margin-bottom: 18px;
+  padding: 9px 12px;
+  border: 1px solid var(--ink-13);
+  border-radius: var(--r-field);
+  background: #fff;
+  color: var(--ink);
+  font: 400 14px var(--fbody);
+}
+.pn-share__lang:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .pn-share__scopes {
   display: grid;
   grid-template-columns: 1fr 1fr;

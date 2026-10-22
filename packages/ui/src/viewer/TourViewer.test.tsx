@@ -177,6 +177,40 @@ describe('TourViewer', () => {
     expect(screen.queryByRole('navigation', { name: 'Tour' })).toBeNull();
   });
 
+  describe('languages', () => {
+    const bar = { home: <a href="/">home</a> };
+
+    it('marks the viewer with the language and offers the others in the bar', () => {
+      const onLanguageChange = vi.fn();
+      renderViewer({ bar, lang: 'de', languages: ['en', 'de'], onLanguageChange });
+      expect(document.querySelector('.pn-tour')?.getAttribute('lang')).toBe('de');
+      const picker = screen.getByRole('combobox', { name: 'Language' });
+      expect(picker.closest('.pn-tourbar__end')).toBeTruthy();
+      expect((picker as HTMLSelectElement).value).toBe('de');
+      expect(
+        within(picker)
+          .getAllByRole('option')
+          .map((o) => o.textContent),
+      ).toEqual(['English', 'Deutsch']);
+      fireEvent.change(picker, { target: { value: 'en' } });
+      expect(onLanguageChange).toHaveBeenCalledWith('en');
+    });
+
+    it('floats the picker over the stage without a bar (the embed)', () => {
+      renderViewer({ lang: 'en', languages: ['en', 'fr'], onLanguageChange: vi.fn() });
+      const picker = screen.getByRole('combobox', { name: 'Language' });
+      expect(picker.closest('.pn-tour__lang')).toBeTruthy();
+    });
+
+    it('shows no picker for a tour in one language, and no lang without one', () => {
+      renderViewer({ bar, lang: 'en', languages: ['en'], onLanguageChange: vi.fn() });
+      expect(screen.queryByRole('combobox', { name: 'Language' })).toBeNull();
+      cleanup();
+      renderViewer({ bar });
+      expect(document.querySelector('.pn-tour')?.hasAttribute('lang')).toBe(false);
+    });
+  });
+
   it('walks links and the map, reporting scenes and point opens', async () => {
     const onSceneChange = vi.fn();
     const onHotspotOpen = vi.fn();

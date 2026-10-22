@@ -47,6 +47,10 @@ describe('share links', () => {
         '  allow="fullscreen; xr-spatial-tracking"></iframe>',
     );
     expect(embedSrc(SITE, 'a-b', 'pano-1')).toBe(`${SITE}/s/a-b/embed?pano=pano-1`);
+    expect(embedSrc(SITE, 'a-b', 'pano-1', 'pt-BR')).toBe(
+      `${SITE}/s/a-b/embed?pano=pano-1&lang=pt-BR`,
+    );
+    expect(embedSrc(SITE, 'a-b', null, 'de')).toBe(`${SITE}/s/a-b/embed?lang=de`);
   });
 
   it('normalises while typing but keeps a dash to type through', () => {
@@ -263,6 +267,17 @@ describe('ShareModal', () => {
       expect(screen.getByText('Courtyard — no links out')).toBeTruthy();
       await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy code' })));
       expect(writeText).toHaveBeenCalledWith(code());
+    });
+
+    it("pins the embed's language when the tour has several, else offers none", () => {
+      renderModal({ tab: 'embed', languages: ['en', 'de'] });
+      const select = screen.getByLabelText('Language') as HTMLSelectElement;
+      expect(select.value).toBe('');
+      fireEvent.change(select, { target: { value: 'de' } });
+      expect(code()).toBe(embedSnippet(`${SITE}/s/old-town/embed?lang=de`, 480));
+      cleanup();
+      renderModal({ tab: 'embed', languages: ['en'] });
+      expect(screen.queryByLabelText('Language')).toBeNull();
     });
 
     it('disables "This pano only" without a current pano', () => {

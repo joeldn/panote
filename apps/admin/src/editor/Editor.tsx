@@ -1,4 +1,11 @@
-import { DEFAULT_TOUR_SETTINGS, type Hotspot } from '@internal/contracts';
+import {
+  DEFAULT_TOUR_SETTINGS,
+  languageName,
+  localizeHotspot,
+  MAX_SCENE_TRANSLATION_CHARS,
+  sceneTranslationChars,
+  type Hotspot,
+} from '@internal/contracts';
 import {
   Button,
   Compass,
@@ -27,6 +34,7 @@ import type { ShareOutletContext } from '../share/ShareRoute.js';
 import { useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
+import { FALLBACK_LANGUAGE, LanguageMenu } from './LanguageMenu.js';
 import { LibraryPicker } from './LibraryPicker.js';
 import { newId, pointSizeForDrag, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
@@ -55,7 +63,8 @@ const FOV_MAX = 80;
 
 type Confirm =
   | { kind: 'remove-pano'; panoId: string }
-  | { kind: 'delete-point'; panoId: string; id: string; title: string };
+  | { kind: 'delete-point'; panoId: string; id: string; title: string }
+  | { kind: 'remove-language'; lang: string };
 
 /** A point being moved, and where it was, for Esc to put it back. */
 interface Moving {
@@ -212,6 +221,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   // A point dropped by a placing drag that is still sizing it (Esc takes it back out).
   const sizing = useRef<{ panoId: string; id: string; size: number | null } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [languagesOpen, setLanguagesOpen] = useState(false);
+  // The language titles and text are edited in; null is the default language.
+  const [editLang, setEditLang] = useState<string | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   // The share modal opens over the editor: sharing it starts or stops is the editor's too.
   const { setShared } = editor;
@@ -225,6 +237,16 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const { dispatch, dirty } = editor;
   const tour = docs.tour.current;
   const settings = tour.settings ?? DEFAULT_TOUR_SETTINGS;
+  const defaultLang = tour.languages?.default ?? FALLBACK_LANGUAGE;
+  // Only a language the tour still has: one removed (or reloaded away) drops back.
+  const lang = editLang && tour.languages?.others.includes(editLang) ? editLang : null;
+  const translation = lang ? { lang, name: languageName(lang) } : null;
+  // What a field shows while translating: its translation, with the default text behind it.
+  const tr = <F extends string>(
+    base: string | undefined,
+    i18n: Partial<Record<string, Partial<Record<F, string | undefined>> | undefined>> | undefined,
+    field: F,
+  ) => (lang ? { value: i18n?.[lang]?.[field] ?? '', placeholder: base ?? '' } : null);
   const blocker = useUnsavedGuards(dirty.length > 0, docs.tourId);
 
   const sceneIds = useMemo(() => tour.scenes.map((s) => s.panoId), [tour.scenes]);
@@ -342,7 +364,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   // these arrays change, so a new one on every editor render would do it on
   // every keystroke.
   const points = useMemo(() => (cfg ? cfg.hotspots.filter((h) => h.type === 'info') : []), [cfg]);
-  const markers = useMemo(() => points.map(toViewerHotspot), [points]);
+  const markers = useMemo(
+    () => points.map((h) => toViewerHotspot(localizeHotspot(h, lang))),
+    [points, lang],
+  );
   const point = lookOnly ? null : (points.find((h) => h.id === activePoint) ?? null);
   const movingNow =
     moving && point?.id === moving.id && moving.panoId === currentId ? moving : null;
@@ -602,17 +627,19 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             <InlineText
               className="ed-crumbs__tour"
               label="Tour title"
-              value={tour.title}
-              onCommit={(title) => dispatch({ type: 'tour/title', title })}
+              {...(tr(tour.title, tour.i18n, 'title') ?? { value: tour.title })}
+              onCommit={(title) => dispatch({ type: 'tour/title', title, ...(lang && { lang }) })}
             />
             <i className="fa-solid fa-chevron-right ed-crumbs__sep" aria-hidden="true" />
             {cfg && currentId ? (
               <InlineText
                 className="ed-crumbs__pano"
                 label="Pano name"
-                value={cfg.title}
+                {...(tr(cfg.title, cfg.i18n, 'title') ?? { value: cfg.title })}
                 disabled={lookOnly}
-                onCommit={(title) => dispatch({ type: 'scene/title', panoId: currentId, title })}
+                onCommit={(title) =>
+                  dispatch({ type: 'scene/title', panoId: currentId, title, ...(lang && { lang }) })
+                }
               />
             ) : (
               <span className="ed-crumbs__pano">
@@ -625,18 +652,38 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         <div className="ed-bar__right">
           <button
             type="button"
+            className="ed-glass-btn ed-lang-btn"
+            aria-label={`Language: ${languageName(lang ?? defaultLang)}`}
+            aria-expanded={languagesOpen}
+            data-languages-toggle
+            onClick={() => {
+              setSettingsOpen(false);
+              setLanguagesOpen((o) => !o);
+            }}
+          >
+            <i className="fa-solid fa-globe" aria-hidden="true" />
+            <span className="ed-lang-btn__tag">{lang ?? defaultLang}</span>
+          </button>
+          <button
+            type="button"
             className="ed-glass-btn ed-glass-btn--icon"
             aria-label="Tour settings"
             aria-expanded={settingsOpen}
             data-settings-toggle
-            onClick={() => setSettingsOpen((o) => !o)}
+            onClick={() => {
+              setLanguagesOpen(false);
+              setSettingsOpen((o) => !o);
+            }}
           >
             <i className="fa-solid fa-sliders" aria-hidden="true" />
           </button>
           <Link className="ed-glass-btn" to="insights">
             Insights
           </Link>
-          <Link className="ed-glass-btn" to={`/t/${docs.tourId}/preview`}>
+          <Link
+            className="ed-glass-btn"
+            to={`/t/${docs.tourId}/preview${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`}
+          >
             Preview
           </Link>
           <SaveButton editor={editor} />
@@ -648,11 +695,28 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       </header>
       {settingsOpen && (
         <SettingsPopover
+          // A fresh draft per language.
+          key={lang ?? ''}
           settings={settings}
-          description={tour.description ?? ''}
+          description={lang ? (tour.i18n?.[lang]?.description ?? '') : (tour.description ?? '')}
+          {...(translation && {
+            translating: { name: translation.name, placeholder: tour.description ?? '' },
+          })}
           onChange={(patch) => dispatch({ type: 'tour/settings', settings: patch })}
-          onDescription={(description) => dispatch({ type: 'tour/description', description })}
+          onDescription={(description) =>
+            dispatch({ type: 'tour/description', description, ...(lang && { lang }) })
+          }
           onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {languagesOpen && (
+        <LanguageMenu
+          languages={tour.languages}
+          editing={lang ?? defaultLang}
+          onEdit={(l) => setEditLang(l === defaultLang ? null : l)}
+          onChange={(languages) => dispatch({ type: 'tour/languages', languages })}
+          onRemove={(l) => setConfirm({ kind: 'remove-language', lang: l })}
+          onClose={() => setLanguagesOpen(false)}
         />
       )}
 
@@ -677,6 +741,19 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               {placingNow ? 'Cancel' : 'Add point'}
             </Button>
           </header>
+          {translation && (
+            <p className="ed-hint ed-translating" role="note">
+              <i className="fa-solid fa-globe" aria-hidden="true" /> Translating into{' '}
+              {translation.name}. Blank fields show the {languageName(defaultLang)} text.
+            </p>
+          )}
+          {cfg && sceneTranslationChars(cfg) > MAX_SCENE_TRANSLATION_CHARS && (
+            <p className="ed-note ed-note--error" role="alert">
+              This pano’s translations are over the{' '}
+              {MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit, so it can’t be
+              saved. Shorten some of them.
+            </p>
+          )}
           {lookOnly && (
             <p className="ed-hint ed-look-only" role="note">
               <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
@@ -723,8 +800,13 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           )}
           {point && currentId ? (
             <PointEditor
-              key={point.id}
+              key={`${point.id}:${lang ?? ''}`}
               point={point}
+              translation={translation}
+              onTranslate={(patch) =>
+                lang &&
+                dispatch({ type: 'point/translate', panoId: currentId, id: point.id, lang, patch })
+              }
               onChange={(patch) =>
                 dispatch({ type: 'point/update', panoId: currentId, id: point.id, patch })
               }
@@ -765,7 +847,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                       onClick={() => openPoint(h.id)}
                     >
                       <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
-                      {h.title}
+                      {localizeHotspot(h, lang).title}
                     </button>
                   </li>
                 ))}
@@ -850,6 +932,24 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           if (confirm?.kind === 'delete-point') {
             dispatch({ type: 'point/remove', panoId: confirm.panoId, id: confirm.id });
             openPoint(null);
+          }
+          setConfirm(null);
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmModal
+        open={confirm?.kind === 'remove-language'}
+        title="Remove language?"
+        body={
+          confirm?.kind === 'remove-language'
+            ? `Visitors stop seeing this tour in ${languageName(confirm.lang)} when you save, and its ${languageName(confirm.lang)} title and description are removed. Pano and point translations stay with each pano, ready if you add the language back.`
+            : null
+        }
+        confirmLabel="Remove language"
+        onConfirm={() => {
+          if (confirm?.kind === 'remove-language') {
+            dispatch({ type: 'lang/remove', lang: confirm.lang });
+            if (editLang === confirm.lang) setEditLang(null);
           }
           setConfirm(null);
         }}

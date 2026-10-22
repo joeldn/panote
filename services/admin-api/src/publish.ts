@@ -5,6 +5,7 @@ import {
   deletingKey,
   manifestKey,
   originalKey,
+  pickTranslations,
   publishKey,
   pubTourKey,
   sharingStoppedKey,
@@ -13,6 +14,7 @@ import {
   SlugRecordSchema,
   SLUGS_ROOT,
   tourKey,
+  translationLanguages,
   DEFAULT_VISIBILITY,
   type Hotspot,
   type PublishedTour,
@@ -75,11 +77,28 @@ export const checkScenes = async (
   return { failures, configs };
 };
 
+// Only the tour's own languages are published: a config is per pano, so it can hold
+// translations another tour of the owner added.
+function keepTranslations<T extends { i18n?: Record<string, unknown> | undefined }>(
+  doc: T,
+  keep: ReadonlySet<string>,
+): T {
+  if (!doc.i18n) return doc;
+  const { i18n, ...rest } = doc;
+  const kept = pickTranslations(i18n, keep);
+  return (kept ? { ...rest, i18n: kept } : rest) as T;
+}
+
 // Link hotspots must stay inside the tour: a foreign target is dropped rather
 // than 422'd, since every Save publishes.
-const publicHotspots = (config: SceneConfig, sceneIds: ReadonlySet<string>): SceneConfig => ({
-  ...config,
-  hotspots: config.hotspots.flatMap((h): Hotspot[] => {
+const publicHotspots = (
+  config: SceneConfig,
+  sceneIds: ReadonlySet<string>,
+  langs: ReadonlySet<string>,
+): SceneConfig => ({
+  ...keepTranslations(config, langs),
+  hotspots: config.hotspots.flatMap((hotspot): Hotspot[] => {
+    const h = keepTranslations(hotspot, langs);
     if (h.targetPanoId === undefined || sceneIds.has(h.targetPanoId)) return [h];
     if (h.type === 'link') return [];
     const { targetPanoId: _dropped, ...rest } = h;
@@ -98,6 +117,8 @@ export const buildBundle = (
     tour.startPanoId && tour.scenes.some((s) => s.panoId === tour.startPanoId)
       ? tour.startPanoId
       : firstPanoId;
+  const langs = translationLanguages(tour.languages);
+  const i18n = pickTranslations(tour.i18n, langs);
   return {
     v: 1,
     tourId: tour.tourId,
@@ -108,12 +129,14 @@ export const buildBundle = (
     slug: state.slug,
     publishedAt: state.publishedAt,
     settings: tour.settings ?? DEFAULT_TOUR_SETTINGS,
+    ...(tour.languages && { languages: tour.languages }),
+    ...(i18n && { i18n }),
     startPanoId,
     scenes: tour.scenes.map((s) => ({
       panoId: s.panoId,
       ...(s.mapX !== undefined ? { mapX: s.mapX } : {}),
       ...(s.mapY !== undefined ? { mapY: s.mapY } : {}),
-      config: publicHotspots(configs.get(s.panoId) as SceneConfig, sceneIds),
+      config: publicHotspots(configs.get(s.panoId) as SceneConfig, sceneIds, langs),
     })),
   };
 };

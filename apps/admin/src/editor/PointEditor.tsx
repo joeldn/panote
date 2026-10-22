@@ -11,7 +11,13 @@ import {
 
 import { searchIcons } from './icons.js';
 import { applyFormat, formatForKey, IS_MAC, type MarkdownFormat } from './markdown-format.js';
-import { POINT_SIZE_MAX, POINT_SIZE_MIN, POINT_SIZE_STEP, type HotspotPatch } from './model.js';
+import {
+  POINT_SIZE_MAX,
+  POINT_SIZE_MIN,
+  POINT_SIZE_STEP,
+  type HotspotPatch,
+  type TranslationPatch,
+} from './model.js';
 import { choiceOf, mediaInput, parseMedia, type MediaChoice } from './media.js';
 
 type MediaPick = 'none' | MediaChoice;
@@ -65,17 +71,29 @@ export interface PointEditorProps {
   onDuplicate: () => void;
   onDelete: () => void;
   onDone: () => void;
+  /**
+   * Editing a translation: title and text are this language's, with the default-language
+   * text as the placeholder. Everything else is shared by every language.
+   */
+  translation?: { lang: string; name: string } | null;
+  onTranslate?: (patch: TranslationPatch) => void;
 }
 
 type FieldProps = Pick<PointEditorProps, 'point' | 'onChange'>;
 
+interface BodyFieldProps {
+  value: string;
+  /** `null` clears the text. */
+  onValue: (body: string | null) => void;
+  placeholder?: string | undefined;
+}
+
 /** The markdown body, with a toolbar (and its shortcuts) for the syntax the viewer renders. */
-function BodyField({ point, onChange }: FieldProps) {
+function BodyField({ value: body, onValue, placeholder }: BodyFieldProps) {
   const id = useId();
   const area = useRef<HTMLTextAreaElement>(null);
   // Where the selection goes once the formatted text has rendered.
   const selectAfter = useRef<[number, number] | null>(null);
-  const body = point.body ?? '';
 
   useLayoutEffect(() => {
     const sel = selectAfter.current;
@@ -94,7 +112,7 @@ function BodyField({ point, onChange }: FieldProps) {
     el.focus();
     if (next.value.length > MAX_HOTSPOT_BODY_LENGTH) return;
     selectAfter.current = [next.start, next.end];
-    onChange({ body: next.value ? next.value : null });
+    onValue(next.value ? next.value : null);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -131,10 +149,11 @@ function BodyField({ point, onChange }: FieldProps) {
         id={`${id}-body`}
         className="ed-input ed-textarea"
         value={body}
+        {...(placeholder && { placeholder })}
         maxLength={MAX_HOTSPOT_BODY_LENGTH}
         rows={4}
         onKeyDown={onKeyDown}
-        onChange={(e) => onChange({ body: e.target.value ? e.target.value : null })}
+        onChange={(e) => onValue(e.target.value ? e.target.value : null)}
       />
     </div>
   );
@@ -226,11 +245,15 @@ export function PointEditor({
   onDuplicate,
   onDelete,
   onDone,
+  translation = null,
+  onTranslate,
 }: PointEditorProps) {
   const id = useId();
   const [iconQuery, setIconQuery] = useState('');
-  // The parent keys this component by point id, so this starts fresh per point.
-  const [title, setTitle] = useState(point.title);
+  const lang = translation?.lang ?? null;
+  const storedTitle = lang ? (point.i18n?.[lang]?.title ?? '') : point.title;
+  // The parent keys this component by point id and language, so this starts fresh per both.
+  const [title, setTitle] = useState(storedTitle);
   const icons = searchIcons(iconQuery);
   // An off-list stored icon renders as the fallback, so the picker shows that as selected.
   const current = pointIcon(point.icon);
@@ -241,22 +264,35 @@ export function PointEditor({
     <div className="ed-point" aria-label={`Edit point ${point.title}`} role="group">
       <div className="ed-field">
         <label className="ed-label" htmlFor={`${id}-title`}>
-          Title
+          Title {translation && <span className="ed-label__hint">{translation.name}</span>}
         </label>
         <input
           id={`${id}-title`}
           className="ed-input"
           value={title}
+          {...(translation && { placeholder: point.title, lang: translation.lang })}
           maxLength={MAX_TITLE_LENGTH}
           onChange={(e) => {
             setTitle(e.target.value);
+            const next = e.target.value.trim();
+            // A blank translation falls back to the default title.
+            if (lang) onTranslate?.({ title: next || null });
             // An empty title can't be saved (contract min 1): the doc keeps the last one.
-            if (e.target.value.trim()) onChange({ title: e.target.value.trim() });
+            else if (next) onChange({ title: next });
           }}
-          onBlur={() => setTitle(point.title)}
+          onBlur={() => setTitle(storedTitle)}
         />
       </div>
-      <BodyField point={point} onChange={onChange} />
+      {lang ? (
+        <BodyField
+          key={lang}
+          value={point.i18n?.[lang]?.body ?? ''}
+          placeholder={point.body}
+          onValue={(body) => onTranslate?.({ body })}
+        />
+      ) : (
+        <BodyField value={point.body ?? ''} onValue={(body) => onChange({ body })} />
+      )}
       <div className="ed-field">
         <label className="ed-label" htmlFor={`${id}-icon`}>
           Icon

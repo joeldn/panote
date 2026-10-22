@@ -1,10 +1,12 @@
-import type {
-  Hotspot,
-  PublishedTour,
-  SceneConfig,
-  TourConfigEntry,
-  TourDoc,
-  TourSettings,
+import {
+  localizeConfigs,
+  localizePublishedTour,
+  type Hotspot,
+  type PublishedTour,
+  type SceneConfig,
+  type TourConfigEntry,
+  type TourDoc,
+  type TourSettings,
 } from '@internal/contracts';
 import type { InfoHotspotData, Tour, TourLink, TourScene } from './tour-types.js';
 
@@ -50,17 +52,23 @@ const configOf = (entry: SceneConfig | TourConfigEntry | null | undefined): Scen
 /**
  * Adapt a stored tour (link hotspots with `targetPanoId`) to the viewer's
  * `Tour` (scenes with `links`). Inputs are schema-parsed, so angles are canonical.
+ * `lang` picks the scenes' and points' text (see pickLanguage); untranslated text
+ * stays in the default language.
  */
-export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTour {
-  const loaded = new Map<string, SceneConfig>();
+export function toViewerTour(
+  doc: TourDoc,
+  configs: SceneConfigSource,
+  lang?: string | null,
+): ViewerTour {
+  const stored = new Map<string, SceneConfig>();
   const missing: string[] = [];
   const mapPositions: ViewerTour['mapPositions'] = {};
   for (const scene of doc.scenes) {
-    if (loaded.has(scene.panoId) || missing.includes(scene.panoId)) continue;
+    if (stored.has(scene.panoId) || missing.includes(scene.panoId)) continue;
     const config = configOf(configs[scene.panoId]);
     // A config saved under another panoId is not this scene's config.
     if (config && config.panoId === scene.panoId) {
-      loaded.set(scene.panoId, config);
+      stored.set(scene.panoId, config);
       if (scene.mapX !== undefined && scene.mapY !== undefined) {
         mapPositions[scene.panoId] = { x: scene.mapX, y: scene.mapY };
       }
@@ -68,6 +76,7 @@ export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTo
       missing.push(scene.panoId);
     }
   }
+  const loaded = lang ? localizeConfigs(stored, lang) : stored;
 
   const scenes: Record<string, TourScene> = {};
   const hotspots: ViewerTour['hotspots'] = {};
@@ -125,8 +134,12 @@ export function toViewerTour(doc: TourDoc, configs: SceneConfigSource): ViewerTo
   };
 }
 
-/** Adapt a published bundle (`pub/tours/<tourId>.json`) the same way as an owner's tour. */
-export function publishedToViewerTour(pub: PublishedTour): ViewerTour {
+/**
+ * Adapt a published bundle (`pub/tours/<tourId>.json`) the same way as an owner's tour,
+ * with its text in `lang`.
+ */
+export function publishedToViewerTour(published: PublishedTour, lang?: string | null): ViewerTour {
+  const pub = localizePublishedTour(published, lang);
   const doc: TourDoc = {
     tourId: pub.tourId,
     title: pub.title,

@@ -1,3 +1,5 @@
+import { localizePublishedTour, pickLanguage } from '@internal/contracts';
+
 import { isLinkPreviewBot } from './bots.js';
 import { preloadLinks, preloadUrls, readTourBoot, scriptJson, type TourBoot } from './boot.js';
 import { EXPLORE_PATH, explorePage } from './explore.js';
@@ -31,18 +33,26 @@ function headTail(
   plain: PlainHead,
   cdnBase: string,
   canonical: string,
+  lang: string | null,
 ): string {
   if (!boot) {
     return (plain.title === null ? '' : `<title>${plain.title}</title>`) + plain.metas.join('');
   }
+  // The SPA gets the bundle as stored and picks the language itself.
   const data = scriptJson({ slug: boot.slug, record: boot.record, tour: boot.tour });
   const tilesBase = CDN_BASE.test(cdnBase) ? `${cdnBase}tiles/` : null;
   const preloads =
     boot.manifest && tilesBase !== null ? preloadLinks(preloadUrls(tilesBase, boot.manifest)) : '';
+  // Title and preview tags in the ?lang= language when the tour has it, else the default
+  // (a scraper sends no useful Accept-Language, and the card should match the link).
+  const shown = {
+    ...boot,
+    tour: localizePublishedTour(boot.tour, pickLanguage(boot.tour.languages, lang)),
+  };
   return (
-    `<title>${escapeText(`${boot.tour.title} · panote`)}</title>` +
+    `<title>${escapeText(`${shown.tour.title} · panote`)}</title>` +
     (boot.tour.visibility === 'unlisted' ? '<meta name="robots" content="noindex">' : '') +
-    linkPreviewTags(boot, canonical, tilesBase) +
+    linkPreviewTags(shown, canonical, tilesBase) +
     preloads +
     `<script type="application/json" id="pn-boot">${data}</script>`
   );
@@ -106,6 +116,7 @@ function primeHtml(
   response: Response,
   boot: Promise<TourBoot | null>,
   canonical: string,
+  lang: string | null,
 ): Response {
   const plain: PlainHead = { title: null, metas: [] };
   let cdnBase = '';
@@ -139,10 +150,10 @@ function primeHtml(
           const head = { title: plain.title, metas: [...plain.metas] };
           const base = cdnBase;
           const tail = boot
-            .then((b) => headTail(b, head, base, canonical))
+            .then((b) => headTail(b, head, base, canonical, lang))
             .catch((err: unknown) => {
               console.error('tour page priming failed', err);
-              return headTail(null, head, base, canonical);
+              return headTail(null, head, base, canonical, lang);
             });
           end.before(htmlStream(tail), { html: true });
         });
@@ -227,8 +238,9 @@ async function tourPage(
   // the head's tail falls back to the plain title inside primeHtml.
   try {
     // og:url: the tour's own page, never the embed or a query variant.
-    const canonical = `${new URL(request.url).origin}/s/${live.path.slug}`;
-    return primeHtml(html, boot, canonical);
+    const url = new URL(request.url);
+    const canonical = `${url.origin}/s/${live.path.slug}`;
+    return primeHtml(html, boot, canonical, url.searchParams.get('lang'));
   } catch (err) {
     console.error('tour page priming failed', err);
     return html;

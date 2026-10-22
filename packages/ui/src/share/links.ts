@@ -23,10 +23,22 @@ export const shareUrl = (siteOrigin: string, slug: string): string =>
 /** The link as the modal shows it: no scheme, `panote.io/s/<slug>`. */
 export const displayUrl = (url: string): string => url.replace(/^https?:\/\//, '');
 
-/** `https://panote.io/s/<slug>/embed[?pano=<panoId>]` (design README 8, "Embed"). */
-export function embedSrc(siteOrigin: string, slug: string, panoId?: string | null): string {
+/**
+ * `https://panote.io/s/<slug>/embed[?pano=<panoId>][&lang=<tag>]` (design README 8,
+ * "Embed"). Without `lang` the embed follows the visitor's browser languages.
+ */
+export function embedSrc(
+  siteOrigin: string,
+  slug: string,
+  panoId?: string | null,
+  lang?: string | null,
+): string {
   const base = `${shareUrl(siteOrigin, slug)}/embed`;
-  return panoId ? `${base}?pano=${encodeURIComponent(panoId)}` : base;
+  const query = [
+    ...(panoId ? [`pano=${encodeURIComponent(panoId)}`] : []),
+    ...(lang ? [`lang=${encodeURIComponent(lang)}`] : []),
+  ];
+  return query.length ? `${base}?${query.join('&')}` : base;
 }
 
 /** The iframe snippet, byte for byte the design's format. */
