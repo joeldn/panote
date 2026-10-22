@@ -285,6 +285,24 @@ export const AccountDisabledRecordSchema = z.object({
 });
 export type AccountDisabledRecord = z.infer<typeof AccountDisabledRecordSchema>;
 
+// The pointer at tourOwnerKey: the owner of one tour, for the operator's takedown script.
+export const TourOwnerRecordSchema = z.object({ v: z.literal(1), sub: z.string().min(1) });
+export type TourOwnerRecord = z.infer<typeof TourOwnerRecordSchema>;
+
+// quarantine/<caseId>/case.json: what an operator quarantine (takedown.ts) copied, and whose.
+export const QuarantineCaseRecordSchema = z.object({
+  v: z.literal(1),
+  caseId: z.string(),
+  sub: z.string().min(1),
+  tourIds: z.array(z.string()),
+  // The original keys copied; each copy is at quarantine/<caseId>/<key>.
+  keys: z.array(z.string()),
+  firstAt: z.string(),
+  lastAt: z.string(),
+  reason: z.string().optional(),
+});
+export type QuarantineCaseRecord = z.infer<typeof QuarantineCaseRecordSchema>;
+
 // admin-api's operator-only takedown route, guarded by the OPERATOR_TOKEN secret
 // sent in OPERATOR_TOKEN_HEADER. `delete` is the owner's own tour delete (it
 // unpublishes first); `unpublish` only takes the share link, bundle and slug down.

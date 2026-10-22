@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   accountDeletionKey,
   accountDisabledKey,
+  QUARANTINE_ROOT,
+  tourOwnerKey,
   uploadLogKey,
   uploadLogTime,
   userUploadLogPrefix,
@@ -46,6 +48,12 @@ describe('keys', () => {
 
   it('builds an account deletion marker key under accounts/, owner encoded', () => {
     expect(accountDeletionKey('auth0|abc')).toBe(`accounts/${encodeId('auth0|abc')}/deletion.json`);
+  });
+
+  it('tourOwnerKey is owner-free and private (outside tiles/, pub/, slugs/)', () => {
+    expect(tourOwnerKey('tour-1')).toBe('tour-owners/tour-1.json');
+    expect(() => tourOwnerKey('a/b')).toThrow(/tourId must match/);
+    expect(QUARANTINE_ROOT).toBe('quarantine/');
   });
 
   it('accountDisabledKey sits next to the deletion marker, owner encoded', () => {

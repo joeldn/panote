@@ -1,7 +1,14 @@
-import { sharingStoppedKey, tilesPrefix, tourKey, type TourDoc } from '@internal/contracts';
+import {
+  sharingStoppedKey,
+  tilesPrefix,
+  tourKey,
+  tourOwnerKey,
+  type TourDoc,
+} from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
+import { forgetTourOwner } from './operator.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
 
@@ -43,12 +50,17 @@ export const deleteTour = async (
   const result = (): CdnPurge => mergePurges({ prefixes, files });
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
   const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
-  if (!own) return result();
+  if (!own) {
+    await forgetTourOwner(bucket, sub, tourId);
+    return result();
+  }
   const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
 
   const referenced = await referencedPanoIds(bucket, sub, tourId);
   const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced, prefixes);
   await bucket.delete(tourKey(sub, tourId));
+  // The operator's owner pointer (it holds the sub) goes with the tour.
+  await bucket.delete(tourOwnerKey(tourId));
   // Again: a publish serialized before this point may have re-published it.
   files.push(...(await unpublishTour()));
 
