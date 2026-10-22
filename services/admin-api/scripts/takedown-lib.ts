@@ -503,8 +503,7 @@ export async function copyToQuarantine(
       key,
       dest,
       source,
-      (what) =>
-        `the existing quarantine copy of ${key} ${what}; keep it and pick a new case id`,
+      (what) => `the existing quarantine copy of ${key} ${what}; keep it and pick a new case id`,
     );
     return true;
   }
