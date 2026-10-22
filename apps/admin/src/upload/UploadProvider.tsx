@@ -1,7 +1,9 @@
 import './upload.css';
 
 import type { StagePreview } from '@internal/ui';
+import { MAX_TOUR_SCENES } from '@internal/contracts';
 import {
+  ApiError,
   createUploadDeps,
   decodePreview,
   isAuthError,
@@ -40,8 +42,16 @@ import {
   type ActiveUpload,
   type ChipActionId,
   type FinalizeState,
+  type UploadLimit,
 } from './chip-model.js';
-import { addPanoToTour, assertTourHasRoom, FinalizeError, titleFromFileName } from './finalize.js';
+import {
+  addPanoToTour,
+  assertTourHasRoom,
+  FinalizeError,
+  SignedOutBatchError,
+  titleFromFileName,
+  tourRoomMessage,
+} from './finalize.js';
 import { repickNotice } from './repick-notice.js';
 import {
   clearBackgroundRecord,
@@ -106,9 +116,22 @@ interface Job {
   /** The picked file's local preview; null after a sign-in redirect (no file) or once done. */
   preview: PreviewKeeper | null;
   ctl: UploadController | null;
+  /** Its presign was refused by an account limit or the rate limit: the queue stops. */
+  limited: UploadLimit;
+  /** Files queued behind it that were dropped when it stopped the queue. */
+  skipped: number;
 }
 
-const toActive = (j: Job): ActiveUpload => ({
+/** A picked file waiting for its turn: uploads run one at a time, in the order picked. */
+interface Queued {
+  key: number;
+  file: File;
+  target: PanoTarget;
+  /** Its batch created the tour (new-tour). */
+  createdTour: boolean;
+}
+
+const toActive = (j: Job, queued = 0): ActiveUpload => ({
   key: j.key,
   fileName: j.fileName,
   hasFile: j.file !== null,
@@ -117,7 +140,29 @@ const toActive = (j: Job): ActiveUpload => ({
   machine: j.machine,
   landed: j.landed,
   finalize: j.finalize,
+  queued,
+  skipped: j.skipped,
+  limited: j.limited,
 });
+
+/** Its PUT is still to finish: the next queued file waits for it. */
+const isUploading = (j: Job): boolean =>
+  j.machine.phase === 'preparing' || j.machine.phase === 'upload';
+
+/**
+ * A presign refusal every later file would get too: an account quota (panos, storage,
+ * uploads per day), a disabled or deleted account, or the per-minute rate limit.
+ */
+function limitOf(e: unknown): UploadLimit {
+  if (!(e instanceof ApiError)) return null;
+  if (e.status === 429) return 'rate';
+  // upload-api answers 403 only for a quota ('pano limit reached', 'storage limit reached',
+  // 'daily upload limit reached') or 'account disabled', and 410 only for 'account deleted'.
+  if (e.status === 410) return 'account';
+  if (e.status !== 403) return null;
+  const code = (e.body as { error?: unknown } | null)?.error;
+  return code === 'account disabled' ? 'account' : 'quota';
+}
 
 const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null): boolean => {
   if (!a) return false;
@@ -238,6 +283,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
 
   const fg = useRef<Job | null>(null);
   const jobs = useRef(new Set<Job>());
+  // Files picked together wait here for their turn; the head starts once the PUT before it ends.
+  const queue = useRef<Queued[]>([]);
+  const queueKey = useRef(0);
+  // Late-bound: starts the next queued file (defined after run, used by release).
+  const nextRef = useRef<() => void>(() => {});
   const keyRef = useRef(0);
   const pending = uploadEnv.pending ?? idbPendingUploads;
   const live = useRef({
@@ -276,7 +326,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   /** Mirror a job into the chip if it is the foreground one. */
   const sync = useCallback(
     (j: Job) => {
-      if (fg.current === j) setActive(toActive(j));
+      if (fg.current === j) setActive(toActive(j, queue.current.length));
       touch();
     },
     [touch],
@@ -307,10 +357,14 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     [sync],
   );
 
-  /** The chip is free: show a hidden job that failed meanwhile, if any. */
+  /** The chip is free: the next queued file takes it, else a hidden job that failed meanwhile. */
   const release = useCallback(() => {
     fg.current = null;
     setActive(null);
+    if (queue.current.length > 0) {
+      nextRef.current();
+      return;
+    }
     const next = [...jobs.current].find((j) => j.waiting);
     if (next) {
       next.waiting = false;
@@ -459,6 +513,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       // Landed: the scene joins its tour now, while it tiles (an added pano only).
       if (s.phase === 'processing' && j.finalize.status === 'idle') void append(j);
       if (s.phase === 'ready') void complete(j, s.panoId, s.manifest);
+      if (fg.current !== j || queue.current.length === 0) return;
+      if (s.phase === 'failed' && (s.stage === 'auth' || j.limited)) {
+        // Every later file would hit the same wall: stop, and say how many never started.
+        j.skipped = queue.current.length;
+        queue.current = [];
+        sync(j);
+      } else if (s.phase !== 'preparing' && s.phase !== 'upload' && s.phase !== 'cancelled') {
+        // Its PUT is over (landed, or failed): the next file goes. Deferred, so this
+        // change finishes applying first. A cancel is the canceller's to follow up.
+        queueMicrotask(() => nextRef.current());
+      }
     },
     [sync, surface, persist, forgetFor, drop, touch, append, complete],
   );
@@ -515,11 +580,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         completing: false,
         preview,
         ctl: null,
+        limited: null,
+        skipped: 0,
       };
       jobs.current.add(j);
       if (!bg) {
         fg.current = j;
-        setActive(toActive(j));
+        setActive(toActive(j, queue.current.length));
       }
       if (file && !preview) {
         const { uploadEnv: env } = live.current;
@@ -538,10 +605,19 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         });
       }
       const onChange = (s: UploadState) => onMachine(j, s);
+      // Notes a limit on this job, so its failure can stop the queue behind it.
+      const jd: UploadDeps = {
+        ...d,
+        presign: (req) =>
+          d.presign(req).catch((e: unknown) => {
+            j.limited = limitOf(e);
+            throw e;
+          }),
+      };
       j.ctl =
         'resume' in source
-          ? startUpload(d, { ...source, onChange })
-          : startUpload(d, { ...source, file: file as File, onChange });
+          ? startUpload(jd, { ...source, onChange })
+          : startUpload(jd, { ...source, file: file as File, onChange });
       touch();
     },
     [onMachine, drop, touch],
@@ -553,9 +629,55 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     return landedPanoId ? { replacePanoId: landedPanoId } : {};
   };
 
+  /**
+   * The foreground job gives the chip up to the next upload: landed work finishes hidden
+   * (with its own sign-in record slot), a failure waits to be shown once the chip is free.
+   */
+  const handOff = useCallback(
+    (j: Job) => {
+      fg.current = null;
+      if (j.done || j.machine.phase === 'cancelled') {
+        drop(j);
+      } else if (
+        j.machine.phase === 'failed' ||
+        j.machine.phase === 'timed-out' ||
+        j.finalize.status === 'failed'
+      ) {
+        j.waiting = true;
+      } else if (j.landed && savedBy.current !== j.key) {
+        j.bg = true;
+      }
+      touch();
+    },
+    [drop, touch],
+  );
+
+  /** The next queued file takes the chip, once the foreground PUT is over. */
+  const next = useCallback(() => {
+    const cur = fg.current;
+    if (cur && isUploading(cur)) return;
+    const item = queue.current.shift();
+    if (!item) return;
+    if (cur) handOff(cur);
+    run(item.file, item.file.name, item.target, sourceFor(item.target, null), {
+      createdTour: item.createdTour,
+    });
+  }, [handOff, run]);
+  useEffect(() => {
+    nextRef.current = next;
+  });
+
   const begin = useCallback<Uploads['begin']>(
-    async (file, target) => {
-      if (isInFlight(fg.current)) throw new Error('An upload is already in progress.');
+    async (picked, target) => {
+      const files = picked instanceof File ? [picked] : [...picked];
+      const file = files[0];
+      if (!file) throw new Error('Choose a photo to upload.');
+      if (target.kind === 'replace' && files.length > 1) {
+        throw new FinalizeError('Choose one photo to replace this image.', false);
+      }
+      if (target.kind === 'new-tour' && files.length > MAX_TOUR_SCENES) {
+        throw new FinalizeError(tourRoomMessage(MAX_TOUR_SCENES), false);
+      }
       // Its tiler would race this one's, and the baseline (so the preview and the
       // readiness check) would be the first upload's tiles. Timed-out jobs don't count:
       // re-uploading over a stuck pano is the way out, and run() stops watching it.
@@ -574,23 +696,62 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           const { tourId } = await s.api.createTour({ title, scenes: [] });
           panoTarget = { kind: 'add', tourId };
         } else {
-          if (target.kind === 'add') await assertTourHasRoom(s.api, target.tourId);
+          if (target.kind === 'add') {
+            const { tourId } = target;
+            // Photos already on their way into this tour need room too: the server's
+            // scenes don't list them until each one lands and is appended.
+            const reserved =
+              queue.current.filter((q) => q.target.tourId === tourId).length +
+              [...jobs.current].filter(
+                (j) =>
+                  j.target.kind === 'add' &&
+                  j.target.tourId === tourId &&
+                  !j.done &&
+                  j.finalize.status !== 'done' &&
+                  j.machine.phase !== 'cancelled',
+              ).length;
+            await assertTourHasRoom(s.api, tourId, files.length, reserved);
+          }
           panoTarget = target;
         }
       } catch (e) {
-        if (isAuthError(e)) persist(-1, file.name, target, null, file);
+        if (isAuthError(e)) {
+          persist(-1, file.name, target, null, file);
+          // The stash holds one file: say which photos the user has to add again.
+          if (files.length > 1) {
+            throw new SignedOutBatchError(
+              file.name,
+              files.slice(1).map((f) => f.name),
+            );
+          }
+        }
         throw e;
       }
       forget();
       setRepick(null);
       setPicker(null);
-      const over = retryOver(fg.current, panoTarget);
-      run(file, file.name, panoTarget, sourceFor(panoTarget, over), {
-        createdTour: target.kind === 'new-tour',
-      });
+      const createdTour = target.kind === 'new-tour';
+      const items = files.map((f) => ({
+        key: ++queueKey.current,
+        file: f,
+        target: panoTarget,
+        createdTour,
+      }));
+      const cur = fg.current;
+      if (cur && isUploading(cur)) {
+        // One PUT at a time: these wait their turn behind the one under way.
+        queue.current.push(...items);
+        sync(cur);
+      } else {
+        const over = retryOver(cur, panoTarget);
+        // Landed work goes on hidden; anything else on the chip makes way, as before.
+        if (cur && isLandedWork(cur)) handOff(cur);
+        queue.current.push(...items.slice(1));
+        run(file, file.name, panoTarget, sourceFor(panoTarget, over), { createdTour });
+      }
       return { tourId: panoTarget.kind === 'add' ? panoTarget.tourId : null };
     },
-    [run, persist, forget],
+    [run, persist, forget, sync, handOff],
   );
 
   // Best effort: a tour this upload created and nothing landed in is removed again.
@@ -622,8 +783,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     if (isLandedWork(j)) return;
     j.ctl?.cancel();
     drop(j);
-    if (!j.landed && j.createdTour && j.target.kind === 'add') {
-      void discardEmptyTour(j.target.tourId);
+    const { tourId } = j.target;
+    // Not while another file of its batch is still on its way into that tour.
+    const others =
+      queue.current.some((q) => q.target.tourId === tourId) ||
+      [...jobs.current].some((o) => o.target.tourId === tourId);
+    if (!j.landed && j.createdTour && j.target.kind === 'add' && !others) {
+      void discardEmptyTour(tourId);
     }
   }, [release, forget, forgetFor, discardEmptyTour, drop]);
 
@@ -646,6 +812,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         return;
       case 'sign-in':
         session.requestSignIn();
+        return;
+      case 'cancel-queue':
+        queue.current = [];
+        sync(j);
         return;
       case 'repick':
         setRepick({ target: j.target, fileName: j.fileName, reason: 'retry' });
@@ -705,6 +875,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       }
       all.clear();
       fg.current = null;
+      queue.current = [];
     };
   }, []);
 
@@ -765,8 +936,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         ...(replaces !== undefined && { replacesVersion: replaces }),
       };
     };
-    const pendingFor = (tourId: string): PendingUpload[] =>
-      current()
+    const pendingFor = (tourId: string): PendingUpload[] => [
+      ...current()
         .reverse()
         .filter((j) => j.target.tourId === tourId && j.machine.phase !== 'cancelled')
         .map((j) => ({
@@ -777,7 +948,21 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           machine: j.machine,
           finalize: j.finalize,
           hasPreview: j.preview?.available ?? false,
-        }));
+        })),
+      // Then the files still waiting their turn, in the order they were picked.
+      ...queue.current
+        .filter((q) => q.target.tourId === tourId)
+        .map((q) => ({
+          key: `queued-${q.key}`,
+          target: q.target,
+          fileName: q.file.name,
+          panoId: null,
+          machine: { phase: 'preparing' as const, mode: null },
+          finalize: { status: 'idle' as const },
+          hasPreview: false,
+          queued: true,
+        })),
+    ];
     const checkAgain = (panoId: string): boolean => {
       const j = current().find((x) => x.panoId === panoId && x.machine.phase === 'timed-out');
       if (!j?.ctl) return false;

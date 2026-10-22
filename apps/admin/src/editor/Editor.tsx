@@ -876,6 +876,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           }
           onDisconnect={(to) => currentId && dispatch({ type: 'link/remove', from: currentId, to })}
           onAddFromLibrary={() => setLibraryOpen(true)}
+          onAddPano={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
         />
       </aside>
 
