@@ -8,6 +8,12 @@ import { StageFactoryContext } from './stage-factory.js';
 
 afterEach(cleanup);
 
+// Each test here drives one or two whole editor tabs through load, edits and save round
+// trips: about 0.3 s alone, but CI's Coverage job runs every package's suite at once under
+// V8 coverage, and the first save tests of this file ran past 5 s there, on main as well
+// (CI runs on 0c7574e and 68efe24). The work is the same; the runner is just that much slower.
+vi.setConfig({ testTimeout: 15_000 });
+
 let server: FakeServer;
 let viewers: FakeViewer[];
 let create: ReturnType<typeof viewerFactory>['create'];
