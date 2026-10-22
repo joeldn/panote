@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
@@ -920,16 +920,29 @@ rewriting identical keys rather than creating a new one.
 Every successful re-tile leaves the previous version's tiles behind under `tiles/<panoId>/`. Once a
 job's manifest swap is confirmed (its post-PUT HEAD still sees the ETag it tiled), it records every
 other version dir it finds there at `tile-gc/<panoId>/<version>.json` (`{ v, originalKey,
-tilerVersion, supersededAt }`, create-only so the first timestamp sticks). `admin-api`'s daily cron
-(`17 3 * * *`, the same one as the slug-alias and account sweeps) deletes a recorded dir once the
-record is over 24 hours old, so a version goes 24-48 hours after it was superseded. Before deleting
-it re-reads the manifest: the version it names is never deleted (the record just goes), and a dir
-the pano's current original would tile into again (same ETag, same tiler version as the job that
-superseded it) is kept and checked again the next day, since a job may be writing there. A pano
-whose original is gone has been deleted; its record and dir just go. At most 50 records per run;
-the rest wait a day. Nothing is purged: no manifest points at those URLs any more, and edge copies
-age out. Dirs left over from before this existed are recorded the next time that pano re-tiles,
-so a `retile.ts --all` after deploying this clears them too, a day later.
+tilerVersion, supersededAt }`). Records are overwritten on every swap, so their time and tiler
+version always follow the latest one. `admin-api`'s daily cron (`17 3 * * *`, the same one as the
+slug-alias and account sweeps) deletes a recorded dir once the record is over 24 hours old, so a
+version goes 24-48 hours after it was superseded. Before deleting it checks, and keeps the dir if
+any check fails:
+
+- the manifest must be readable and name a different version (the version it names is never
+  deleted; that record just goes);
+- the pano's current original must not tile into that dir again (same ETag, same tiler version as
+  the job that superseded it), since a job may be writing there;
+- nothing in the dir may have been written after the record (a re-upload of old bytes, or a tiler
+  rollback, rewrote it); the record's time then moves to now.
+
+A pano whose original is gone has been deleted; its record and dir just go. A run acts on at most
+50 records (deleted or dropped) and looks at no more than 500; kept ones are checked again the next
+day. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+left over from before this existed are recorded the next time that pano re-tiles, so a
+`retile.ts --all` after deploying this clears them too, a day later.
+
+Records hold the owner-bearing original key, so deleting a pano (including through account
+deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job that confirmed its
+swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
+(the original is gone by then).
 
 The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
 fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
@@ -1106,7 +1119,10 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
    (`crypto.randomUUID()`, `PANO_PATTERN`); an id that fails it can't have been published, so only
    its counters and prefix are deleted.
 3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
-   `tiles/<panoId>/`, then the owner prefix). No reference or recent-upload checks: everything goes.
+   `tiles/<panoId>/` and of its superseded-version records under `tile-gc/<panoId>/`, which name the
+   owner's original key, then the owner prefix). No reference or recent-upload checks: everything
+   goes. A record a tiler job writes in the moment after that is dropped by the tile sweep 24-48
+   hours later (see "Old version dirs").
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
 If any step throws, the route still answers `202 {"status":"pending"}`: the account is already

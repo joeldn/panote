@@ -1,5 +1,5 @@
 import { PANO_PATTERN, tileGcKey, tilesPrefix, type TileGcRecord } from '@internal/contracts';
-import { R2PreconditionFailedError, type R2S3Client } from '@internal/worker-kit/r2-s3';
+import type { R2S3Client } from '@internal/worker-kit/r2-s3';
 
 export type SupersededStore = Pick<R2S3Client, 'listPrefixes' | 'put'>;
 
@@ -11,8 +11,10 @@ export type SupersededStore = Pick<R2S3Client, 'listPrefixes' | 'put'>;
  * tiles, and a dir listed here can belong to a newer job still uploading. The
  * sweep re-checks both before it deletes.
  *
- * Create-only, so a dir already waiting keeps its first supersededAt. Returns
- * the versions it recorded.
+ * A plain overwrite, so supersededAt and tilerVersion always follow the latest
+ * swap: a dir that was live again in between (a re-upload of old bytes, a tiler
+ * rollback) gets a fresh grace period instead of an old record's. Returns the
+ * versions it recorded.
  */
 export const recordSupersededVersions = async (
   store: SupersededStore,
@@ -38,17 +40,10 @@ export const recordSupersededVersions = async (
   };
   const recorded: string[] = [];
   for (const v of versions) {
-    try {
-      await store.put(tileGcKey(panoId, v), JSON.stringify(record), {
-        contentType: 'application/json',
-        ifNoneMatch: '*',
-      });
-      recorded.push(v);
-    } catch (e) {
-      // Already waiting for the sweep: keep its earlier timestamp.
-      if (e instanceof R2PreconditionFailedError) continue;
-      throw e;
-    }
+    await store.put(tileGcKey(panoId, v), JSON.stringify(record), {
+      contentType: 'application/json',
+    });
+    recorded.push(v);
   }
   return recorded;
 };

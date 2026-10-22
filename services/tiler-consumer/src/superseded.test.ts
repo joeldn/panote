@@ -1,21 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { tileGcKey, TileGcRecordSchema } from '@internal/contracts';
-import { R2PreconditionFailedError } from '@internal/worker-kit/r2-s3';
 import { recordSupersededVersions, type SupersededStore } from './superseded.js';
 
 const PANO = 'pano-1';
 const ORIGINAL = `panos/owner/${PANO}/original`;
 const NOW = new Date('2026-10-01T00:00:00.000Z');
 
-/** listPrefixes over a fixed set of dirs; create-only puts into a Map. */
+/** listPrefixes over a fixed set of dirs; puts into a Map. */
 const memoryStore = (dirs: string[], existing: string[] = []) => {
   const objects = new Map<string, string>(existing.map((k) => [k, 'earlier']));
   const store: SupersededStore = {
     async listPrefixes(prefix) {
       return dirs.map((d) => `${prefix}${d}/`);
     },
-    async put(key, body, opts) {
-      if (opts.ifNoneMatch === '*' && objects.has(key)) throw new R2PreconditionFailedError(key);
+    async put(key, body) {
       objects.set(key, String(body));
     },
   };
@@ -53,10 +51,12 @@ describe('recordSupersededVersions', () => {
     expect(objects.size).toBe(0);
   });
 
-  it('keeps an existing record, and its earlier timestamp, as it is', async () => {
+  it('overwrites an existing record, so its time follows the latest swap', async () => {
     const { store, objects } = memoryStore(['t1-old', 't1-new'], [tileGcKey(PANO, 't1-old')]);
-    expect(await run(store)).toEqual([]);
-    expect(objects.get(tileGcKey(PANO, 't1-old'))).toBe('earlier');
+    expect(await run(store)).toEqual(['t1-old']);
+    expect(JSON.parse(objects.get(tileGcKey(PANO, 't1-old'))!)).toMatchObject({
+      supersededAt: NOW.toISOString(),
+    });
   });
 
   it('drops a listed dir whose name is not a valid version', async () => {

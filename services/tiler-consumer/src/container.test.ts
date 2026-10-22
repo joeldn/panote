@@ -70,7 +70,6 @@ vi.mock('@internal/worker-kit/r2-s3', () => ({
     deleteObject: r2DeleteMock,
     listPrefixes: r2ListPrefixesMock,
   }),
-  R2PreconditionFailedError: class extends Error {},
 }));
 
 vi.mock('./r2io.js', () => ({ uploadDir: uploadDirMock }));
@@ -634,7 +633,8 @@ describe('superseded version dirs after a confirmed swap', () => {
       originalKey: `panos/abc/${panoId}/original`,
       tilerVersion: MOCK_TILER_OUTPUT_VERSION,
     });
-    expect(opts).toMatchObject({ ifNoneMatch: '*' });
+    // An overwrite, so the record's time follows this swap.
+    expect(opts).not.toHaveProperty('ifNoneMatch');
     // Only the marker clear: no tile is deleted on the swap itself.
     expect(r2DeleteMock).toHaveBeenCalledTimes(1);
     expect(r2DeleteMock).toHaveBeenCalledWith(

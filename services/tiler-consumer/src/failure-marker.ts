@@ -153,6 +153,9 @@ export const deleteOversizedOriginal = async (
       console.warn(`skip deleting oversized original pano=${pano}: it changed or is gone`);
       return 'skipped';
     }
+    // Not atomic with the HEAD above: the R2 binding has no conditional delete,
+    // so a replace landing in between would be deleted too. Accepted and
+    // documented (PR #120; docs/deploy.md, "Oversized originals are deleted").
     await bucket.delete(originalNotificationKey);
     console.warn(`deleted oversized original pano=${pano}`);
     return 'deleted';

@@ -145,6 +145,102 @@ describe('sweepTileGcRecord', () => {
   });
 });
 
+describe('sweepTileGcRecord: dirs rewritten or unreadable since the record', () => {
+  const longAgo = new Date(Date.now() - 3 * TILE_GC_GRACE_MS).toISOString();
+
+  it('keeps a dir rewritten after the record (undo-replace: E1 -> E2 -> E1 -> E2 within a day)', async () => {
+    const panoId = 'gc-undo-replace';
+    // E2 is the current original and manifest; t1-E1 was live again in between,
+    // so its tiles are newer than the stale record that survived from the first swap.
+    const { currentVersion } = await seedPano(panoId, []);
+    await env.BUCKET.put(`${tileVersionPrefix(panoId, 't1-E1')}0/px/0-0.webp`, 'rewritten');
+    await record(panoId, 't1-E1', { supersededAt: longAgo });
+    const now = later();
+
+    expect(await sweepTileGcRecord(env.BUCKET, tileGcKey(panoId, 't1-E1'), now)).toBe('kept');
+    expect(await listKeys(tileVersionPrefix(panoId, 't1-E1'))).toHaveLength(1);
+    expect(await listKeys(tileVersionPrefix(panoId, currentVersion))).toHaveLength(2);
+    // Its time moves on, so a later run gives it a full grace period from now.
+    const refreshed = await (await env.BUCKET.get(
+      tileGcKey(panoId, 't1-E1'),
+    ))!.json<TileGcRecord>();
+    expect(refreshed.supersededAt).toBe(now.toISOString());
+  });
+
+  it('keeps a dir a rolled-back tiler is writing into, though the record names the newer tiler', async () => {
+    const panoId = 'gc-rollback';
+    const put = await env.BUCKET.put(originalKey(SUB, panoId), 'same bytes');
+    const etag = put!.etag;
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ version: `t2-${etag}` }));
+    // Tiler 1 is deployed again and re-tiling into t1-<etag>.
+    await env.BUCKET.put(`${tileVersionPrefix(panoId, `t1-${etag}`)}0/px/0-0.webp`, 'in flight');
+    await record(panoId, `t1-${etag}`, { tilerVersion: 2, supersededAt: longAgo });
+
+    expect(await sweepTileGcRecord(env.BUCKET, tileGcKey(panoId, `t1-${etag}`))).toBe('kept');
+    expect(await listKeys(tileVersionPrefix(panoId, `t1-${etag}`))).toHaveLength(1);
+  });
+
+  it('keeps everything when the manifest exists but cannot be parsed', async () => {
+    const panoId = 'gc-bad-manifest';
+    await seedPano(panoId, ['t1-old']);
+    await env.BUCKET.put(manifestKey(panoId), 'not json');
+    await record(panoId, 't1-old');
+
+    expect(await sweepTileGcRecord(env.BUCKET, tileGcKey(panoId, 't1-old'))).toBe('kept');
+    expect(await listKeys(tileVersionPrefix(panoId, 't1-old'))).toHaveLength(2);
+    expect(await env.BUCKET.head(tileGcKey(panoId, 't1-old'))).not.toBeNull();
+  });
+
+  /** env.BUCKET, with `override` patched over some of its calls. */
+  const patched = (override: Partial<Record<'get' | 'head', (key: string) => unknown>>) =>
+    ({
+      get: override.get ?? ((k: string) => env.BUCKET.get(k)),
+      head: override.head ?? ((k: string) => env.BUCKET.head(k)),
+      list: (o: R2ListOptions) => env.BUCKET.list(o),
+      put: (k: string, v: string, o?: R2PutOptions) => env.BUCKET.put(k, v, o),
+      delete: (k: string | string[]) => env.BUCKET.delete(k),
+    }) as unknown as R2Bucket;
+
+  it('lets a failed read of the record body throw, leaving the record', async () => {
+    const panoId = 'gc-read-error';
+    await seedPano(panoId, ['t1-old']);
+    await record(panoId, 't1-old');
+    const bucket = patched({
+      get: async (k) =>
+        k === tileGcKey(panoId, 't1-old')
+          ? {
+              text: async () => {
+                throw new Error('stream reset');
+              },
+            }
+          : env.BUCKET.get(k),
+    });
+
+    await expect(sweepTileGcRecord(bucket, tileGcKey(panoId, 't1-old'))).rejects.toThrow(
+      'stream reset',
+    );
+    expect(await env.BUCKET.head(tileGcKey(panoId, 't1-old'))).not.toBeNull();
+  });
+
+  it('matches a quoted original ETag against the dir name', async () => {
+    const panoId = 'gc-quoted-etag';
+    const put = await env.BUCKET.put(originalKey(SUB, panoId), 'new original');
+    const inFlight = `t${TILER}-${put!.etag}`;
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ version: 't1-previous' }));
+    await env.BUCKET.put(`${tileVersionPrefix(panoId, inFlight)}0/px/0-0.webp`, 'tile');
+    await record(panoId, inFlight, { supersededAt: later().toISOString() });
+    const bucket = patched({
+      head: async (k) => {
+        const o = await env.BUCKET.head(k);
+        return o && { etag: `"${o.etag}"` };
+      },
+    });
+
+    expect(await sweepTileGcRecord(bucket, tileGcKey(panoId, inFlight))).toBe('kept');
+    expect(await listKeys(tileVersionPrefix(panoId, inFlight))).toHaveLength(1);
+  });
+});
+
 describe('sweepSupersededTiles', () => {
   it('leaves records younger than the grace period alone', async () => {
     const panoId = 'gc-young';
@@ -162,11 +258,39 @@ describe('sweepSupersededTiles', () => {
       await seedPano(panoId, ['t1-old']);
       await record(panoId, 't1-old');
     }
-    const first = await sweepSupersededTiles(env.BUCKET, later(), 2);
-    expect(first.deleted).toBe(2);
-    const second = await sweepSupersededTiles(env.BUCKET, later(), 2);
-    expect(second.deleted).toBe(1);
+    // Other tests' leftover records share the bucket, so count only these three.
+    await sweepSupersededTiles(env.BUCKET, later(), 2);
+    expect((await listKeys('tile-gc/gc-budget-')).length).toBeGreaterThan(0);
+    for (let run = 0; run < 5; run++) await sweepSupersededTiles(env.BUCKET, later(), 2);
     expect(await listKeys('tile-gc/gc-budget-')).toEqual([]);
+  });
+
+  it("doesn't let kept records use up the budget for the ones after them", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 'gc-starve-a...' sorts first and is kept (the original's own in-flight dir).
+    const put = await env.BUCKET.put(originalKey(SUB, 'gc-starve-a'), 'original');
+    const inFlight = `t${TILER}-${put!.etag}`;
+    await env.BUCKET.put(manifestKey('gc-starve-a'), JSON.stringify({ version: 't1-x' }));
+    await record('gc-starve-a', inFlight);
+    await seedPano('gc-starve-b', ['t1-old']);
+    await record('gc-starve-b', 't1-old');
+
+    for (let run = 0; run < 5; run++) await sweepSupersededTiles(env.BUCKET, later(), 1);
+    expect(await listKeys('tile-gc/gc-starve-b/')).toEqual([]);
+    expect(await listKeys('tile-gc/gc-starve-a/')).toHaveLength(1);
+  });
+
+  it('stops after examining examineCap records, acted on or not', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const put = await env.BUCKET.put(originalKey(SUB, 'gc-cap-a'), 'original');
+    await env.BUCKET.put(manifestKey('gc-cap-a'), JSON.stringify({ version: 't1-x' }));
+    await record('gc-cap-a', `t${TILER}-${put!.etag}`);
+    await seedPano('gc-cap-b', ['t1-old']);
+    await record('gc-cap-b', 't1-old');
+
+    const counts = await sweepSupersededTiles(env.BUCKET, later(), 50, 0);
+    expect(counts).toEqual({ deleted: 0, current: 0, kept: 0, invalid: 0 });
+    expect(await listKeys('tile-gc/gc-cap-b/')).toHaveLength(1);
   });
 
   it('runs from the daily cron', async () => {

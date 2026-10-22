@@ -121,8 +121,9 @@ export const ogKey = (p: string, v: string): string => `${tileVersionPrefix(p, v
 // WAF only lets tiles/, pub/ and slugs/ through, so the record may name the
 // owner-bearing original key.
 export const TILE_GC_ROOT = 'tile-gc/';
+export const tileGcPrefix = (p: string): string => `${TILE_GC_ROOT}${assertValidId(p, 'panoId')}/`;
 export const tileGcKey = (p: string, v: string): string =>
-  `${TILE_GC_ROOT}${assertValidId(p, 'panoId')}/${assertValidId(v, 'version')}.json`;
+  `${tileGcPrefix(p)}${assertValidId(v, 'version')}.json`;
 
 // Share links (plan 3.2): public and owner-free, same rule as tiles/ above.
 export const PUB_TOURS_ROOT = 'pub/tours/';
