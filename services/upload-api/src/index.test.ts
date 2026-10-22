@@ -774,6 +774,18 @@ describe('upload-url for a floor-plan image (kind: plan)', () => {
     expect(jpg.key).toMatch(/\.jpg$/);
   });
 
+  it.each([
+    ['a number', 5],
+    ['a string', 'plan'],
+    ['true', true],
+    ['an array', [planBody]],
+  ])('400s, not 500s, on a body that is %s', async (_, body) => {
+    vi.stubGlobal('fetch', stub());
+    const r = await post(body);
+    expect(r.status).toBe(400);
+    expect(await r.json()).toEqual({ error: 'body must be a JSON object' });
+  });
+
   it('404s for a tour the caller does not have', async () => {
     vi.stubGlobal('fetch', stub({ tour: 404 }));
     const r = await post(planBody);

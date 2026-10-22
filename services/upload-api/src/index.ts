@@ -119,7 +119,12 @@ export default {
       // Per owner, before any R2 request: a runaway client can't run up S3 calls.
       const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS);
       if (limited) return limited;
-      const body = ((await req.json().catch(() => null)) ?? {}) as UploadUrlBody;
+      const raw: unknown = (await req.json().catch(() => null)) ?? {};
+      // A primitive or an array would throw on `in` below (a 500): a 400 instead.
+      if (typeof raw !== 'object' || Array.isArray(raw)) {
+        return Response.json({ error: 'body must be a JSON object' }, { status: 400 });
+      }
+      const body = raw as UploadUrlBody;
       if ('kind' in body && body.kind !== 'plan') {
         return Response.json({ error: 'kind must be "plan" when given' }, { status: 400 });
       }
