@@ -55,6 +55,33 @@ describe('checkSlug', () => {
     expect(checkSlug('admin')).toEqual({ ok: false, reason: 'reserved' });
   });
 
+  it('reserves brand and sign-in look-alikes, but not ordinary words that share a start', () => {
+    for (const s of [
+      'support',
+      'abuse',
+      'security',
+      'sign-in',
+      'panote-team',
+      'panotesupport',
+      'login-help',
+      'log-in',
+      'signin-now',
+    ]) {
+      expect(checkSlug(s)).toEqual({ ok: false, reason: 'reserved' });
+    }
+    for (const s of [
+      'signing-day',
+      'logins-and-logs',
+      'my-panote-tour',
+      'apple',
+      'google',
+      'contact',
+      'register',
+    ]) {
+      expect(checkSlug(s)).toEqual({ ok: true });
+    }
+  });
+
   it('SlugSchema reports the reason', () => {
     const r = SlugSchema.safeParse('panote');
     expect(r.success).toBe(false);
