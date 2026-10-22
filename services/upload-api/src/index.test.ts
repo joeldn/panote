@@ -722,3 +722,132 @@ describe('upload-url owner quotas', () => {
     expect(lists(fetchMock as Mock)).toHaveLength(0);
   });
 });
+
+describe('upload-url for a floor-plan image (kind: plan)', () => {
+  const planBody = { kind: 'plan', tourId: 'tour-1', contentType: 'image/webp', size: 2048 };
+  const tourJson = `tours/${encodeId('auth0|me')}/tour-1/tour.json`;
+  // HEADs: the caller's tour.json exists (unless `tour` says otherwise), no markers;
+  // PUTs (the upload log) succeed; LISTs are empty.
+  const stub = ({ tour = 200 }: { tour?: number } = {}) =>
+    vi.fn(async (input: Request | string) => {
+      if (isList(input)) return emptyListing();
+      const reqUrl = typeof input === 'string' ? input : input.url;
+      if (decodeURIComponent(new URL(reqUrl).pathname).endsWith(tourJson)) {
+        return new Response(null, { status: tour });
+      }
+      if (methodOf(input) === 'PUT') return new Response(null, { status: 200 });
+      return new Response(null, { status: 404 });
+    });
+
+  it('presigns a fresh, owner-free key under the tour’s public plan prefix', async () => {
+    const fetchMock = stub();
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await post(planBody);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { planId: string; key: string; url: string };
+    expect(j.key).toBe(`pub/plans/tour-1/${j.planId}.webp`);
+    expect(j.key).not.toContain(encodeId('auth0|me'));
+    const url = new URL(j.url);
+    expect(decodeURIComponent(url.pathname)).toMatch(new RegExp(`/${j.key}$`));
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host');
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('600');
+    // Checked the caller owns the tour.
+    const heads = fetchMock.mock.calls
+      .map(([req]) => req as Request)
+      .filter((req) => req.method === 'HEAD')
+      .map((req) => decodeURIComponent(new URL(req.url).pathname));
+    expect(heads.some((p) => p.endsWith(tourJson))).toBe(true);
+    // A second URL is a new key, so a replaced image is never served stale.
+    const again = (await (await post(planBody)).json()) as { key: string };
+    expect(again.key).not.toBe(j.key);
+  });
+
+  it('names the key after the image type', async () => {
+    vi.stubGlobal('fetch', stub());
+    const png = (await (await post({ ...planBody, contentType: 'image/png' })).json()) as {
+      key: string;
+    };
+    expect(png.key).toMatch(/\.png$/);
+    const jpg = (await (await post({ ...planBody, contentType: 'image/jpeg' })).json()) as {
+      key: string;
+    };
+    expect(jpg.key).toMatch(/\.jpg$/);
+  });
+
+  it('404s for a tour the caller does not have', async () => {
+    vi.stubGlobal('fetch', stub({ tour: 404 }));
+    const r = await post(planBody);
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: 'tour not found' });
+  });
+
+  it('fails closed with 502 when the tour HEAD errors', async () => {
+    vi.stubGlobal('fetch', stub({ tour: 500 }));
+    expect((await post(planBody)).status).toBe(502);
+  });
+
+  it('caps the size at 4 MiB, not 150 MiB', async () => {
+    vi.stubGlobal('fetch', stub());
+    expect((await post({ ...planBody, size: 4 * 1024 * 1024 })).status).toBe(200);
+    const r = await post({ ...planBody, size: 4 * 1024 * 1024 + 1 });
+    expect(r.status).toBe(400);
+    expect(((await r.json()) as { error: string }).error).toMatch(/4 MiB/);
+  });
+
+  it('400s a bad tourId, a missing one, a bad type and an unknown kind', async () => {
+    vi.stubGlobal('fetch', stub());
+    expect((await post({ ...planBody, tourId: '../x' })).status).toBe(400);
+    const { tourId: _gone, ...noTour } = planBody;
+    expect((await post(noTour)).status).toBe(400);
+    expect((await post({ ...planBody, contentType: 'image/svg+xml' })).status).toBe(400);
+    expect((await post({ ...planBody, kind: 'avatar' })).status).toBe(400);
+  });
+
+  it('410s for an account marked for deletion, before the tour HEAD', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: Request) =>
+        input.url.endsWith('/deletion.json')
+          ? new Response(null, { status: 200 })
+          : new Response(null, { status: 404 }),
+      ),
+    );
+    expect((await post(planBody)).status).toBe(410);
+  });
+
+  it('counts toward the daily upload limit, logging the planId', async () => {
+    const fetchMock = stub();
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await call(planBody, { MAX_UPLOADS_PER_OWNER_PER_DAY: '5' });
+    expect(r.status).toBe(200);
+    const { planId } = (await r.json()) as { planId: string };
+    const puts = fetchMock.mock.calls
+      .map(([req]) => req as Request)
+      .filter((req) => req.method === 'PUT')
+      .map((req) => decodeURIComponent(new URL(req.url).pathname));
+    expect(puts).toHaveLength(1);
+    expect(puts[0]).toMatch(
+      new RegExp(`/${userUploadLogPrefix('auth0|me')}\\d{8}T\\d{9}Z-${planId}$`),
+    );
+  });
+
+  it('403s at the daily upload limit', async () => {
+    const full = vi.fn(async (input: Request | string) => {
+      const reqUrl = new URL(typeof input === 'string' ? input : input.url);
+      if (reqUrl.searchParams.get('list-type') === '2') {
+        const key = uploadLogKey('auth0|me', new Date(Date.now() - 3600_000), 'p1');
+        return new Response(
+          `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>${key}</Key><Size>0</Size></Contents></ListBucketResult>`,
+        );
+      }
+      if (decodeURIComponent(reqUrl.pathname).endsWith(tourJson)) {
+        return new Response(null, { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal('fetch', full);
+    const r = await call(planBody, { MAX_UPLOADS_PER_OWNER_PER_DAY: '1' });
+    expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: 'daily upload limit reached' });
+  });
+});
