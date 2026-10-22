@@ -107,6 +107,17 @@ export const accountDeletionKey = (u: string): string =>
 export const accountDisabledKey = (u: string): string =>
   `${ACCOUNTS_ROOT}${encodeId(u)}/disabled.json`;
 
+// Operator lookup: which owner holds a tour, written when admin-api creates or publishes
+// it, so the takedown script needn't scan every owner (it still does for older tours).
+// Private like accounts/: the CDN's WAF rule only lets tiles/, pub/ and slugs/ through,
+// and the body (TourOwnerRecord) carries the raw sub.
+export const TOUR_OWNERS_ROOT = 'tour-owners/';
+export const tourOwnerKey = (t: string): string =>
+  `${TOUR_OWNERS_ROOT}${assertValidId(t, 'tourId')}.json`;
+// Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
+// kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
+// public prefixes, and nothing in the Workers reads, lists or deletes it.
+export const QUARANTINE_ROOT = 'quarantine/';
 // One empty object per upload URL that upload-api issued, for the per-owner daily
 // upload limit: it counts URLs, so an upload that was deleted again, or a URL
 // never used, still counts. Owner-scoped, outside panos/ (admin-api lists that as
