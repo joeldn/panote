@@ -219,7 +219,7 @@ describe('createAdminApi', () => {
     [
       403,
       'daily upload limit reached',
-      'This account has reached its daily upload limit. Try again tomorrow.',
+      'This account has reached its daily upload limit. Try again later today or tomorrow.',
     ],
     [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
     [403, 'forbidden', '403: forbidden'],

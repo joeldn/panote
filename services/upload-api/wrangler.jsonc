@@ -39,7 +39,7 @@
         "MAX_PANOS_PER_OWNER": "500",
         // 20 GiB of originals (20 * 1024^3).
         "MAX_BYTES_PER_OWNER": "21474836480",
-        // Originals written per rolling 24 hours, new and replaced alike.
+        // Upload URLs issued per rolling 24 hours, new and replace alike (upload-log/).
         "MAX_UPLOADS_PER_OWNER_PER_DAY": "50",
       },
     },
@@ -71,7 +71,7 @@
         "MAX_PANOS_PER_OWNER": "500",
         // 20 GiB of originals (20 * 1024^3).
         "MAX_BYTES_PER_OWNER": "21474836480",
-        // Originals written per rolling 24 hours, new and replaced alike.
+        // Upload URLs issued per rolling 24 hours, new and replace alike (upload-log/).
         "MAX_UPLOADS_PER_OWNER_PER_DAY": "50",
       },
     },

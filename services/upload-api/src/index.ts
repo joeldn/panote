@@ -8,7 +8,13 @@ import {
 import { authenticate, rateLimit, toErrorResponse, WorkerError } from '@internal/worker-kit';
 import { createR2S3Client, type R2HeadResult } from '@internal/worker-kit/r2-s3';
 
-import { checkQuota, quotaLimits } from './quota.js';
+import {
+  checkDailyUploads,
+  checkQuota,
+  quotaLimits,
+  recordUpload,
+  UPLOAD_LOG_PRUNE_MAX,
+} from './quota.js';
 
 // Mirrors the MAX_ORIGINAL_BYTES wrangler var (services/tiler-consumer/wrangler.jsonc:55,92).
 const MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
@@ -34,7 +40,7 @@ interface UploadUrlBody {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (req.method !== 'POST' || url.pathname !== '/api/upload-url') {
       return Response.json({ error: 'not found' }, { status: 404 });
@@ -115,17 +121,37 @@ export default {
       }
 
       // Owner quotas, last before signing: only a request that would otherwise get
-      // a URL pays for the listing, and only when a limit is set.
+      // a URL pays for the listings, and only for a limit that is set.
       const limits = quotaLimits(env);
-      const refusal = await checkQuota(r2, sub, limits, {
-        size,
-        replacing: 'panoId' in body ? panoId : undefined,
-        now: Date.now(),
-      }).catch(() => {
-        // A failed listing is no answer either: fail closed, as for the HEADs.
+      const now = Date.now();
+      // A failed listing is no answer either: fail closed, as for the HEADs.
+      const unavailable = () => {
         throw new WorkerError('storage unavailable', 502);
-      });
+      };
+      const [refusal, daily] = await Promise.all([
+        checkQuota(r2, sub, limits, {
+          size,
+          replacing: 'panoId' in body ? panoId : undefined,
+        }).catch(unavailable),
+        checkDailyUploads(r2, sub, limits.maxUploadsPerDay, now).catch(unavailable),
+      ]);
+      if (daily.expired.length > 0) {
+        // Best-effort: an entry left behind is outside the window and never counted.
+        ctx.waitUntil(
+          Promise.allSettled(
+            daily.expired.slice(0, UPLOAD_LOG_PRUNE_MAX).map((k) => r2.deleteObject(k)),
+          ),
+        );
+      }
       if (refusal) return Response.json({ error: refusal }, { status: 403 });
+      if (daily.refused) {
+        return Response.json({ error: 'daily upload limit reached' }, { status: 403 });
+      }
+      // Logged before the URL exists, so every URL handed out is counted: no log
+      // entry, no URL.
+      if (limits.maxUploadsPerDay !== null) {
+        await recordUpload(r2, sub, panoId, now).catch(unavailable);
+      }
 
       const key = originalKey(sub, panoId);
       // content-length is signed too: the browser sends the File's size, which is the

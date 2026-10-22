@@ -1073,6 +1073,7 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
    its counters and prefix are deleted.
 3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
    `tiles/<panoId>/`, then the owner prefix). No reference or recent-upload checks: everything goes.
+   Then `upload-log/<owner>/`, upload-api's log of the upload URLs it issued (Owner quotas).
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
 If any step throws, the route still answers `202 {"status":"pending"}`: the account is already
@@ -1215,7 +1216,7 @@ don't check the bundle (a view stores one counter per tourId); the per-IP limit 
 
 ### Owner quotas
 
-`upload-api` calls `checkQuota` (`src/quota.ts`) last before it signs an upload URL, after the
+`upload-api` checks owner quotas (`src/quota.ts`) last before it signs an upload URL, after the
 auth, rate limit, body checks and the account markers. Three vars, set in both env blocks of
 `services/upload-api/wrangler.jsonc`:
 
@@ -1224,35 +1225,35 @@ auth, rate limit, body checks and the account markers. Three vars, set in both e
   already over it (the limit was lowered under them).
 - `MAX_BYTES_PER_OWNER` (`21474836480`, 20 GiB): most bytes of originals one owner may hold,
   counting the declared `size` of the upload; a replace frees the old original's bytes.
-- `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most originals one owner may write in a rolling 24
-  hours, new and replaced alike, counting this one. It caps tiling compute (a job is about $0.01).
+- `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most upload URLs one owner may get in a rolling 24
+  hours, new uploads and replaces alike (each is a tiling job), counting this one. It bounds
+  tiling compute per account (a job is about $0.01); the global backstops are the 60-per-minute
+  `UPLOAD_URL_LIMITER` and the tiler's `max_concurrency`.
 
-Each var is optional: unset or empty means unlimited, and with none set the owner's prefix isn't
-listed at all. With any set, the owner's prefix is listed (S3 `ListObjectsV2`, one Class A
-operation per 1,000 objects) in full on every upload-URL request: that is a known cost. A pano
-with a delete tombstone (`deleting`) counts toward neither the pano nor the byte limit. Over a
-limit: `403 {"error":"pano limit reached"}`, `403 {"error":"storage limit reached"}` or
-`403 {"error":"daily upload limit reached"}`, checked in that order; the admin app words each one
-(`packages/web-kit/src/api/http.ts`). A listing that fails is a `502`, and a value that isn't a
-non-negative integer refuses every upload (`500`), so a typo can't silently lift a limit.
+Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
+limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
+1,000 objects) in full on every upload-URL request: that is a known cost. A pano with a delete
+tombstone (`deleting`) counts toward neither. Over a limit: `403 {"error":"pano limit reached"}`,
+`403 {"error":"storage limit reached"}` or `403 {"error":"daily upload limit reached"}`, checked
+in that order; the admin app words each one (`packages/web-kit/src/api/http.ts`). A listing or
+log write that fails is a `502` with no URL, and a value that isn't a non-negative integer refuses
+every upload (`500`), so a typo can't silently lift a limit. They are soft caps: concurrent
+requests can each pass, since each counts what is stored when it reads.
 
-They are soft caps: they count what's stored now and the declared size, so concurrent requests
-can each pass.
-
-The daily limit reads the `LastModified` of each `original` in that same listing, so it needs no
-extra request and no new state (no KV, no Durable Object, no marker objects to sweep on account
-deletion). Every original written in the past 24 hours counts once, tombstoned ones included,
-since they were tiled; an original listed without a `LastModified` counts as recent. What it
-doesn't see, by design:
-
-- a URL issued but not yet used. The `UPLOAD_URL_LIMITER` (60 per minute) and the 600-second
-  expiry bound how many can be outstanding;
-- replacing one pano again within the day: it counts once, however often it was rewritten;
-- an original that was deleted, so its listing entry is gone.
-
-A Workers Rate Limiting binding can't express a day (its period is 10 or 60 seconds), which is why
-the daily count reads storage instead. The global backstop for tiling compute is the tiler's
-`max_concurrency`.
+**Upload log.** The daily limit counts URLs, not stored originals, so uploading and then deleting,
+or asking for URLs and never using them, doesn't get round it. Before it returns a URL,
+`upload-api` writes one empty object, `upload-log/<owner>/<issued, basic ISO 8601>-<panoId>`
+(`uploadLogKey` in `@internal/contracts`); if that write fails, no URL. Each request lists
+`upload-log/<owner>/` once (about one entry per URL in the past day, so a page or two at most) and
+counts the entries from the past 24 hours. Older entries, and any name it can't read, aren't
+counted and are deleted best-effort after the response (`waitUntil`, at most
+`UPLOAD_LOG_PRUNE_MAX` = 50 per request). It sits outside `panos/` because `admin-api` lists that
+prefix as the owner's panos, and outside the R2 notification rule (prefix `panos/`). It is private:
+the CDN's WAF rule only lets `tiles/`, `pub/` and `slugs/` through. Account deletion removes
+`upload-log/<owner>/` after the panos, and the daily sweep's "anything left?" check lists it too,
+so an entry logged just before the deletion marker is caught. An owner who stops uploading keeps
+up to a day's entries (empty objects) until their next upload-URL request. A Workers Rate Limiting
+binding can't express a day (its period is 10 or 60 seconds), which is why the count lives in R2.
 
 To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
 (the vars are in the generated `env.d.ts`) and deploy.
