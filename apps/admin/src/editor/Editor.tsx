@@ -2,6 +2,8 @@ import {
   DEFAULT_TOUR_SETTINGS,
   languageName,
   localizeHotspot,
+  MAX_SCENE_TRANSLATION_CHARS,
+  sceneTranslationChars,
   type Hotspot,
 } from '@internal/contracts';
 import {
@@ -745,6 +747,13 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               {translation.name}. Blank fields show the {languageName(defaultLang)} text.
             </p>
           )}
+          {cfg && sceneTranslationChars(cfg) > MAX_SCENE_TRANSLATION_CHARS && (
+            <p className="ed-note ed-note--error" role="alert">
+              This pano’s translations are over the{' '}
+              {MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit, so it can’t be
+              saved. Shorten some of them.
+            </p>
+          )}
           {lookOnly && (
             <p className="ed-hint ed-look-only" role="note">
               <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
@@ -933,7 +942,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         title="Remove language?"
         body={
           confirm?.kind === 'remove-language'
-            ? `Every ${languageName(confirm.lang)} title and text in this tour is removed when you save. Visitors see the ${languageName(defaultLang)} text instead.`
+            ? `Visitors stop seeing this tour in ${languageName(confirm.lang)} when you save, and its ${languageName(confirm.lang)} title and description are removed. Pano and point translations stay with each pano, ready if you add the language back.`
             : null
         }
         confirmLabel="Remove language"

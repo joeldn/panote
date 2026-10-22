@@ -238,7 +238,7 @@ export type EditorAction =
   | { type: 'tour/title'; title: string; lang?: string }
   | { type: 'tour/description'; description: string; lang?: string }
   | { type: 'tour/languages'; languages: TourLanguages }
-  /** Drops a translation language and every string in it, from the tour and its panos. */
+  /** Drops a translation language and the tour's own strings in it (pano strings stay). */
   | { type: 'lang/remove'; lang: string }
   | { type: 'tour/settings'; settings: Partial<TourSettings> }
   | { type: 'tour/start'; panoId: string }
@@ -330,23 +330,16 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
     case 'tour/languages':
       return withTour(docs, (t) => ({ ...t, languages: action.languages }));
     case 'lang/remove': {
+      // Only the tour's own strings. A pano's translations stay with its config: the pano
+      // may be in other tours that still have the language, and publish only ever sends
+      // a tour's own languages, so the removed one stops showing here either way.
       const { lang } = action;
-      const next = withTour(docs, (t) => {
+      return withTour(docs, (t) => {
         const cleared = dropLanguage(t, lang);
         if (!t.languages) return cleared;
         const others = t.languages.others.filter((l) => l !== lang);
         return { ...cleared, languages: { ...t.languages, others } };
       });
-      // Every pano of the tour this editor holds; a config only another tour uses keeps its own.
-      let out = next;
-      for (const panoId of Object.keys(docs.scenes)) {
-        out = withConfig(out, panoId, (c) => {
-          const scene = dropLanguage(c, lang);
-          const hotspots = c.hotspots.map((h) => dropLanguage(h, lang));
-          return hotspots.some((h, i) => h !== c.hotspots[i]) ? { ...scene, hotspots } : scene;
-        });
-      }
-      return out;
     }
     case 'tour/settings':
       return withTour(docs, (t) => ({

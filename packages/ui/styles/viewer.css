@@ -516,7 +516,7 @@
   outline-offset: 2px;
 }
 .pn-lang:hover {
-  background: #fff;
+  background: var(--paper);
 }
 /* No top bar (the embed): top left, under where the embed's brand pill sits, clear of
    the compass (top right), the map (bottom left) and the centred controls. */

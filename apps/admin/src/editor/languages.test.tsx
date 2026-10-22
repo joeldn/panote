@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { MAX_SCENE_TRANSLATION_CHARS } from '@internal/contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
@@ -148,7 +149,7 @@ describe('editor: languages', () => {
     expect(within(menu).getByRole('button', { name: /^Cymraeg$/i })).toBeTruthy();
   });
 
-  it('removing a language asks first, then drops its strings from the tour and its panos', async () => {
+  it("removing a language asks first, then drops the tour's strings and keeps the panos'", async () => {
     server.setTour({
       ...server.tour!.body,
       languages: { default: 'en', others: ['de', 'fr'] },
@@ -191,11 +192,35 @@ describe('editor: languages', () => {
       languages: { default: 'en', others: ['fr'] },
       i18n: { fr: { title: 'Vieille ville' } },
     });
+    // Only the tour was saved: a pano may be in other tours that keep German.
+    expect(server.writes().map((w) => `${w.method} ${w.path}`)).toEqual([
+      'PUT /api/admin/tours/t1',
+      'POST /api/admin/tours/t1/publish',
+    ]);
     const square = server.configs.get('square')!.body as Record<string, unknown>;
-    expect(square).not.toHaveProperty('i18n');
+    expect(square).toMatchObject({ i18n: { de: { title: 'Platz' } } });
     expect((square.hotspots as unknown[])[0]).toMatchObject({
-      i18n: { fr: { title: 'Fontaine' } },
+      i18n: { de: { title: 'Brunnen' }, fr: { title: 'Fontaine' } },
     });
+  });
+
+  it('says at the pano, and on Save, when its translations are over the size limit', async () => {
+    server.setTour({ ...server.tour!.body, languages: { default: 'en', others: ['de'] } });
+    const ui = openTab();
+    await ui.findByRole('button', { name: /Tour title: Old town/ });
+    fireEvent.click(within(await openMenu(ui)).getByRole('button', { name: 'Deutsch' }));
+    fireEvent.click(ui.getAllByRole('button', { name: 'Fountain' })[0]!);
+    const point = ui.getByRole('group', { name: 'Edit point Fountain' });
+    // More than the textarea allows (pasted through another tool, say).
+    fireEvent.change(within(point).getByLabelText(/^Text/), {
+      target: { value: 'x'.repeat(MAX_SCENE_TRANSLATION_CHARS + 1) },
+    });
+    expect(ui.getByText(/translations are over the 200,000-character limit/)).toBeTruthy();
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    expect(
+      await ui.findByText(/Pano “Square”: its translations are over the 200,000-character limit/),
+    ).toBeTruthy();
+    expect(server.writes().filter((w) => w.path.includes('/panos/'))).toEqual([]);
   });
 
   it('the Preview link carries the language being edited', async () => {
