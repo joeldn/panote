@@ -1,13 +1,21 @@
 import type {
   Hotspot,
+  MapPoint,
   SceneConfig,
   TourDoc,
   TourLanguages,
+  TourPlan,
   TourSettings,
   TourWithConfigsOk,
   View,
 } from '@internal/contracts';
-import { DEFAULT_TOUR_SETTINGS, MAX_TITLE_LENGTH } from '@internal/contracts';
+import {
+  DEFAULT_TOUR_SETTINGS,
+  fitMapPositions,
+  isUnitMap,
+  MAX_TITLE_LENGTH,
+  toMapCoord,
+} from '@internal/contracts';
 
 // Editor state: every document keeps the version it was loaded (or last saved) as,
 // the edited version, and the ETag that Save sends as If-Match.
@@ -230,6 +238,35 @@ function dropLanguage<T extends { i18n?: Partial<Record<string, unknown>> | unde
   return withI18n(doc, (Object.keys(rest).length > 0 ? rest : undefined) as T['i18n']);
 }
 
+/** Where each scene sits on the floor plan, as 0..1 fractions (contracts plan.ts). */
+export function mapPositions(tour: TourDoc): Map<string, MapPoint> {
+  const raw = new Map<string, MapPoint>();
+  for (const s of tour.scenes) {
+    if (s.mapX !== undefined && s.mapY !== undefined) raw.set(s.panoId, { x: s.mapX, y: s.mapY });
+  }
+  return fitMapPositions(raw);
+}
+
+/**
+ * `tour` with `panoId` at (x, y) on the plan. A tour that still holds positions in
+ * other units (from before the 0..1 convention) has them all converted first, to where
+ * they were drawn, so placing one scene doesn't move the others on the map.
+ */
+function placeOnMap(tour: TourDoc, panoId: string, x: number, y: number): TourDoc {
+  const placed = [...tour.scenes].flatMap((s) =>
+    s.mapX !== undefined && s.mapY !== undefined ? [{ x: s.mapX, y: s.mapY }] : [],
+  );
+  const fitted = isUnitMap(placed) ? null : mapPositions(tour);
+  return {
+    ...tour,
+    scenes: tour.scenes.map((s) => {
+      if (s.panoId === panoId) return { ...s, mapX: toMapCoord(x), mapY: toMapCoord(y) };
+      const at = fitted?.get(s.panoId);
+      return at ? { ...s, mapX: toMapCoord(at.x), mapY: toMapCoord(at.y) } : s;
+    }),
+  };
+}
+
 export type TranslationPatch = Partial<{ title: string | null; body: string | null }>;
 
 export type EditorAction =
@@ -243,6 +280,11 @@ export type EditorAction =
   | { type: 'tour/settings'; settings: Partial<TourSettings> }
   | { type: 'tour/start'; panoId: string }
   | { type: 'tour/remove-scene'; panoId: string }
+  /** Puts a scene on the floor plan, or moves it: 0..1 fractions, clamped. */
+  | { type: 'map/place'; panoId: string; x: number; y: number }
+  | { type: 'map/remove'; panoId: string }
+  /** The floor-plan image; null removes it. */
+  | { type: 'tour/plan'; plan: TourPlan | null }
   | { type: 'scene/title'; panoId: string; title: string; lang?: string }
   | { type: 'scene/start-view'; panoId: string; view: View }
   | { type: 'scene/north'; panoId: string; north: number }
@@ -356,6 +398,22 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
         return startPanoId === undefined || startPanoId === action.panoId
           ? { ...rest, scenes }
           : { ...rest, scenes, startPanoId };
+      });
+    case 'map/place':
+      return withTour(docs, (t) => placeOnMap(t, action.panoId, action.x, action.y));
+    case 'map/remove':
+      return withTour(docs, (t) => ({
+        ...t,
+        scenes: t.scenes.map((s) => {
+          if (s.panoId !== action.panoId) return s;
+          const { mapX: _x, mapY: _y, ...rest } = s;
+          return rest;
+        }),
+      }));
+    case 'tour/plan':
+      return withTour(docs, (t) => {
+        const { plan: _old, ...rest } = t;
+        return action.plan ? { ...rest, plan: action.plan } : rest;
       });
     case 'scene/title': {
       const { lang } = action;

@@ -3,6 +3,7 @@ import {
   languageName,
   localizeHotspot,
   MAX_SCENE_TRANSLATION_CHARS,
+  planKey,
   sceneTranslationChars,
   type Hotspot,
 } from '@internal/contracts';
@@ -31,13 +32,15 @@ import { writeCurrentTour } from '../dashboard/current-tour.js';
 import { OwnerAccountMenu } from '../account/OwnerAccountMenu.js';
 import { useSession } from '../session.js';
 import type { ShareOutletContext } from '../share/ShareRoute.js';
-import { useUploads } from '../upload/upload-context.js';
+import { UploadEnvContext, useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
 import { FALLBACK_LANGUAGE, LanguageMenu } from './LanguageMenu.js';
 import { LibraryPicker } from './LibraryPicker.js';
+import { MapPanel } from './MapPanel.js';
 import { newId, pointSizeForDrag, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
+import { PlanImageError, preparePlanImage, uploadPlanImage } from './plan-image.js';
 import { PointerLayer, type LayerPoint } from './PointerLayer.js';
 import {
   isLanding,
@@ -225,6 +228,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   // The language titles and text are edited in; null is the default language.
   const [editLang, setEditLang] = useState<string | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const uploadEnv = useContext(UploadEnvContext);
+  const [planUploading, setPlanUploading] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
   // The share modal opens over the editor: sharing it starts or stops is the editor's too.
   const { setShared } = editor;
   const shareContext = useMemo<ShareOutletContext>(
@@ -484,6 +490,38 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       });
     }
   };
+
+  // The image goes up now, to a fresh key; the tour points at it from the next Save.
+  const addPlanImage = async (file: File) => {
+    setPlanError(null);
+    setPlanUploading(true);
+    try {
+      const plan = await uploadPlanImage(
+        {
+          upload: session.upload,
+          prepare: uploadEnv.preparePlan ?? preparePlanImage,
+          ...(uploadEnv.createXhr && { createXhr: uploadEnv.createXhr }),
+        },
+        docs.tourId,
+        file,
+      );
+      dispatch({ type: 'tour/plan', plan });
+    } catch (e) {
+      if (!(e instanceof PlanImageError)) console.error('plan image upload failed', e);
+      setPlanError(
+        e instanceof PlanImageError ? e.message : 'The image couldn’t be added. Try again.',
+      );
+    } finally {
+      setPlanUploading(false);
+    }
+  };
+  const planImage = tour.plan
+    ? {
+        url: `${config.cdnBase}${planKey(docs.tourId, tour.plan.id, tour.plan.type)}`,
+        width: tour.plan.width,
+        height: tour.plan.height,
+      }
+    : null;
 
   const missingName = scene?.kind === 'missing' ? 'Missing pano' : null;
   const conflictBusy = editor.saving;
@@ -876,6 +914,21 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           }
           onDisconnect={(to) => currentId && dispatch({ type: 'link/remove', from: currentId, to })}
           onAddFromLibrary={() => setLibraryOpen(true)}
+        />
+        <MapPanel
+          docs={docs}
+          currentId={currentId}
+          plan={planImage}
+          uploading={planUploading}
+          planError={planError}
+          onPlace={(panoId, x, y) => dispatch({ type: 'map/place', panoId, x, y })}
+          onRemove={(panoId) => dispatch({ type: 'map/remove', panoId })}
+          onSelect={select}
+          onPlanFile={(file) => void addPlanImage(file)}
+          onRemovePlan={() => {
+            setPlanError(null);
+            dispatch({ type: 'tour/plan', plan: null });
+          }}
         />
       </aside>
 

@@ -404,6 +404,185 @@
   flex: 1 1 auto;
 }
 
+/* --- Map card: collapsed to its head until opened --- */
+.ed-map {
+  flex: 0 0 auto;
+}
+
+.ed-map--open {
+  flex: 0 1 auto;
+  max-height: 60%;
+  overflow-y: auto;
+}
+
+.ed-map:not(.ed-map--open) .ed-card__head {
+  border-bottom: 0;
+}
+
+.ed-map__toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ed-map__chevron {
+  font-size: 10px;
+  color: var(--ink-45);
+  transition: transform 0.15s;
+}
+
+.ed-map--open .ed-map__chevron {
+  transform: rotate(90deg);
+}
+
+.ed-map__toggle:focus-visible,
+.ed-map__dot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Room round the plan so a dot on its edge shows whole; a query container for its size. */
+.ed-map__frame {
+  container-type: inline-size;
+  margin: 4px 16px 10px;
+}
+
+/* The plan keeps the image's shape (or the viewer's map box without one), at most 320px tall. */
+.ed-map__plan {
+  position: relative;
+  width: min(100cqw, 320px * var(--ed-map-ratio, 1));
+  aspect-ratio: var(--ed-map-ratio, 1);
+  margin-inline: auto;
+  border-radius: var(--r-row);
+  background:
+    linear-gradient(var(--ink-06) 1px, transparent 1px) 0 0 / 10% 10%,
+    linear-gradient(90deg, var(--ink-06) 1px, transparent 1px) 0 0 / 10% 10%,
+    var(--ink-05);
+  outline: none;
+}
+
+.ed-map__plan--image {
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--ink-08);
+}
+
+.ed-map__plan--placing {
+  cursor: crosshair;
+}
+
+.ed-map__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* A 28px target round a 12px dot; touch drags move it instead of scrolling the panel. */
+.ed-map__dot {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.ed-map__dot::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--ink-62);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%);
+}
+
+.ed-map__dot--current {
+  z-index: 1;
+}
+
+.ed-map__dot--current::after {
+  width: 16px;
+  height: 16px;
+  background: var(--accent);
+}
+
+.ed-map__dot--dragging {
+  z-index: 2;
+  cursor: grabbing;
+}
+
+/* The name shows on hover, focus and drag, above the dot. */
+.ed-map__label {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fff;
+  font: 500 11px var(--fbody);
+  white-space: nowrap;
+  transform: translateX(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.ed-map__dot:hover .ed-map__label,
+.ed-map__dot:focus-visible .ed-map__label,
+.ed-map__dot--dragging .ed-map__label {
+  opacity: 1;
+}
+
+.ed-map__row,
+.ed-map__image {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 16px 6px;
+}
+
+.ed-map__name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ed-map__image .ed-label {
+  margin-right: auto;
+}
+
+.ed-map__error {
+  padding: 0 16px 4px;
+}
+
+.ed-map__fine {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
 .ed-card__head {
   display: flex;
   justify-content: space-between;

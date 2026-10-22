@@ -10,6 +10,7 @@ import {
 } from '@internal/web-kit';
 import { createContext, useContext } from 'react';
 
+import type { PlanPreparer } from '../editor/plan-image.js';
 import type { ActiveUpload, FinalizeState } from './chip-model.js';
 import type { UploadTarget } from './resume-store.js';
 
@@ -97,6 +98,8 @@ export const idbPendingUploads: PendingUploadStore = {
 /** Test seams: the presigned PUT's XHR, the pending-file store, the tiles base, the preview decode. */
 export interface UploadEnv {
   createXhr?: () => XhrLike;
+  /** Test seam: redraws a picked floor-plan image (the editor's Map card). */
+  preparePlan?: PlanPreparer;
   tilesBase?: string;
   pending?: PendingUploadStore;
   decodePreview?: PreviewDecoder;
