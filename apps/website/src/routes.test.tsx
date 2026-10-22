@@ -116,6 +116,37 @@ describe('website routes', () => {
     expect(text).toContain('Signing in with Microsoft or Facebook keeps a separate account.');
   });
 
+  it('privacy covers IP addresses, error reports, media embeds and backups', async () => {
+    renderAt('/privacy');
+    const textOf = async (name: string) => {
+      const heading = await screen.findByRole('heading', { name });
+      let text = '';
+      for (let el = heading.nextElementSibling; el && el.tagName !== 'H2';) {
+        text += ` ${el.textContent ?? ''}`;
+        el = el.nextElementSibling;
+      }
+      return text.replace(/\s+/g, ' ');
+    };
+    const ips = await textOf('IP addresses and logs');
+    expect(ips).toContain('We use it briefly to protect the service from abuse');
+    expect(ips).toContain('We don’t store IP addresses with our analytics');
+    expect(ips).toContain('kept for a limited time and then deleted automatically');
+    const errors = await textOf('Error reports');
+    expect(errors).toContain('no IP address, browser or country');
+    const media = await textOf('Videos and media in tours');
+    expect(media).toMatch(/YouTube.*Vimeo/);
+    expect(media).toContain('youtube-nocookie.com');
+    expect(media).toContain('sees your IP address and may set cookies');
+    expect(await textOf('Backups')).toContain(
+      'a tour or account you delete can remain in these private backups for up to 30 days',
+    );
+    expect(await textOf('How long we keep things')).toContain('Backups: 30 days.');
+    const basis = await textOf('Why we’re allowed to');
+    expect(basis).toContain('our contract with you');
+    expect(basis).toContain('legitimate interest');
+    expect(basis).toContain('Legal obligations');
+  });
+
   it('privacy names no sign-in provider the app does not offer', async () => {
     renderAt('/privacy');
     await screen.findByRole('heading', { name: 'Your account' });

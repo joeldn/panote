@@ -54,12 +54,14 @@ afterEach(() => {
 });
 
 describe('landing', () => {
-  it('says it is free and sign-in is with Google (Q1)', async () => {
+  it('says it is free and names no sign-in provider', async () => {
     renderSite('/');
     expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe(
       'Your 360° tours. Full resolution. Free.',
     );
-    expect(dropTarget().textContent).toContain('free — sign in with Google, live in seconds');
+    expect(dropTarget().textContent).toContain('free, sign in and go live in seconds');
+    // Which providers sign-in offers is per environment; landing copy must not name one.
+    expect(document.body.textContent).not.toMatch(/sign in with Google/i);
     expect(screen.queryByText(/no sign-up/i)).toBeNull();
     // Without a showcase tour there's no live hero or "See a live tour".
     expect(screen.queryByRole('link', { name: /See a live tour/ })).toBeNull();
@@ -141,7 +143,7 @@ describe('landing', () => {
     expect(first.getAttribute('aria-expanded')).toBe('false');
     expect(account.getAttribute('aria-expanded')).toBe('true');
     expect(document.getElementById(account.getAttribute('aria-controls')!)?.textContent).toContain(
-      'sign in with Google',
+      'You sign in with an account you already have',
     );
   });
 

@@ -170,7 +170,7 @@ export const FAQS = [
   },
   {
     q: 'Do I need an account?',
-    a: 'Only to create and manage tours — you sign in with Google. Visitors never need one: a tour link just opens.',
+    a: 'Only to create and manage tours. You sign in with an account you already have, so there’s no new password to remember. Visitors never need one: a tour link just opens.',
   },
   {
     q: 'Do I own what I upload?',

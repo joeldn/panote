@@ -8,6 +8,9 @@ import { OPERATOR_ADDRESS, OPERATOR_JURISDICTION, OPERATOR_NAME } from './operat
 
 const Mail = () => <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>;
 
+// Operator details still undecided show as their placeholder, marked so nobody mistakes them.
+const Operator = ({ value }: { value: string }) => <span className="legal__todo">{value}</span>;
+
 function LegalPage({
   title,
   updated,
@@ -34,6 +37,10 @@ export function Privacy() {
         collect, why, and who helps us run it. The short version: we keep what we need to run your
         account and show your tours, we count visits without personal data, and we don’t sell
         anything about you.
+      </p>
+      <p>
+        Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />,
+        which is responsible for the personal data described here.
       </p>
 
       <h2>Your account</h2>
@@ -73,12 +80,58 @@ export function Privacy() {
         people’s tours.
       </p>
 
+      <h2>IP addresses and logs</h2>
+      <p>
+        Every request to Panote arrives with the IP address it came from. We use it briefly to
+        protect the service from abuse: views, likes, visit counts, Explore and error reports are
+        limited per IP address, and uploads and edits per account. The limiter only counts the last
+        minute or so of requests. We don’t store IP addresses with our analytics or visit counts.
+      </p>
+      <p>
+        Our hosting provider, Cloudflare, keeps logs of requests to our service, which can include
+        the IP address and the address of the page or file asked for. We use these logs to find and
+        fix problems and to look into abuse. They are kept for a limited time and then deleted
+        automatically.
+      </p>
+
+      <h2>Error reports</h2>
+      <p>
+        When a Panote page, a tour or the tour editor hits an error in your browser, it may send us
+        a short report. It says which app and version it was, the kind of error, the error message,
+        the top lines of the code trace, and the path of the page. Before the report is sent, and
+        again when we receive it, we remove email addresses, tour ids and tour links, and anything
+        after a ? in a web address. We add nothing about you to it: no IP address, browser or
+        country. Reports go into the same logs as above and are deleted with them. Only some page
+        visits send reports at all.
+      </p>
+
+      <h2>Videos and media in tours</h2>
+      <p>
+        A tour’s owner can add a YouTube or Vimeo video, or link an image, audio or video file from
+        another website, to a hotspot. It loads only when you open that hotspot, and it comes
+        straight from that site, not from Panote. That site sees your IP address and may set cookies
+        or store data in your browser under its own privacy policy. YouTube videos play in YouTube’s
+        privacy-enhanced mode (youtube-nocookie.com) and Vimeo videos in Vimeo’s do-not-track
+        player, which limit this but don’t stop it.
+      </p>
+
+      <h2>Backups</h2>
+      <p>
+        Every night we back up tour details and account settings to the same private storage as the
+        rest of Panote, and keep each backup for 30 days. They are only used to recover from a fault
+        and are never shown publicly. So a tour or account you delete can remain in these private
+        backups for up to 30 days before it is gone.
+      </p>
+
       <h2>Who helps us run Panote</h2>
       <ul>
         <li>Cloudflare: hosting, storage, content delivery and visit counts.</li>
         <li>Auth0 (Okta): sign-in.</li>
         <li>Google, Apple, Microsoft or Facebook: whichever account you sign in with.</li>
         <li>Our email delivery provider: sending one-time sign-in codes.</li>
+        <li>
+          YouTube, Vimeo and other sites a tour links media from: only when you open that hotspot.
+        </li>
       </ul>
       <p>We don’t show ads and we don’t sell or rent personal data.</p>
 
@@ -101,6 +154,37 @@ export function Privacy() {
         details and what you sent in our private record of reports, and may pass a copyright notice
         on to the owner of the content.
       </p>
+
+      <h2>How long we keep things</h2>
+      <ul>
+        <li>Your account, tours and panoramas: until you delete them, or we close the account.</li>
+        <li>Your sign-in record: up to 30 days after you delete your account.</li>
+        <li>Backups: 30 days.</li>
+        <li>
+          Visit counts and likes: until the account that owns the tour is deleted. The anonymous
+          visit records behind them: about three months.
+        </li>
+        <li>IP addresses for abuse protection: about a minute.</li>
+        <li>Request logs and error reports: a limited time, then deleted automatically.</li>
+        <li>Reports, notices and content held after a report: as long as the law requires.</li>
+        <li>The like id in your browser: until you clear your browser’s storage.</li>
+      </ul>
+
+      <h2>Why we’re allowed to</h2>
+      <ul>
+        <li>
+          To run the service you signed up for (our contract with you): your account, sign-in, what
+          you upload and publish, and your likes.
+        </li>
+        <li>
+          Our legitimate interest in keeping Panote secure and working: IP addresses for abuse
+          protection, request logs, error reports and backups.
+        </li>
+        <li>
+          Legal obligations: handling reports and copyright notices, and keeping content and records
+          when the law requires it.
+        </li>
+      </ul>
 
       <h2>Changes</h2>
       <p>
@@ -165,9 +249,6 @@ export function Terms() {
     </LegalPage>
   );
 }
-
-// Operator details still undecided show as their placeholder, marked so nobody mistakes them.
-const Operator = ({ value }: { value: string }) => <span className="legal__todo">{value}</span>;
 
 export function ContentPolicy() {
   return (
