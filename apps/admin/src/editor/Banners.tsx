@@ -108,11 +108,13 @@ export function Notices({
   onDismiss,
   busy,
   onRepublish,
+  onDiscardDraft,
 }: {
   notices: EditorNotice[];
   onDismiss: (id: string) => void;
   busy: boolean;
   onRepublish: () => void;
+  onDiscardDraft: () => void;
 }) {
   return (
     <>
@@ -133,6 +135,11 @@ export function Notices({
           {n.action === 'republish' && (
             <Button variant="primary" size="sm" onClick={onRepublish} busy={busy}>
               Try again
+            </Button>
+          )}
+          {n.action === 'discard-draft' && (
+            <Button variant="ghost" size="sm" onClick={onDiscardDraft}>
+              Discard
             </Button>
           )}
           <button

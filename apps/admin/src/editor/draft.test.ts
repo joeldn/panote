@@ -2,7 +2,14 @@ import type { TourWithConfigsOk } from '@internal/contracts';
 import { sweepEditorDrafts } from '@internal/web-kit';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { applyDraft, draftKey, readDraft, writeDraft, type DraftStorage } from './draft.js';
+import {
+  applyDraft,
+  DRAFT_MAX_AGE_MS,
+  draftKey,
+  readDraft,
+  writeDraft,
+  type DraftStorage,
+} from './draft.js';
 import { dirtyKeys, editorReducer, fromServer, type EditorDocs } from './model.js';
 
 const ME = 'google-oauth2|me';
@@ -71,15 +78,51 @@ describe('editor drafts', () => {
     expect(dirtyKeys(res.docs).sort()).toEqual(['pano:a', 'tour']);
   });
 
-  it('drops the edits to any doc whose server ETag changed meanwhile', () => {
+  it('keeps the edits to a doc whose server ETag changed meanwhile, as a conflict on the old ETag', () => {
     writeDraft(localStorage, ME, edited());
     const res = applyDraft(
       fromServer(server('te-other', 'ea')),
       readDraft(localStorage, ME, 't1')!,
     );
     expect(res.restored).toEqual(['pano:a']);
-    expect(res.discarded).toEqual(['tour']);
-    expect(res.docs.tour.current.title).toBe('Old town');
+    expect(res.conflicts).toEqual(['tour']);
+    expect(res.discarded).toEqual([]);
+    // Save would send the draft's ETag and get a 412, never overwrite the newer copy.
+    expect(res.docs.tour).toMatchObject({
+      etag: 'te',
+      base: { title: 'Old town' },
+      current: { title: 'Draft title' },
+    });
+  });
+
+  it('drops the edits to a pano that is no longer in the tour', () => {
+    writeDraft(localStorage, ME, edited());
+    const gone = server();
+    gone.tour.scenes = [{ panoId: 'b' }];
+    delete gone.configs.a;
+    const res = applyDraft(fromServer(gone), readDraft(localStorage, ME, 't1')!);
+    expect(res.discarded).toEqual(['pano:a']);
+    expect(res.docs.scenes.a).toBeUndefined();
+  });
+
+  it('restores nothing for a doc already saved elsewhere with the same edits', () => {
+    writeDraft(localStorage, ME, edited());
+    const same = server('te-other');
+    same.tour.title = 'Draft title';
+    const res = applyDraft(fromServer(same), readDraft(localStorage, ME, 't1')!);
+    expect(res.conflicts).toEqual([]);
+    expect(res.restored).toEqual(['pano:a']);
+    expect(res.docs.tour.etag).toBe('te-other');
+  });
+
+  it('drops a draft older than the age limit', () => {
+    const then = new Date('2026-10-01T00:00:00Z');
+    writeDraft(localStorage, ME, edited(), then);
+    const justInTime = new Date(then.getTime() + DRAFT_MAX_AGE_MS);
+    expect(readDraft(localStorage, ME, 't1', justInTime)).not.toBeNull();
+    const tooLate = new Date(then.getTime() + DRAFT_MAX_AGE_MS + 1);
+    expect(readDraft(localStorage, ME, 't1', tooLate)).toBeNull();
+    expect(localStorage.getItem(draftKey(ME, 't1'))).toBeNull();
   });
 
   it('discards an unreadable draft', () => {
