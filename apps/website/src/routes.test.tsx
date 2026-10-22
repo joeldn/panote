@@ -1,4 +1,5 @@
 import { cleanup, configure, screen, within } from '@testing-library/react';
+import { KNOWN_CONNECTIONS } from '@internal/web-kit';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { renderSite } from './__fixtures__/auth.js';
@@ -45,6 +46,13 @@ describe('website routes', () => {
     const page = screen.getByRole('article').textContent ?? '';
     expect(page).toContain('records your account id against that tour');
     expect(page).not.toContain('isn’t linked to an account');
+  });
+
+  it('privacy names every sign-in provider the app can offer', async () => {
+    renderAt('/privacy');
+    const account = await screen.findByRole('heading', { name: 'Your account' });
+    const text = account.nextElementSibling?.textContent ?? '';
+    for (const { label } of Object.values(KNOWN_CONNECTIONS)) expect(text).toContain(label);
   });
 
   it('falls back to a 404 page', async () => {
