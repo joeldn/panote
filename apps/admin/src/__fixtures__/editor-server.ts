@@ -33,6 +33,8 @@ export class FakeServer {
   missing = new Map<string, { deleting: boolean; hasOriginal: boolean }>();
   publish: { slug: string; visibility: 'public' | 'unlisted'; publishedAt: string } | null = null;
   publishScript: PublishScript | null = null;
+  /** The owner stopped sharing: an after-Save publish is refused until a plain one. */
+  sharingStopped = false;
   requests: Recorded[] = [];
   /** Config PUTs for these panoIds fail with a 500. */
   brokenConfigs = new Set<string>();
@@ -92,12 +94,20 @@ export class FakeServer {
 
     if (tourMatch && tourMatch[2] && method === 'POST') {
       if (this.publishScript) return this.publishScript();
+      const afterSave = (body as { afterSave?: boolean } | undefined)?.afterSave === true;
+      if (afterSave && this.sharingStopped) return json({ error: 'sharing stopped' }, 409);
+      if (!afterSave) this.sharingStopped = false;
       this.publish ??= {
         slug: 'my-tour',
         visibility: 'unlisted',
         publishedAt: '2026-10-01T00:00:00.000Z',
       };
       return json({ ...this.publish, url: `/s/${this.publish.slug}` });
+    }
+    if (tourMatch && tourMatch[2] && method === 'DELETE') {
+      this.publish = null;
+      this.sharingStopped = true;
+      return new Response(null, { status: 204 });
     }
     if (tourMatch && method === 'GET') {
       if (!this.tour) return json({ error: 'not found' }, 404);

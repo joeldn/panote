@@ -130,4 +130,17 @@ describe('runPublish', () => {
     await expect(runPublish(down, 't1')).resolves.toMatchObject({ kind: 'failed' });
     await expect(runPublish(fakeApi(), 't1')).resolves.toMatchObject({ kind: 'ok' });
   });
+
+  it('asks as an after-Save publish, and reports a tour whose owner stopped sharing', async () => {
+    const api = fakeApi();
+    await runPublish(api, 't1');
+    expect(api.publishTour).toHaveBeenCalledWith('t1', { afterSave: true });
+
+    const stopped = fakeApi({
+      publishTour: vi.fn(async () => {
+        throw new ApiError(409, { error: 'sharing stopped' });
+      }),
+    });
+    await expect(runPublish(stopped, 't1')).resolves.toEqual({ kind: 'sharing-stopped' });
+  });
 });

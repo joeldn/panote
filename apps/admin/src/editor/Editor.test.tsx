@@ -429,6 +429,48 @@ describe('editor: save', () => {
   });
 });
 
+describe('editor: stop sharing', () => {
+  it('says Save updates a live link, and a stopped tour stays offline on Save', async () => {
+    server.publish = {
+      slug: 'old-town',
+      visibility: 'unlisted',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+    };
+    const { ui, router } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Renamed');
+    const save = ui.getByRole('button', { name: 'Save' });
+    expect(save.getAttribute('aria-describedby')).toBe('ed-save-hint');
+    expect(ui.getByText('Saving updates the live link')).toBeTruthy();
+
+    // Stop sharing from the share modal over the editor (edits stay unsaved).
+    fireEvent.click(ui.getByRole('link', { name: 'Share' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Privacy' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop sharing' }));
+    const confirm = screen.getByRole('dialog', { name: 'Stop sharing this tour?' });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Stop sharing' }));
+    expect(await screen.findByText('This tour isn’t live yet')).toBeTruthy();
+    expect(server.writes().at(-1)).toMatchObject({
+      method: 'DELETE',
+      path: '/api/admin/tours/t1/publish',
+    });
+    // The editor follows: no "updates the live link" any more.
+    expect(ui.queryByText('Saving updates the live link')).toBeNull();
+    expect(ui.getByRole('button', { name: 'Save' }).getAttribute('aria-describedby')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1'));
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect(server.tour?.body.title).toBe('Renamed');
+    const publishCall = server.writes().at(-1);
+    expect(publishCall).toMatchObject({ method: 'POST', body: { afterSave: true } });
+    expect(server.publish).toBeNull();
+    expect(ui.queryByText(/now live/)).toBeNull();
+  });
+});
+
 describe('editor: points, connections, views and settings', () => {
   it('adds a point by clicking the pano and edits title, icon, size and media', async () => {
     const { ui } = openTab();
