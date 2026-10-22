@@ -447,7 +447,9 @@ describe('editor: save', () => {
     );
     const { ui } = openTab();
     expect(await ui.findByRole('button', { name: /Tour title: Old draft/ })).toBeTruthy();
-    expect(ui.getByText(/Restored your unsaved changes/)).toBeTruthy();
+    expect(ui.getByText(/Restored your unsaved changes/).textContent).toContain(
+      'choose Reload or Overwrite above',
+    );
     expect(ui.getByText(/This tour changed elsewhere/)).toBeTruthy();
     expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
 

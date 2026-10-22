@@ -256,7 +256,10 @@ export function useEditor(
             notify({
               id: 'draft',
               tone: 'info',
-              text: 'Restored your unsaved changes. Save to keep them.',
+              // Save is blocked while a conflict is open: point at the banner instead.
+              text: applied.conflicts.length
+                ? 'Restored your unsaved changes. This tour also changed elsewhere, so choose Reload or Overwrite above.'
+                : 'Restored your unsaved changes. Save to keep them.',
               action: 'discard-draft',
             });
           }

@@ -566,7 +566,11 @@ describe('useEditor draft autosave', () => {
     expect(result.current.dirty).toEqual(['tour']);
     expect(result.current.conflicts).toEqual([]);
     expect(result.current.notices).toContainEqual(
-      expect.objectContaining({ id: 'draft', action: 'discard-draft' }),
+      expect.objectContaining({
+        id: 'draft',
+        action: 'discard-draft',
+        text: 'Restored your unsaved changes. Save to keep them.',
+      }),
     );
     expect(stored(storage)?.tour.doc.title).toBe('Draft title');
   });
@@ -656,7 +660,10 @@ describe('useEditor draft autosave', () => {
     const { result } = await setup(storage, 't2');
     expect(result.current.docs?.tour.current.title).toBe('Draft title');
     expect(result.current.conflicts).toEqual(['tour']);
-    expect(result.current.notices.map((n) => n.id)).toContain('draft');
+    const notice = result.current.notices.find((n) => n.id === 'draft');
+    expect(notice?.text).toBe(
+      'Restored your unsaved changes. This tour also changed elsewhere, so choose Reload or Overwrite above.',
+    );
     // Save is blocked until the banner's Reload or Overwrite: nothing is overwritten.
     await act(() => result.current.save());
     expect(result.current.saving).toBe(false);
