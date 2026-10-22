@@ -392,10 +392,10 @@ jobs:
           # route can take a few seconds to answer after a deploy.
           expect() {
             local want=$1 got=""; shift
-            for _ in 1 2 3; do
+            for try in 1 2 3; do
               got=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$@" || true)
               [ "$got" = "$want" ] && break
-              sleep 10
+              [ "$try" = 3 ] || sleep 10
             done
             if [ "$got" = "$want" ]; then
               echo "ok   $want  $*"

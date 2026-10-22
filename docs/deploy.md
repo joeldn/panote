@@ -1604,14 +1604,16 @@ the account has the resources the config names.
    first thing.
    **Status: outstanding.**
 
-5. **Cache rules.** Put the `panote.io` zone id (Overview → API → Zone ID) into
-   `infra/cloudflare/cache-rules.production.json` in place of `YOUR_PANOTE_IO_ZONE_ID` (the
-   script refuses the placeholder), then
+5. **Cache rules.** In your local checkout, put the `panote.io` zone id (Overview → API → Zone
+   ID) into `infra/cloudflare/cache-rules.production.json` in place of `YOUR_PANOTE_IO_ZONE_ID`
+   (the script refuses the placeholder), then
    `infra/cloudflare/apply-cache-rules.sh production --dry-run` and `--yes` (CDN cache rules; the
    token is scoped to `panote.io` this time). Production's file manages two rules:
    `panote-json-edge-cache`, as on dev, and `panote-tiles-404-no-store`, which does what dev's
    dashboard-made `tiles-404-short-ttl` does (a tile `404` is never edge-cached), so production
-   needs no dashboard rule. The zone id edit goes in the same PR as step 10.
+   needs no dashboard rule. It sets only the `404` TTL, not `cache`, and leaves out
+   `manifest.json`, so the manifest stays `DYNAMIC` (see Known limitations). Keep the zone id
+   edit uncommitted for now: step 10 commits it with the other placeholders.
    Verify: the dry run on an empty zone shows only the two rules being added; after `--yes` the
    script prints both as `enabled=true`. Their effect is checked in the final block.
    **Status: outstanding.**
@@ -1621,7 +1623,8 @@ the account has the resources the config names.
    Only once step 4's rule is enabled.
    Verify, straight away, while the bucket is still empty:
    - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/` and
-     `/tiles/../panos/x`: all `403`.
+     `/tiles/../panos/x` (that one with `curl --path-as-is`, or curl collapses the `..` itself):
+     all `403`.
    - `curl -sI https://cdn.panote.io/tiles/x`: `404` from R2, not `403`.
    If any private path isn't `403`, detach the domain before doing anything else.
    **Status: outstanding.**
@@ -1677,8 +1680,12 @@ the account has the resources the config names.
     public); and step 5's zone id. Replace each only with the real value, never another made-up
     name (`docs/decisions.md`). Run `pnpm -r run types` and commit any `env.d.ts` change (CI fails
     on drift).
-    Verify: `grep -rn YOUR_ services/*/wrangler.jsonc apps/*/wrangler.jsonc apps/*/.env.production infra/cloudflare`
-    prints nothing; CI's production dry-runs and production app build pass. Merging deploys dev
+    Verify: this prints nothing (comment lines mention `YOUR_` and are skipped):
+    ```bash
+    grep -rn YOUR_ services/*/wrangler.jsonc apps/*/wrangler.jsonc apps/*/.env.production infra/cloudflare \
+      | grep -vE '^[^:]+:[0-9]+:\s*(#|//)'
+    ```
+    CI's production dry-runs and production app build must pass too. Merging deploys dev
     only, as always.
     **Status: outstanding.**
 
@@ -1713,7 +1720,7 @@ Run after step 12, before telling anyone the site exists. The first group is wha
 ```bash
 # Private prefixes stay private (step 4): every line 403
 for p in panos/x tours/x accounts/x ops/x '' tiles/../panos/x; do
-  curl -sI -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
+  curl -sI --path-as-is -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
 # Public prefixes pass through to R2: 404 for a key that doesn't exist, not 403
 curl -sI -o /dev/null -w '%{http_code}\n' https://cdn.panote.io/tiles/x/manifest.json
 # APIs: 200 (no auth), 401, 401
@@ -1737,7 +1744,8 @@ Then, by hand:
   `https://cdn.panote.io/tiles/<panoId>/manifest.json` is `200`, a tile is `200` with
   `cache-control: public, max-age=31536000, immutable` (`HIT` on the second fetch), and the
   original at `https://cdn.panote.io/panos/<owner>/<panoId>/original` is `403`.
-- **Cache rules.** A tile URL that doesn't exist is `404` twice, never `HIT`. Publish a test tour:
+- **Cache rules.** A tile URL that doesn't exist is `404` twice, never `HIT`, and the test pano's
+  `tiles/<panoId>/manifest.json` still returns `cf-cache-status: DYNAMIC`. Publish a test tour:
   `https://cdn.panote.io/slugs/<slug>.json` is `HIT` on the second fetch; `/s/<slug>` on
   `panote.io` shows the tour and a Slack DM of the link unfurls with its image (Link previews).
 - **Purge and delete.** Delete the test tour and pano (wait an hour after upload, the
