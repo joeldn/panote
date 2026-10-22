@@ -5,7 +5,6 @@ import {
   ClientErrorReportSchema,
   EXPLORE_CURSOR_PATTERN,
   EXPLORE_PATH,
-  pubTourKey,
   ViewBeaconSchema,
 } from '@internal/contracts';
 import { Hono } from 'hono';
@@ -21,11 +20,17 @@ import { logClientError } from './client-error.js';
 import { readJsonBody, toDataPoint } from './events.js';
 import { listExplore } from './explore.js';
 import { rateLimitKeyForIp } from './ip-key.js';
+import { createPublishedCheck } from './published.js';
 import { TourStats } from './stats.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
 const stat = (c: { env: Env }, tourId: string) => c.env.STATS.get(c.env.STATS.idFromName(tourId));
+
+// Views, events and likes only count for a published tour: a well-formed id for a
+// tour that doesn't exist (or no longer does) must not mint a Durable Object, write
+// an Analytics Engine point or show up in Insights. One per isolate, see published.ts.
+const isPublished = createPublishedCheck();
 
 // Every limiter binding's `simple.period` (wrangler.jsonc), sent as the 429's
 // Retry-After. The limits themselves live in wrangler.jsonc, per env.
@@ -87,6 +92,9 @@ app.post('/api/tours/:tourId/view', async (c) => {
   const parsed = ViewBeaconSchema.safeParse(body.value);
   if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
   const tourId = c.req.param('tourId');
+  if (!(await isPublished(c.env.BUCKET, tourId))) {
+    return c.json({ error: 'tour not found' }, 404);
+  }
   const res = await stat(c, tourId).fetch('https://do/view', { method: 'POST' });
   c.env.EVENTS.writeDataPoint(toDataPoint(tourId, { type: 'view', ...parsed.data }));
   return res;
@@ -98,6 +106,9 @@ app.post('/api/tours/:tourId/events', async (c) => {
   const parsed = AnalyticsEventBatchSchema.safeParse(body.value);
   if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
   const tourId = c.req.param('tourId');
+  if (!(await isPublished(c.env.BUCKET, tourId))) {
+    return c.json({ error: 'tour not found' }, 404);
+  }
   for (const event of parsed.data.events) c.env.EVENTS.writeDataPoint(toDataPoint(tourId, event));
   return c.body(null, 204);
 });
@@ -116,9 +127,7 @@ app.post('/api/tours/:tourId/like', async (c) => {
     return c.json({ error: 'invalid X-Client-Id' }, 400);
   }
   const tourId = c.req.param('tourId');
-  // Only a published tour takes likes: a well-formed id for a tour that doesn't
-  // exist must not mint a Durable Object or store anything.
-  if (!(await c.env.BUCKET.head(pubTourKey(tourId)))) {
+  if (!(await isPublished(c.env.BUCKET, tourId))) {
     return c.json({ error: 'tour not found' }, 404);
   }
   return stat(c, tourId).fetch(`https://do/like?u=${encodeURIComponent(who)}`, {
@@ -136,6 +145,8 @@ app.post('/api/errors', async (c) => {
   return c.body(null, 204);
 });
 
+// Not checked against the bundle: a read stores nothing (an unknown id reads zeros
+// from an empty Durable Object), and the dashboard reads counts for unpublished tours.
 app.get('/api/tours/:tourId/stats', async (c) => {
   const res = await stat(c, c.req.param('tourId')).fetch('https://do/');
   return new Response(res.body, {
