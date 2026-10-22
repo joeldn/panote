@@ -6,8 +6,10 @@ import {
   deletingKey,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
+  OPERATOR_RESTORE_PATH,
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
+  OperatorRestoreRequestSchema,
   OperatorTakedownRequestSchema,
   originalKey,
   PANO_DELETE_CONFLICTS,
@@ -30,6 +32,7 @@ import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
 
+import { BACKUP_CRON, restoreFromBackup, runBackup } from './backup.js';
 import {
   conditionalGet,
   guardedPut,
@@ -143,11 +146,11 @@ export const WRITE_RATE_PERIOD_SECONDS = 60;
 // Every write is rate limited per owner, before any R2 read. Once an account is
 // marked for deletion it is read-only: no write may recreate what the delete is
 // removing. The account route itself stays open for retries, and for a disabled
-// owner too: they may still delete their own account. The operator route has no
-// Auth0 user; its own secret guards it.
+// owner too: they may still delete their own account. The operator routes have no
+// Auth0 user; their own secret guards them.
 app.use('/api/admin/*', async (c, next) => {
   if (!WRITE_METHODS.has(c.req.method)) return next();
-  if (c.req.path === OPERATOR_TAKEDOWN_PATH) return next();
+  if (c.req.path === OPERATOR_TAKEDOWN_PATH || c.req.path === OPERATOR_RESTORE_PATH) return next();
   const { sub: verified } = await authenticate(c.req.raw, c.env);
   const limited = await rateLimit(c.env.WRITE_LIMITER, verified, WRITE_RATE_PERIOD_SECONDS);
   if (limited) return limited;
@@ -519,6 +522,26 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   return c.json({ action, purged: purge.prefixes.length + purge.files.length });
 });
 
+// Operator restore (scripts/restore-backup.ts): copies keys back from a day's backup set,
+// through the binding so each object's metadata comes back exactly. Same token as takedown.
+app.post(OPERATOR_RESTORE_PATH, async (c) => {
+  if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const body = OperatorRestoreRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const { date, keys, overwrite } = body.data;
+  const out = await restoreFromBackup(c.env.BUCKET, date, keys, overwrite);
+  // A share link or bundle that 404ed may be cached as such; the restored ones are purged.
+  const files = out.restored.filter((k) => k.startsWith('pub/') || k.startsWith('slugs/'));
+  purgeLater(c, { prefixes: [], files });
+  // An audit line: counts only, keys carry the owner.
+  console.warn(
+    `[restore] operator restore from ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused`,
+  );
+  return c.json(out);
+});
+
 app.onError(errorHandler);
 
 export default {
@@ -527,8 +550,14 @@ export default {
   // finishes (or re-sweeps) every account marked for deletion, and deletes tile
   // versions a re-tile superseded more than a day ago (no purge: nothing
   // references their URLs any more, and edge copies age out on their own).
+  // The backup has its own, more frequent cron (backup.ts), so it gets its own
+  // invocation's subrequest budget and can resume a set the last run didn't finish.
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
+    if (controller.cron === BACKUP_CRON) {
+      ctx.waitUntil(runBackup(env.BUCKET, now));
+      return;
+    }
     ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
     ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
     ctx.waitUntil(sweepSupersededTiles(env.BUCKET, now));
