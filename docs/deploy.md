@@ -20,7 +20,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | none |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
@@ -53,7 +53,8 @@ anonymous).
 
 `apps/website` and `apps/admin` are Vite + React SPAs, each deployed as a Worker with **static
 assets** on the same host as the APIs. Admin is assets-only; the website also has a small `main`
-script that only runs for `/s/*` (slug redirects and tour page priming, below). Why not Pages, and why
+script that only runs for `/s/*` (slug redirects and tour page priming, below) and `/explore` (its
+title and preview tags, see Explore). Why not Pages, and why
 build-time config: `docs/decisions.md`.
 
 | App | Script (dev / production) | Route (dev / production) | Vite `base` / output |
@@ -70,7 +71,7 @@ Cloudflare resolves that by specificity: "When more than one route pattern could
 URL, the most specific route pattern wins" (Workers docs, [Routes → Matching
 behavior](https://developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior),
 with the example that `example.com/hello/*` takes precedence over `example.com/*`). So
-`/api/admin/*`, `/api/tours/*`, `/api/errors` and `/api/upload-url` stay on the API Workers and `/app`, `/app/*`
+`/api/admin/*`, `/api/tours/*`, `/api/errors`, `/api/explore` and `/api/upload-url` stay on the API Workers and `/app`, `/app/*`
 on admin; everything else lands on the website. The docs' known issue about trailing `/*`
 specificity (`/images/*` vs `/images*` on the same zone,
 [Known issues](https://developers.cloudflare.com/workers/platform/known-issues/)) doesn't apply:
@@ -1281,6 +1282,66 @@ Auth0 user as above and reply to the request.
 
 ---
 
+## Explore
+
+`https://panote.dev/explore` (and `panote.io`) lists every **Public** tour, newest first, 24 to a
+page with a "Load more" cursor. Unlisted tours are never listed. Cards show the cover, title and
+scene count and link to `/s/<slug>`; nothing on them names the owner. Code:
+`services/admin-api/src/explore.ts` (writes), `services/public-api/src/explore.ts` (reads),
+`apps/website/src/explore/`; schemas and keys in `@internal/contracts` (`explore.ts`, `keys.ts`).
+
+**Storage: R2 only, under `explore/`.**
+
+| Key | What | Written by |
+|---|---|---|
+| `explore/index/<rank>-<tourId>.json` | The card: `{ v, tourId, slug, title, sceneCount, cover, publishedAt, listedAt, updatedAt }`. `rank` is `9999999999999 - listedAt ms`, 13 digits, so an R2 list (ascending) is newest-listed first and a page is one `list` call. `cover` is `{ panoId, version, image: "og" \| "preview" }` (the start scene's `og.jpg` or `preview.webp`) or `null` | admin-api, inside the tour's `TourPublisher` |
+| `explore/tours/<tourId>.json` | Pointer `{ v, key }` to the tour's entry, so a removal needs only the tourId | same |
+| `explore/hidden/<tourId>.json` | Operator marker `{ v, hiddenAt }`: never list this tour | the takedown route (`hide` / `unhide`) |
+
+Every key is owner-free, like `pub/`. A tour keeps its `listedAt` (its place in the list) across
+Saves, renames and republishes for as long as it stays listed; switching to Unlisted and back
+lists it as new. The public bundle `pub/tours/<tourId>.json` now also carries
+`customMetadata: { visibility, slug }`, so the read side checks a listed tour with a `HEAD`.
+
+**Writes.** Every publish (each Save), slug rename and visibility change rewrites the entry after
+the bundle: listed while the bundle is Public, the start scene's manifest exists (a ready scene)
+and there is no hidden marker; removed otherwise. These writes are best-effort: a failure is
+logged as `[explore] index update failed` and the publish still succeeds, so at worst a tour is
+missing from Explore until its next Save. Removal on unpublish is not best-effort: the owner's
+Stop sharing, tour delete, account delete (and its daily sweep), and the operator's `unpublish`
+and `delete` (so also any later takedown mode built on them) all go through `unpublish` in
+`publish.ts`, which deletes the bundle, then the entry and pointer, then `publish.json`. If the
+entry delete throws, the request fails and `publish.json` stays, so a retry finds the tour and
+finishes it.
+
+**Reads.** `GET /api/explore[?cursor=<rank>-<tourId>]` on public-api answers
+`{ tours: [...], cursor: string | null }` (`ExplorePageSchema`, which the website validates). It
+re-checks every entry before showing it: dropped if `pub/tours/<tourId>.json` is gone or not
+Public, if `explore/hidden/<tourId>.json` exists, or if the entry doesn't parse or has no scenes.
+So an entry that outlived its tour (a failed removal, a race with an operator hide) is never
+shown. Per page that is one `list` plus a `GET` and two `HEAD`s per entry, and at most three
+`list` calls when many entries are dropped. Responses are `Cache-Control: public, max-age=60` and
+kept in the edge cache (Cache API, keyed by path plus `cursor` only), so a taken-down tour can
+linger on a cached Explore page for up to 60 s; its `/s/<slug>` link stops working at once. A bad
+cursor is `400`; the limiter is `EXPLORE_LIMITER` (Rate limits).
+
+**Exposure: nothing new on the CDN.** `explore/` is outside the CDN WAF rule's three public
+prefixes (`/tiles/`, `/pub/`, `/slugs/`), so `https://cdn.panote.dev/explore/...` is `403` like
+`tours/`; the index is only read through public-api. No WAF or cache rule changes.
+
+**Website.** `/explore` is a page in the SPA, linked from the header and the footer's Product
+column. The website's script also runs for `/explore` (`run_worker_first`) to give it its own
+`<title>`, description, `og:title`, `og:description` and `og:url` (the site-wide preview image
+stays). It is in the production sitemap.
+
+**Hide from Explore without unpublishing.** `takedown.ts --slug <slug> --hide-from-explore`
+writes the hidden marker, then removes the entry. Publish never relists a hidden tour, and the
+read side drops it even if an entry slipped through. `--show-on-explore` deletes the marker and
+relists the tour from its current bundle if it is still published and Public. The marker is
+owner-free and is left behind by a tour or account delete (tourIds are never reused).
+
+---
+
 ## Abuse controls
 
 Groundwork only: no per-owner quota is set yet. Code: `services/public-api/src/index.ts`,
@@ -1304,6 +1365,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
 | `public-api` | `ERRORS_LIMITER` | `POST /api/errors` | client IP (IPv6 per /64) | 20/min | `1204` / `2204` |
+| `public-api` | `EXPLORE_LIMITER` | `GET /api/explore` | client IP (IPv6 per /64) | 60/min | `1205` / `2205` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
@@ -1384,10 +1446,13 @@ on them with the takedown script below.
 Two ways to stop abuse, usually together:
 
 - **Take a tour down.** admin-api's operator-only route `POST /api/admin/operator/takedown`
-  (`{ sub, tourId, action: "unpublish" | "delete" }`, header `X-Operator-Token`) runs exactly what
+  (`{ sub, tourId, action: "unpublish" | "delete" | "hide" | "unhide" }`, header `X-Operator-Token`) runs exactly what
   the owner's own unpublish or tour delete runs, through the tour's `TourPublisher`, with the CDN
   purge. `unpublish` removes the share link, bundle and slug and keeps the tour and panos; `delete`
-  also deletes the tour and every pano no other tour of that owner uses. It answers `404` for a
+  also deletes the tour and every pano no other tour of that owner uses. Both also take the tour
+  off Explore. `hide` only takes it off Explore and keeps it off (the tour stays live by link, so
+  there is nothing to purge); `unhide` lists it again if it is still published and Public (see
+  Explore). It answers `404` for a
   missing or wrong token, and always while the `OPERATOR_TOKEN` secret isn't set on that env, so
   the route doesn't exist until you set it. It skips the write gate (no Auth0 user).
 - **Disable the owner.** A marker `accounts/<owner>/disabled.json` (`{ v, disabledAt, reason? }`).
@@ -1408,7 +1473,7 @@ bucket can't quietly be sent to production's admin-api.
 
 ```bash
 export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
-export OPERATOR_TOKEN=...    # only for --unpublish / --delete
+export OPERATOR_TOKEN=...    # only for a tour action (--unpublish, --delete, --hide-from-explore, --show-on-explore)
 # Report only: which tour the share link is, who owns it, whether they're disabled
 node services/admin-api/scripts/takedown.ts --slug old-town
 # What it would do, without doing it
@@ -1417,6 +1482,9 @@ node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disabl
 node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disable-owner --reason 'report 2026-10-21'
 # Or delete it outright; --tour takes a tourId instead of a slug
 node services/admin-api/scripts/takedown.ts --tour <tourId> --delete
+# Keep it live by link but off Explore (and back again)
+node services/admin-api/scripts/takedown.ts --slug old-town --hide-from-explore
+node services/admin-api/scripts/takedown.ts --slug old-town --show-on-explore
 # An owner alone, by Auth0 user id
 node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --disable-owner
 node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --enable-owner
@@ -1854,12 +1922,13 @@ Run after step 12, before telling anyone the site exists. The first group is wha
 
 ```bash
 # Private prefixes stay private (step 4): every line 403
-for p in panos/x tours/x accounts/x ops/x '' tiles/../panos/x; do
+for p in panos/x tours/x accounts/x ops/x explore/index/x '' tiles/../panos/x; do
   curl -sI --path-as-is -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
 # Public prefixes pass through to R2: 404 for a key that doesn't exist, not 403
 curl -sI -o /dev/null -w '%{http_code}\n' https://cdn.panote.io/tiles/x/manifest.json
 # APIs: 200 (no auth), 401, 401
 curl -s -o /dev/null -w '%{http_code}\n' https://panote.io/api/tours/x/stats
+curl -s -o /dev/null -w '%{http_code}\n' https://panote.io/api/explore
 curl -s -o /dev/null -w '%{http_code}\n' https://panote.io/api/admin/panos
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://panote.io/api/upload-url
 # Apps: 200, 200, 307 to /app/; indexable (no X-Robots-Tag), robots.txt says Allow: /
