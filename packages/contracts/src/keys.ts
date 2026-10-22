@@ -120,6 +120,15 @@ export const previewKey = (p: string, v: string): string =>
 // The link-preview image, same dir as preview.webp.
 export const ogKey = (p: string, v: string): string => `${tileVersionPrefix(p, v)}og.jpg`;
 
+// A tile version dir the tiler saw superseded by a manifest swap, waiting for
+// admin-api's daily sweep to delete it after a grace period. Private: the CDN's
+// WAF only lets tiles/, pub/ and slugs/ through, so the record may name the
+// owner-bearing original key.
+export const TILE_GC_ROOT = 'tile-gc/';
+export const tileGcPrefix = (p: string): string => `${TILE_GC_ROOT}${assertValidId(p, 'panoId')}/`;
+export const tileGcKey = (p: string, v: string): string =>
+  `${tileGcPrefix(p)}${assertValidId(v, 'version')}.json`;
+
 // Share links (plan 3.2): public and owner-free, same rule as tiles/ above.
 export const PUB_TOURS_ROOT = 'pub/tours/';
 export const pubTourKey = (t: string): string =>
