@@ -245,6 +245,31 @@ describe('Explore index: every way off the list', () => {
   });
 });
 
+describe('Explore index: an unreadable pointer', () => {
+  it('removal still finds and deletes the entry by listing the index', async () => {
+    const who = 'ex-badptr';
+    const { tourId } = await publishedTour(who, { visibility: 'public' });
+    const { key } = (await listed(tourId))!;
+    await env.BUCKET.put(exploreTourKey(tourId), 'not json at all');
+    expect((await api(who, 'DELETE', `/tours/${tourId}/publish`)).status).toBe(204);
+    expect(await has(key)).toBe(false);
+    expect(await has(exploreTourKey(tourId))).toBe(false);
+    expect(await indexKeys(tourId)).toEqual([]);
+  });
+
+  it('a republish replaces it without leaving the old entry behind', async () => {
+    const who = 'ex-badptr2';
+    const { tourId } = await publishedTour(who, { visibility: 'public' });
+    const { key } = (await listed(tourId))!;
+    await env.BUCKET.put(exploreTourKey(tourId), JSON.stringify({ v: 1, key: 'pub/x.json' }));
+    await api(who, 'POST', `/tours/${tourId}/publish`, { afterSave: true });
+    const keys = await indexKeys(tourId);
+    expect(keys).toHaveLength(1);
+    expect((await listed(tourId))?.key).toBe(keys[0]);
+    expect(keys[0] === key || !(await has(key))).toBe(true);
+  });
+});
+
 describe('operator hide from Explore', () => {
   it('takes it off the list, keeps the share link, and a later publish leaves it off', async () => {
     const who = 'ex-hide';

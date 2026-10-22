@@ -1,4 +1,5 @@
 import {
+  EXPLORE_INDEX_ROOT,
   EXPLORE_RANK_MAX,
   ExploreCoverSchema,
   exploreCursorOf,
@@ -25,9 +26,10 @@ type StoredPointer = { pointer: ExplorePointer | null };
 
 // null: no pointer. { pointer: null }: one that doesn't parse, still to be removed.
 const readPointer = async (bucket: R2Bucket, tourId: string): Promise<StoredPointer | null> => {
-  const got = await getJson<unknown>(bucket, exploreTourKey(tourId));
-  if (!got) return null;
-  const parsed = ExplorePointerSchema.safeParse(got.value);
+  const obj = await bucket.get(exploreTourKey(tourId));
+  if (!obj) return null;
+  const value: unknown = await obj.json().catch(() => null);
+  const parsed = ExplorePointerSchema.safeParse(value);
   return { pointer: parsed.success ? parsed.data : null };
 };
 
@@ -56,6 +58,21 @@ const readCover = async (
 };
 
 /**
+ * Every index entry filed under this tour, found by listing the whole index. Only for a
+ * pointer that doesn't parse (it can't say where the entry is): rare, so a full list is fine.
+ */
+const deleteEntriesByScan = async (bucket: R2Bucket, tourId: string): Promise<void> => {
+  const suffix = `-${tourId}.json`;
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix: EXPLORE_INDEX_ROOT, ...(cursor ? { cursor } : {}) });
+    const mine = page.objects.map((o) => o.key).filter((k) => k.endsWith(suffix));
+    if (mine.length > 0) await bucket.delete(mine);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+};
+
+/**
  * Takes the tour off Explore: its entry, then its pointer. Idempotent, and it
  * throws on an R2 error, so a takedown that can't finish says so and is retried.
  */
@@ -63,6 +80,7 @@ export const removeFromExplore = async (bucket: R2Bucket, tourId: string): Promi
   const stored = await readPointer(bucket, tourId);
   if (!stored) return;
   if (stored.pointer) await bucket.delete(stored.pointer.key);
+  else await deleteEntriesByScan(bucket, tourId);
   await bucket.delete(exploreTourKey(tourId));
 };
 
@@ -83,6 +101,8 @@ export const syncExplore = async (bucket: R2Bucket, bundle: PublishedTour, now: 
     return;
   }
   const stored = await readPointer(bucket, tourId);
+  // An unreadable pointer can't name its entry: drop whatever is filed under the tour first.
+  if (stored && !stored.pointer) await deleteEntriesByScan(bucket, tourId);
   const kept = stored?.pointer ? listedAtOf(stored.pointer.key) : null;
   const listedAtMs = kept ?? now.getTime();
   const key = exploreEntryKey(listedAtMs, tourId);

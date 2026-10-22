@@ -1,6 +1,6 @@
-import type { ExploreTour } from '@internal/contracts';
+import type { ExplorePage, ExploreTour } from '@internal/contracts';
 import { Button } from '@internal/ui';
-import { createPublicApi, exploreCoverUrl, tilesBaseUrl } from '@internal/web-kit';
+import { createPublicApi, exploreCoverUrl, tilesBaseUrl, type PublicApi } from '@internal/web-kit';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 
@@ -21,6 +21,23 @@ type State =
       cursor: string | null;
       more: 'idle' | 'loading' | 'error';
     };
+
+// public-api stops after a few list calls when it drops many stale entries, so a page can be
+// empty but still have a cursor. Follow it this many more times before showing Load more.
+export const MAX_EMPTY_PAGE_HOPS = 3;
+
+/** One page, skipping past empty pages that still have a cursor (at most MAX_EMPTY_PAGE_HOPS). */
+async function fetchPage(
+  api: PublicApi,
+  cursor: string | null,
+  signal: AbortSignal,
+): Promise<ExplorePage> {
+  let page = await api.explore(cursor, { signal });
+  for (let hop = 0; hop < MAX_EMPTY_PAGE_HOPS && page.tours.length === 0 && page.cursor; hop++) {
+    page = await api.explore(page.cursor, { signal });
+  }
+  return page;
+}
 
 const sceneCount = (n: number) => (n === 1 ? '1 scene' : `${n} scenes`);
 
@@ -70,7 +87,7 @@ export function Explore() {
   useEffect(() => {
     if (!api) return;
     const ac = new AbortController();
-    api.explore(null, { signal: ac.signal }).then(
+    fetchPage(api, null, ac.signal).then(
       (page) => {
         if (!ac.signal.aborted) setState({ status: 'ready', ...page, more: 'idle' });
       },
@@ -92,7 +109,7 @@ export function Explore() {
     pending.current = ac;
     const { cursor } = state;
     setState({ ...state, more: 'loading' });
-    api.explore(cursor, { signal: ac.signal }).then(
+    fetchPage(api, cursor, ac.signal).then(
       (page) => {
         if (ac.signal.aborted) return;
         setState((s) => {

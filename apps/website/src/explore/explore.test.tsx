@@ -16,7 +16,7 @@ import { fakeAuth, LOCAL, renderSite } from '../__fixtures__/auth.js';
 import { AuthEnvContext } from '../auth-context.js';
 import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
-import { EXPLORE_TITLE } from './Explore.js';
+import { EXPLORE_TITLE, MAX_EMPTY_PAGE_HOPS } from './Explore.js';
 
 configure({ asyncUtilTimeout: 5000 });
 beforeAll(async () => {
@@ -128,6 +128,31 @@ describe('/explore', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await screen.findByRole('link', { name: /Tour 5/ });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('skips past empty pages that still have a cursor, up to a cap', async () => {
+    const fetch = stubExplore({
+      '': { tours: [], cursor: '0000000000001-a' },
+      '0000000000001-a': { tours: [], cursor: '0000000000002-b' },
+      '0000000000002-b': { tours: [tour(9)], cursor: null },
+    });
+    renderExplore();
+    await screen.findByRole('link', { name: /Tour 9/ });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(screen.queryByRole('heading', { name: 'No public tours yet' })).toBeNull();
+  });
+
+  it('stops following empty pages after MAX_EMPTY_PAGE_HOPS and offers Load more', async () => {
+    const pages: Record<string, Reply> = {};
+    const cursors = Array.from({ length: 6 }, (_, i) => `000000000000${i}-c`);
+    pages[''] = { tours: [], cursor: cursors[0]! };
+    cursors.forEach((c, i) => {
+      pages[c] = { tours: [], cursor: cursors[i + 1] ?? null };
+    });
+    const fetch = stubExplore(pages);
+    renderExplore();
+    expect(await screen.findByRole('button', { name: 'Load more' })).toBeTruthy();
+    expect(fetch).toHaveBeenCalledTimes(1 + MAX_EMPTY_PAGE_HOPS);
   });
 
   it('shows an empty state when nothing is listed', async () => {

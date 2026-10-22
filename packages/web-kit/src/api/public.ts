@@ -62,7 +62,8 @@ export function createPublicApi(opts: PublicApiOptions = {}): PublicApi {
     if (cursor != null && !EXPLORE_CURSOR_PATTERN.test(cursor)) {
       throw new TypeError(`cursor must match ${EXPLORE_CURSOR_PATTERN}`);
     }
-    const url = `${base}${EXPLORE_PATH}${cursor != null ? `?cursor=${cursor}` : ''}`;
+    const query = cursor != null ? `?${new URLSearchParams({ cursor }).toString()}` : '';
+    const url = `${base}${EXPLORE_PATH}${query}`;
     const res = await doFetch(url, signal ? { method: 'GET', signal } : { method: 'GET' });
     const body = await readJson(res);
     if (!res.ok) throw new ApiError(res.status, body);
