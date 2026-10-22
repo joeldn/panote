@@ -10,6 +10,7 @@ import {
   tilesPerEdge,
 } from '@panote/core';
 import { renderFace, type RgbImage } from './remap.js';
+import { fillBands, planEquirect } from './equirect.js';
 import { equirectSampler, OG_FILE, ogImage } from './og.js';
 import {
   assertPyramidBounds,
@@ -97,24 +98,39 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
       `source is ${meta.width}x${meta.height} (${meta.width * meta.height} px), which exceeds the ${MAX_INPUT_PIXELS}px decode cap`,
     );
 
-  const faceSize = computeFaceSize(meta.width, tileSize, opts.maxSize);
+  // Partial panoramas (wider than 2:1) are padded to 2:1 so they aren't
+  // stretched over the sphere; see equirect.ts. The padded size is planned
+  // here, before the decode, and held to the same pixel cap.
+  const plan = planEquirect(meta.width, meta.height);
+  const faceSize = computeFaceSize(plan.width, tileSize, opts.maxSize);
   const maxLevel = computeMaxLevel(faceSize, tileSize);
   assertPyramidBounds(tileSize, faceSize, maxLevel);
 
   log(`source ${meta.width}x${meta.height} → faceSize ${faceSize}, maxLevel ${maxLevel}`);
+  if (plan.height !== plan.contentHeight)
+    log(
+      `partial panorama: padded to ${plan.width}x${plan.height}${plan.scaled ? ' (downscaled to fit the decode cap)' : ''}`,
+    );
 
-  // Load equirect as raw RGB once.
-  const { data, info } = await sharp(opts.src)
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  // removeAlpha() strips an alpha band if present; it does not force an RGB
-  // colorspace. A grayscale source decodes to 1 channel, and remap.ts's
-  // bilinear sampler indexes with a fixed stride of 3, so silently trusting
-  // `channels: 3` here would read out of bounds and produce mostly-black
-  // tiles with no error. Fail loudly instead.
+  // Load the equirect as raw 8-bit sRGB once. toColourspace('srgb') makes the
+  // conversion explicit for greyscale, CMYK and 16-bit sources (removeAlpha()
+  // only strips an alpha band), so remap.ts's fixed 3-channel stride holds.
+  let decode = sharp(opts.src).toColourspace('srgb').removeAlpha();
+  if (plan.scaled) decode = decode.resize(plan.width, plan.contentHeight, { fit: 'fill' });
+  if (plan.height !== plan.contentHeight)
+    decode = decode.extend({
+      top: plan.top,
+      bottom: plan.height - plan.top - plan.contentHeight,
+      background: { r: 0, g: 0, b: 0 },
+    });
+  const { data, info } = await decode.raw().toBuffer({ resolveWithObject: true });
+  // Defence in depth: if a source ever decoded to anything but 3 channels,
+  // remap.ts would read out of bounds and write mostly-black tiles with no
+  // error. Fail loudly instead.
   if (info.channels !== 3)
     throw new Error(`expected a 3-channel RGB source after removeAlpha, got ${info.channels}`);
+  if (plan.height !== plan.contentHeight)
+    fillBands(data, info.width, info.height, plan.top, plan.contentHeight);
   const srcImg: RgbImage = {
     data,
     width: info.width,
