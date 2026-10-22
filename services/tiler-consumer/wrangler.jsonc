@@ -3,8 +3,8 @@
   // Deploys REQUIRE an environment: `wrangler deploy --env dev|production`.
   // Wrangler does NOT inherit vars/bindings into named environments, so every
   // binding is repeated under each env block. A bare `wrangler deploy` has none.
-  // `main` exports no fetch handler - this Worker is a queue consumer
-  // only, see src/consumer.ts.
+  // `main` exports no fetch handler - this Worker is a queue consumer, plus
+  // the 5-minute health check's Cron Trigger, see src/consumer.ts.
   "name": "panote-tiler-consumer",
   "main": "src/consumer.ts",
   "compatibility_date": "2026-01-01",
@@ -75,10 +75,26 @@
         "R2_BUCKET": "pano-content-dev",
         // Must be on an Email Routing domain; only panote.io has routing.
         "ALERT_EMAIL_FROM": "tiler-alerts@panote.io",
+        // Health check (src/health.ts, docs/deploy.md "Monitoring and alerts"). The
+        // origin the probes ask for; a published tour's slug to probe its page (empty:
+        // skipped); "true" adds two probes through the public URL, where the Access
+        // login redirect counts as up.
+        "HEALTH_SITE_ORIGIN": "https://panote.dev",
+        "HEALTH_TOUR_SLUG": "",
+        "HEALTH_PUBLIC_PROBES": "true",
       },
-      // DLQ alert email (src/alert.ts). Unrestricted on purpose: the recipient
-      // is the ALERT_EMAIL_TO secret, so no address lives in the repo.
+      // DLQ and health alert email (src/alert.ts, src/health.ts). Unrestricted on
+      // purpose: the recipient is the ALERT_EMAIL_TO secret, so no address lives in the repo.
       "send_email": [{ "name": "ALERT_EMAIL" }],
+      // Health check probes: straight into each Worker, past routes and Access.
+      "services": [
+        { "binding": "WEBSITE", "service": "panote-website-dev" },
+        { "binding": "ADMIN_APP", "service": "panote-admin-dev" },
+        { "binding": "PUBLIC_API", "service": "panote-public-api-dev" },
+        { "binding": "ADMIN_API", "service": "panote-admin-api-dev" },
+        { "binding": "UPLOAD_API", "service": "panote-upload-api-dev" },
+      ],
+      "triggers": { "crons": ["*/5 * * * *"] },
     },
     "production": {
       // production is unprovisioned, see docs/deploy.md
@@ -124,8 +140,20 @@
         "R2_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         "R2_BUCKET": "pano-content",
         "ALERT_EMAIL_FROM": "tiler-alerts@panote.io",
+        "HEALTH_SITE_ORIGIN": "https://panote.io",
+        "HEALTH_TOUR_SLUG": "",
+        "HEALTH_PUBLIC_PROBES": "true",
       },
       "send_email": [{ "name": "ALERT_EMAIL" }],
+      // Every target must already be deployed: deploy this Worker last (Production runbook).
+      "services": [
+        { "binding": "WEBSITE", "service": "panote-website" },
+        { "binding": "ADMIN_APP", "service": "panote-admin" },
+        { "binding": "PUBLIC_API", "service": "panote-public-api" },
+        { "binding": "ADMIN_API", "service": "panote-admin-api" },
+        { "binding": "UPLOAD_API", "service": "panote-upload-api" },
+      ],
+      "triggers": { "crons": ["*/5 * * * *"] },
     },
   },
 }

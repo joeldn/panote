@@ -21,9 +21,9 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
 are `false` in both `dev` and `production`: from the first dev deploy
@@ -647,7 +647,7 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --
 ```
 
 `ALERT_EMAIL_TO` is the recipient of the DLQ alert email (see "Tiling failure marker and alerting"
-below). It's a secret only to keep the owner's personal address out of the repo; it must be
+below) and of the health check's alerts (see "Monitoring and alerts"). It's a secret only to keep the owner's personal address out of the repo; it must be
 byte-identical to a verified Email Routing destination address on the account — a Gmail `+tag`
 variant counts as a *different* address, and a mismatch makes `send()` fail with
 `E_RECIPIENT_NOT_ALLOWED`, since `panote.io` isn't onboarded to Email Sending and only verified
@@ -1911,6 +1911,114 @@ the US Copyright Office.
 
 ---
 
+## Monitoring and alerts
+
+What alerts, and how. Until this existed the only alert was the DLQ email above; a Worker
+answering `5xx`, a failed daily cron or a failed CDN purge only showed up in the logs.
+
+### Health check (every 5 minutes)
+
+`tiler-consumer` has a Cron Trigger, `*/5 * * * *`, that runs `runHealthCheck`
+(`services/tiler-consumer/src/health.ts`). It lives there, not in a new Worker or in `admin-api`,
+because `tiler-consumer` already has the `ALERT_EMAIL` binding, the `ALERT_EMAIL_TO` secret and a
+sender on `panote.io`, the only domain with Email Routing: nothing new has to be set up for it
+to email, on dev or production. It also keeps it out of `admin-api`'s cron, which another job
+uses.
+
+**Checks** (`src/health-probes.ts`):
+
+| Check | How | Up when |
+|---|---|---|
+| `website /`, `website /explore` | `WEBSITE` service binding | `200` HTML |
+| `website tour page` (only with `HEALTH_TOUR_SLUG` set) | `WEBSITE`, `/s/<slug>` | `200` HTML with the tour's boot data (`id="pn-boot"`), so the slug and bundle were read from R2 |
+| `admin app /app/` | `ADMIN_APP` | `200` HTML |
+| `public-api /api/explore` | `PUBLIC_API` | `200` JSON with a `tours` array |
+| `admin-api /api/admin/panos`, `upload-api /api/upload-url` | `ADMIN_API`, `UPLOAD_API`, no token | `401`: the Worker ran and refused, it didn't `5xx` |
+| `public URL /` (with `HEALTH_PUBLIC_PROBES` `true`) | global `fetch` of `HEALTH_SITE_ORIGIN`, redirects not followed | `200` HTML, **or a redirect to `*.cloudflareaccess.com`** |
+| `public URL /api/explore` (same) | global `fetch` | `200` JSON with `tours`. An Access redirect here is down: it means the `/api/*` bypass app is gone |
+| `admin-api daily cron` | reads `ops/cron/admin-api-daily.json` | the last run had no task throw and the last clean run is under 26 h old |
+| `cdn purge` | reads `ops/cdn-purge/last-failure.json` | no purge failed in the last hour |
+
+Each probe has a 10 s timeout. Requests carry `user-agent: panote-health-check` and no token.
+
+**Cloudflare Access on dev.** `panote.dev`'s pages are behind Access (Cloudflare Access (dev
+only), above), so a public probe of a page gets a `302` to the login. Most probes therefore go
+through **service bindings**, straight into each Worker: that proves the Worker's code runs and
+answers, and never meets Access or a route. The two `public URL` probes then check the route and
+Access setup the way a visitor meets it, and count the Access login redirect as up for a page
+(production has no Access, so there it's a plain `200`). Not verified live: whether a fetch from
+a Worker with no route of its own to a route on the same account reaches the Worker on that
+route. If the two `public URL` checks fail on every run while the service-binding ones pass, set
+`HEALTH_PUBLIC_PROBES` to `false` in that env block and redeploy; the rest keep working.
+
+**When it emails.** A check is down after **2 failures in a row** (`FAILURES_TO_ALERT`) and up
+again after one pass. An email goes out whenever the set of down checks differs from what the
+last email said, at most **one per 30 minutes** (`ALERT_THROTTLE_MS`, shared with the DLQ alert,
+separate window): subject `[panote] <host> DOWN (N): <checks>` with each check's status, or
+`[panote] <host> recovered: all checks pass`. A flap that ends where the last email left it, inside
+the window, sends nothing; one that doesn't is sent when the window closes, as things stand then.
+A failed send is retried on the next run. With `ALERT_EMAIL_TO` unset it logs
+`[health] skip alert` and sends nothing, like the DLQ alert. There is no reminder while something
+stays down.
+
+**State** is one small object, `ops/health/state.json` in the content bucket
+(`{ failures, announced, lastSentAt, cronMissingSince }`), written only when it changes. Like the
+DLQ throttle it sits under `ops/`, which the CDN never serves. If it can't be read the check
+starts from scratch, which can mean one email too many, never none.
+
+**Logs.** Every failing check, every run: `[health] check failed check=<name> detail=<status>`.
+Also `[health] alert sent`, `[health] alert throttled`, `[health] failed to send alert: code=…`.
+Details are statuses and error names only.
+
+**Vars** (both env blocks of `services/tiler-consumer/wrangler.jsonc`):
+`HEALTH_SITE_ORIGIN` (`https://panote.dev` / `https://panote.io`), `HEALTH_TOUR_SLUG` (empty: no
+tour page probe; set it to a published Unlisted or Public tour that should stay up) and
+`HEALTH_PUBLIC_PROBES` (`true`). After changing one, run
+`pnpm --filter @service/tiler-consumer run types` and commit `env.d.ts` (its header hash moves).
+
+### Daily cron and CDN purge failures
+
+- **Daily cron.** `admin-api`'s `scheduled` handler runs its tasks (`slug-aliases`,
+  `account-deletions` with its CDN purge, `tile-gc`) through `runDailyCron`
+  (`services/admin-api/src/cron-status.ts`). Each task that throws logs
+  `[cron] daily task failed task=<name> error=<error name>`, and every run writes
+  `ops/cron/admin-api-daily.json`: `{ lastRunAt, lastOkAt, failed }`, where `lastOkAt` only moves
+  on a run with no task failed. The health check fails `admin-api daily cron` when the last run
+  failed (until the next clean run) or the last clean run is over 26 h old (the cron stopped). On
+  a bucket with no status yet, it waits 26 h from the first time it saw that before failing. A
+  task's per-item failures that it logs and carries on from (one account, one tile version) don't
+  count: only a task that throws.
+- **CDN purge.** A failed purge already logs `cdn purge failed (…)`. It now also overwrites
+  `ops/cdn-purge/last-failure.json` (`{ at, detail }`, the same status and error codes as the log
+  line), from both request handlers and the cron. The `cdn purge` check fails for an hour after
+  the latest one, so a failure emails (twice-in-a-row rule: from about 5 minutes after) and
+  recovers on its own. A burst of deletes past the Free plan's 5 prefix purges a minute (`429`)
+  alerts too, since those tiles do stay cached until their TTL. A skipped purge (token or zone id
+  not configured, production today) records nothing.
+
+### Not covered
+
+- **A Cloudflare-wide outage.** Every check runs inside Cloudflare; if Cloudflare, or Workers
+  Cron Triggers, are down, nothing runs and nothing emails.
+- `5xx` on routes nothing probes (an editor save, a like). Those show in Workers Logs and the
+  error reports (Error reporting), not here.
+- The tiler container and the upload queue: dead letters still alert through the DLQ email.
+- `cdn.panote.dev`/`cdn.panote.io` themselves (R2 custom domain), unless the tour page probe is set.
+
+**TODO (Joel): add an external uptime monitor.** Set up a free monitor from any external uptime
+service (one that checks from outside Cloudflare) on `https://panote.io/` and
+`https://panote.io/api/explore` once production is up, alerting to the same inbox. It's the only
+thing that sees a Cloudflare-wide outage or a DNS problem with `panote.io`. Not for `panote.dev`:
+Access would make its pages look down. Nothing has been signed up for.
+
+**Status: code only, not deployed.** After the next dev deploy: check `tiler-consumer`'s logs for
+`[health]` lines (none expected while everything passes), and after the next 03:17 UTC run, for
+`ops/cron/admin-api-daily.json` in `pano-content-dev`. To see an alert end to end, set
+`HEALTH_TOUR_SLUG` on dev to a slug that doesn't exist and deploy: the tour page check fails, and
+an email arrives about 10 minutes later; set it back and the recovery follows within 30 minutes.
+
+---
+
 ## Insights (unit B5)
 
 `public-api` writes one Workers Analytics Engine data point per viewer event (`view`, `scene`,
@@ -2139,8 +2247,10 @@ the account has the resources the config names.
     `workflow_dispatch`, environment `production`, from `main`, and approve it. The four Worker
     jobs and two app jobs run in parallel; `admin-api` binds `public-api`'s `TourStats` across
     scripts, so if `admin-api` fails on this first run because `panote-public-api` doesn't exist
-    yet, re-run that one job once `public-api` is in. The `smoke-test` job then checks the public
-    URLs (below).
+    yet, re-run that one job once `public-api` is in. Likewise `tiler-consumer` has service
+    bindings to the other five production Workers (Monitoring and alerts): if its job fails
+    because one of them doesn't exist yet, re-run it once they are all in. The `smoke-test` job
+    then checks the public URLs (below).
     Verify: every job green, `smoke-test` included.
     **Status: outstanding.**
 
@@ -2149,6 +2259,14 @@ the account has the resources the config names.
     `{ "object": { "key": "panos/alert-test/alert-test/original" }, "action": "PutObject" }`.
     Verify: an email `[panote] tiling failed permanently (1) - pano-uploads-dlq` arrives, and
     `tiler-consumer`'s logs show the marker skipped (the key doesn't exist).
+    **Status: outstanding.**
+
+14. **Health check.** Set `HEALTH_TOUR_SLUG` in the `production` block of
+    `services/tiler-consumer/wrangler.jsonc` to a published tour's slug, and check the Worker's
+    logs for `[health] check failed` (Monitoring and alerts). Set up the external uptime monitor
+    for `panote.io` (same section, the TODO at the end).
+    Verify: no `[health] check failed` line ten minutes after the deploy; the first daily cron
+    after it writes `ops/cron/admin-api-daily.json`.
     **Status: outstanding.**
 
 ### Post-provision verification
