@@ -255,7 +255,7 @@ export const AccountDeletionRecordSchema = z.object({
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
 
-// The record at tileGcKey, written create-only by the tiler after a manifest
+// The record at tileGcKey, overwritten by the tiler after every confirmed manifest
 // swap. `tilerVersion` is the TILER_OUTPUT_VERSION of the job that superseded it,
 // so the sweep can tell whether the current original would tile into this dir again.
 export const TileGcRecordSchema = z.object({

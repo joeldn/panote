@@ -944,6 +944,10 @@ deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job 
 swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
 (the original is gone by then).
 
+After a tiler rollback, don't run `retile.ts` around the cron time (03:17 UTC). A job that starts
+writing into an old version dir while the sweep is deleting it would leave a manifest pointing at
+a half-deleted dir. The window is seconds, but there is no lock between the two.
+
 The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
 fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
 anyway; uncached ones would 404.
