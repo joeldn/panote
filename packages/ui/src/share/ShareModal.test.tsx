@@ -44,7 +44,7 @@ describe('share links', () => {
     expect(embedSnippet(embedSrc('https://panote.io/', 'st-lawrence-jewry'), 480)).toBe(
       '<iframe src="https://panote.io/s/st-lawrence-jewry/embed"\n' +
         '  width="100%" height="480" style="border:0"\n' +
-        '  allow="fullscreen; xr-spatial-tracking"></iframe>',
+        '  allow="fullscreen"></iframe>',
     );
     expect(embedSrc(SITE, 'a-b', 'pano-1')).toBe(`${SITE}/s/a-b/embed?pano=pano-1`);
     expect(embedSrc(SITE, 'a-b', 'pano-1', 'pt-BR')).toBe(
@@ -294,6 +294,8 @@ describe('ShareModal', () => {
       const frame = screen.getByTitle('Embed preview');
       expect(frame.getAttribute('src')).toBe(`${SITE}/s/old-town/embed`);
       expect(frame.getAttribute('height')).toBe('480');
+      // No VR mode, so no xr-spatial-tracking: the embed asks only for fullscreen.
+      expect(frame.getAttribute('allow')).toBe('fullscreen');
     });
   });
 
