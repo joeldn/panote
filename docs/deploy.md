@@ -1400,7 +1400,7 @@ define user content to a private, dated prefix in the **same** bucket every day
 **What's in a set.** `BACKUP_SOURCES` in `@internal/contracts` (`keys.ts`): every `tours/<owner>/<tourId>/*.json`
 (`tour.json`, `publish.json`, `sharing-stopped.json`), each pano's `panos/<owner>/<panoId>/config.json`,
 `pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, and the
-account markers `accounts/<owner>/{deletion,disabled}.json`. Not in it: originals (large, and the
+account markers `accounts/<owner>/{deletion,disabled}.json`. Not in it: floor-plan images (`pub/plans/`, not JSON, so a restored `tour.json` can name a plan image that is gone; re-upload it in the editor), originals (large, and the
 only copy of the photo, so a lost original is still lost), tiles and manifests (rebuilt from the
 original by a re-tile, "Re-tiling" above), and the derived or operational prefixes `tile-gc/`,
 `upload-log/`, `quarantine/` and `ops/`. Each copy keeps the object's content type, cache control
@@ -1746,8 +1746,8 @@ Two ways to stop abuse, usually together:
 `services/admin-api/scripts/takedown.ts` does both, and on top of them:
 
 - **`--quarantine <caseId>`** keeps a private copy before anything is removed: the tour's
-  `tour.json` and `publish.json`, its public bundle, its slug records, the floor-plan image the
-  tour or its bundle names, and the original and
+  `tour.json` and `publish.json`, its public bundle, its slug records, every floor-plan image under
+  `pub/plans/<tourId>/` (named or not), and the original and
   `config.json` of every scene in the tour or its bundle, each copied byte for byte (content type
   kept, create-only so a rerun keeps the first copy) to `quarantine/<caseId>/<its key>`, plus
   `quarantine/<caseId>/case.json` (`{ caseId, sub, tourIds, keys, firstAt, lastAt, reason? }`).
