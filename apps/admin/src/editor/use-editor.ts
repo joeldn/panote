@@ -50,8 +50,11 @@ export interface EditorNotice {
   text: string;
   /** In-editor route (relative to the tour), e.g. `share/link`. */
   link?: { to: string; label: string };
-  /** A button on the notice; `republish` retries publishing the saved tour. */
-  action?: 'republish';
+  /**
+   * A button on the notice: `republish` retries publishing the saved tour, `discard-draft`
+   * drops restored unsaved changes and reloads the saved tour.
+   */
+  action?: 'republish' | 'discard-draft';
 }
 
 export type Failures = Partial<Record<DocKey, DocFailure>>;
@@ -64,15 +67,8 @@ function browserStorage(): DraftStorage | null {
   }
 }
 
-const describeScenes = (docs: EditorDocs, keys: DocKey[]): string =>
-  keys
-    .map((k) => {
-      const id = panoIdOf(k);
-      if (id === null) return 'the tour details';
-      const s = docs.scenes[id];
-      return s?.kind === 'config' ? `“${s.current.title}”` : 'a pano';
-    })
-    .join(', ');
+/** How long after the last edit the draft is written to storage. */
+export const AUTOSAVE_DELAY_MS = 1000;
 
 const REASONS: Record<string, string> = {
   'not-ready': 'still processing',
@@ -215,9 +211,13 @@ export function useEditor(
   const publishSeq = useRef(0);
   const publishTail = useRef<Promise<void>>(Promise.resolve());
   const publishCount = useRef(0);
+  // True while unsaved changes are being thrown away on purpose: autosave mustn't keep them.
+  const draftOffRef = useRef(false);
 
   // Synchronous so a save started right after an edit sees it.
   const dispatch = useCallback((action: EditorAction) => {
+    // A new edit is a new unsaved change worth keeping.
+    if (action.type !== 'load') draftOffRef.current = false;
     const prev = docsRef.current?.tour.etag;
     docsRef.current = editorReducer(docsRef.current, action);
     const next = docsRef.current?.tour.etag;
@@ -249,24 +249,35 @@ export function useEditor(
         }
         let fresh = fromServer(res.data);
         const draft = storage ? readDraft(storage, user, tourId) : null;
-        if (draft) {
+        if (storage && draft) {
           const applied = applyDraft(fresh, draft);
           fresh = applied.docs;
-          if (applied.restored.length) {
+          if (applied.restored.length || applied.conflicts.length) {
             notify({
               id: 'draft',
               tone: 'info',
-              text: 'Restored your unsaved changes from before you signed in again. Save to keep them.',
+              // Save is blocked while a conflict is open: point at the banner instead.
+              text: applied.conflicts.length
+                ? 'Restored your unsaved changes. This tour also changed elsewhere, so choose Reload or Overwrite above.'
+                : 'Restored your unsaved changes. Save to keep them.',
+              action: 'discard-draft',
             });
+          }
+          if (applied.conflicts.length) {
+            // The server copy moved on since the draft: the conflict banner asks which to keep.
+            setFailures(
+              Object.fromEntries(applied.conflicts.map((k) => [k, { kind: 'conflict' as const }])),
+            );
           }
           if (applied.discarded.length) {
             notify({
               id: 'draft-conflict',
               tone: 'warn',
-              text: `Some unsaved changes were dropped because ${describeScenes(fresh, applied.discarded)} changed elsewhere while you were signed out.`,
+              text: 'Some unsaved changes couldn’t be restored because their pano is no longer in this tour.',
             });
           }
-          clearDraft(storage!, user, tourId);
+          // Keep only what was restored, so a tab lost right now still has it.
+          if (writeDraft(storage, user, fresh) === 'clean') clearDraft(storage, user, tourId);
         }
         dispatch({ type: 'load', docs: fresh });
         publishRef.current = res.data.publish ?? null;
@@ -281,7 +292,7 @@ export function useEditor(
     return () => {
       cancelled = true;
     };
-  }, [api, tourId, user, storage, dispatch, notify, loadKey]);
+  }, [api, tourId, user, storage, dispatch, notify, setFailures, loadKey]);
 
   useBeforeSignIn({
     prepare: () => {
@@ -313,6 +324,41 @@ export function useEditor(
   useEffect(() => {
     if (ready && dirtyCount === 0 && storage) clearDraft(storage, user, tourId);
   }, [ready, dirtyCount, storage, user, tourId]);
+
+  // Autosave: unsaved edits go to storage shortly after the last change, and at once when
+  // the page is hidden or unloaded (a phone may discard a background tab without warning,
+  // and iOS mostly skips beforeunload). A full or blocked storage just means no draft.
+  const writeNow = useCallback(() => {
+    const current = docsRef.current;
+    if (!storage || !current || draftOffRef.current) return;
+    if (dirtyKeys(current).length === 0) return;
+    // Two tabs on one tour share this key and the last write wins: both are this user's
+    // edits, and Save's ETag conflict check still guards the server copy.
+    writeDraft(storage, user, current);
+  }, [storage, user]);
+  useEffect(() => {
+    if (!ready || !dirtyCount) return;
+    const timer = setTimeout(writeNow, AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [ready, dirtyCount, docs, writeNow]);
+  useEffect(() => {
+    if (!ready) return;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') writeNow();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', writeNow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', writeNow);
+    };
+  }, [ready, writeNow]);
+
+  /** Leaving without saving: drop the stored draft and keep autosave from writing it again. */
+  const forgetDraft = useCallback(() => {
+    draftOffRef.current = true;
+    if (storage) clearDraft(storage, user, tourId);
+  }, [storage, user, tourId]);
 
   /** `auto`: the editor's own retry once the tiles a `not-ready` publish waited on are in. */
   const republishWith = useCallback(
@@ -605,6 +651,41 @@ export function useEditor(
     await save({ resolving: true });
   }, [failures, fetchDoc, dispatch, notify, dismiss, save]);
 
+  /** The restored-draft notice's Discard: drop every unsaved change and take the saved tour. */
+  const discardDraft = useCallback(async () => {
+    if (savingRef.current) return;
+    forgetDraft();
+    try {
+      const res = await api.getTourWithConfigs(tourId);
+      // A save started during the fetch wins: its result is what the editor now holds.
+      if (savingRef.current) {
+        draftOffRef.current = false;
+        writeNow();
+        return;
+      }
+      if (res.status !== 'ok') throw new Error('This tour no longer exists.');
+      // A sync still out would land on the fresh copy as if it were older: drop it.
+      syncSeq.current++;
+      dispatch({ type: 'load', docs: fromServer(res.data) });
+      setFailures({});
+      publishRef.current = res.data.publish ?? null;
+      setPublish(publishRef.current);
+      dismiss('draft');
+      dismiss('draft-conflict');
+      dismiss('conflict-error');
+    } catch (e) {
+      // The edits are still on screen: keep autosaving them.
+      draftOffRef.current = false;
+      writeNow();
+      notify({
+        id: 'draft',
+        tone: 'warn',
+        text: `Your unsaved changes couldn’t be discarded (${(e as Error).message}). Try again.`,
+        action: 'discard-draft',
+      });
+    }
+  }, [api, tourId, forgetDraft, writeNow, dispatch, setFailures, dismiss, notify]);
+
   const dirty = docs ? dirtyKeys(docs) : [];
 
   return {
@@ -631,6 +712,8 @@ export function useEditor(
     notify,
     dismiss,
     syncAppended,
+    discardDraft,
+    forgetDraft,
   };
 }
 
