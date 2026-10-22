@@ -4,6 +4,7 @@ import {
   AccountDeleteRequestSchema,
   AccountDeletionRecordSchema,
   AccountDisabledRecordSchema,
+  TourOwnerRecordSchema,
   CLIENT_ID_PATTERN,
   OperatorTakedownRequestSchema,
   PANO_DELETE_CONFLICTS,
@@ -113,6 +114,13 @@ describe('AccountDisabledRecordSchema', () => {
     expect(
       AccountDisabledRecordSchema.safeParse({ ...record, reason: 'x'.repeat(501) }).success,
     ).toBe(false);
+  });
+});
+
+describe('TourOwnerRecordSchema', () => {
+  it('needs a non-empty sub', () => {
+    expect(TourOwnerRecordSchema.safeParse({ v: 1, sub: 'auth0|me' }).success).toBe(true);
+    expect(TourOwnerRecordSchema.safeParse({ v: 1, sub: '' }).success).toBe(false);
   });
 });
 

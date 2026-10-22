@@ -7,6 +7,7 @@ import {
   storedSlugKey,
   tilesPrefix,
   tourKey,
+  tourOwnerKey,
   userPanosPrefix,
   userToursPrefix,
   type AccountDeletionRecord,
@@ -141,6 +142,7 @@ const deleteOwnedTour = async (
     // While tour.json exists a retry lists this tour again, so stats go before it.
     await deps.clearStats(tourId);
     await bucket.delete(tourKey(sub, tourId));
+    await bucket.delete(tourOwnerKey(tourId));
     // As tour delete does: a publish queued behind the first unpublish still saw
     // tour.json and republished. Any publish after this sees no tour.json and
     // unpublishes itself (publish.ts commit).

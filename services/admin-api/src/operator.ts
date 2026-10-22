@@ -1,4 +1,12 @@
-import { accountDisabledKey, PANO_PATTERN, publishKey, tourKey } from '@internal/contracts';
+import {
+  accountDisabledKey,
+  PANO_PATTERN,
+  publishKey,
+  tourKey,
+  tourOwnerKey,
+  type TourOwnerRecord,
+} from '@internal/contracts';
+import { putJson } from '@internal/worker-kit/r2-binding';
 
 // Helpers for the operator-only takedown route (OPERATOR_TAKEDOWN_PATH in
 // index.ts; scripts/takedown.ts, "Takedown" in docs/deploy.md). It needs no
@@ -39,4 +47,17 @@ export const tourExists = async (
     bucket.head(publishKey(sub, tourId)),
   ]);
   return !!tour || !!record;
+};
+
+/**
+ * Writes the tour's owner pointer (tourOwnerKey) for the takedown script, create-only:
+ * a tourId is only ever one owner's, so an existing pointer is already right.
+ */
+export const recordTourOwner = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+): Promise<void> => {
+  const record: TourOwnerRecord = { v: 1, sub };
+  await putJson(bucket, tourOwnerKey(tourId), record, { etagDoesNotMatch: '*' });
 };

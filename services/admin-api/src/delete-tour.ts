@@ -1,4 +1,4 @@
-import { tilesPrefix, tourKey, type TourDoc } from '@internal/contracts';
+import { tilesPrefix, tourKey, tourOwnerKey, type TourDoc } from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
@@ -47,6 +47,8 @@ export const deleteTour = async (
   const referenced = await referencedPanoIds(bucket, sub, tourId);
   const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced, prefixes);
   await bucket.delete(tourKey(sub, tourId));
+  // The operator's owner pointer (it holds the sub) goes with the tour.
+  await bucket.delete(tourOwnerKey(tourId));
   // Again: a publish serialized before this point may have re-published it.
   files.push(...(await unpublishTour()));
 

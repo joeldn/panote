@@ -47,7 +47,7 @@ import {
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
-import { isAccountDisabled, isOperator, tourExists } from './operator.js';
+import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { referencedPanoIds } from './references.js';
@@ -289,6 +289,7 @@ app.post('/api/admin/tours', async (c) => {
     { etagDoesNotMatch: '*' },
     tourCustomMetadata(parsed.data),
   );
+  await recordTourOwner(c.env.BUCKET, sub, tourId);
   return c.json({ tourId }, 201);
 });
 
@@ -393,6 +394,8 @@ app.post('/api/admin/tours/:tourId/publish', async (c) => {
   const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
   const out = await publisher(c.env, tourId).publish(sub, tourId, body.data);
+  // Tours created before the owner pointer existed get one when they're (re)published.
+  if (out.status < 300) await recordTourOwner(c.env.BUCKET, sub, tourId);
   return c.json(out.body, out.status);
 });
 
