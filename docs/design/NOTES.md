@@ -68,6 +68,10 @@ the code wins:
   dashboard (`/panos/unused`), where the owner can put it back into a tour
   from the editor's library or delete it for good. (Deleting a whole tour
   deletes the panos only it used.)
+- **Embed `allow` list.** The README's embed snippet asks for
+  `allow="fullscreen; xr-spatial-tracking"`. The code asks only for
+  `fullscreen`: there is no VR mode, so the snippet shouldn't imply one.
+  Embeds already pasted with the old list keep working.
 
 ## Auth
 
