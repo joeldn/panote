@@ -138,9 +138,9 @@ describe('website routes', () => {
     expect(media).toContain('youtube-nocookie.com');
     expect(media).toContain('sees your IP address and may set cookies');
     expect(await textOf('Backups')).toContain(
-      'a tour or account you delete can remain in these private backups for up to 30 days',
+      'a tour or account you delete can remain in these private backups for up to 31 days',
     );
-    expect(await textOf('How long we keep things')).toContain('Backups: 30 days.');
+    expect(await textOf('How long we keep things')).toContain('Backups: up to 31 days.');
     const basis = await textOf('Why we’re allowed to');
     expect(basis).toContain('our contract with you');
     expect(basis).toContain('legitimate interest');
