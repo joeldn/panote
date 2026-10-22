@@ -20,6 +20,34 @@ describe('SignInModal', () => {
     expect(screen.getByRole('link', { name: 'Terms' }).getAttribute('href')).toBe('/terms');
   });
 
+  it('renders every provider it is given, in order, with its brand icon', () => {
+    const options = [
+      google,
+      { id: 'apple', label: 'Apple', icon: 'fa-brands fa-apple' },
+      { id: 'windowslive', label: 'Microsoft', icon: 'fa-brands fa-microsoft' },
+      { id: 'facebook', label: 'Facebook', icon: 'fa-brands fa-facebook' },
+    ];
+    const onSignIn = vi.fn(() => new Promise<void>(() => {}));
+    render(<SignInModal open onClose={() => {}} options={options} onSignIn={onSignIn} />);
+    const buttons = screen.getAllByRole('button', { name: /^Continue with / });
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      'Continue with Google',
+      'Continue with Apple',
+      'Continue with Microsoft',
+      'Continue with Facebook',
+    ]);
+    expect(buttons.map((b) => b.querySelector('i')?.className)).toEqual(options.map((o) => o.icon));
+    fireEvent.click(buttons[2]!);
+    expect(onSignIn).toHaveBeenCalledWith('windowslive');
+  });
+
+  it('shows only the providers it is given', () => {
+    render(<SignInModal open onClose={() => {}} options={[google]} onSignIn={vi.fn()} />);
+    expect(
+      screen.getAllByRole('button', { name: /^Continue with / }).map((b) => b.textContent),
+    ).toEqual(['Continue with Google']);
+  });
+
   it('shows a failed start and lets the user retry', async () => {
     const onSignIn = vi.fn().mockRejectedValueOnce(new Error('popup blocked'));
     render(<SignInModal open onClose={() => {}} options={[google]} onSignIn={onSignIn} />);
