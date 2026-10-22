@@ -6,7 +6,7 @@ import {
   tourOwnerKey,
   type TourOwnerRecord,
 } from '@internal/contracts';
-import { putJson } from '@internal/worker-kit/r2-binding';
+import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 
 // Helpers for the operator-only takedown route (OPERATOR_TAKEDOWN_PATH in
 // index.ts; scripts/takedown.ts, "Takedown" in docs/deploy.md). It needs no
@@ -72,4 +72,18 @@ export const recordTourOwner = async (
       e instanceof Error ? e.name : 'unknown error',
     );
   }
+};
+
+/**
+ * Removes the owner pointer for a tour that has no tour.json (a publish-only leftover),
+ * but only if it names this owner: anyone can DELETE any tourId, and must not clear
+ * another owner's pointer by doing so.
+ */
+export const forgetTourOwner = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+): Promise<void> => {
+  const got = await getJson<TourOwnerRecord>(bucket, tourOwnerKey(tourId)).catch(() => null);
+  if (got?.value.sub === sub) await bucket.delete(tourOwnerKey(tourId));
 };

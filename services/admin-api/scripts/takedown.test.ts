@@ -527,14 +527,18 @@ describe('quarantine', () => {
     expect(objects.get(originalKey(SUB, 'p-1'))).toEqual(bytes);
   });
 
-  it('skips what is not there, and keeps the first copy on a rerun', async () => {
+  it('skips what is not there, and keeps a matching first copy on a rerun', async () => {
     const { store, objects } = seed();
     expect(await copyToQuarantine(store, CASE, configKey(SUB, 'p-2'))).toBe(false);
     await copyToQuarantine(store, CASE, originalKey(SUB, 'p-2'));
-    objects.set(originalKey(SUB, 'p-2'), 'changed since');
+    const first = objects.get(quarantineKey(CASE, originalKey(SUB, 'p-2')));
     expect(await copyToQuarantine(store, CASE, originalKey(SUB, 'p-2'))).toBe(true);
-    const kept = objects.get(quarantineKey(CASE, originalKey(SUB, 'p-2'))) as Uint8Array;
-    expect(new TextDecoder().decode(kept)).toBe('original two');
+    expect(objects.get(quarantineKey(CASE, originalKey(SUB, 'p-2')))).toBe(first);
+    // The source changed since: the old copy no longer vouches for it.
+    objects.set(originalKey(SUB, 'p-2'), 'changed since');
+    await expect(copyToQuarantine(store, CASE, originalKey(SUB, 'p-2'))).rejects.toThrow(
+      /pick a new case id/,
+    );
   });
 
   it('throws rather than report a copy that is not there', async () => {
@@ -562,6 +566,20 @@ describe('quarantine', () => {
     await expect(copyToQuarantine(changed.store, CASE, originalKey(SUB, 'p-1'))).rejects.toThrow(
       /differs/,
     );
+  });
+
+  it('on a rerun, refuses an existing copy that is short or different, and keeps it', async () => {
+    const { store, objects } = seed();
+    const dest = quarantineKey(CASE, originalKey(SUB, 'p-1'));
+    objects.set(dest, 'original on'); // short: a run that failed its check
+    await expect(copyToQuarantine(store, CASE, originalKey(SUB, 'p-1'))).rejects.toThrow(
+      /existing quarantine copy .* is 11 bytes, not 12; keep it and pick a new case id/,
+    );
+    objects.set(dest, 'ORIGINAL ONE'); // same size, other bytes
+    await expect(copyToQuarantine(store, CASE, originalKey(SUB, 'p-1'))).rejects.toThrow(
+      /existing quarantine copy .* differs .*pick a new case id/,
+    );
+    expect(objects.get(dest)).toBe('ORIGINAL ONE');
   });
 
   it('refuses an unreadable case record, and one changed while it was being written', async () => {

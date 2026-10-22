@@ -1418,9 +1418,12 @@ illegal, other), what you did and when, and the outcome. Nothing in the bucket r
    statement under penalty of perjury; a signature (a typed name will do). If anything is missing,
    reply asking for it and do nothing else yet.
 2. Run the report-only command on the link to find the tour and owner, then
-   `--unpublish` (the case log, not the bucket, records why). That takes the share link down and keeps the tour in the
-   owner's account so it can be restored, **but it leaves `tiles/<panoId>/` reachable by direct
-   URL**: anyone who kept a tile or preview URL can still load the image. For the infringing image
+   `--unpublish` (the case log, not the bucket, records why). That takes the share link down and
+   keeps the tour in the owner's account so it can be restored, **but it leaves
+   `tiles/<panoId>/` reachable by direct URL**: anyone who kept a tile or preview URL can still
+   load the image. And without `--disable-owner` the owner can share it again from the share
+   modal straight away (only the editor's Saves leave it off), so add `--disable-owner` while the
+   case is open if they shouldn't. For the infringing image
    itself, use `--disable-owner --quarantine <case id>` (keeps a copy for the dispute and deletes
    the tour, its panos and their tiles, purged) or, if nothing needs keeping,
    `--delete --nothing-to-preserve`. A counter-notice can then only restore from the quarantine

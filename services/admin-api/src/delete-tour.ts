@@ -8,6 +8,7 @@ import {
 import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
+import { forgetTourOwner } from './operator.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
 
@@ -49,7 +50,10 @@ export const deleteTour = async (
   const result = (): CdnPurge => mergePurges({ prefixes, files });
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
   const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
-  if (!own) return result();
+  if (!own) {
+    await forgetTourOwner(bucket, sub, tourId);
+    return result();
+  }
   const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
 
   const referenced = await referencedPanoIds(bucket, sub, tourId);

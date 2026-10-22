@@ -345,6 +345,29 @@ describe('the tour owner pointer (tourOwnerKey)', () => {
     }
   });
 
+  it("goes with a publish-only tour's delete, but never another owner's pointer", async () => {
+    const who = 'ptr-pubonly';
+    const tourId = 'ptr-pubonly-tour';
+    await put(publishKey(subOf(who), tourId), {
+      slug: 'ptr-pubonly-live',
+      visibility: 'public',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+    });
+    await put(tourOwnerKey(tourId), { v: 1, sub: subOf(who) });
+    const stranger = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: bearer('ptr-stranger'),
+    });
+    expect(stranger.status).toBe(204);
+    expect(await has(tourOwnerKey(tourId))).toBe(true);
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: bearer(who),
+    });
+    expect(r.status).toBe(204);
+    expect(await has(tourOwnerKey(tourId))).toBe(false);
+  });
+
   it('goes with the tour on an operator delete and on an account delete', async () => {
     const sub = subOf('ptr-del');
     const s = await seedTour(sub, 'ptr-del');

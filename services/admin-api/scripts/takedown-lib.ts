@@ -454,11 +454,30 @@ const md5Etag = (etag: string | null): string | null =>
   etag && /^"?[0-9a-f]{32}"?$/i.test(etag) ? etag.replace(/"/g, '').toLowerCase() : null;
 
 /**
+ * Throws unless the copy at `dest` has `key`'s size, and its ETag where both are content
+ * hashes. `problem` says what's wrong with a copy that fails.
+ */
+async function verifyCopy(
+  store: TakedownStore,
+  key: string,
+  dest: string,
+  source: { bytes: number; etag: string | null },
+  problem: (what: string) => string,
+): Promise<void> {
+  const [head, listed] = await Promise.all([store.head(dest), store.listObjects(dest)]);
+  const size = listed.find((o) => o.key === dest)?.size;
+  if (!head.ok || size === undefined) throw new Error(problem('is missing'));
+  if (size !== source.bytes) throw new Error(problem(`is ${size} bytes, not ${source.bytes}`));
+  const [want, got] = [md5Etag(source.etag), md5Etag(head.etag)];
+  if (want && got && want !== got) throw new Error(problem(`differs from ${key}`));
+}
+
+/**
  * Copies one object to quarantine/<caseId>/<key>, byte for byte with its content type.
- * Create-only: rerunning a case keeps the first copy (checked when it was made). False
- * when there's nothing at `key`. Throws unless a new copy is there afterwards with the
- * same size, and the same ETag where both are content hashes, so nothing is removed on
- * the strength of a copy that failed or came out short.
+ * Create-only: a rerun keeps an existing copy, but only once it matches the source. False
+ * when there's nothing at `key`. Throws unless the copy, new or existing, has the same
+ * size, and the same ETag where both are content hashes, so nothing is removed on the
+ * strength of a copy that failed or came out short.
  */
 export async function copyToQuarantine(
   store: TakedownStore,
@@ -469,6 +488,7 @@ export async function copyToQuarantine(
   if (res.status === 404) return false;
   if (!res.ok) throw new Error(`R2 GET ${key} -> ${res.status}`);
   const body = new Uint8Array(await res.arrayBuffer());
+  const source = { bytes: body.byteLength, etag: res.headers.get('etag') };
   const dest = quarantineKey(caseId, key);
   try {
     await store.put(dest, body, {
@@ -477,19 +497,18 @@ export async function copyToQuarantine(
     });
   } catch (e) {
     if (!(e instanceof R2PreconditionFailedError)) throw e;
-    if (!(await headExists(store, dest))) {
-      throw new Error(`quarantine copy of ${key} is missing`, { cause: e });
-    }
+    // A copy from an earlier run: trusted only if it matches what's there now.
+    await verifyCopy(
+      store,
+      key,
+      dest,
+      source,
+      (what) =>
+        `the existing quarantine copy of ${key} ${what}; keep it and pick a new case id`,
+    );
     return true;
   }
-  const [head, listed] = await Promise.all([store.head(dest), store.listObjects(dest)]);
-  const size = listed.find((o) => o.key === dest)?.size;
-  if (!head.ok || size === undefined) throw new Error(`quarantine copy of ${key} is missing`);
-  if (size !== body.byteLength) {
-    throw new Error(`quarantine copy of ${key} is ${size} bytes, not ${body.byteLength}`);
-  }
-  const [want, got] = [md5Etag(res.headers.get('etag')), md5Etag(head.etag)];
-  if (want && got && want !== got) throw new Error(`quarantine copy of ${key} differs from it`);
+  await verifyCopy(store, key, dest, source, (what) => `quarantine copy of ${key} ${what}`);
   return true;
 }
 
