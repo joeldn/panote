@@ -8,6 +8,7 @@ import {
   QuarantineCaseRecordSchema,
   CLIENT_ID_PATTERN,
   OperatorTakedownRequestSchema,
+  OperatorRestoreRequestSchema,
   PANO_DELETE_CONFLICTS,
   PanoConfigOkSchema,
   PanoDeleteConflictSchema,
@@ -176,5 +177,24 @@ describe('OperatorTakedownRequestSchema', () => {
     ['another action', { ...ok, action: 'disable' }],
   ])('refuses %s', (_label, body) => {
     expect(OperatorTakedownRequestSchema.safeParse(body).success).toBe(false);
+  });
+});
+
+describe('OperatorRestoreRequestSchema', () => {
+  const key = 'tours/abc/t1/tour.json';
+  it('takes a date and restorable keys, create-only by default', () => {
+    const parsed = OperatorRestoreRequestSchema.parse({ date: '2026-10-22', keys: [key] });
+    expect(parsed.overwrite).toBe(false);
+  });
+
+  it.each([
+    { date: '2026-10-22/..', keys: [key] },
+    { date: '2026-10-22', keys: [] },
+    { date: '2026-10-22', keys: ['accounts/abc/deletion.json'] },
+    { date: '2026-10-22', keys: ['panos/abc/p1/original'] },
+    { date: '2026-10-22', keys: ['backup/2026-10-21/tours/abc/t1/tour.json'] },
+    { date: '2026-10-22', keys: Array.from({ length: 101 }, () => key) },
+  ])('refuses %j', (body) => {
+    expect(OperatorRestoreRequestSchema.safeParse(body).success).toBe(false);
   });
 });
