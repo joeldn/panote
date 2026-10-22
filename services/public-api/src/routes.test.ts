@@ -24,6 +24,12 @@ afterAll(() => {
   setTestJwtVerifier(undefined);
 });
 
+// A view, like or events batch needs the tour's public bundle; these tests publish one per tourId.
+const publish = (tourId: string) => env.BUCKET.put(pubTourKey(tourId), '{}');
+beforeAll(async () => {
+  for (const id of ['view-1', 'stats-no-reset', 'rl-v6', 'rl-own']) await publish(id);
+});
+
 describe('POST /api/tours/:tourId/view', () => {
   it('increments the view counter on each call', async () => {
     const view = () => SELF.fetch('https://x/api/tours/view-1/view', { method: 'POST' });
@@ -33,9 +39,6 @@ describe('POST /api/tours/:tourId/view', () => {
     expect(await stats.json()).toMatchObject({ views: 2 });
   });
 });
-
-// A like needs the tour's public bundle; these tests publish one per tourId.
-const publish = (tourId: string) => env.BUCKET.put(pubTourKey(tourId), '{}');
 
 // Each like gets its own client IP, so the real per-IP limiter never trips here.
 let ipSeq = 0;
@@ -140,6 +143,15 @@ describe('POST /api/tours/:tourId/like', () => {
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'tour not found' });
     expect(await storedKeys('like-no-such-tour')).toEqual([]);
+  });
+});
+
+describe('POST /api/tours/:tourId/view for an unpublished tour', () => {
+  it('404s and creates no Durable Object state', async () => {
+    const r = await SELF.fetch('https://x/api/tours/view-no-such-tour/view', { method: 'POST' });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: 'tour not found' });
+    expect(await storedKeys('view-no-such-tour')).toEqual([]);
   });
 });
 

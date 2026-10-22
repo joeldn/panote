@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin, USER } from '../__fixtures__/auth.js';
 import { FakeServer, viewerFactory, type FakeViewer } from '../__fixtures__/editor-server.js';
-import { draftKey } from './draft.js';
+import { draftKey, resumeDraftWrites } from './draft.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 afterEach(cleanup);
@@ -14,6 +14,7 @@ let create: ReturnType<typeof viewerFactory>['create'];
 
 beforeEach(() => {
   localStorage.clear();
+  resumeDraftWrites();
   server = new FakeServer();
   server.setTour({
     tourId: 't1',
@@ -219,6 +220,10 @@ describe('editor: save', () => {
     expect(await back.ui.findByRole('button', { name: /Tour title: Unsaved title/ })).toBeTruthy();
     expect(back.ui.getByText(/Restored your unsaved changes/)).toBeTruthy();
     expect(back.ui.getByRole('button', { name: 'Save' })).toBeTruthy();
+    // Still unsaved, so still kept until Save.
+    expect(localStorage.getItem(DRAFT)).toContain('Unsaved title');
+    fireEvent.click(back.ui.getByRole('button', { name: 'Save' }));
+    await back.ui.findByText('Saved');
     expect(localStorage.getItem(DRAFT)).toBeNull();
   });
 
@@ -404,6 +409,21 @@ describe('editor: save', () => {
     );
   });
 
+  it('signing out with unsaved edits leaves no draft behind, even after an autosave on the way out', async () => {
+    const auth = fakeAuth();
+    const { ui } = openTab('/app/t/t1', auth);
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Unsaved');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem(DRAFT)).toContain('Unsaved');
+    fireEvent.click(ui.getByRole('button', { name: /^Account:/ }));
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Sign out' }));
+    await waitFor(() => expect(auth.signOut).toHaveBeenCalled());
+    expect(localStorage.getItem(DRAFT)).toBeNull();
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem(DRAFT)).toBeNull();
+  });
+
   it("offers Delete account in the editor's account menu", async () => {
     const { ui } = openTab('/app/t/t1');
     await loaded(ui);
@@ -412,20 +432,45 @@ describe('editor: save', () => {
     expect(await screen.findByRole('dialog', { name: 'Delete your account?' })).toBeTruthy();
   });
 
-  it('drops a parked draft whose doc changed on the server meanwhile', async () => {
+  it('restores a draft whose doc changed on the server into the conflict banner, and Discard drops it', async () => {
     localStorage.setItem(
       DRAFT,
       JSON.stringify({
         v: 1,
-        savedAt: '2026-10-01T00:00:00Z',
-        tour: { etag: 'stale', doc: { tourId: 't1', title: 'Old draft', scenes: [] } },
+        savedAt: new Date().toISOString(),
+        tour: {
+          etag: 'stale',
+          doc: { tourId: 't1', title: 'Old draft', scenes: [{ panoId: 'square' }] },
+        },
         configs: {},
       }),
     );
     const { ui } = openTab();
-    await loaded(ui);
-    expect(ui.getByText(/dropped because the tour details changed elsewhere/)).toBeTruthy();
+    expect(await ui.findByRole('button', { name: /Tour title: Old draft/ })).toBeTruthy();
+    expect(ui.getByText(/Restored your unsaved changes/).textContent).toContain(
+      'choose Reload or Overwrite above',
+    );
+    expect(ui.getByText(/This tour changed elsewhere/)).toBeTruthy();
     expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
+
+    fireEvent.click(ui.getByRole('button', { name: 'Discard' }));
+    await loaded(ui);
+    expect(ui.queryByText(/This tour changed elsewhere/)).toBeNull();
+    expect(ui.queryByText(/Restored your unsaved changes/)).toBeNull();
+    expect(localStorage.getItem(DRAFT)).toBeNull();
+    expect(server.writes()).toEqual([]);
+  });
+
+  it('autosaves edits when the tab is hidden and restores them in a new tab', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Kept title');
+    window.dispatchEvent(new Event('pagehide'));
+    cleanup();
+
+    const back = openTab();
+    expect(await back.ui.findByRole('button', { name: /Tour title: Kept title/ })).toBeTruthy();
+    expect(back.ui.getByText(/Restored your unsaved changes/)).toBeTruthy();
   });
 });
 
@@ -901,10 +946,25 @@ describe('editor: points, connections, views and settings', () => {
     const modal = await screen.findByRole('dialog', { name: 'Leave without saving?' });
     fireEvent.click(within(modal).getByRole('button', { name: 'Stay' }));
     expect(router.state.location.pathname).toBe('/app/t/t1');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem(DRAFT)).toContain('Unsaved');
     // Share opens over the editor, so it doesn't count as leaving.
     fireEvent.click(ui.getByRole('link', { name: 'Share' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
     expect(screen.queryByRole('dialog', { name: 'Leave without saving?' })).toBeNull();
     expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
+  });
+
+  it('drops the autosaved draft when you leave without saving', async () => {
+    const { ui, router } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Unsaved');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem(DRAFT)).toContain('Unsaved');
+    fireEvent.click(ui.getByRole('link', { name: 'Your tours' }));
+    const modal = await screen.findByRole('dialog', { name: 'Leave without saving?' });
+    fireEvent.click(within(modal).getByRole('button', { name: 'Leave' }));
+    await waitFor(() => expect(router.state.location.pathname).not.toBe('/app/t/t1'));
+    expect(localStorage.getItem(DRAFT)).toBeNull();
   });
 });

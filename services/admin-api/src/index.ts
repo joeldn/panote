@@ -55,6 +55,7 @@ import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './op
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
+import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
 import {
@@ -552,15 +553,23 @@ export default {
   // references their URLs any more, and edge copies age out on their own).
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
+  // It returns before runDailyCron, so the 15-minute cron never runs the daily
+  // tasks or records a daily cron run.
+  // runDailyCron logs each task that throws and records the run for the health check.
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === BACKUP_CRON) {
       ctx.waitUntil(runBackup(env.BUCKET, now));
       return;
     }
-    ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
-    ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
-    ctx.waitUntil(sweepSupersededTiles(env.BUCKET, now));
+    ctx.waitUntil(
+      runDailyCron(env.BUCKET, now, {
+        'slug-aliases': () => sweepExpiredAliases(env.BUCKET, now),
+        'account-deletions': () =>
+          sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)),
+        'tile-gc': () => sweepSupersededTiles(env.BUCKET, now),
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;
 

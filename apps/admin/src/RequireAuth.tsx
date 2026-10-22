@@ -5,6 +5,7 @@ import { Outlet, useLocation } from 'react-router';
 
 import { useAuthEnv } from './auth-context.js';
 import { cancelBeforeSignIn, runBeforeSignIn } from './before-sign-in.js';
+import { resumeDraftWrites, stopDraftWrites } from './editor/draft.js';
 import {
   createSessionApi,
   createSessionUploadApi,
@@ -92,9 +93,14 @@ export function RequireAuth() {
         requestSignIn: () => setExpired(true),
         holdSignIn,
         signOut: () => {
-          // Parked editor drafts belong to this user; don't leave them on a shared machine.
+          // Parked editor drafts belong to this user; don't leave them on a shared machine,
+          // and don't let an autosave on the way out write one back.
+          stopDraftWrites();
           sweepEditorDrafts();
-          return auth.signOut(`${origins.website}/`);
+          return auth.signOut(`${origins.website}/`).catch((e: unknown) => {
+            resumeDraftWrites();
+            throw e;
+          });
         },
       },
     [user, api, upload, holdSignIn, auth, origins],

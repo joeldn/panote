@@ -10,6 +10,8 @@
     "src/backfill-args.ts",
     "src/failure-marker.ts",
     "src/alert.ts",
+    "src/health.ts",
+    "src/health-probes.ts",
     "src/env.d.ts",
     "env.d.ts",
     "../../packages/worker-kit/src/worker-configuration.d.ts"
