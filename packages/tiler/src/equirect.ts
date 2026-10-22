@@ -28,6 +28,14 @@ export interface EquirectPlan {
 }
 
 /**
+ * How much wider than 2:1 a source can be and still be tiled as it is, stretched
+ * the way the tiler always has. Stitchers are often a few px off 2:1, and padding
+ * those would change their tiles for nothing. Must match TOLERANCE in
+ * apps/admin/src/upload/aspect-note.ts, which tells the creator when padding applies.
+ */
+export const ASPECT_TOLERANCE = 0.02;
+
+/**
  * Plans the decode of a width x height source. The caller has already checked
  * width * height against MAX_INPUT_PIXELS; padding makes the decoded buffer
  * bigger than the source, so the padded size is held to the same cap here,
@@ -36,14 +44,6 @@ export interface EquirectPlan {
  * rounded up to a power of two, and the widest padded source the cap allows
  * (about 17,300 px) already gets the 8192 px faces a 30,000 px strip would.
  */
-/**
- * How much wider than 2:1 a source can be and still be tiled as it is, stretched
- * the way the tiler always has. Stitchers are often a few px off 2:1, and padding
- * those would change their tiles for nothing. Must match TOLERANCE in
- * apps/admin/src/upload/aspect-note.ts, which tells the creator when padding applies.
- */
-export const ASPECT_TOLERANCE = 0.02;
-
 export function planEquirect(
   width: number,
   height: number,
