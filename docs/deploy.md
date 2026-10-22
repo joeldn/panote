@@ -1277,13 +1277,17 @@ Two ways to stop abuse, usually together:
   rule's three public prefixes (`/tiles/`, `/pub/`, `/slugs/`, see "CDN custom domain"), so it is
   never served, and no Worker reads, lists or deletes it: the account-deletion sweep only touches
   `tours/<owner>/`, `panos/<owner>/` and the owner's public keys. A case id is lowercase letters,
-  digits and `-` (e.g. `2026-10-22-report-3`); one case holds one owner.
+  digits and `-` (e.g. `2026-10-22-report-3`); one case holds one owner. Each copy is checked for
+  size and, where both ETags are content hashes, ETag. `case.json` is rewritten only if it hasn't
+  changed since it was read. `--quarantine` needs `--disable-owner`, so the owner can't write
+  between the copy and the delete.
 - **`--all-tours`** applies the tour action to every tour the owner has (named by `--sub`, or by
   any one of their tours' `--slug`/`--tour`), one at a time, so the last delete also takes the panos
   the tours shared. With `--quarantine` it also copies every pano the owner has, in a tour or not.
 - **`--close-account`** writes the account-deletion marker, as the owner's own Delete account
   does (see "Account deletion"): the next daily sweep deletes what is left (panos in no tour, with
   their tiles, purged), and the Auth0 user is yours to remove from the `delete-account.ts --list`.
+  It needs `--disable-owner` too.
 - **`--delete` keeps no copy, so it needs `--nothing-to-preserve` as well**, the operator's word
   that nothing it destroys may be evidence. `--close-account` needs the same, unless it goes with
   `--all-tours --quarantine <caseId>`. If in doubt, quarantine.
@@ -1306,8 +1310,8 @@ export OPERATOR_TOKEN=...    # only for --unpublish / --quarantine / --delete
 node services/admin-api/scripts/takedown.ts --slug old-town
 # What it would do, without doing it
 node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disable-owner --dry-run
-# Copyright: take the tour offline and note why (never shown to the owner)
-node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --reason 'notice 2026-10-21'
+# Copyright: take the tour's share link down (--reason only goes with --disable-owner)
+node services/admin-api/scripts/takedown.ts --slug old-town --unpublish
 # Illegal images: block the owner, keep a copy of everything, take it all down, close the account
 node services/admin-api/scripts/takedown.ts --slug old-town --disable-owner --reason 'case 2026-10-22-3' \
   --all-tours --quarantine 2026-10-22-3 --close-account
@@ -1324,7 +1328,8 @@ requests above (the slug `GET`, the owner lookup, the tour listing for `--all-to
 
 Finding the owner: tour keys carry the owner and `pub/` deliberately doesn't, so admin-api writes
 a pointer `tour-owners/<tourId>.json` (`{ v, sub }`, private like `accounts/`) when a tour is
-created, and when one is published (which covers older tours). Tour delete and account delete
+created, and when one is published (which covers older tours). The write is best-effort: a
+failure logs `[takedown] owner pointer ... not written` and the create or publish still succeeds. Tour delete and account delete
 remove it. The script reads the pointer and checks that sub really holds the tour; with no
 usable pointer (a tour that hasn't been published since) it falls back to listing `tours/` and
 `HEAD`ing that tourId under each owner (one request per owner).
@@ -1353,8 +1358,13 @@ illegal, other), what you did and when, and the outcome. Nothing in the bucket r
    statement under penalty of perjury; a signature (a typed name will do). If anything is missing,
    reply asking for it and do nothing else yet.
 2. Run the report-only command on the link to find the tour and owner, then
-   `--unpublish --reason '<case id>'`. Unpublish is enough for copyright: the tour stays in the
-   owner's account so it can be restored.
+   `--unpublish` (the case log, not the bucket, records why). That takes the share link down and keeps the tour in the
+   owner's account so it can be restored, **but it leaves `tiles/<panoId>/` reachable by direct
+   URL**: anyone who kept a tile or preview URL can still load the image. For the infringing image
+   itself, use `--disable-owner --quarantine <case id>` (keeps a copy for the dispute and deletes
+   the tour, its panos and their tiles, purged) or, if nothing needs keeping,
+   `--delete --nothing-to-preserve`. A counter-notice can then only restore from the quarantine
+   copy, by hand.
 3. Email the owner (their address is on their Auth0 user): which tour, that it was taken offline
    after a copyright notice, a copy of the notice, and how to send a counter-notice.
 4. Log it, and check the log for the owner's earlier upheld notices (see repeat infringers).
@@ -1387,7 +1397,8 @@ illegal, other), what you did and when, and the outcome. Nothing in the bucket r
 **Repeat infringers.** The case log is the record. Before closing a copyright case, count the
 owner's earlier upheld notices (ones not reversed by a counter-notice). At the third, close the
 account: `--sub '<sub>' --disable-owner --reason '<case id>' --all-tours --unpublish`, then
-`--close-account --nothing-to-preserve` once nothing is in dispute, and tell the owner.
+`--sub '<sub>' --disable-owner --close-account --nothing-to-preserve` once nothing is in dispute,
+and tell the owner.
 
 **TODO (Joel):** the legal pages still carry `YOUR_` placeholders for the operator's legal name,
 postal address and the counter-notice jurisdiction (`apps/website/src/legal/operator.ts`), and the

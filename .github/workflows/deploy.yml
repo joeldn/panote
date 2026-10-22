@@ -234,7 +234,8 @@ jobs:
             const hits = fs
               .readFileSync(file, "utf8")
               .split("\n")
-              .filter((line) => !line.trim().startsWith("//") && /YOUR_/i.test(line));
+              .filter((line) => !/^(\/\/|\/\*|\*|\{\s*\/\*)/.test(line.trim()))
+              .filter((line) => /\bYOUR_[A-Z0-9_]+/.test(line));
             for (const hit of hits) {
               console.log(`::error::${file}: ${hit.trim()} is still a YOUR_ placeholder. Fill in the operator's real details (docs/deploy.md, Takedown) before deploying production.`);
             }

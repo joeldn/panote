@@ -39,6 +39,16 @@ describe('website routes', () => {
     expect(text).not.toContain('To delete your account, or to ask');
   });
 
+  it('privacy says what a report or takedown keeps, even after account deletion', async () => {
+    renderAt('/privacy');
+    const holds = await screen.findByRole('heading', { name: 'Reports and legal holds' });
+    const text = holds.nextElementSibling?.textContent ?? '';
+    expect(text).toContain('as long as the law requires');
+    expect(text).toContain('stays even if the account is deleted');
+    expect(text).toContain('we keep your contact details');
+    expect(screen.getByRole('article').textContent).toContain('Last updated 22 October 2026');
+  });
+
   it('privacy is accurate about signed-in likes', async () => {
     renderAt('/privacy');
     await screen.findByRole('heading', { name: 'Visitors and analytics' });

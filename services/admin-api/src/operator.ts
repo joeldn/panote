@@ -52,6 +52,10 @@ export const tourExists = async (
 /**
  * Writes the tour's owner pointer (tourOwnerKey) for the takedown script, create-only:
  * a tourId is only ever one owner's, so an existing pointer is already right.
+ * Best-effort: it runs after a create or publish has succeeded, and a failure only
+ * logs, since the script falls back to scanning owners without it. A publish racing a
+ * delete can leave an orphan pointer to a tour that's gone; harmless, because the
+ * script checks the owner still holds the tour before trusting it.
  */
 export const recordTourOwner = async (
   bucket: R2Bucket,
@@ -59,5 +63,13 @@ export const recordTourOwner = async (
   tourId: string,
 ): Promise<void> => {
   const record: TourOwnerRecord = { v: 1, sub };
-  await putJson(bucket, tourOwnerKey(tourId), record, { etagDoesNotMatch: '*' });
+  try {
+    await putJson(bucket, tourOwnerKey(tourId), record, { etagDoesNotMatch: '*' });
+  } catch (e) {
+    // The name only: R2 error messages can carry keys, and this record holds the sub.
+    console.error(
+      `[takedown] owner pointer for tour ${tourId} not written:`,
+      e instanceof Error ? e.name : 'unknown error',
+    );
+  }
 };

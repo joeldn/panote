@@ -18,7 +18,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { sweepAccountDeletions } from './delete-account.js';
 import worker from './index.js';
-import { isOperator } from './operator.js';
+import { isOperator, recordTourOwner } from './operator.js';
 import { unpublish } from './publish.js';
 
 // Storage is shared between it() cases in this file, so each case uses its own
@@ -321,6 +321,25 @@ describe('the tour owner pointer (tourOwnerKey)', () => {
     });
     expect(r.status).toBe(200);
     expect(await pointer(tourId)).toEqual({ v: 1, sub: subOf(who) });
+  });
+
+  it('a failed pointer write only logs, without the owner, and never throws', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = {
+      put: async () => {
+        throw new Error(`R2 PUT tour-owners/x.json for ${subOf('ptr-fails')} -> 500`);
+      },
+    } as unknown as R2Bucket;
+    try {
+      await expect(recordTourOwner(failing, subOf('ptr-fails'), 'ptr-fails-tour')).resolves.toBe(
+        undefined,
+      );
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(error.mock.calls)).not.toContain('ptr-fails|');
+      expect(JSON.stringify(error.mock.calls)).not.toContain(subOf('ptr-fails'));
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('goes with the tour on an operator delete and on an account delete', async () => {

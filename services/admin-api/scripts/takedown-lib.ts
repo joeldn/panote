@@ -4,6 +4,7 @@ import {
   accountDeletionKey,
   accountDisabledKey,
   AccountDisabledRecordSchema,
+  QuarantineCaseRecordSchema,
   configKey,
   encodeId,
   manifestKey,
@@ -24,12 +25,13 @@ import {
   userPanosPrefix,
   userToursPrefix,
   type AccountDisabledRecord,
+  type QuarantineCaseRecord,
   type OperatorTakedownAction,
   type OperatorTakedownOk,
 } from '@internal/contracts';
 import { R2PreconditionFailedError, type R2S3Client } from '@internal/worker-kit/r2-s3';
 
-import { r2ConfigFromEnv, type R2Config } from './delete-account-lib.ts';
+import { r2ConfigFromEnv, requestAccountDeletion, type R2Config } from './delete-account-lib.ts';
 
 export type OwnerAction = 'disable' | 'enable';
 /** What happens to the tour(s): the operator route's two actions, or copy-then-delete. */
@@ -163,6 +165,12 @@ export function parseTakedownArgs(
   if (closeAccount && ownerAction === 'enable') {
     throw new Error('--close-account and --enable-owner are exclusive');
   }
+  // The owner is blocked first, so nothing they write lands between the copy and the delete.
+  if ((tourAction === 'quarantine' || closeAccount) && ownerAction !== 'disable') {
+    throw new Error(
+      `${tourAction === 'quarantine' ? '--quarantine' : '--close-account'} needs --disable-owner`,
+    );
+  }
   if (tourId !== undefined && !PANO_PATTERN.test(tourId)) {
     throw new Error(`--tour must match ${PANO_PATTERN}`);
   }
@@ -213,7 +221,7 @@ export function parseTakedownArgs(
 
 export type TakedownStore = Pick<
   R2S3Client,
-  'get' | 'head' | 'put' | 'deleteObject' | 'listPrefixes'
+  'get' | 'head' | 'put' | 'deleteObject' | 'listPrefixes' | 'listObjects'
 >;
 
 const headExists = async (store: TakedownStore, key: string): Promise<boolean> => {
@@ -441,11 +449,16 @@ export async function ownerPanoContent(store: TakedownStore, sub: string): Promi
   return { keys: panoKeys(sub, panoIds), panoIds };
 }
 
+// A single-part PUT's ETag is the body's MD5 on S3 and R2; a multipart one ("…-N") isn't.
+const md5Etag = (etag: string | null): string | null =>
+  etag && /^"?[0-9a-f]{32}"?$/i.test(etag) ? etag.replace(/"/g, '').toLowerCase() : null;
+
 /**
  * Copies one object to quarantine/<caseId>/<key>, byte for byte with its content type.
- * Create-only: rerunning a case keeps the first copy. False when there's nothing at
- * `key`. Throws unless the copy is there afterwards, so nothing is removed on the
- * strength of a copy that failed.
+ * Create-only: rerunning a case keeps the first copy (checked when it was made). False
+ * when there's nothing at `key`. Throws unless a new copy is there afterwards with the
+ * same size, and the same ETag where both are content hashes, so nothing is removed on
+ * the strength of a copy that failed or came out short.
  */
 export async function copyToQuarantine(
   store: TakedownStore,
@@ -464,39 +477,52 @@ export async function copyToQuarantine(
     });
   } catch (e) {
     if (!(e instanceof R2PreconditionFailedError)) throw e;
+    if (!(await headExists(store, dest))) {
+      throw new Error(`quarantine copy of ${key} is missing`, { cause: e });
+    }
+    return true;
   }
-  if (!(await headExists(store, dest))) throw new Error(`quarantine copy of ${key} is missing`);
+  const [head, listed] = await Promise.all([store.head(dest), store.listObjects(dest)]);
+  const size = listed.find((o) => o.key === dest)?.size;
+  if (!head.ok || size === undefined) throw new Error(`quarantine copy of ${key} is missing`);
+  if (size !== body.byteLength) {
+    throw new Error(`quarantine copy of ${key} is ${size} bytes, not ${body.byteLength}`);
+  }
+  const [want, got] = [md5Etag(res.headers.get('etag')), md5Etag(head.etag)];
+  if (want && got && want !== got) throw new Error(`quarantine copy of ${key} differs from it`);
   return true;
-}
-
-export interface CaseRecord {
-  v: 1;
-  caseId: string;
-  sub: string;
-  tourIds: string[];
-  /** The original keys copied; each copy is at quarantine/<caseId>/<key>. */
-  keys: string[];
-  firstAt: string;
-  lastAt: string;
-  reason?: string;
 }
 
 /**
  * Writes (or adds to) quarantine/<caseId>/case.json, the operator's record of what the
  * case holds and whose it was. One case is one owner: adding another owner's content
- * to it is refused.
+ * to it is refused, as is an unreadable record. The write is conditional on the record
+ * read, so two runs on one case can't drop each other's keys.
  */
 export async function writeCaseRecord(
   store: TakedownStore,
   caseId: string,
   add: { sub: string; tourIds: string[]; keys: string[]; reason: string | undefined },
   now: Date,
-): Promise<CaseRecord> {
-  const existing = (await readJson(store, caseRecordKey(caseId))) as CaseRecord | null;
+): Promise<QuarantineCaseRecord> {
+  const key = caseRecordKey(caseId);
+  const res = await store.get(key);
+  let existing: QuarantineCaseRecord | null = null;
+  let etag: string | null = null;
+  if (res.ok) {
+    const parsed = QuarantineCaseRecordSchema.safeParse(await res.json().catch(() => null));
+    if (!parsed.success) throw new Error(`${key} is unreadable; fix it or pick a new case id`);
+    existing = parsed.data;
+    etag = res.headers.get('etag');
+    if (!etag) throw new Error(`R2 GET ${key}: no ETag`);
+  } else if (res.status !== 404) {
+    throw new Error(`R2 GET ${key} -> ${res.status}`);
+  }
   if (existing && existing.sub !== add.sub) {
     throw new Error(`case ${caseId} already holds another owner's content; pick a new case id`);
   }
-  const record: CaseRecord = {
+  const reason = add.reason ?? existing?.reason;
+  const record: QuarantineCaseRecord = {
     v: 1,
     caseId,
     sub: add.sub,
@@ -504,13 +530,21 @@ export async function writeCaseRecord(
     keys: [...new Set([...(existing?.keys ?? []), ...add.keys])],
     firstAt: existing?.firstAt ?? now.toISOString(),
     lastAt: now.toISOString(),
-    ...((add.reason ?? existing?.reason) === undefined
-      ? {}
-      : { reason: (add.reason ?? existing?.reason)! }),
+    ...(reason === undefined ? {} : { reason }),
   };
-  await store.put(caseRecordKey(caseId), JSON.stringify(record), {
-    contentType: 'application/json',
-  });
+  try {
+    await store.put(key, JSON.stringify(record), {
+      contentType: 'application/json',
+      ...(etag ? { ifMatch: etag } : { ifNoneMatch: '*' as const }),
+    });
+  } catch (e) {
+    if (e instanceof R2PreconditionFailedError) {
+      throw new Error(`${key} changed while this run was writing it; rerun the same command`, {
+        cause: e,
+      });
+    }
+    throw e;
+  }
   return record;
 }
 
@@ -559,4 +593,108 @@ export function describeOwner(sub: string, status: OwnerStatus): string {
     ? `disabled since ${status.disabled.disabledAt}${status.disabled.reason ? ` (${status.disabled.reason})` : ''}`
     : 'not disabled';
   return `owner ${sub}: ${disabled}${status.deletionRequested ? '; account deletion requested' : ''}`;
+}
+
+export interface TakedownDeps {
+  store: TakedownStore;
+  fetch: FetchLike;
+  log: (line: string) => void;
+  now: () => Date;
+}
+
+/**
+ * The whole CLI run (takedown.ts only parses and wires it): find the tour(s) and owner,
+ * then, unless it's a dry run, block or unblock the owner, quarantine, take tours down
+ * through admin-api, and close the account, in that order. A quarantine makes and checks
+ * every copy, and writes the case record, before any delete is requested.
+ */
+export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promise<void> {
+  const { store, log } = deps;
+  // Read-only from here to the dry-run stop: find the tour(s) and the owner.
+  const tourId = args.slug !== undefined ? await tourIdForSlug(store, args.slug) : args.tourId;
+  const sub = args.sub ?? (tourId !== undefined ? await findTourOwner(store, tourId) : undefined);
+  if (sub === undefined) throw new Error('no owner to act on');
+  // A --sub given with a tour must be that tour's owner, before anything is written.
+  if (args.sub !== undefined && tourId !== undefined) await assertOwnsTour(store, sub, tourId);
+  if (tourId !== undefined) log(`tour ${tourId}`);
+  log(describeOwner(sub, await readOwnerStatus(store, sub)));
+  const tourIds = args.allTours ? await listOwnerTours(store, sub) : tourId ? [tourId] : [];
+  if (args.allTours) log(`owner has ${tourIds.length} tour(s): ${tourIds.join(', ')}`);
+
+  const routeAction = args.tourAction === 'unpublish' ? 'unpublish' : 'delete';
+  const planned = [
+    args.ownerAction && `${args.ownerAction} owner`,
+    args.tourAction === 'quarantine' &&
+      `copy ${args.allTours ? 'everything the owner has' : 'the tour'} to ${quarantineKey(args.caseId!, '')}`,
+    args.tourAction &&
+      tourIds.length > 0 &&
+      `${routeAction} ${tourIds.length} tour(s) via ${args.api?.origin}`,
+    args.closeAccount && 'mark the account for deletion',
+  ].filter(Boolean);
+  if (planned.length === 0) return;
+  if (args.dryRun) {
+    log(`DRY RUN: would ${planned.join(', then ')} in ${args.r2.bucket}`);
+    return;
+  }
+
+  // Owner first: a disabled owner can't republish, or add to what's being copied.
+  if (args.ownerAction === 'disable') {
+    await disableOwner(store, sub, deps.now(), args.reason);
+    log('owner disabled: uploads and admin writes now answer 403');
+  } else if (args.ownerAction === 'enable') {
+    await enableOwner(store, sub);
+    log('owner enabled again');
+  }
+
+  const panoIds = new Set<string>();
+  if (args.tourAction === 'quarantine') {
+    const caseId = args.caseId!;
+    const keys = new Set<string>();
+    const contents = await Promise.all(tourIds.map((id) => tourContent(store, sub, id)));
+    if (args.allTours) contents.push(await ownerPanoContent(store, sub));
+    for (const content of contents) {
+      content.keys.forEach((k) => keys.add(k));
+      content.panoIds.forEach((p) => panoIds.add(p));
+    }
+    const copied: string[] = [];
+    for (const key of keys) if (await copyToQuarantine(store, caseId, key)) copied.push(key);
+    const reason = args.reason;
+    await writeCaseRecord(store, caseId, { sub, tourIds, keys: copied, reason }, deps.now());
+    log(`${copied.length} object(s) copied to ${quarantineKey(caseId, '')} (case.json lists them)`);
+  }
+
+  if (args.tourAction && args.api) {
+    // One at a time: each delete checks which panos the owner's other tours still use.
+    for (const id of tourIds) {
+      const done = await requestTourTakedown(deps.fetch, args.api, {
+        sub,
+        tourId: id,
+        action: routeAction,
+      });
+      log(`tour ${id} ${done.action}d; ${done.purged} CDN purge target(s) queued`);
+    }
+    if (routeAction === 'unpublish') {
+      log('panos and their tiles are kept (reachable by direct URL); --quarantine removes them');
+    }
+  }
+
+  if (args.closeAccount) {
+    const { created } = await requestAccountDeletion(store, sub, deps.now());
+    log(
+      created
+        ? 'account marked for deletion: the next daily sweep deletes what is left, with its tiles'
+        : 'account was already marked for deletion',
+    );
+  }
+
+  // Tiles live under the panoId, not the owner: say which ones are still public.
+  const tiled = await panosWithTiles(store, [...panoIds]);
+  if (tiled.length > 0) {
+    log(
+      `tiles still public for ${tiled.length} pano(s): ${tiled.join(', ')}` +
+        (args.closeAccount
+          ? ' (the account-deletion sweep removes them)'
+          : " (another of the owner's tours uses them; --all-tours takes those down too)"),
+    );
+  }
 }

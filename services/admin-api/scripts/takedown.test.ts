@@ -32,6 +32,7 @@ import {
   quarantineKey,
   readOwnerStatus,
   requestTourTakedown,
+  runTakedown,
   tourContent,
   tourIdForSlug,
   writeCaseRecord,
@@ -124,6 +125,12 @@ describe('parseTakedownArgs', () => {
     [['--sub', SUB, '--quarantine', 'case-1'], /needs --slug or --tour, or --all-tours/],
     [['--sub', SUB, '--close-account'], /--close-account deletes everything/],
     [['--slug', 'a', '--quarantine', 'case-1', '--close-account'], /--close-account deletes/],
+    // The owner is blocked before the copy, so they can't write between it and the delete.
+    [['--slug', 'a', '--quarantine', 'case-1'], /--quarantine needs --disable-owner/],
+    [
+      ['--sub', SUB, '--close-account', '--nothing-to-preserve'],
+      /--close-account needs --disable-owner/,
+    ],
     [['--sub', SUB, '--nothing-to-preserve'], /--nothing-to-preserve goes with/],
     [['--slug', 'a', '--unpublish', '--nothing-to-preserve'], /--nothing-to-preserve goes with/],
     [['--sub', SUB, '--close-account', '--nothing-to-preserve', '--enable-owner'], /exclusive/],
@@ -164,7 +171,10 @@ describe('parseTakedownArgs', () => {
       tourAction: 'unpublish',
     });
     expect(
-      parseTakedownArgs(['--sub', SUB, '--close-account', '--nothing-to-preserve'], ENV),
+      parseTakedownArgs(
+        ['--sub', SUB, '--close-account', '--nothing-to-preserve', '--disable-owner'],
+        ENV,
+      ),
     ).toMatchObject({ closeAccount: true, tourAction: undefined, api: undefined });
   });
 
@@ -207,10 +217,29 @@ describe('parseTakedownArgs', () => {
   });
 });
 
+const bytesOf = (body: string | Uint8Array): Uint8Array =>
+  typeof body === 'string' ? new TextEncoder().encode(body) : body;
+
+/** A stand-in for S3's MD5 ETag: 32 hex chars that change with the content. */
+function fakeEtag(body: string | Uint8Array): string {
+  let h = 2166136261;
+  const out: string[] = [];
+  for (let round = 0; round < 4; round++) {
+    for (const byte of bytesOf(body)) h = Math.imul(h ^ byte, 16777619) >>> 0;
+    h = Math.imul(h ^ round, 16777619) >>> 0;
+    out.push(h.toString(16).padStart(8, '0'));
+  }
+  return `"${out.join('')}"`;
+}
+
 /** The S3 calls the CLI makes, over a Map. */
 function memoryStore(seed: Record<string, string> = {}) {
   const objects = new Map<string, string | Uint8Array>(Object.entries(seed));
   const types = new Map<string, string>();
+  const etagOf = (key: string) => {
+    const body = objects.get(key);
+    return body === undefined ? null : fakeEtag(body);
+  };
   const store: TakedownStore = {
     async listPrefixes(prefix) {
       const found = new Set<string>();
@@ -221,17 +250,27 @@ function memoryStore(seed: Record<string, string> = {}) {
       }
       return [...found];
     },
+    async listObjects(prefix) {
+      return [...objects]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, body]) => ({ key, size: bytesOf(body).byteLength }));
+    },
     async head(key) {
-      return { ok: objects.has(key), status: objects.has(key) ? 200 : 404, etag: null };
+      return { ok: objects.has(key), status: objects.has(key) ? 200 : 404, etag: etagOf(key) };
     },
     async get(key) {
       const body = objects.get(key);
       if (body === undefined) return new Response(null, { status: 404 });
       const type = types.get(key);
-      return new Response(body, type ? { headers: { 'content-type': type } } : {});
+      return new Response(body, {
+        headers: { etag: etagOf(key)!, ...(type ? { 'content-type': type } : {}) },
+      });
     },
     async put(key, body, opts) {
       if (opts.ifNoneMatch === '*' && objects.has(key)) throw new R2PreconditionFailedError(key);
+      if (opts.ifMatch !== undefined && opts.ifMatch !== etagOf(key)) {
+        throw new R2PreconditionFailedError(key);
+      }
       objects.set(key, typeof body === 'string' ? body : body.slice());
       types.set(key, opts.contentType);
     },
@@ -509,6 +548,48 @@ describe('quarantine', () => {
     await expect(copyToQuarantine(failing, CASE, originalKey(SUB, 'p-1'))).rejects.toThrow(/503/);
   });
 
+  it('throws on a copy that came out short or different', async () => {
+    const short = seed();
+    const realShort = short.store.put.bind(short.store);
+    short.store.put = (key, body, opts) => realShort(key, body.slice(1), opts);
+    await expect(copyToQuarantine(short.store, CASE, originalKey(SUB, 'p-1'))).rejects.toThrow(
+      /is 11 bytes, not 12/,
+    );
+    const changed = seed();
+    const realChanged = changed.store.put.bind(changed.store);
+    changed.store.put = (key, body, opts) =>
+      realChanged(key, typeof body === 'string' ? body : body.map((b, i) => (i ? b : b ^ 1)), opts);
+    await expect(copyToQuarantine(changed.store, CASE, originalKey(SUB, 'p-1'))).rejects.toThrow(
+      /differs/,
+    );
+  });
+
+  it('refuses an unreadable case record, and one changed while it was being written', async () => {
+    const unreadable = seed();
+    unreadable.objects.set(caseRecordKey(CASE), '{"v":1}');
+    await expect(
+      writeCaseRecord(
+        unreadable.store,
+        CASE,
+        { sub: SUB, tourIds: [], keys: [], reason: undefined },
+        new Date(),
+      ),
+    ).rejects.toThrow(/unreadable/);
+
+    const raced = seed();
+    const add = { sub: SUB, tourIds: ['tour-1'], keys: ['a'], reason: undefined };
+    await writeCaseRecord(raced.store, CASE, add, new Date());
+    const real = raced.store.put.bind(raced.store);
+    raced.store.put = async (key, body, opts) => {
+      // Another run on the same case writes first.
+      raced.objects.set(key, JSON.stringify({ ...JSON.parse(body as string), keys: ['other'] }));
+      return real(key, body, opts);
+    };
+    await expect(writeCaseRecord(raced.store, CASE, add, new Date())).rejects.toThrow(
+      /changed while this run was writing it/,
+    );
+  });
+
   it('keeps one case record per case, adding to it and refusing another owner', async () => {
     const { store, objects } = seed();
     const t1 = new Date('2026-10-22T09:00:00.000Z');
@@ -549,5 +630,85 @@ describe('quarantine', () => {
   it('reports which panos still have public tiles', async () => {
     const { store } = memoryStore({ [manifestKey('p-1')]: '{}' });
     expect(await panosWithTiles(store, ['p-1', 'p-2'])).toEqual(['p-1']);
+  });
+});
+
+describe('runTakedown', () => {
+  const CASE = 'case-run';
+  const ARGV = ['--slug', 'live', '--disable-owner', '--all-tours', '--quarantine', CASE];
+
+  const seed = () => {
+    const m = memoryStore({
+      [storedSlugKey('live')!]: JSON.stringify({ v: 1, kind: 'tour', tourId: 'tour-1' }),
+      [tourOwnerKey('tour-1')]: JSON.stringify({ v: 1, sub: SUB }),
+      [tourKey(SUB, 'tour-1')]: JSON.stringify({ scenes: [{ panoId: 'p-1' }] }),
+      [tourKey(SUB, 'tour-2')]: JSON.stringify({ scenes: [{ panoId: 'p-1' }] }),
+      [originalKey(SUB, 'p-1')]: 'original one',
+      [originalKey(SUB, 'p-loose')]: 'in no tour',
+    });
+    const events: string[] = [];
+    const realPut = m.store.put.bind(m.store);
+    m.store.put = async (key, body, opts) => {
+      events.push(`put ${key}`);
+      return realPut(key, body, opts);
+    };
+    const fetchFn = vi.fn(async (_input: string, init: RequestInit) => {
+      const { tourId } = JSON.parse(init.body as string) as { tourId: string };
+      events.push(`delete ${tourId}`);
+      return Response.json({ action: 'delete', purged: 1 });
+    });
+    const lines: string[] = [];
+    const deps = {
+      store: m.store,
+      fetch: fetchFn,
+      log: (line: string) => lines.push(line),
+      now: () => new Date('2026-10-22T09:00:00.000Z'),
+    };
+    return { ...m, events, fetchFn, lines, deps };
+  };
+
+  it('never asks for a delete when a copy fails', async () => {
+    const t = seed();
+    const put = t.store.put;
+    t.store.put = async (key, body, opts) => {
+      if (key === quarantineKey(CASE, originalKey(SUB, 'p-1'))) throw new Error('R2 PUT -> 500');
+      return put(key, body, opts);
+    };
+    await expect(runTakedown(parseTakedownArgs(ARGV, ENV), t.deps)).rejects.toThrow(/500/);
+    expect(t.fetchFn).not.toHaveBeenCalled();
+    expect(t.objects.has(caseRecordKey(CASE))).toBe(false);
+    // The owner was blocked first, and nothing of theirs is gone.
+    expect(t.objects.has(accountDisabledKey(SUB))).toBe(true);
+    expect(t.objects.has(originalKey(SUB, 'p-1'))).toBe(true);
+  });
+
+  it('blocks the owner, copies everything, writes the case, then deletes each tour and closes the account', async () => {
+    const t = seed();
+    await runTakedown(parseTakedownArgs([...ARGV, '--close-account'], ENV), t.deps);
+    expect(t.fetchFn).toHaveBeenCalledTimes(2);
+    const firstDelete = t.events.findIndex((e) => e.startsWith('delete '));
+    expect(t.events[0]).toBe(`put ${accountDisabledKey(SUB)}`);
+    expect(t.events.indexOf(`put ${caseRecordKey(CASE)}`)).toBeLessThan(firstDelete);
+    expect(t.events.slice(firstDelete)).toEqual([
+      'delete tour-1',
+      'delete tour-2',
+      `put ${accountDeletionKey(SUB)}`,
+    ]);
+    for (const key of [
+      tourKey(SUB, 'tour-1'),
+      tourKey(SUB, 'tour-2'),
+      originalKey(SUB, 'p-1'),
+      originalKey(SUB, 'p-loose'),
+    ]) {
+      expect([key, t.objects.has(quarantineKey(CASE, key))]).toEqual([key, true]);
+    }
+  });
+
+  it('a dry run writes nothing and calls nothing', async () => {
+    const t = seed();
+    await runTakedown(parseTakedownArgs([...ARGV, '--dry-run'], ENV), t.deps);
+    expect(t.events).toEqual([]);
+    expect(t.fetchFn).not.toHaveBeenCalled();
+    expect(t.lines.at(-1)).toMatch(/^DRY RUN: would disable owner, then copy everything/);
   });
 });

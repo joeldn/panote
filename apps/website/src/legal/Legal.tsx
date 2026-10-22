@@ -28,7 +28,7 @@ function LegalPage({
 
 export function Privacy() {
   return (
-    <LegalPage title="Privacy" updated="21 October 2026">
+    <LegalPage title="Privacy" updated="22 October 2026">
       <p>
         Panote is a free service for publishing 360° panoramas and tours. This page says what we
         collect, why, and who helps us run it. The short version: we keep what we need to run your
@@ -49,7 +49,7 @@ export function Privacy() {
         Panoramas, tour titles, hotspot text and other content you add are stored on Cloudflare and
         served from our content network. A tour you publish can be opened by anyone with its link; a
         public tour may also be shown elsewhere on Panote. When you delete a tour or panorama we
-        remove it from storage and our caches.
+        remove it from storage and our caches, except for content held after a report (see below).
       </p>
 
       <h2>Visitors and analytics</h2>
@@ -80,7 +80,19 @@ export function Privacy() {
         You can edit, unpublish or delete your tours at any time. You can also delete your whole
         account yourself: once signed in, open the account menu and choose Delete account. That
         removes your tours, panoramas, share links and visit counts, and your sign-in record is
-        removed within 30 days. To ask what we hold about you, email <Mail />.
+        removed within 30 days. Content held after a report is the one exception, below. To ask what
+        we hold about you, email <Mail />.
+      </p>
+
+      <h2>Reports and legal holds</h2>
+      <p>
+        If we remove content under our{' '}
+        <Link to="/content-policy">content and copyright policy</Link>, we may keep a private copy
+        of it, with the account id it belonged to and the details of the report, as evidence for as
+        long as the law requires. That copy is never shown publicly, and it stays even if the
+        account is deleted. When you send us a report or a copyright notice, we keep your contact
+        details and what you sent in our private record of reports, and may pass a copyright notice
+        on to the owner of the content.
       </p>
 
       <h2>Changes</h2>
