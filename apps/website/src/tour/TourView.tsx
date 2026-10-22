@@ -1,7 +1,13 @@
-import type { PublishedTour, ViewBeacon } from '@internal/contracts';
+import {
+  localizePublishedTour,
+  pickLanguage,
+  tourLanguageList,
+  type PublishedTour,
+  type ViewBeacon,
+} from '@internal/contracts';
 import { Logo, LogoMark, TourViewer } from '@internal/ui';
 import { publishedToViewerTour, tilesBaseUrl } from '@internal/web-kit';
-import { useContext, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import './tour.css';
@@ -55,12 +61,47 @@ function ReportLink({ slug }: { slug: string }) {
   );
 }
 
+const browserLanguages = (): readonly string[] =>
+  typeof navigator === 'undefined' ? [] : (navigator.languages ?? [navigator.language]);
+
+/**
+ * The page's `<html lang>` follows the tour's text while it is shown. Only for a tour
+ * with languages: one without says nothing about the language it is written in.
+ */
+function useDocumentLang(lang: string | null) {
+  useEffect(() => {
+    if (!lang) return;
+    const root = document.documentElement;
+    const before = root.getAttribute('lang');
+    root.setAttribute('lang', lang);
+    return () => {
+      if (before === null) root.removeAttribute('lang');
+      else root.setAttribute('lang', before);
+    };
+  }, [lang]);
+}
+
 /** Screen 05: the visitor viewer, or the chrome-free embed. */
-export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean }) {
+export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: boolean }) {
   const config = useConfig();
   const createViewer = useContext(StageFactoryContext);
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
+  // ?lang= when the tour has it, else the browser's languages, else the default (Q4).
+  const lang = pickLanguage(stored.languages, params.get('lang'), browserLanguages());
+  const languages = useMemo(() => tourLanguageList(stored.languages), [stored.languages]);
+  const tour = useMemo(() => localizePublishedTour(stored, lang), [stored, lang]);
   const vt = useMemo(() => publishedToViewerTour(tour), [tour]);
+  useDocumentLang(lang);
+  // Kept in the URL, so a reload or a copied link stays in the language picked.
+  const chooseLanguage = (next: string) =>
+    setParams(
+      (p) => {
+        const out = new URLSearchParams(p);
+        out.set('lang', next);
+        return out;
+      },
+      { replace: true },
+    );
 
   const requested = params.get('pano');
   const requestedOk = requested !== null && !!vt.tour?.scenes[requested];
@@ -92,6 +133,9 @@ export function TourView({ tour, embed }: { tour: PublishedTour; embed: boolean 
       // In someone else's page the wheel scrolls it until the visitor engages
       // the viewer; the full-page tour keeps every wheel for zooming.
       embed={embed}
+      lang={lang}
+      languages={languages}
+      onLanguageChange={chooseLanguage}
       {...(createViewer && { createViewer })}
       {...(!embed && {
         bar: {
