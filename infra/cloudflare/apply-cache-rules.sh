@@ -6,11 +6,12 @@
 # managed rule by its `ref`, and shows the diff. Nothing is written without
 # --yes. See docs/deploy.md, "CDN cache rules".
 #
-#   CF_API_TOKEN=... infra/cloudflare/apply-cache-rules.sh dev [--dry-run | --yes]
+#   CF_API_TOKEN=... infra/cloudflare/apply-cache-rules.sh <dev|production> [--dry-run | --yes]
 #   infra/cloudflare/apply-cache-rules.sh dev --dry-run --live-file saved.json
 #
 # The token needs Zone -> Cache Rules: Edit on the zone (Read is enough for
 # --dry-run). --live-file diffs against a saved GET response instead of the API.
+# A zoneId that isn't a real 32-hex id (YOUR_PANOTE_IO_ZONE_ID) is refused.
 set -euo pipefail
 
 API=https://api.cloudflare.com/client/v4
@@ -21,7 +22,7 @@ die() {
   exit 1
 }
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -61,6 +62,8 @@ config="$dir/cache-rules.$env_name.json"
 [ -f "$config" ] || die "no $config"
 zone_id=$(jq -er '.zoneId' "$config")
 zone=$(jq -er '.zone' "$config")
+[[ "$zone_id" =~ ^[0-9a-f]{32}$ ]] ||
+  die "$config: zoneId \"$zone_id\" is not a zone id; set it to $zone's (Overview -> API -> Zone ID)"
 managed=$(jq -ce '.rules' "$config")
 jq -e 'all(.[]; (.ref | type) == "string" and (.ref | length) > 0)' <<<"$managed" >/dev/null ||
   die "every managed rule needs a ref"

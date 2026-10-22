@@ -163,10 +163,14 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: printf '%s' "$PR_TITLE" | pnpm exec commitlint --verbose
 
-  # Builds each plain-Worker service and both SPAs and dry-runs `wrangler
-  # deploy` against them, catching a broken build or unresolvable workspace
-  # import on every PR instead of only on a real deploy. tiler-consumer is
-  # skipped (needs Docker). Not a required check.
+  # Builds every Worker service and both SPAs and dry-runs `wrangler deploy`
+  # against them for both dev and production, catching a broken build, an
+  # unresolvable workspace import or a bad env block on every PR instead of
+  # only on a real deploy. Production is dry-run too because nothing deploys
+  # it yet, so its config would otherwise only be checked on the first real
+  # production deploy. A dry-run only bundles: no credentials, no account
+  # access, and YOUR_ placeholders are fine (deploy.yml's guard rejects
+  # those). Not a required check.
   deploy-dry-run:
     name: Deploy dry-run
     runs-on: ubuntu-latest
@@ -184,6 +188,7 @@ jobs:
           --filter="@service/public-api..."
           --filter="@service/admin-api..."
           --filter="@service/upload-api..."
+          --filter="@service/tiler-consumer..."
           --filter="@app/website..."
           --filter="@app/admin..."
 
@@ -203,6 +208,37 @@ jobs:
         run: >-
           pnpm --filter "@service/upload-api" exec wrangler deploy
           --dry-run --env dev --outdir /tmp/deploy-dry-run/upload-api
+
+      # --containers-rollout=none skips the container image: without it a
+      # dry-run still builds the Dockerfile (Docker plus a native sharp
+      # compile, the slowest part of a real deploy). The Worker, its Durable
+      # Object, queue consumers and bindings are still bundled and checked.
+      - name: Dry-run deploy tiler-consumer
+        run: >-
+          pnpm --filter "@service/tiler-consumer" exec wrangler deploy
+          --dry-run --containers-rollout=none --env dev
+          --outdir /tmp/deploy-dry-run/tiler-consumer
+
+      - name: Dry-run deploy public-api (production)
+        run: >-
+          pnpm --filter "@service/public-api" exec wrangler deploy
+          --dry-run --env production --outdir /tmp/deploy-dry-run/production/public-api
+
+      - name: Dry-run deploy admin-api (production)
+        run: >-
+          pnpm --filter "@service/admin-api" exec wrangler deploy
+          --dry-run --env production --outdir /tmp/deploy-dry-run/production/admin-api
+
+      - name: Dry-run deploy upload-api (production)
+        run: >-
+          pnpm --filter "@service/upload-api" exec wrangler deploy
+          --dry-run --env production --outdir /tmp/deploy-dry-run/production/upload-api
+
+      - name: Dry-run deploy tiler-consumer (production)
+        run: >-
+          pnpm --filter "@service/tiler-consumer" exec wrangler deploy
+          --dry-run --containers-rollout=none --env production
+          --outdir /tmp/deploy-dry-run/production/tiler-consumer
 
       # Assets-only Workers: checks the config, routes and the built dist/
       # (APP_MODE unset, so the build above used .env.dev).
@@ -239,6 +275,17 @@ jobs:
             if grep -q 'X-Robots-Tag' "apps/$app/dist/_headers"; then exit 1; fi
             grep -qx 'Allow: /' "apps/$app/dist/robots.txt"
           done
+
+      # Against the production builds above (APP_MODE=production).
+      - name: Dry-run deploy website (production)
+        run: >-
+          pnpm --filter "@app/website" exec wrangler deploy
+          --dry-run --env production --outdir /tmp/deploy-dry-run/production/website
+
+      - name: Dry-run deploy admin (production)
+        run: >-
+          pnpm --filter "@app/admin" exec wrangler deploy
+          --dry-run --env production --outdir /tmp/deploy-dry-run/production/admin
 
   # Runs in parallel with `gate`, not after it. `pnpm test:coverage` is a
   # superset of `pnpm test` for the Node-side packages (same tests, plus
