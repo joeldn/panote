@@ -4,6 +4,8 @@ import {
   AccountDeleteRequestSchema,
   AccountDeletionRecordSchema,
   AccountDisabledRecordSchema,
+  TourOwnerRecordSchema,
+  QuarantineCaseRecordSchema,
   CLIENT_ID_PATTERN,
   OperatorTakedownRequestSchema,
   PANO_DELETE_CONFLICTS,
@@ -113,6 +115,30 @@ describe('AccountDisabledRecordSchema', () => {
     expect(
       AccountDisabledRecordSchema.safeParse({ ...record, reason: 'x'.repeat(501) }).success,
     ).toBe(false);
+  });
+});
+
+describe('TourOwnerRecordSchema', () => {
+  it('needs a non-empty sub', () => {
+    expect(TourOwnerRecordSchema.safeParse({ v: 1, sub: 'auth0|me' }).success).toBe(true);
+    expect(TourOwnerRecordSchema.safeParse({ v: 1, sub: '' }).success).toBe(false);
+  });
+});
+
+describe('QuarantineCaseRecordSchema', () => {
+  it('needs the owner and the copied keys', () => {
+    const record = {
+      v: 1,
+      caseId: 'c-1',
+      sub: 'auth0|me',
+      tourIds: ['t'],
+      keys: ['k'],
+      firstAt: 'a',
+      lastAt: 'b',
+    };
+    expect(QuarantineCaseRecordSchema.safeParse(record).success).toBe(true);
+    expect(QuarantineCaseRecordSchema.safeParse({ ...record, keys: 'k' }).success).toBe(false);
+    expect(QuarantineCaseRecordSchema.safeParse({ ...record, sub: '' }).success).toBe(false);
   });
 });
 

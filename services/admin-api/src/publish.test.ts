@@ -1,4 +1,5 @@
 import {
+  configKey,
   deletingKey,
   encodeId,
   manifestKey,
@@ -24,12 +25,18 @@ import {
   SELF,
   waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
 import worker from './index.js';
 import type { TourPublisher } from './publisher.js';
-import { DEFAULT_SLUG_ALIAS_DAYS, MAX_ALIASES, parseAliasDays, publishTour } from './publish.js';
+import {
+  DEFAULT_SLUG_ALIAS_DAYS,
+  MAX_ALIASES,
+  parseAliasDays,
+  publishTour,
+  renameSlug,
+} from './publish.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
@@ -37,6 +44,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Duration-bound: 21 renames through the DO take ~2-2.6s idle, 4.5-5.4s with the
 // CPU saturated, where the 5s default timed out (measured locally).
 const SLOW_TEST_MS = 30_000;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
@@ -61,6 +72,11 @@ const putConfig = async (who: Who, panoId: string, title = `Scene ${panoId}`) =>
   });
   expect(r.status).toBe(200);
 };
+
+// A config with no original of the caller's behind it: only legacy data, since
+// the config PUT now refuses one (routes.test.ts).
+const legacyConfig = (who: Who, panoId: string, title = `Scene ${panoId}`) =>
+  env.BUCKET.put(configKey(subOf(who), panoId), JSON.stringify({ panoId, title, hotspots: [] }));
 
 /** A fully owned, tiled pano: original + config + manifest. */
 const readyPano = async (panoId: string, who: Who = 'me') => {
@@ -234,9 +250,9 @@ describe('POST /api/admin/tours/:tourId/publish', () => {
     // deleting: tombstone left by an interrupted delete
     await env.BUCKET.put(originalKey(MY_SUB, 'pub-422-del'), 'bytes');
     await env.BUCKET.put(deletingKey(MY_SUB, 'pub-422-del'), '');
-    // not-owned: a config under my prefix, but the original is someone else's
+    // not-owned: a (legacy) config under my prefix, but the original is someone else's
     await readyPano('pub-422-foreign', 'other');
-    await putConfig('me', 'pub-422-foreign');
+    await legacyConfig('me', 'pub-422-foreign');
     // not-ready: owned and configured, not tiled yet
     await env.BUCKET.put(originalKey(MY_SUB, 'pub-422-tiling'), 'bytes');
     await putConfig('me', 'pub-422-tiling');
@@ -265,9 +281,16 @@ describe('POST /api/admin/tours/:tourId/publish', () => {
     expect(await env.BUCKET.head(publishKey(MY_SUB, tourId))).toBeNull();
   });
 
-  it("a config written for someone else's panoId can't be published", async () => {
+  it("a config for someone else's panoId can't be written, and a legacy one can't be published", async () => {
     await readyPano('pub-steal-p1', 'other');
-    await putConfig('me', 'pub-steal-p1', 'Stolen');
+    const put = await SELF.fetch('https://x/api/admin/panos/pub-steal-p1/config', {
+      method: 'PUT',
+      headers: { ...bearer('me'), 'If-Match': '*' },
+      body: JSON.stringify({ title: 'Stolen', hotspots: [] }),
+    });
+    expect(put.status).toBe(404);
+    expect(await env.BUCKET.head(configKey(MY_SUB, 'pub-steal-p1'))).toBeNull();
+    await legacyConfig('me', 'pub-steal-p1', 'Stolen');
     const tourId = await createTour('Stolen Tour', ['pub-steal-p1']);
     const r = await publish(tourId, { slug: 'stolen-tour' });
     expect(r.status).toBe(422);
@@ -504,12 +527,26 @@ describe('DELETE /api/admin/tours/:tourId/publish', () => {
     expect(again.status).toBe(200);
   });
 
-  it('leaves an earlier rename alias to expire on its own', async () => {
+  it('releases its rename aliases too, so another tour can claim them', async () => {
     const tourId = await publishedTour('unpub-alias', 'unpub-alias-old');
     await putSlug(tourId, 'unpub-alias-new');
     expect((await unpublishReq(tourId)).status).toBe(204);
     expect(await env.BUCKET.head(slugKey('unpub-alias-new'))).toBeNull();
-    expect(await readSlug('unpub-alias-old')).toMatchObject({ kind: 'redirect', tourId });
+    expect(await env.BUCKET.head(slugKey('unpub-alias-old'))).toBeNull();
+    const other = await publishedTour('unpub-alias-o', 'unpub-alias-old');
+    expect(await readSlug('unpub-alias-old')).toEqual({ v: 1, kind: 'tour', tourId: other });
+  });
+
+  it('a publish, rename, unpublish cycle leaves no slugs held behind', async () => {
+    await readyPano('unpub-cycle-p1');
+    const tourId = await createTour('Cycle', ['unpub-cycle-p1']);
+    for (let i = 0; i < 3; i += 1) {
+      expect((await publish(tourId, { slug: `unpub-cycle-${i}-a` })).status).toBe(200);
+      expect((await putSlug(tourId, `unpub-cycle-${i}-b`)).status).toBe(200);
+      expect((await unpublishReq(tourId)).status).toBe(204);
+    }
+    const left = await env.BUCKET.list({ prefix: 'slugs/unpub-cycle-' });
+    expect(left.objects).toEqual([]);
   });
 
   it("does not delete a slug that now points at another tour, or another user's bundle", async () => {
@@ -849,27 +886,69 @@ describe('alias edge cases', () => {
   });
 
   it(
-    `tracks at most ${MAX_ALIASES} aliases; a dropped one still points at the current slug`,
+    `holds at most ${MAX_ALIASES} aliases: one more slug change is refused and claims nothing`,
     async () => {
       const tourId = await publishedTour('alias-cap', 'alias-cap-0');
-      const renames = MAX_ALIASES + 1;
-      for (let i = 1; i <= renames; i += 1) {
+      for (let i = 1; i <= MAX_ALIASES; i += 1) {
         expect((await putSlug(tourId, `alias-cap-${i}`)).status).toBe(200);
       }
-      const current = `alias-cap-${renames}`;
+      const current = `alias-cap-${MAX_ALIASES}`;
+      const refused = await putSlug(tourId, 'alias-cap-next');
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({ error: 'too many renames' });
+      expect((await publish(tourId, { slug: 'alias-cap-next' })).status).toBe(409);
+      expect(await env.BUCKET.head(slugKey('alias-cap-next'))).toBeNull();
+      expect(await readSlug(current)).toEqual({ v: 1, kind: 'tour', tourId });
+
+      // Every alias is tracked and still redirects (Q6), and a bare republish
+      // or a move back onto an alias still works at the cap.
       const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
       expect(record.aliases).toHaveLength(MAX_ALIASES);
-      expect(record.aliases?.[0]).toBe(`alias-cap-${renames - 1}`);
-      expect(record.aliases).not.toContain('alias-cap-0');
-      for (let i = 0; i < renames; i += 1) {
+      for (let i = 0; i < MAX_ALIASES; i += 1) {
         expect(await readSlug(`alias-cap-${i}`)).toMatchObject({
           kind: 'redirect',
           redirect: current,
         });
       }
+      expect((await publish(tourId)).status).toBe(200);
+      expect((await putSlug(tourId, 'alias-cap-0')).status).toBe(200);
     },
     SLOW_TEST_MS,
   );
+
+  it('aliases past SLUG_ALIAS_DAYS stop counting toward the cap before the sweep runs', async () => {
+    const tourId = await publishedTour('alias-aged', 'alias-aged-0');
+    for (let i = 1; i <= MAX_ALIASES; i += 1) {
+      expect((await putSlug(tourId, `alias-aged-${i}`)).status).toBe(200);
+    }
+    expect((await putSlug(tourId, 'alias-aged-next')).status).toBe(409);
+    // Called directly so the faked clock applies (the TourPublisher runs elsewhere).
+    // No cron has run: every expired alias is still in R2.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + (DEFAULT_SLUG_ALIAS_DAYS + 1) * DAY_MS);
+    const clock = { now: new Date(), aliasDays: DEFAULT_SLUG_ALIAS_DAYS };
+    const out = await renameSlug(env.BUCKET, MY_SUB, tourId, 'alias-aged-next', clock);
+    expect(out.status).toBe(200);
+    expect(await readSlug('alias-aged-0')).toMatchObject({ kind: 'redirect' });
+    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+    expect(record.aliases).toEqual([`alias-aged-${MAX_ALIASES}`]);
+  });
+
+  it('a tour live at a slug reserved since it was claimed still republishes', async () => {
+    const tourId = await publishedTour('alias-reserved', 'alias-reserved-x');
+    // As if 'support' had been claimed before RESERVED_SLUGS listed it.
+    await env.BUCKET.put('slugs/support.json', JSON.stringify({ v: 1, kind: 'tour', tourId }));
+    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+    await env.BUCKET.put(
+      publishKey(MY_SUB, tourId),
+      JSON.stringify({ ...record, slug: 'support' }),
+    );
+    const r = await publish(tourId);
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { slug: string }).slug).toBe('support');
+    // A new claim of a reserved word is still refused.
+    expect((await putSlug(tourId, 'abuse')).status).toBe(400);
+  });
 
   it('link hotspots to panos outside the tour are stripped from the bundle', async () => {
     await readyPano('hs-a');

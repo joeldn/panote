@@ -12,7 +12,7 @@ const MODES = ['dev', 'production'];
 const API_TARGET = 'https://panote.dev';
 // The pages a crawler should find from the sitemap. Tours aren't listed: a public tour is
 // found through links to it (Explore links every one), and an unlisted one must not be.
-const SITEMAP_PATHS = ['/', '/explore', '/privacy', '/terms'];
+const SITEMAP_PATHS = ['/', '/explore', '/privacy', '/terms', '/content-policy'];
 
 // Validates the env at build time and emits dist/_headers (CSP, noindex off production),
 // dist/robots.txt and dist/sitemap.xml, so both are real files rather than the SPA fallback

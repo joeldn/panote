@@ -7,6 +7,7 @@ import {
   storedSlugKey,
   tilesPrefix,
   tourKey,
+  tourOwnerKey,
   userPanosPrefix,
   userToursPrefix,
   userUploadLogPrefix,
@@ -81,8 +82,8 @@ const markComplete = async (bucket: R2Bucket, sub: string, now: Date): Promise<v
   );
 };
 
-// Redirect aliases this tour still owns. unpublish only removes the live slug and
-// leaves aliases to expire; an account delete removes them now.
+// Redirect aliases this tour still owns. unpublish releases them too; this keeps
+// the account delete from depending on it for that.
 const deleteAliases = async (bucket: R2Bucket, sub: string, tourId: string): Promise<string[]> => {
   const stored = await readPublishRecord(bucket, sub, tourId);
   const removed: string[] = [];
@@ -142,6 +143,7 @@ const deleteOwnedTour = async (
     // While tour.json exists a retry lists this tour again, so stats go before it.
     await deps.clearStats(tourId);
     await bucket.delete(tourKey(sub, tourId));
+    await bucket.delete(tourOwnerKey(tourId));
     // As tour delete does: a publish queued behind the first unpublish still saw
     // tour.json and republished. Any publish after this sees no tour.json and
     // unpublishes itself (publish.ts commit).

@@ -60,6 +60,10 @@ function publishMessage(err: PublishError, panos: SharePano[]): string {
       return 'This tour isn’t live any more. Close and reopen Share to publish it again.';
     case 'not-found':
       return 'This tour no longer exists.';
+    case 'too-many-renames':
+      return 'This tour’s link has changed too many times recently. Try again later.';
+    case 'rate-limited':
+      return 'Too many requests. Wait a minute and try again.';
     case 'unprocessable': {
       if (err.scenes.length === 0) return 'Add a pano to this tour before publishing it.';
       const name = (id: string) => panos.find((p) => p.id === id)?.name ?? id;

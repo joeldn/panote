@@ -31,6 +31,19 @@
         ],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
+      // namespace_id is ours to choose (any integer, unique in the account; nothing to
+      // create), dev 13xx and production 23xx. `period` (10 or 60) must match
+      // WRITE_RATE_PERIOD_SECONDS in src/index.ts, which is the 429's Retry-After.
+      // Writes (POST/PUT/PATCH/DELETE) per owner (Auth0 sub) per minute. 300 lets two
+      // Saves of a full tour through in one minute: each is MAX_TOUR_SCENES (100) configs
+      // + tour + publish.
+      "ratelimits": [
+        {
+          "name": "WRITE_LIMITER",
+          "namespace_id": "1301",
+          "simple": { "limit": 300, "period": 60 },
+        },
+      ],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
@@ -67,6 +80,16 @@
         ],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
+      // Writes (POST/PUT/PATCH/DELETE) per owner (Auth0 sub) per minute. 300 lets two
+      // Saves of a full tour through in one minute: each is MAX_TOUR_SCENES (100) configs
+      // + tour + publish.
+      "ratelimits": [
+        {
+          "name": "WRITE_LIMITER",
+          "namespace_id": "2301",
+          "simple": { "limit": 300, "period": 60 },
+        },
+      ],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it
         // only with the real tenant URL, never another fake name.
