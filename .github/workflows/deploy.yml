@@ -219,6 +219,27 @@ jobs:
               console.log(`${file}: no YOUR_ placeholders.`);
             }
           }
+          // The legal pages name the operator, governing law and so on; until those are
+          // decided they hold YOUR_ placeholders (apps/website/src/legal/operator.ts).
+          const legalDir = "apps/website/src/legal";
+          const legalFiles = fs
+            .readdirSync(legalDir)
+            .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f));
+          if (legalFiles.length === 0) {
+            console.log(`::error::${legalDir}: no sources found - the guard would silently skip them.`);
+            failed = true;
+          }
+          for (const name of legalFiles) {
+            const file = `${legalDir}/${name}`;
+            const hits = fs
+              .readFileSync(file, "utf8")
+              .split("\n")
+              .filter((line) => !line.trim().startsWith("//") && /YOUR_/i.test(line));
+            for (const hit of hits) {
+              console.log(`::error::${file}: ${hit.trim()} is still a YOUR_ placeholder. Fill in the operator's real details (docs/deploy.md, Takedown) before deploying production.`);
+            }
+            if (hits.length > 0) failed = true;
+          }
           if (failed) process.exit(1);
           EOF
 

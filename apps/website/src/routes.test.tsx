@@ -25,7 +25,7 @@ describe('website routes', () => {
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeTruthy();
   });
 
-  it.each(['/privacy', '/terms'])('renders %s', async (path) => {
+  it.each(['/privacy', '/terms', '/content-policy'])('renders %s', async (path) => {
     renderAt(path);
     expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
   });
@@ -45,6 +45,45 @@ describe('website routes', () => {
     const page = screen.getByRole('article').textContent ?? '';
     expect(page).toContain('records your account id against that tour');
     expect(page).not.toContain('isn’t linked to an account');
+  });
+
+  it('content policy covers notices, counter-notices, repeat infringers and illegal images', async () => {
+    renderAt('/content-policy');
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Content and copyright' }),
+    ).toBeTruthy();
+    for (const name of [
+      'What isn’t allowed',
+      'Report a tour',
+      'Copyright notices',
+      'What we do',
+      'Counter-notices',
+      'Repeat infringers',
+      'Illegal images',
+    ]) {
+      expect(screen.getByRole('heading', { level: 2, name })).toBeTruthy();
+    }
+    const page = screen.getByRole('article').textContent ?? '';
+    expect(page).toContain('under penalty of perjury');
+    expect(page).toContain('your signature');
+    expect(page).toContain('NCMEC');
+    expect(page).toContain('We keep a private copy');
+    expect(page).toContain('account is closed');
+  });
+
+  it('terms point to the content policy, and the footer links it', async () => {
+    renderAt('/terms');
+    await screen.findByRole('heading', { level: 1, name: 'Terms' });
+    const article = screen.getByRole('article');
+    expect(
+      within(article)
+        .getByRole('link', { name: 'content and copyright policy' })
+        .getAttribute('href'),
+    ).toBe('/content-policy');
+    const legal = screen.getByRole('navigation', { name: 'Legal' });
+    expect(within(legal).getByRole('link', { name: 'Content policy' }).getAttribute('href')).toBe(
+      '/content-policy',
+    );
   });
 
   it('falls back to a 404 page', async () => {
