@@ -66,11 +66,11 @@ Long scrolling page on `#faf8f4`, max content width **1180px**, horizontal paddi
 
 - **Fixed top nav** — logo mark (24px) + wordmark "panote.io" (500 18px, letter-spacing −.02em); links Features / How it works / Showcase / FAQ (hidden below 600px); "Sign in" text button; dark CTA. Nav gains a translucent backdrop-blur background after scroll.
 - **Hero** — live pano behind, scrimmed. `h1` in display font, `clamp(44px, 6.6vw, 92px)`, weight 400, line-height .98, letter-spacing −.015em, max-width 15ch. Sub-paragraph 400 19px/1.5, max-width 50ch. Primary CTA is a **drop target**: dark `#1a1815` pill, 15px/22px padding, with a dashed 22px upload square, title "Upload your first tour" (600 15px) and sub "free — no sign-up, live in seconds" (400 12.5px, 60% white).
-- **Pillars** — 4-up grid, 22px gap. Section `h2` `clamp(32px, 4.4vw, 54px)`, weight 400, max-width 18ch; mono kicker paragraph at 13px, 45% ink, max-width 32ch. Pillar cards: icon, mono tag, title, body. Content: Full resolution / No limits / No watermark, ever / Your work stays yours.
+- **Pillars** — 4-up grid, 22px gap. Section `h2` `clamp(32px, 4.4vw, 54px)`, weight 400, max-width 18ch; mono kicker paragraph at 13px, 45% ink, max-width 32ch. Pillar cards: icon, mono tag, title, body. Content: Full resolution / Generous limits / No watermark, ever / Your work stays yours.
 - **How it works** — numbered steps ("01 / Upload" style mono labels).
 - **Comparison table** — 3-column grid `1.4fr 1fr 1fr`, rows separated by 1px `rgba(26,24,21,.09)`, on `#faf8f4`.
 - **"Why it's free"** — dark section, reasons list with icons, plus a bordered callout (1px `rgba(250,248,244,.16)`, radius 13px, 400 15px/1.55).
-- **Showcase**, **FAQ** (accordion, one open at a time), **footer** — 4 columns: brand blurb, Product, Resources (Docs / Camera guide / Embedding), Contact. Bottom bar: "© 2026 Panote · Free, unlimited, no watermark" + Privacy / Terms, 13px mono at 40% ink.
+- **Showcase**, **FAQ** (accordion, one open at a time), **footer** — 4 columns: brand blurb, Product, Resources (Docs / Camera guide / Embedding), Contact. Bottom bar: "© 2026 Panote · Free, full resolution, no watermark" + Privacy / Terms, 13px mono at 40% ink.
 
 > Copy rule: the product is **free, not open source**, and makes **no export/download promises**. Do not reintroduce "open source", "MIT", "GitHub", "export your tours", or "download your config" copy anywhere.
 
