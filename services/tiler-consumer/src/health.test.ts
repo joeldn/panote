@@ -130,7 +130,9 @@ describe('checkCron', () => {
     });
     const { result } = await checkCron(env.BUCKET, EMPTY_STATE, T0);
     expect(result.ok).toBe(false);
-    expect(result.detail).toBe(`run at ${iso(T0 - MIN)} failed: tile-gc`);
+    expect(result.detail).toBe(
+      `run at ${iso(T0 - MIN)} failed: tile-gc (clears after the next successful daily run)`,
+    );
   });
 
   it('fails a status that never had a clean run, or is malformed', async () => {

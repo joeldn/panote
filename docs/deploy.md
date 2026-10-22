@@ -1934,7 +1934,7 @@ uses.
 | `admin app /app/` | `ADMIN_APP` | `200` HTML |
 | `public-api /api/explore` | `PUBLIC_API` | `200` JSON with a `tours` array |
 | `admin-api /api/admin/panos`, `upload-api /api/upload-url` | `ADMIN_API`, `UPLOAD_API`, no token | `401`: the Worker ran and refused, it didn't `5xx` |
-| `public URL /` (with `HEALTH_PUBLIC_PROBES` `true`) | global `fetch` of `HEALTH_SITE_ORIGIN`, redirects not followed | `200` HTML, **or a redirect to `*.cloudflareaccess.com`** |
+| `public URL /` (only with `HEALTH_PUBLIC_PROBES` `true`; off by default) | global `fetch` of `HEALTH_SITE_ORIGIN`, redirects not followed | `200` HTML, **or a redirect to `*.cloudflareaccess.com`** |
 | `public URL /api/explore` (same) | global `fetch` | `200` JSON with `tours`. An Access redirect here is down: it means the `/api/*` bypass app is gone |
 | `admin-api daily cron` | reads `ops/cron/admin-api-daily.json` | the last run had no task throw and the last clean run is under 26 h old |
 | `cdn purge` | reads `ops/cdn-purge/last-failure.json` | no purge failed in the last hour |
@@ -1942,14 +1942,22 @@ uses.
 Each probe has a 10 s timeout. Requests carry `user-agent: panote-health-check` and no token.
 
 **Cloudflare Access on dev.** `panote.dev`'s pages are behind Access (Cloudflare Access (dev
-only), above), so a public probe of a page gets a `302` to the login. Most probes therefore go
+only), above), so a public probe of a page gets a `302` to the login. The probes therefore go
 through **service bindings**, straight into each Worker: that proves the Worker's code runs and
-answers, and never meets Access or a route. The two `public URL` probes then check the route and
-Access setup the way a visitor meets it, and count the Access login redirect as up for a page
-(production has no Access, so there it's a plain `200`). Not verified live: whether a fetch from
-a Worker with no route of its own to a route on the same account reaches the Worker on that
-route. If the two `public URL` checks fail on every run while the service-binding ones pass, set
-`HEALTH_PUBLIC_PROBES` to `false` in that env block and redeploy; the rest keep working.
+answers, and never meets Access or a route.
+
+**Public URL probes: off by default** (`HEALTH_PUBLIC_PROBES` `false` in both env blocks). With
+it `true`, two more probes fetch `HEALTH_SITE_ORIGIN` the way a visitor does, to catch a broken
+route or Access setup, and count the Access login redirect as up for a page (production has no
+Access, so there it's a plain `200`). They are off because a Worker's `fetch` to another
+Worker's route on the same account has historically failed (error 1042 and same-zone requests
+going to the origin instead), which would mean a false DOWN email after every deploy; the
+service-binding probes already cover the Workers, and the external monitor (TODO below) covers
+the public path. To try them: set `HEALTH_PUBLIC_PROBES` to `"true"` in the `dev` block of
+`services/tiler-consumer/wrangler.jsonc`, run `pnpm --filter @service/tiler-consumer run types`
+(it should report no change) and merge; then watch the logs for `[health] check failed check=public URL`
+over the next 15 minutes. If those lines appear while the service-binding checks pass, set it
+back to `"false"`; a DOWN email for them may already have gone out.
 
 **When it emails.** A check is down after **2 failures in a row** (`FAILURES_TO_ALERT`) and up
 again after one pass. An email goes out whenever the set of down checks differs from what the
@@ -1973,8 +1981,9 @@ Details are statuses and error names only.
 **Vars** (both env blocks of `services/tiler-consumer/wrangler.jsonc`):
 `HEALTH_SITE_ORIGIN` (`https://panote.dev` / `https://panote.io`), `HEALTH_TOUR_SLUG` (empty: no
 tour page probe; set it to a published Unlisted or Public tour that should stay up) and
-`HEALTH_PUBLIC_PROBES` (`true`). After changing one, run
-`pnpm --filter @service/tiler-consumer run types` and commit `env.d.ts` (its header hash moves).
+`HEALTH_PUBLIC_PROBES` (`false`, see above). After changing one, run
+`pnpm --filter @service/tiler-consumer run types` and commit any `env.d.ts` change (a value
+change alone leaves it as it is; CI checks for drift).
 
 ### Daily cron and CDN purge failures
 
@@ -1984,7 +1993,10 @@ tour page probe; set it to a published Unlisted or Public tour that should stay 
   `[cron] daily task failed task=<name> error=<error name>`, and every run writes
   `ops/cron/admin-api-daily.json`: `{ lastRunAt, lastOkAt, failed }`, where `lastOkAt` only moves
   on a run with no task failed. The health check fails `admin-api daily cron` when the last run
-  failed (until the next clean run) or the last clean run is over 26 h old (the cron stopped). On
+  failed or the last clean run is over 26 h old (the cron stopped). A failed run keeps the check
+  failing until the next daily run comes back clean, so even a one-off failure means a DOWN email
+  and the recovery email about a day later; the alert says so ("clears after the next successful
+  daily run"). On
   a bucket with no status yet, it waits 26 h from the first time it saw that before failing. A
   task's per-item failures that it logs and carries on from (one account, one tile version) don't
   count: only a task that throws.

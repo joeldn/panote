@@ -131,7 +131,12 @@ export const checkCron = async (
   const parsed = CronStatusSchema.safeParse(raw);
   if (!parsed.success) return fail('status malformed');
   const { lastRunAt, lastOkAt, failed } = parsed.data;
-  if (failed.length > 0) return fail(`run at ${lastRunAt} failed: ${failed.join(', ')}`);
+  // Stays failing until the next daily run comes back clean, about a day later.
+  if (failed.length > 0) {
+    return fail(
+      `run at ${lastRunAt} failed: ${failed.join(', ')} (clears after the next successful daily run)`,
+    );
+  }
   const okAt = lastOkAt === null ? NaN : Date.parse(lastOkAt);
   if (!(now - okAt <= CRON_STALE_MS)) return fail(`last clean run ${lastOkAt ?? 'never'}`);
   return {

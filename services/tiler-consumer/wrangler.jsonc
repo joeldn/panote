@@ -78,10 +78,11 @@
         // Health check (src/health.ts, docs/deploy.md "Monitoring and alerts"). The
         // origin the probes ask for; a published tour's slug to probe its page (empty:
         // skipped); "true" adds two probes through the public URL, where the Access
-        // login redirect counts as up.
+        // login redirect counts as up. Off: same-account Worker-to-route fetches are
+        // unreliable (docs/deploy.md).
         "HEALTH_SITE_ORIGIN": "https://panote.dev",
         "HEALTH_TOUR_SLUG": "",
-        "HEALTH_PUBLIC_PROBES": "true",
+        "HEALTH_PUBLIC_PROBES": "false",
       },
       // DLQ and health alert email (src/alert.ts, src/health.ts). Unrestricted on
       // purpose: the recipient is the ALERT_EMAIL_TO secret, so no address lives in the repo.
@@ -142,7 +143,7 @@
         "ALERT_EMAIL_FROM": "tiler-alerts@panote.io",
         "HEALTH_SITE_ORIGIN": "https://panote.io",
         "HEALTH_TOUR_SLUG": "",
-        "HEALTH_PUBLIC_PROBES": "true",
+        "HEALTH_PUBLIC_PROBES": "false",
       },
       "send_email": [{ "name": "ALERT_EMAIL" }],
       // Every target must already be deployed: deploy this Worker last (Production runbook).
