@@ -30,6 +30,16 @@ describe('aspectNote', () => {
     expect(aspectNote({ width, height })).toBe(note);
   });
 
+  it('describes a wide strip by its vertical view, not as less than a 360', () => {
+    // A wide strip is usually a full 360 sweep with a narrow view up and down.
+    expect(aspectNote({ width: 8000, height: 2000 })).toBe(
+      'This photo doesn’t cover the full view up and down. We’ll fill the top and bottom so it displays without stretching.',
+    );
+    expect(aspectNote({ width: 4000, height: 3000 })).toBe(
+      'This photo isn’t a 2:1 panorama, so it will look stretched in the viewer.',
+    );
+  });
+
   it('says nothing when the size is unknown', () => {
     expect(aspectNote(null)).toBeNull();
     expect(aspectNote({ width: 0, height: 0 })).toBeNull();

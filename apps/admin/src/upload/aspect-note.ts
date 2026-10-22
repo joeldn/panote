@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 const TOLERANCE = 0.02;
 
 export const WIDE_NOTE =
-  'This photo isn’t a full 360. We’ll fill the top and bottom so it displays without stretching.';
+  'This photo doesn’t cover the full view up and down. We’ll fill the top and bottom so it displays without stretching.';
 export const NARROW_NOTE =
   'This photo isn’t a 2:1 panorama, so it will look stretched in the viewer.';
 
