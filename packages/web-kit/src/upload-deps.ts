@@ -5,7 +5,7 @@ import { putFile, type UploadApi, type UploadContentType, type XhrLike } from '.
 import type { UploadDeps } from './upload-machine.js';
 
 export interface UploadDepsOptions {
-  uploadApi: UploadApi;
+  uploadApi: Pick<UploadApi, 'presign'>;
   adminApi: Pick<AdminApi, 'getPanoStatus'>;
   /** The viewer's tiles base, `tilesBaseUrl(config)`. */
   tilesBase: string;

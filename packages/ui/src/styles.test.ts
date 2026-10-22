@@ -42,7 +42,12 @@ describe('styles', () => {
     const used = ['components.css', 'viewer.css', 'share.css'].flatMap((f) =>
       [...read(f).matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]),
     );
-    const local = new Set(['--pn-modal-width', '--pn-modal-radius', '--pn-hs-scale']);
+    const local = new Set([
+      '--pn-modal-width',
+      '--pn-modal-radius',
+      '--pn-hs-scale',
+      '--pn-plan-ratio',
+    ]);
     expect(used.filter((u) => !defined.has(u) && !local.has(u as string))).toEqual([]);
   });
 

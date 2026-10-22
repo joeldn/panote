@@ -466,6 +466,27 @@ describe('/s/:slug', () => {
     await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', undefined));
   });
 
+  it('draws the floor plan from the bundle, with dots that go to their scene', async () => {
+    const base = bundle();
+    objects['pub/tours/tour-a.json'] = bundle({
+      plan: { id: 'plan-1', type: 'image/webp', width: 800, height: 600 },
+      scenes: (base.scenes as Array<Record<string, unknown>>).map((s, i) => ({
+        ...s,
+        mapX: i === 0 ? 0.25 : 0.75,
+        mapY: 0.5,
+      })),
+    });
+    renderAt('/s/old-town');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const plan = screen.getByRole('group', { name: 'Floor plan' });
+    expect(plan.querySelector('img')?.getAttribute('src')).toBe(
+      `${CDN}pub/plans/tour-a/plan-1.webp`,
+    );
+    fireEvent.click(within(plan).getByRole('button', { name: 'Church' }));
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', undefined));
+  });
+
   it('adds noindex for an unlisted tour', async () => {
     objects['pub/tours/tour-a.json'] = bundle({ visibility: 'unlisted' });
     renderAt('/s/old-town');

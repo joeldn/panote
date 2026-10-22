@@ -95,6 +95,29 @@ describe('owner preview', () => {
     await waitFor(() => expect(lastViewer().setAutoRotate).toHaveBeenCalledWith(true));
   });
 
+  it('shows the saved floor plan as visitors will see it', async () => {
+    server.setTour({
+      tourId: 't1',
+      title: 'Old town',
+      scenes: [
+        { panoId: 'square', mapX: 0.2, mapY: 0.3 },
+        { panoId: 'church', mapX: 0.6, mapY: 0.7 },
+      ],
+      startPanoId: 'church',
+      plan: { id: 'plan-1', type: 'image/png', width: 640, height: 480 },
+    });
+    open();
+    await shown();
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const plan = screen.getByRole('group', { name: 'Floor plan' });
+    expect(plan.querySelector('img')?.getAttribute('src')).toBe(
+      'https://cdn.panote.dev/pub/plans/t1/plan-1.png',
+    );
+    expect(within(plan).getByRole('button', { name: 'Church' }).getAttribute('aria-current')).toBe(
+      'location',
+    );
+  });
+
   it('shows points and walks a link, sending no analytics, views or likes', async () => {
     const sendBeacon = vi.fn(() => true);
     Object.defineProperty(navigator, 'sendBeacon', { value: sendBeacon, configurable: true });

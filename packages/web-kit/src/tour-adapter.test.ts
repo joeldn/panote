@@ -79,6 +79,9 @@ describe('toViewerTour', () => {
     expect(v.links.nave?.[0]?.source.id).toBe('l3');
     expect(v.hotspots.nave).toEqual([]);
     expect(v.north).toEqual({ hall: 0.5, nave: 0 });
+    // Only a north the creator set can say which way a view faces on the map.
+    expect(v.hasNorth).toEqual({ hall: true, nave: false });
+    expect(v.plan).toBeNull();
     expect(v.titles).toEqual({ hall: 'Hall', nave: 'Nave' });
     expect(v.mapPositions).toEqual({ hall: { x: 0.2, y: 0.4 } });
     expect(v.missing).toEqual([]);
@@ -193,6 +196,34 @@ describe('publishedToViewerTour', () => {
     expect(vt.mapPositions).toEqual({ hall: { x: 1, y: 2 } });
     expect(vt.settings).toEqual(settings);
     expect(vt.missing).toEqual([]);
+    expect(vt.plan).toBeNull();
+  });
+
+  it('carries the plan image, as a CDN URL', () => {
+    const plan = { id: 'pl-1', type: 'image/webp', width: 800, height: 600 };
+    const pub = PublishedTourSchema.parse({
+      v: 1,
+      tourId: 't1',
+      title: 'T',
+      visibility: 'public',
+      slug: 'tee',
+      publishedAt: '2026-09-20T00:00:00Z',
+      settings: DEFAULT_TOUR_SETTINGS,
+      startPanoId: 'hall',
+      plan,
+      scenes: [{ panoId: 'hall', mapX: 0.5, mapY: 0.5, config: hall }],
+    });
+    expect(publishedToViewerTour(pub, null, { cdnBase: 'https://cdn.test/' }).plan).toEqual({
+      url: 'https://cdn.test/pub/plans/t1/pl-1.webp',
+      width: 800,
+      height: 600,
+    });
+    // An owner's tour the same way (the admin Preview).
+    const doc = tour({ plan, scenes: [{ panoId: 'hall' }] });
+    expect(toViewerTour(doc, { hall }, null, { cdnBase: 'https://cdn.test/' }).plan?.url).toBe(
+      'https://cdn.test/pub/plans/t1/pl-1.webp',
+    );
+    expect(toViewerTour(doc, { hall }).plan).toBeNull();
   });
 });
 

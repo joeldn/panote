@@ -109,7 +109,11 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
   // As visitors get it: ?lang= (the editor's Preview passes the language being edited),
   // else the browser's languages, else the default.
   const lang = pickLanguage(doc.languages, params.get('lang'), navigator.languages ?? []);
-  const vt = useMemo(() => toViewerTour(doc, configs, lang), [doc, configs, lang]);
+  const { cdnBase } = config;
+  const vt = useMemo(
+    () => toViewerTour(doc, configs, lang, { cdnBase }),
+    [doc, configs, lang, cdnBase],
+  );
   const title = translated(doc.title, doc.i18n, lang, 'title');
   const [sharing, setSharing] = useState(false);
   // The scene whose tiles failed to load, e.g. one still processing.

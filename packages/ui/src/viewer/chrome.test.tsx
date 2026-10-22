@@ -1,5 +1,5 @@
 import type { PanoViewerApi } from '@panote/viewer';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -560,6 +560,9 @@ describe('HotspotPanel', () => {
 });
 
 describe('SceneMap', () => {
+  const list = () => within(document.querySelector('.pn-scenemap__list') as HTMLElement);
+  const plan = () => within(screen.getByRole('group', { name: 'Floor plan' }));
+
   it('lists scenes, plots placed ones, and selects another scene', () => {
     const onSelect = vi.fn();
     const { container } = render(
@@ -574,12 +577,123 @@ describe('SceneMap', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Map' }));
     expect(container.querySelectorAll('.pn-scenemap__dot')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Hall' }).getAttribute('aria-current')).toBe(
+    expect(list().getByRole('button', { name: 'Hall' }).getAttribute('aria-current')).toBe(
       'location',
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Kitchen' }));
+    fireEvent.click(list().getByRole('button', { name: 'Kitchen' }));
     expect(onSelect).toHaveBeenCalledWith('b');
     expect(screen.queryByRole('button', { name: 'Kitchen' })).toBeNull();
+  });
+
+  it('makes each dot a button named after its scene that goes there', () => {
+    const onSelect = vi.fn();
+    render(
+      <SceneMap
+        scenes={[
+          { id: 'a', title: 'Hall', x: 0.1, y: 0.2 },
+          { id: 'b', title: 'Kitchen', x: 0.75, y: 0.5 },
+          { id: 'c', title: 'Garden' },
+        ]}
+        current="a"
+        onSelect={onSelect}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const dots = plan().getAllByRole('button');
+    expect(dots.map((d) => d.getAttribute('aria-label'))).toEqual(['Hall', 'Kitchen']);
+    // 0..1 positions are fractions of the plan, as they are.
+    expect(dots[1]!.style.left).toBe('75%');
+    expect(dots[1]!.style.top).toBe('50%');
+    expect(dots[0]!.getAttribute('aria-current')).toBe('location');
+    expect(dots[0]!.className).toContain('pn-scenemap__dot--on');
+    expect(dots[1]!.getAttribute('aria-current')).toBeNull();
+    fireEvent.click(dots[1]!);
+    expect(onSelect).toHaveBeenCalledWith('b');
+    // The list stays, with every scene, placed or not.
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    expect(list().getAllByRole('button')).toHaveLength(3);
+  });
+
+  it('fits older, unit-free positions into the plan as before', () => {
+    render(
+      <SceneMap
+        scenes={[
+          { id: 'a', title: 'Hall', x: 0, y: 0 },
+          { id: 'b', title: 'Kitchen', x: 10, y: 5 },
+        ]}
+        current="a"
+        onSelect={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const [hall, kitchen] = plan().getAllByRole('button');
+    expect(hall!.style.left).toBe('8%');
+    expect(parseFloat(kitchen!.style.left)).toBeCloseTo(92);
+  });
+
+  it('shows no plan without positions, and one dot only over a plan image', () => {
+    const scenes = [
+      { id: 'a', title: 'Hall', x: 0.5, y: 0.5 },
+      { id: 'b', title: 'Kitchen' },
+    ];
+    const { rerender, container } = render(
+      <SceneMap
+        scenes={scenes.map(({ id, title }) => ({ id, title }))}
+        current="a"
+        onSelect={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    expect(screen.queryByRole('group', { name: 'Floor plan' })).toBeNull();
+    rerender(<SceneMap scenes={scenes} current="a" onSelect={() => {}} />);
+    expect(screen.queryByRole('group', { name: 'Floor plan' })).toBeNull();
+    rerender(
+      <SceneMap
+        scenes={scenes}
+        current="a"
+        plan={{ url: 'https://cdn.test/pub/plans/t/p.webp', width: 400, height: 200 }}
+        onSelect={() => {}}
+      />,
+    );
+    const group = screen.getByRole('group', { name: 'Floor plan' });
+    expect(group.style.getPropertyValue('--pn-plan-ratio')).toBe('2');
+    const img = container.querySelector('.pn-scenemap__img') as HTMLImageElement;
+    expect(img.getAttribute('src')).toBe('https://cdn.test/pub/plans/t/p.webp');
+    expect(img.getAttribute('alt')).toBe('');
+    expect(plan().getAllByRole('button')).toHaveLength(1);
+  });
+
+  it('turns a facing cone on the current dot with the view, only where north is set', () => {
+    const viewer = fakeViewer();
+    const scenes = [
+      { id: 'a', title: 'Hall', x: 0.2, y: 0.2, hasNorth: true },
+      { id: 'b', title: 'Kitchen', x: 0.8, y: 0.8, hasNorth: true },
+    ];
+    const { container, rerender } = withViewer(
+      viewer,
+      <SceneMap scenes={scenes} current="a" onSelect={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const cones = () => container.querySelectorAll<HTMLElement>('.pn-scenemap__facing');
+    expect(cones()).toHaveLength(1);
+    const hall = plan().getByRole('button', { name: 'Hall' });
+    expect(hall.contains(cones()[0]!)).toBe(true);
+    // heading() is north relative to the view (0.5 rad): the view faces -0.5 rad from north.
+    expect(cones()[0]!.style.transform).toBe('rotate(-0.5rad)');
+    viewer.heading.mockReturnValue(-1);
+    viewer.frame();
+    expect(cones()[0]!.style.transform).toBe('rotate(1rad)');
+    // No north set: nothing to say which way is which.
+    rerender(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <SceneMap
+          scenes={scenes.map((s) => ({ ...s, hasNorth: false }))}
+          current="a"
+          onSelect={() => {}}
+        />
+      </PanoViewerContext.Provider>,
+    );
+    expect(cones()).toHaveLength(0);
   });
 
   it('while a change is pending, goes back to the scene on screen but not to the pending one', () => {
@@ -612,7 +726,7 @@ describe('SceneMap', () => {
     expect(kitchen.getAttribute('aria-busy')).toBe('true');
     expect(kitchen.className).toContain('pn-scenemap__item--pending');
     expect(kitchen.querySelector('.pn-scenemap__spinner')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'Hall' }).getAttribute('aria-busy')).toBeNull();
+    expect(list().getByRole('button', { name: 'Hall' }).getAttribute('aria-busy')).toBeNull();
 
     // Landed: no longer pending.
     rerender(<SceneMap scenes={scenes} current="b" onSelect={() => {}} />);

@@ -1,6 +1,7 @@
 import {
   localizeConfigs,
   localizePublishedTour,
+  planKey,
   type Hotspot,
   type PublishedTour,
   type SceneConfig,
@@ -33,11 +34,27 @@ export interface ViewerTour {
   /** Compass north offset per panoId, radians (0 when unset). */
   north: Record<string, number>;
   titles: Record<string, string>;
-  /** Floor-plan positions for the mini-map, where the tour has them. */
+  /** Floor-plan positions for the mini-map, where the tour has them (contracts plan.ts). */
   mapPositions: Record<string, { x: number; y: number }>;
+  /** The scenes whose north has been set, so the mini-map can show which way the view faces. */
+  hasNorth: Record<string, boolean>;
+  /** The floor-plan image behind the mini-map; null without one (or without `cdnBase`). */
+  plan: ViewerPlan | null;
   /** Scenes listed by the tour whose config is missing; left out of `tour`. */
   missing: string[];
   settings: TourSettings;
+}
+
+/** A tour's floor-plan image, ready for an `<img>`. */
+export interface ViewerPlan {
+  url: string;
+  width: number;
+  height: number;
+}
+
+export interface ViewerTourOptions {
+  /** CDN root with a trailing slash (`AppConfig.cdnBase`), for the plan image's URL. */
+  cdnBase?: string;
 }
 
 export type SceneConfigSource = Record<string, SceneConfig | TourConfigEntry | null | undefined>;
@@ -59,6 +76,7 @@ export function toViewerTour(
   doc: TourDoc,
   configs: SceneConfigSource,
   lang?: string | null,
+  options: ViewerTourOptions = {},
 ): ViewerTour {
   const stored = new Map<string, SceneConfig>();
   const missing: string[] = [];
@@ -82,6 +100,7 @@ export function toViewerTour(
   const hotspots: ViewerTour['hotspots'] = {};
   const linksByPano: ViewerTour['links'] = {};
   const north: ViewerTour['north'] = {};
+  const hasNorth: ViewerTour['hasNorth'] = {};
   const titles: ViewerTour['titles'] = {};
   for (const [panoId, config] of loaded) {
     const links: ViewerLink[] = [];
@@ -111,6 +130,7 @@ export function toViewerTour(
     hotspots[panoId] = info;
     linksByPano[panoId] = links;
     north[panoId] = config.north ?? 0;
+    hasNorth[panoId] = config.north !== undefined;
     titles[panoId] = config.title;
   }
 
@@ -129,6 +149,15 @@ export function toViewerTour(
     north,
     titles,
     mapPositions,
+    hasNorth,
+    plan:
+      doc.plan && options.cdnBase !== undefined
+        ? {
+            url: `${options.cdnBase}${planKey(doc.tourId, doc.plan.id, doc.plan.type)}`,
+            width: doc.plan.width,
+            height: doc.plan.height,
+          }
+        : null,
     missing,
     settings: doc.settings ?? DEFAULT_TOUR_SETTINGS,
   };
@@ -138,18 +167,28 @@ export function toViewerTour(
  * Adapt a published bundle (`pub/tours/<tourId>.json`) the same way as an owner's tour,
  * with its text in `lang`.
  */
-export function publishedToViewerTour(published: PublishedTour, lang?: string | null): ViewerTour {
+export function publishedToViewerTour(
+  published: PublishedTour,
+  lang?: string | null,
+  options: ViewerTourOptions = {},
+): ViewerTour {
   const pub = localizePublishedTour(published, lang);
   const doc: TourDoc = {
     tourId: pub.tourId,
     title: pub.title,
     startPanoId: pub.startPanoId,
     settings: pub.settings,
+    ...(pub.plan && { plan: pub.plan }),
     scenes: pub.scenes.map(({ panoId, mapX, mapY }) => ({
       panoId,
       ...(mapX !== undefined && { mapX }),
       ...(mapY !== undefined && { mapY }),
     })),
   };
-  return toViewerTour(doc, Object.fromEntries(pub.scenes.map((s) => [s.panoId, s.config])));
+  return toViewerTour(
+    doc,
+    Object.fromEntries(pub.scenes.map((s) => [s.panoId, s.config])),
+    null,
+    options,
+  );
 }

@@ -86,11 +86,14 @@ export {
 export {
   createUploadApi,
   MAX_UPLOAD_BYTES,
+  PlanUrlOkSchema,
   putFile,
   UPLOAD_CONTENT_TYPES,
   UploadAbortedError,
   UploadUrlOkSchema,
   validateUploadFile,
+  type PlanPresignRequest,
+  type PlanUrlOk,
   type PresignRequest,
   type PutFileOptions,
   type UploadApi,
@@ -107,7 +110,9 @@ export {
   type SceneConfigSource,
   type ViewerInfoHotspot,
   type ViewerLink,
+  type ViewerPlan,
   type ViewerTour,
+  type ViewerTourOptions,
 } from './tour-adapter.js';
 export type { InfoHotspotData, Tour, TourLink, TourScene } from './tour-types.js';
 export {

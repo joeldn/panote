@@ -138,6 +138,35 @@ describe('createUploadApi', () => {
     ).rejects.toThrow(/different panoId/);
   });
 
+  it('asks for a plan image URL with kind plan and validates the response', async () => {
+    const fetch = vi.fn(async (_u: string, _i?: RequestInit) =>
+      json({ planId: 'pl1', key: 'pub/plans/t1/pl1.webp', url: 'https://r2.test/put?sig' }),
+    );
+    const api = createUploadApi({ fetch, getToken: async () => 't' });
+    await expect(
+      api.presignPlan({ tourId: 't1', contentType: 'image/webp', size: 9 }),
+    ).resolves.toEqual({
+      planId: 'pl1',
+      key: 'pub/plans/t1/pl1.webp',
+      url: 'https://r2.test/put?sig',
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/upload-url');
+    expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).toEqual({
+      kind: 'plan',
+      tourId: 't1',
+      contentType: 'image/webp',
+      size: 9,
+    });
+    const bad = vi.fn(async () => json({ panoId: 'p1', key: 'k', url: 'https://r2.test/x' }));
+    await expect(
+      createUploadApi({ fetch: bad, getToken: async () => 't' }).presignPlan({
+        tourId: 't1',
+        contentType: 'image/png',
+        size: 1,
+      }),
+    ).rejects.toBeInstanceOf(ApiSchemaError);
+  });
+
   it('surfaces 4xx errors with the server message', async () => {
     const fetch = vi.fn(async () => json({ error: 'original not found' }, 404));
     await expect(

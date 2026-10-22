@@ -90,7 +90,8 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
   const lang = pickLanguage(stored.languages, params.get('lang'), browserLanguages());
   const languages = useMemo(() => tourLanguageList(stored.languages), [stored.languages]);
   const tour = useMemo(() => localizePublishedTour(stored, lang), [stored, lang]);
-  const vt = useMemo(() => publishedToViewerTour(tour), [tour]);
+  const { cdnBase } = config;
+  const vt = useMemo(() => publishedToViewerTour(tour, null, { cdnBase }), [tour, cdnBase]);
   useDocumentLang(lang);
   // Kept in the URL, so a reload or a copied link stays in the language picked.
   const chooseLanguage = (next: string) =>
