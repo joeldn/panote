@@ -23,6 +23,7 @@ import { useConfig } from '../config-context.js';
 import { writeCurrentTour } from '../dashboard/current-tour.js';
 import { OwnerAccountMenu } from '../account/OwnerAccountMenu.js';
 import { useSession } from '../session.js';
+import type { ShareOutletContext } from '../share/ShareRoute.js';
 import { useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
@@ -165,15 +166,25 @@ function SaveButton({ editor }: { editor: EditorController }) {
     );
   }
   if (dirty.length > 0) {
+    // A live tour's Save also updates what its link shows: say so where the click happens.
+    const live = editor.publish !== null;
     return (
-      <Button
-        variant="primary"
-        pill
-        onClick={() => void editor.save()}
-        aria-keyshortcuts="Control+S Meta+S"
-      >
-        Save
-      </Button>
+      <>
+        {live && (
+          <span id="ed-save-hint" className="ed-save-hint">
+            Saving updates the live link
+          </span>
+        )}
+        <Button
+          variant="primary"
+          pill
+          onClick={() => void editor.save()}
+          aria-keyshortcuts="Control+S Meta+S"
+          aria-describedby={live ? 'ed-save-hint' : undefined}
+        >
+          Save
+        </Button>
+      </>
     );
   }
   return (
@@ -202,6 +213,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const sizing = useRef<{ panoId: string; id: string; size: number | null } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  // The share modal opens over the editor: sharing it starts or stops is the editor's too.
+  const { setShared } = editor;
+  const shareContext = useMemo<ShareOutletContext>(
+    () => ({ onSharingChange: setShared }),
+    [setShared],
+  );
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [failedLoad, setFailedLoad] = useState<string | null>(null);
   const frame = useRef<HTMLElement>(null);
@@ -856,7 +873,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           onAdded={addedFromLibrary}
         />
       )}
-      <Outlet />
+      <Outlet context={shareContext} />
     </main>
   );
 }

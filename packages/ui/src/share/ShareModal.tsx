@@ -1,6 +1,7 @@
 import { useId, useState, type ReactNode } from 'react';
 
 import { Button } from '../Button.js';
+import { ConfirmModal } from '../ConfirmModal.js';
 import { cx } from '../cx.js';
 import { Modal, ModalHeader } from '../Modal.js';
 import { Segmented } from '../Segmented.js';
@@ -48,6 +49,11 @@ export interface ShareModalProps {
   onVisibilityChange?: (visibility: Visibility) => Promise<void>;
   /** Owner only, unpublished tour: makes it live. A rejection's message shows inline. */
   onPublish?: () => Promise<void>;
+  /**
+   * Owner only, live tour: takes the link and embeds offline, after a confirm. On success
+   * the caller passes `slug: null`; a rejection's message shows in the confirm.
+   */
+  onStopSharing?: () => Promise<void>;
   /** Unpublished tour that has to pick a slug first (publish said 409 slug lost/taken). */
   slugRequired?: boolean;
   loading?: boolean;
@@ -215,9 +221,20 @@ function LinkTab({
   );
 }
 
-function PrivacyTab({ visibility, onVisibilityChange }: ShareModalProps) {
+function PrivacyTab({ visibility, onVisibilityChange, onStopSharing }: ShareModalProps) {
   const [pending, setPending] = useState<Visibility | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
+
+  const stopSharing = async () => {
+    if (!onStopSharing) return;
+    try {
+      await onStopSharing();
+    } catch (e) {
+      throw new Error(errorMessage(e, 'Could not stop sharing this tour.'), { cause: e });
+    }
+    setConfirmStop(false);
+  };
 
   const choose = async (next: Visibility) => {
     if (next === visibility || pending || !onVisibilityChange) return;
@@ -267,6 +284,27 @@ function PrivacyTab({ visibility, onVisibilityChange }: ShareModalProps) {
         <p className="pn-share__error" role="alert">
           {error}
         </p>
+      )}
+      {onStopSharing && (
+        <>
+          <hr className="pn-share__rule" />
+          <div className="pn-share__stop">
+            <p className="pn-share__stop-text">
+              Take this tour offline. Its link and embeds stop working.
+            </p>
+            <Button variant="ghost" size="sm" onClick={() => setConfirmStop(true)}>
+              Stop sharing
+            </Button>
+          </div>
+          <ConfirmModal
+            open={confirmStop}
+            title="Stop sharing this tour?"
+            body="Its link and embeds stop working. You can share it again any time."
+            confirmLabel="Stop sharing"
+            onConfirm={stopSharing}
+            onCancel={() => setConfirmStop(false)}
+          />
+        </>
       )}
     </>
   );
