@@ -102,6 +102,20 @@ describe('website routes', () => {
     const account = await screen.findByRole('heading', { name: 'Your account' });
     const text = account.nextElementSibling?.textContent ?? '';
     for (const { label } of Object.values(KNOWN_CONNECTIONS)) expect(text).toContain(label);
+    expect(text).toContain('a one-time code we email to it');
+  });
+
+  it('privacy joins only the trusted sign-ins that share a verified email', async () => {
+    renderAt('/privacy');
+    const account = await screen.findByRole('heading', { name: 'Your account' });
+    const text = (account.nextElementSibling?.textContent ?? '').replace(/\s+/g, ' ');
+    expect(text).toContain(
+      'more than one of Google, Apple, GitHub or an email code using the same email address',
+    );
+    expect(text).toContain('they are joined into one Panote account');
+    expect(text).toContain(
+      'Signing in with Microsoft, LinkedIn or Facebook keeps a separate account.',
+    );
   });
 
   it('falls back to a 404 page', async () => {

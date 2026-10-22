@@ -5,12 +5,18 @@ import { z } from 'zod';
  * name, in the order the buttons appear. Only connections listed in
  * `VITE_AUTH0_CONNECTIONS` *and* here are shown; each one must also exist and
  * be enabled for the SPA in the Auth0 tenant (docs/deploy.md, "Auth0").
+ *
+ * `email` is Auth0's passwordless email connection (a one-time code, no social
+ * account): `kind: 'email'` sets it apart from the social buttons, below them.
  */
 export const KNOWN_CONNECTIONS = {
-  'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google' },
-  apple: { label: 'Apple', icon: 'fa-brands fa-apple' },
-  windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft' },
-  facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook' },
+  'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
+  apple: { label: 'Apple', icon: 'fa-brands fa-apple', kind: 'social' },
+  windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft', kind: 'social' },
+  github: { label: 'GitHub', icon: 'fa-brands fa-github', kind: 'social' },
+  linkedin: { label: 'LinkedIn', icon: 'fa-brands fa-linkedin-in', kind: 'social' },
+  facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook', kind: 'social' },
+  email: { label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' },
 } as const;
 export type ConnectionId = keyof typeof KNOWN_CONNECTIONS;
 

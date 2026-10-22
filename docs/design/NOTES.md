@@ -16,7 +16,9 @@ only the UI chrome around it has to match.
 ## Copy rule
 
 The product is free, not open source. No "open source", "MIT", "GitHub", or
-export/download promises in UI copy.
+export/download promises in UI copy. The one exception is GitHub as a sign-in
+provider ("Continue with GitHub", and the provider list on the privacy page):
+that names an account you sign in with, not where code lives.
 
 ## Where API_BRIEF.md disagrees with the code
 
@@ -72,4 +74,8 @@ the code wins:
 ## Auth
 
 The design's social sign-in fits the existing Auth0 setup (tenant
-`panote-dev`, Google social enabled).
+`panote-dev`, Google social enabled). The design shows social SSO buttons
+only; the app adds an optional "Continue with email" (Auth0 passwordless, a
+one-time code) below them, under an "or" divider, with the same row shape on
+`--paper` with a dashed border. It only shows when the `email` connection is
+enabled, and the subtitle still holds: there is no password to remember.

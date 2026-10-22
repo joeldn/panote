@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 
 import { LogoMark } from './Logo.js';
 import { Modal } from './Modal.js';
@@ -9,12 +9,14 @@ export interface SignInOption {
   label: string;
   /** Font Awesome classes, e.g. `fa-brands fa-google`. */
   icon: string;
+  /** `email` (a one-time code by email) renders below the social buttons, set apart. */
+  kind?: 'social' | 'email';
 }
 
 export interface SignInModalProps {
   open: boolean;
   onClose: () => void;
-  /** Enabled social connections; an empty list shows `unavailable` instead. */
+  /** Enabled connections; an empty list shows `unavailable` instead. */
   options: readonly SignInOption[];
   /** Starts the redirect; a rejection shows its message and re-enables the buttons. */
   onSignIn: (id: string) => Promise<void>;
@@ -26,7 +28,10 @@ export interface SignInModalProps {
   privacyHref?: string;
 }
 
-/** 392px social sign-in card (design README "Sign-in modal"): SSO buttons only. */
+/**
+ * 392px sign-in card (design README "Sign-in modal"): social SSO buttons, then
+ * any email option under an "or" divider.
+ */
 export function SignInModal({
   open,
   onClose,
@@ -65,6 +70,28 @@ export function SignInModal({
     return () => window.removeEventListener('pageshow', onShow);
   }, []);
 
+  const social = options.filter((o) => o.kind !== 'email');
+  const email = options.filter((o) => o.kind === 'email');
+
+  const hintId = useId();
+
+  const button = (o: SignInOption, className: string, describedBy?: string) => (
+    <button
+      key={o.id}
+      type="button"
+      className={className}
+      aria-describedby={describedBy}
+      disabled={pending !== null}
+      aria-busy={pending === o.id || undefined}
+      onClick={() => void start(o.id)}
+    >
+      <span className="pn-signin__glyph" aria-hidden="true">
+        {pending === o.id ? <span className="pn-btn__spinner" /> : <i className={o.icon} />}
+      </span>
+      Continue with {o.label}
+    </button>
+  );
+
   const start = async (id: string) => {
     setError(null);
     setPending(id);
@@ -100,25 +127,20 @@ export function SignInModal({
           </p>
         ) : (
           <div className="pn-signin__options">
-            {options.map((o) => (
-              <button
-                key={o.id}
-                type="button"
-                className="pn-signin__option"
-                disabled={pending !== null}
-                aria-busy={pending === o.id || undefined}
-                onClick={() => void start(o.id)}
-              >
-                <span className="pn-signin__glyph" aria-hidden="true">
-                  {pending === o.id ? (
-                    <span className="pn-btn__spinner" />
-                  ) : (
-                    <i className={o.icon} />
-                  )}
-                </span>
-                Continue with {o.label}
-              </button>
-            ))}
+            {social.map((o) => button(o, 'pn-signin__option'))}
+            {email.length > 0 && (
+              <>
+                {social.length > 0 && (
+                  <p className="pn-signin__divider" aria-hidden="true">
+                    or
+                  </p>
+                )}
+                {email.map((o) => button(o, 'pn-signin__option pn-signin__option--email', hintId))}
+                <p id={hintId} className="pn-signin__hint">
+                  We’ll email you a one-time code.
+                </p>
+              </>
+            )}
           </div>
         )}
         {error && (

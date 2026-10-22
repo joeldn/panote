@@ -25,33 +25,54 @@ describe('loadConfig', () => {
     expect(loadConfig(env).auth0.connections).toEqual(['google-oauth2']);
     const c = loadConfig({
       ...env,
-      VITE_AUTH0_CONNECTIONS: 'google-oauth2, github,apple,google-oauth2',
+      VITE_AUTH0_CONNECTIONS: 'google-oauth2, twitter,apple,google-oauth2',
     });
     expect(c.auth0.connections).toEqual(['google-oauth2', 'apple']);
   });
 
-  it('shows Google, Apple, Microsoft and Facebook in that order, whatever the env order', () => {
+  it('shows the social providers in a fixed order, then email, whatever the env order', () => {
     const c = loadConfig({
       ...env,
-      VITE_AUTH0_CONNECTIONS: 'facebook,windowslive,github,apple,google-oauth2,facebook',
+      VITE_AUTH0_CONNECTIONS:
+        'email,facebook,linkedin,windowslive,twitter,github,apple,google-oauth2,facebook',
     });
-    expect(c.auth0.connections).toEqual(['google-oauth2', 'apple', 'windowslive', 'facebook']);
+    expect(c.auth0.connections).toEqual([
+      'google-oauth2',
+      'apple',
+      'windowslive',
+      'github',
+      'linkedin',
+      'facebook',
+      'email',
+    ]);
     expect(
       loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'facebook, windowslive' }).auth0.connections,
     ).toEqual(['windowslive', 'facebook']);
   });
 
-  it('labels each known connection by its provider, with a Font Awesome brand icon', () => {
+  it('labels each social connection by its provider with a brand icon, and email apart', () => {
     expect(KNOWN_CONNECTIONS).toEqual({
-      'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google' },
-      apple: { label: 'Apple', icon: 'fa-brands fa-apple' },
-      windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft' },
-      facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook' },
+      'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
+      apple: { label: 'Apple', icon: 'fa-brands fa-apple', kind: 'social' },
+      windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft', kind: 'social' },
+      github: { label: 'GitHub', icon: 'fa-brands fa-github', kind: 'social' },
+      linkedin: { label: 'LinkedIn', icon: 'fa-brands fa-linkedin-in', kind: 'social' },
+      facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook', kind: 'social' },
+      email: { label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' },
     });
   });
 
-  it('rejects a connection list with no known connection (GitHub is not one)', () => {
-    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'github' })).toThrow(ConfigError);
+  it('accepts email or a newer provider on its own', () => {
+    expect(loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'email' }).auth0.connections).toEqual([
+      'email',
+    ]);
+    expect(
+      loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'linkedin, github' }).auth0.connections,
+    ).toEqual(['github', 'linkedin']);
+  });
+
+  it('rejects a connection list with no known connection (Twitter is not one)', () => {
+    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'twitter' })).toThrow(ConfigError);
   });
 
   it('flags YOUR_ placeholders as not configured', () => {
@@ -96,7 +117,7 @@ describe('loadConfig', () => {
   );
 
   it('rejects VITE_AUTH0_CONNECTIONS that names no known connection', () => {
-    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'github, twitter' })).toThrow(
+    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'twitter, sms' })).toThrow(
       ConfigError,
     );
     expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: '' })).toThrow(

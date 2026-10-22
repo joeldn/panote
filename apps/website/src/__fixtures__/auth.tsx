@@ -15,7 +15,9 @@ export const LOCAL: AppOrigins = {
 export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
   return {
     configured: true,
-    connections: [{ id: 'google-oauth2', label: 'Google', icon: 'fa-brands fa-google' }],
+    connections: [
+      { id: 'google-oauth2', label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
+    ],
     signIn: vi.fn(() => new Promise<void>(() => {})),
     handleCallback: vi.fn(async () => '/app/'),
     getAccessToken: vi.fn(async () => 'jwt-token'),

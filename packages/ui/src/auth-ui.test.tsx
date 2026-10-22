@@ -41,6 +41,57 @@ describe('SignInModal', () => {
     expect(onSignIn).toHaveBeenCalledWith('windowslive');
   });
 
+  it('puts email below the social buttons, under an "or" divider, with a code hint', () => {
+    const options = [
+      { id: 'email', label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' as const },
+      google,
+      { id: 'github', label: 'GitHub', icon: 'fa-brands fa-github', kind: 'social' as const },
+      { id: 'linkedin', label: 'LinkedIn', icon: 'fa-brands fa-linkedin-in' },
+    ];
+    const onSignIn = vi.fn(() => new Promise<void>(() => {}));
+    render(<SignInModal open onClose={() => {}} options={options} onSignIn={onSignIn} />);
+    const buttons = screen.getAllByRole('button', { name: /^Continue with / });
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      'Continue with Google',
+      'Continue with GitHub',
+      'Continue with LinkedIn',
+      'Continue with email',
+    ]);
+    const emailBtn = buttons[3]!;
+    expect(emailBtn.className).toContain('pn-signin__option--email');
+    expect(buttons.slice(0, 3).every((b) => !b.className.includes('--email'))).toBe(true);
+    const divider = document.querySelector('.pn-signin__divider');
+    expect(divider?.textContent).toBe('or');
+    expect(divider!.compareDocumentPosition(buttons[2]!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+    expect(divider!.compareDocumentPosition(emailBtn)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const hint = screen.getByText('We’ll email you a one-time code.');
+    expect(hint.id).not.toBe('');
+    expect(emailBtn.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(buttons[0]!.hasAttribute('aria-describedby')).toBe(false);
+    fireEvent.click(emailBtn);
+    expect(onSignIn).toHaveBeenCalledWith('email');
+    expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+  });
+
+  it('shows email alone without a divider', () => {
+    render(
+      <SignInModal
+        open
+        onClose={() => {}}
+        options={[{ id: 'email', label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' }]}
+        onSignIn={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Continue with email' })).toBeTruthy();
+    expect(document.querySelector('.pn-signin__divider')).toBeNull();
+  });
+
+  it('shows no divider or code hint without an email option', () => {
+    render(<SignInModal open onClose={() => {}} options={[google]} onSignIn={vi.fn()} />);
+    expect(document.querySelector('.pn-signin__divider')).toBeNull();
+    expect(screen.queryByText(/one-time code/)).toBeNull();
+  });
+
   it('shows only the providers it is given', () => {
     render(<SignInModal open onClose={() => {}} options={[google]} onSignIn={vi.fn()} />);
     expect(
