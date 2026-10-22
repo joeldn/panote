@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { PANO_PATTERN } from './keys.js';
+import { LanguageTagSchema, MAX_TOUR_LANGUAGES, TourLanguagesSchema } from './languages.js';
 
 // Radians/degrees, canonicalized not bounded: the viewer's yaw is unbounded
 // (PanoViewer.ts panByPixels:292) and pitch/fov clamp only on setView (:344-346).
@@ -56,6 +57,46 @@ export const MAX_HOTSPOT_ID_LENGTH = 64;
 // A doc already over a cap (legacy or hand-written) fails to parse on
 // load; admin-api does not truncate on read to make it fit.
 export const MAX_ID_LENGTH = 64;
+
+// Translations (Q4) sit beside the text they translate, keyed by language tag: a
+// hotspot's live in the hotspot, so deleting or duplicating it carries them along and
+// nothing can point at an id that is gone. Each string has the same cap as the field it
+// translates, and a missing (or absent) entry falls back to the default-language text.
+// The default language never appears as a key: its text is the field itself.
+const translations = <T extends z.ZodRawShape>(fields: T, max = MAX_TOUR_LANGUAGES - 1) =>
+  z
+    .record(LanguageTagSchema, z.object(fields))
+    .refine((r) => Object.keys(r).length <= max, { message: `at most ${max} translations` });
+
+/**
+ * A scene config is per pano, and a pano can be in several tours with different
+ * languages, so its translations can cover more languages than one tour has (removing a
+ * language from a tour leaves them, for the other tours). Its maps get this wider bound;
+ * size is held by MAX_SCENE_TRANSLATION_CHARS, and publish sends only the tour's own.
+ */
+export const MAX_CONFIG_TRANSLATION_LANGUAGES = 40;
+
+/**
+ * All translated text in one scene config (its own and its hotspots') is capped
+ * together, so translations add a bounded amount to a config and to the pub bundle
+ * that embeds it, whatever the number of languages or points.
+ */
+export const MAX_SCENE_TRANSLATION_CHARS = 200_000;
+
+const translatedChars = (
+  i18n:
+    Partial<Record<string, Partial<Record<string, string | undefined>> | undefined>> | undefined,
+) =>
+  Object.values(i18n ?? {}).reduce(
+    (n, entry) => n + Object.values(entry ?? {}).reduce((m, v) => m + (v?.length ?? 0), 0),
+    0,
+  );
+
+/** Translated characters in a scene config, its own and its hotspots' (see the cap above). */
+export const sceneTranslationChars = (c: {
+  i18n?: Parameters<typeof translatedChars>[0];
+  hotspots: ReadonlyArray<{ i18n?: Parameters<typeof translatedChars>[0] }>;
+}): number => translatedChars(c.i18n) + c.hotspots.reduce((n, h) => n + translatedChars(h.i18n), 0);
 
 // Font Awesome icon name, as rendered by the editor's icon picker.
 const ICON_PATTERN = /^[a-z0-9-]{1,40}$/;
@@ -126,6 +167,13 @@ export const HotspotSchema = z
       .regex(PANO_PATTERN, `targetPanoId must match ${PANO_PATTERN}`)
       .max(MAX_ID_LENGTH)
       .optional(),
+    i18n: translations(
+      {
+        title: z.string().min(1).max(MAX_TITLE_LENGTH).optional(),
+        body: z.string().min(1).max(MAX_HOTSPOT_BODY_LENGTH).optional(),
+      },
+      MAX_CONFIG_TRANSLATION_LANGUAGES,
+    ).optional(),
   })
   .refine((h) => h.type !== 'link' || !!h.targetPanoId, {
     message: 'link hotspot requires targetPanoId',
@@ -136,16 +184,28 @@ export type Hotspot = z.infer<typeof HotspotSchema>;
 // panoId stays verbatim in the R2 key because the viewer builds URLs from
 // the manifest's raw pano value (see keys.ts). Validating it here at the
 // schema boundary is what makes that verbatim use safe.
-export const SceneConfigSchema = z.object({
-  panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
-  title: z.string().min(1).max(MAX_TITLE_LENGTH),
-  description: z.string().max(MAX_SCENE_DESCRIPTION_LENGTH).optional(),
-  initialView: ViewSchema.optional(),
-  // Compass north offset, radians - same canonicalization as yaw (D12;
-  // viewer's ViewerOptions.north, packages/viewer/src/types.ts).
-  north: angle().optional(),
-  hotspots: z.array(HotspotSchema).max(MAX_HOTSPOTS).default([]),
-});
+export const SceneConfigSchema = z
+  .object({
+    panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
+    title: z.string().min(1).max(MAX_TITLE_LENGTH),
+    description: z.string().max(MAX_SCENE_DESCRIPTION_LENGTH).optional(),
+    initialView: ViewSchema.optional(),
+    // Compass north offset, radians - same canonicalization as yaw (D12;
+    // viewer's ViewerOptions.north, packages/viewer/src/types.ts).
+    north: angle().optional(),
+    hotspots: z.array(HotspotSchema).max(MAX_HOTSPOTS).default([]),
+    i18n: translations(
+      {
+        title: z.string().min(1).max(MAX_TITLE_LENGTH).optional(),
+        description: z.string().min(1).max(MAX_SCENE_DESCRIPTION_LENGTH).optional(),
+      },
+      MAX_CONFIG_TRANSLATION_LANGUAGES,
+    ).optional(),
+  })
+  .refine((c) => sceneTranslationChars(c) <= MAX_SCENE_TRANSLATION_CHARS, {
+    message: `translations exceed ${MAX_SCENE_TRANSLATION_CHARS} characters`,
+    path: ['i18n'],
+  });
 export type SceneConfig = z.infer<typeof SceneConfigSchema>;
 
 // Same reason as SceneConfigSchema.panoId above.
@@ -179,8 +239,8 @@ export const TourDescriptionSchema = z
   .max(MAX_TOUR_DESCRIPTION_LENGTH)
   .refine(isPlainText, 'description must be plain text');
 
-// Tour-wide viewer chrome (design README:113-114). Not i18n - deferred to
-// Wave 7 (Q4) - and not per-scene, since it applies across the whole tour.
+// Tour-wide viewer chrome (design README:113-114). Not per-scene, since it applies
+// across the whole tour.
 export const TourSettingsSchema = z.object({
   controls: z.enum(['bottom', 'top']),
   showMap: z.boolean(),
@@ -188,6 +248,12 @@ export const TourSettingsSchema = z.object({
   autoRotate: z.boolean(),
 });
 export type TourSettings = z.infer<typeof TourSettingsSchema>;
+
+/** A tour's own translations (title, description); the published bundle uses it too. */
+export const TourTranslationsSchema = translations({
+  title: z.string().min(1).max(MAX_TITLE_LENGTH).optional(),
+  description: TourDescriptionSchema.pipe(z.string().min(1)).optional(),
+});
 
 // tourId is used verbatim in tourKey(), same reason as panoId above.
 export const TourDocSchema = z.object({
@@ -204,5 +270,8 @@ export const TourDocSchema = z.object({
     .max(MAX_ID_LENGTH)
     .optional(),
   settings: TourSettingsSchema.optional(),
+  // Optional: a tour without it has one, unnamed language (Q4).
+  languages: TourLanguagesSchema.optional(),
+  i18n: TourTranslationsSchema.optional(),
 });
 export type TourDoc = z.infer<typeof TourDocSchema>;

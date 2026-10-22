@@ -195,3 +195,59 @@ describe('publishedToViewerTour', () => {
     expect(vt.missing).toEqual([]);
   });
 });
+
+describe('languages', () => {
+  const de = (raw: Record<string, unknown>, i18n: Record<string, unknown>) => ({
+    ...raw,
+    i18n: { de: i18n },
+  });
+  const hallDe = scene({
+    ...de({ panoId: 'hall', title: 'Hall' }, { title: 'Halle' }),
+    hotspots: [
+      de(
+        { id: 'i1', type: 'info', yaw: 0, pitch: 0, title: 'Clock', body: 'Old' },
+        { title: 'Uhr' },
+      ),
+      // Named after its target, as the editor names a new link: follows the target.
+      { id: 'l1', type: 'link', yaw: 2, pitch: 0, title: 'Nave', targetPanoId: 'nave' },
+    ],
+  });
+  const naveDe = scene(de({ panoId: 'nave', title: 'Nave', hotspots: [] }, { title: 'Schiff' }));
+  const doc = tour({
+    scenes: [{ panoId: 'hall' }, { panoId: 'nave' }],
+    languages: { default: 'en', others: ['de'] },
+  });
+
+  it('toViewerTour shows scene and point text in the language asked for', () => {
+    const v = toViewerTour(doc, { hall: hallDe, nave: naveDe }, 'de');
+    expect(v.titles).toEqual({ hall: 'Halle', nave: 'Schiff' });
+    // An untranslated body stays in the default language.
+    expect(v.hotspots.hall?.[0]).toMatchObject({ title: 'Uhr', body: 'Old' });
+    expect(v.links.hall?.[0]?.label).toBe('Schiff');
+  });
+
+  it('without a language, or in the default one, the stored text is shown', () => {
+    expect(toViewerTour(doc, { hall: hallDe, nave: naveDe }).titles.hall).toBe('Hall');
+    expect(toViewerTour(doc, { hall: hallDe, nave: naveDe }, 'fr').titles.hall).toBe('Hall');
+  });
+
+  it('publishedToViewerTour localizes a bundle', () => {
+    const pub = PublishedTourSchema.parse({
+      v: 1,
+      tourId: 't1',
+      title: 'T',
+      visibility: 'public',
+      slug: 'tee',
+      publishedAt: '2026-09-20T00:00:00Z',
+      settings: DEFAULT_TOUR_SETTINGS,
+      startPanoId: 'hall',
+      languages: { default: 'en', others: ['de'] },
+      scenes: [
+        { panoId: 'hall', config: hallDe },
+        { panoId: 'nave', config: naveDe },
+      ],
+    });
+    expect(publishedToViewerTour(pub, 'de').titles).toEqual({ hall: 'Halle', nave: 'Schiff' });
+    expect(publishedToViewerTour(pub).titles).toEqual({ hall: 'Hall', nave: 'Nave' });
+  });
+});

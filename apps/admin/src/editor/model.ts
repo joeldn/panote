@@ -2,6 +2,7 @@ import type {
   Hotspot,
   SceneConfig,
   TourDoc,
+  TourLanguages,
   TourSettings,
   TourWithConfigsOk,
   View,
@@ -193,18 +194,61 @@ const copyTitle = (title: string): string => {
 export const findLink = (config: SceneConfig, to: string): Hotspot | undefined =>
   config.hotspots.find((h) => h.type === 'link' && h.targetPanoId === to);
 
+/**
+ * One field's translation set (`value`) or cleared (`null`, or blank): an emptied entry
+ * goes, and so does an emptied map, so a translation that is removed again is no edit.
+ */
+export function setTranslation<F extends string>(
+  i18n: Partial<Record<string, Partial<Record<F, string | undefined>> | undefined>> | undefined,
+  lang: string,
+  field: F,
+  value: string | null,
+): Record<string, Partial<Record<F, string>>> | undefined {
+  const out: Record<string, Partial<Record<F, string>>> = {};
+  for (const [k, v] of Object.entries(i18n ?? {})) if (v) out[k] = v as Partial<Record<F, string>>;
+  const entry: Partial<Record<F, string>> = { ...out[lang] };
+  if (value) entry[field] = value;
+  else delete entry[field];
+  if (Object.keys(entry).length > 0) out[lang] = entry;
+  else delete out[lang];
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** `doc` with its `i18n` replaced; an undefined map drops the key. */
+function withI18n<T extends { i18n?: unknown }>(doc: T, i18n: T['i18n'] | undefined): T {
+  const { i18n: _old, ...rest } = doc;
+  return (i18n === undefined ? rest : { ...rest, i18n }) as T;
+}
+
+/** `doc` without `lang`'s translations. */
+function dropLanguage<T extends { i18n?: Partial<Record<string, unknown>> | undefined }>(
+  doc: T,
+  lang: string,
+): T {
+  if (!doc.i18n || !(lang in doc.i18n)) return doc;
+  const { [lang]: _gone, ...rest } = doc.i18n;
+  return withI18n(doc, (Object.keys(rest).length > 0 ? rest : undefined) as T['i18n']);
+}
+
+export type TranslationPatch = Partial<{ title: string | null; body: string | null }>;
+
 export type EditorAction =
   | { type: 'load'; docs: EditorDocs }
-  | { type: 'tour/title'; title: string }
-  | { type: 'tour/description'; description: string }
+  /** With `lang`, the title's translation into it (blank clears it). */
+  | { type: 'tour/title'; title: string; lang?: string }
+  | { type: 'tour/description'; description: string; lang?: string }
+  | { type: 'tour/languages'; languages: TourLanguages }
+  /** Drops a translation language and the tour's own strings in it (pano strings stay). */
+  | { type: 'lang/remove'; lang: string }
   | { type: 'tour/settings'; settings: Partial<TourSettings> }
   | { type: 'tour/start'; panoId: string }
   | { type: 'tour/remove-scene'; panoId: string }
-  | { type: 'scene/title'; panoId: string; title: string }
+  | { type: 'scene/title'; panoId: string; title: string; lang?: string }
   | { type: 'scene/start-view'; panoId: string; view: View }
   | { type: 'scene/north'; panoId: string; north: number }
   | { type: 'point/add'; panoId: string; hotspot: Hotspot }
   | { type: 'point/update'; panoId: string; id: string; patch: HotspotPatch }
+  | { type: 'point/translate'; panoId: string; id: string; lang: string; patch: TranslationPatch }
   | { type: 'point/remove'; panoId: string; id: string }
   | { type: 'point/duplicate'; panoId: string; id: string; newId: string }
   | { type: 'link/set'; from: string; to: string; yaw: number; title: string }
@@ -257,15 +301,46 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
   if (action.type === 'load') return action.docs;
   if (!docs) return docs;
   switch (action.type) {
-    case 'tour/title':
+    case 'tour/title': {
+      const { lang } = action;
+      if (lang) {
+        return withTour(docs, (t) =>
+          withI18n(t, setTranslation(t.i18n, lang, 'title', action.title.trim() || null)),
+        );
+      }
       return withTour(docs, (t) => ({ ...t, title: action.title }));
-    case 'tour/description':
+    }
+    case 'tour/description': {
+      const { lang } = action;
+      if (lang) {
+        return withTour(docs, (t) =>
+          withI18n(
+            t,
+            setTranslation(t.i18n, lang, 'description', action.description.trim() || null),
+          ),
+        );
+      }
       // Stored trimmed, like the server does; blank means no description.
       return withTour(docs, (t) => {
         const { description: _old, ...rest } = t;
         const description = action.description.trim();
         return description ? { ...rest, description } : rest;
       });
+    }
+    case 'tour/languages':
+      return withTour(docs, (t) => ({ ...t, languages: action.languages }));
+    case 'lang/remove': {
+      // Only the tour's own strings. A pano's translations stay with its config: the pano
+      // may be in other tours that still have the language, and publish only ever sends
+      // a tour's own languages, so the removed one stops showing here either way.
+      const { lang } = action;
+      return withTour(docs, (t) => {
+        const cleared = dropLanguage(t, lang);
+        if (!t.languages) return cleared;
+        const others = t.languages.others.filter((l) => l !== lang);
+        return { ...cleared, languages: { ...t.languages, others } };
+      });
+    }
     case 'tour/settings':
       return withTour(docs, (t) => ({
         ...t,
@@ -282,8 +357,15 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
           ? { ...rest, scenes }
           : { ...rest, scenes, startPanoId };
       });
-    case 'scene/title':
+    case 'scene/title': {
+      const { lang } = action;
+      if (lang) {
+        return withConfig(docs, action.panoId, (c) =>
+          withI18n(c, setTranslation(c.i18n, lang, 'title', action.title.trim() || null)),
+        );
+      }
       return withConfig(docs, action.panoId, (c) => ({ ...c, title: action.title }));
+    }
     case 'scene/start-view':
       return withConfig(docs, action.panoId, (c) => ({
         ...c,
@@ -308,6 +390,23 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
           c.hotspots.map((h) => (h.id === action.id ? patchHotspot(h, action.patch) : h)),
         ),
       );
+    case 'point/translate': {
+      const { lang, patch } = action;
+      return withConfig(docs, action.panoId, (c) =>
+        setHotspots(
+          c,
+          c.hotspots.map((h) => {
+            if (h.id !== action.id) return h;
+            let i18n = h.i18n;
+            for (const field of ['title', 'body'] as const) {
+              const v = patch[field];
+              if (v !== undefined) i18n = setTranslation(i18n, lang, field, v?.trim() ? v : null);
+            }
+            return withI18n(h, i18n);
+          }),
+        ),
+      );
+    }
     case 'point/remove':
       return withConfig(docs, action.panoId, (c) =>
         setHotspots(

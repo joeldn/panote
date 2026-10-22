@@ -11,6 +11,7 @@ import { Compass } from './Compass.js';
 import { FloorLinks } from './FloorLinks.js';
 import { HotspotMarkers } from './HotspotMarkers.js';
 import { HotspotPanel } from './HotspotPanel.js';
+import { LanguagePicker } from './LanguagePicker.js';
 import { SceneMap } from './SceneMap.js';
 import type { ViewerHotspot, ViewerLinkArrow, ViewerTourGraph } from './types.js';
 import { ViewerControls } from './ViewerControls.js';
@@ -72,6 +73,14 @@ export interface TourViewerProps {
   onSceneChange?: (panoId: string) => void;
   onHotspotOpen?: (panoId: string, hotspotId: string) => void;
   onLoadError?: (error: unknown, panoId: string) => void;
+  /** The language the tour's text is shown in: the viewer's `lang` attribute. */
+  lang?: string | null;
+  /**
+   * The tour's languages, default first. With more than one and `onLanguageChange`, a
+   * language picker shows: in the top bar, or over the stage without one (the embed).
+   */
+  languages?: readonly string[];
+  onLanguageChange?: (lang: string) => void;
   className?: string;
   /** Rendered after the stage, e.g. a share sheet. */
   children?: ReactNode;
@@ -191,6 +200,9 @@ export function TourViewer({
   onSceneChange,
   onHotspotOpen,
   onLoadError,
+  lang,
+  languages = NONE,
+  onLanguageChange,
   className,
   children,
   createViewer,
@@ -286,9 +298,18 @@ export function TourViewer({
     [data.tour, data.titles, data.mapPositions],
   );
   const { controls, showCompass, showMap } = data.settings;
+  const picker =
+    lang && onLanguageChange ? (
+      <LanguagePicker
+        languages={languages}
+        value={lang}
+        onChange={onLanguageChange}
+        {...(!bar && { className: 'pn-tour__lang' })}
+      />
+    ) : null;
 
   return (
-    <div ref={frame} className={cx('pn-tour', className)}>
+    <div ref={frame} className={cx('pn-tour', className)} {...(lang && { lang })}>
       <PanoStage
         baseUrl={baseUrl}
         panoId={target.id}
@@ -326,9 +347,15 @@ export function TourViewer({
               </span>
             </nav>
             {bar.extras?.(panoId)}
-            {bar.end && <div className="pn-tourbar__end">{bar.end}</div>}
+            {(bar.end || picker) && (
+              <div className="pn-tourbar__end">
+                {picker}
+                {bar.end}
+              </div>
+            )}
           </div>
         )}
+        {!bar && picker}
         {overlay?.(panoId)}
         {showCompass && <Compass className="pn-tour__compass" />}
         {showMap && !single && scenes.length > 1 && (

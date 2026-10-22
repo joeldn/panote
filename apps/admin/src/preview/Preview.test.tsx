@@ -67,6 +67,25 @@ describe('owner preview', () => {
     expect(document.querySelector('.app-shell__bar')).toBeNull();
   });
 
+  it('shows the ?lang= language, with a picker to switch', async () => {
+    server.setTour({
+      ...server.tour!.body,
+      languages: { default: 'en', others: ['de'] },
+      i18n: { de: { title: 'Altstadt' } },
+    });
+    server.setConfig('church', {
+      ...server.configs.get('church')!.body,
+      i18n: { de: { title: 'Kirche' } },
+    });
+    open('/app/t/t1/preview?lang=de');
+    const crumbs = await shown();
+    expect(within(crumbs).getByText('Altstadt')).toBeTruthy();
+    expect(within(crumbs).getByText('Kirche')).toBeTruthy();
+    const picker = screen.getByRole('combobox', { name: 'Language' });
+    fireEvent.change(picker, { target: { value: 'en' } });
+    expect(await within(crumbs).findByText('Old town')).toBeTruthy();
+  });
+
   it('honours the tour settings', async () => {
     open();
     await shown();

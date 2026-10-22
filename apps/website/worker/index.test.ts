@@ -642,6 +642,30 @@ describe('link previews', () => {
     ]);
   });
 
+  it('writes the card in the ?lang= language, and in the default otherwise', async () => {
+    const tour = bundle({
+      description: 'Three squares',
+      languages: { default: 'en', others: ['de'] },
+      i18n: { de: { title: 'Altstadt', description: 'Drei Plätze' } },
+      scenes: bundle().scenes.map((s, i) =>
+        i === 0 ? { ...s, config: { ...s.config, i18n: { de: { title: 'Platz' } } } } : s,
+      ),
+    });
+    await putJson(`pub/tours/${TOUR}.json`, tour);
+    const de = await (await call('/s/new-name?lang=de')).text();
+    expect(de).toContain('<title>Altstadt · panote</title>');
+    expect(metasOf(de)).toEqual([
+      ...textTags('Altstadt', 'Drei Plätze'),
+      ...previewTags('pano-1', 'Platz'),
+    ]);
+    // The SPA still gets the bundle as stored.
+    expect(bootOf(de)).toEqual({ slug: 'new-name', record: live(TOUR), tour });
+    for (const path of ['/s/new-name', '/s/new-name?lang=ja']) {
+      const html = await (await call(path)).text();
+      expect(metasOf(html)).toEqual([...textTags('Old town', 'Three squares'), ...previewTags()]);
+    }
+  });
+
   it("uses the tour's published description over the generated line", async () => {
     await putJson(`pub/tours/${TOUR}.json`, bundle({ description: 'Three squares at dusk.' }));
     const html = await (await call('/s/new-name')).text();

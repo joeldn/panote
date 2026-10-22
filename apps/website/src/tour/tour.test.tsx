@@ -225,6 +225,108 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('tour languages', () => {
+  const multilingual = () =>
+    bundle({
+      languages: { default: 'en', others: ['de', 'fr'] },
+      i18n: { de: { title: 'Altstadt' } },
+      scenes: [
+        {
+          panoId: 'square',
+          config: {
+            panoId: 'square',
+            title: 'Square',
+            i18n: { de: { title: 'Platz' } },
+            hotspots: [
+              {
+                id: 'i1',
+                type: 'info',
+                yaw: 0.2,
+                pitch: 0.1,
+                title: 'Fountain',
+                body: '**Old**',
+                i18n: { de: { title: 'Brunnen' } },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  const navLanguages = (langs: string[]) =>
+    vi.spyOn(navigator, 'languages', 'get').mockReturnValue(langs);
+
+  beforeEach(() => {
+    objects['pub/tours/tour-a.json'] = multilingual();
+    // As index.html ships it.
+    document.documentElement.setAttribute('lang', 'en');
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.documentElement.setAttribute('lang', 'en');
+  });
+
+  it('shows the language ?lang= asks for, falling back per field to the default', async () => {
+    navLanguages(['fr']);
+    renderAt('/s/old-town?lang=de');
+    expect(await screen.findByText('Altstadt')).toBeTruthy();
+    expect(screen.getByText('Platz').getAttribute('aria-current')).toBe('location');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Brunnen' }));
+    // No German body: the English one shows.
+    const panel = screen.getByRole('complementary', { name: 'Brunnen' });
+    expect(panel.querySelector('strong')?.textContent).toBe('Old');
+    expect(document.title).toBe('Altstadt · panote');
+    expect(document.documentElement.getAttribute('lang')).toBe('de');
+    expect(document.querySelector('.pn-tour')?.getAttribute('lang')).toBe('de');
+  });
+
+  it("else follows the browser's languages, by primary subtag too", async () => {
+    navLanguages(['de-AT', 'en']);
+    renderAt('/s/old-town');
+    expect(await screen.findByText('Altstadt')).toBeTruthy();
+  });
+
+  it('else the default, and the picker switches language in place, keeping ?pano=', async () => {
+    navLanguages(['ja']);
+    const router = renderAt('/s/old-town?pano=square');
+    expect(await screen.findByText('Old town')).toBeTruthy();
+    const picker = screen.getByRole('combobox', { name: 'Language' }) as HTMLSelectElement;
+    expect(picker.value).toBe('en');
+    const before = viewers.length;
+    expect([...picker.options].map((o) => o.textContent)).toEqual([
+      'English',
+      'Deutsch',
+      'Français',
+    ]);
+    fireEvent.change(picker, { target: { value: 'de' } });
+    expect(await screen.findByText('Altstadt')).toBeTruthy();
+    expect(router.state.location.search).toBe('?pano=square&lang=de');
+    // Same scene, no new viewer and no load: only the text changed.
+    expect(viewers).toHaveLength(before);
+    expect(lastViewer().crossfade).not.toHaveBeenCalled();
+  });
+
+  it('the embed honours ?lang= and offers the picker over the stage', async () => {
+    navLanguages(['en']);
+    renderAt('/s/old-town/embed?lang=de');
+    await shown('square');
+    expect(document.title).toBe('Altstadt · panote');
+    expect(screen.getByRole('button', { name: 'Brunnen' })).toBeTruthy();
+    expect(
+      screen.getByRole('combobox', { name: 'Language' }).closest('.pn-tour__lang'),
+    ).toBeTruthy();
+  });
+
+  it('a tour in one language has no picker and leaves <html lang> alone', async () => {
+    objects['pub/tours/tour-a.json'] = bundle();
+    renderAt('/s/old-town?lang=de');
+    await shown('square');
+    expect(screen.queryByRole('combobox', { name: 'Language' })).toBeNull();
+    expect(screen.getByText('Old town')).toBeTruthy();
+    expect(document.documentElement.getAttribute('lang')).toBe('en');
+  });
+});
+
 describe('/s/:slug', () => {
   it('keeps every wheel for zooming on the full-page tour', async () => {
     renderAt('/s/old-town');

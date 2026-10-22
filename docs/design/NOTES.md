@@ -53,7 +53,9 @@ the code wins:
 - Per-pano likes (the API currently has per-tour likes).
 - Public/Unlisted visibility and custom slugs.
 - Schema extensions: north offset, point icon/size, media embeds, i18n,
-  tour-wide map/compass settings.
+  tour-wide map/compass settings. All built. The design's `langs[]`/`lang`/`i18n{}`
+  became `TourDoc.languages` plus an `i18n` map beside each translated field (see
+  `docs/decisions.md`); the editor's language switcher sits in the top-right bar.
 - The 2D floor-plan mini-map — `mapX`/`mapY` already exist on `TourDoc`, but
   the viewer feature itself is not built.
 
