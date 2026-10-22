@@ -46,6 +46,14 @@ beforeAll(() => {
 const auth = { headers: { Authorization: 'Bearer good' } };
 const authOther = { headers: { Authorization: 'Bearer good-other' } };
 
+// The config PUT needs an original under the caller's prefix (or an existing config).
+const uploaded = (panoId: string, sub = MY_SUB) =>
+  env.BUCKET.put(originalKey(sub, panoId), 'original bytes');
+
+// A config-only pano (no original), as stored before the config PUT required one.
+const legacyConfig = (panoId: string, title: string, sub = MY_SUB) =>
+  putJson(env.BUCKET, configKey(sub, panoId), { panoId, title, hotspots: [] });
+
 // Every case below uses its own panoId/tourId namespace (port spec section 0.7):
 // storage is shared between it() cases in this file (unlike between files), so
 // each case creates whatever it asserts on rather than relying on another
@@ -74,6 +82,8 @@ describe('admin panos routes', () => {
   it("does not list another user's panos", async () => {
     const mine = 'cross-tenant-mine-p1';
     const theirs = 'cross-tenant-theirs-p1';
+    await uploaded(mine);
+    await uploaded(theirs, OTHER_SUB);
     await SELF.fetch(`https://x/api/admin/panos/${mine}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -92,6 +102,7 @@ describe('admin panos routes', () => {
 
   it('creates then lists a scene config', async () => {
     const panoId = 'create-list-p1';
+    await uploaded(panoId);
     const body = JSON.stringify({ panoId, title: 'Hall', hotspots: [] });
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
@@ -105,6 +116,7 @@ describe('admin panos routes', () => {
 
   it('If-None-Match: * creates a config only once (create-vs-create race)', async () => {
     const panoId = 'create-only-p1';
+    await uploaded(panoId);
     const put = (title: string) =>
       SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
         method: 'PUT',
@@ -143,6 +155,7 @@ describe('admin panos routes', () => {
 
   it('412s on a stale conditional update', async () => {
     const panoId = 'stale-p1';
+    await uploaded(panoId);
     // Seed the object first so there is an etag to be stale against.
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
@@ -159,6 +172,7 @@ describe('admin panos routes', () => {
 
   it('a bare quote in If-Match 412s (guaranteed mismatch), not a 500', async () => {
     const panoId = 'bad-quote-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -178,6 +192,7 @@ describe('admin panos routes', () => {
 
   it('an "x*y" If-Match 412s rather than doing an unconditional overwrite', async () => {
     const panoId = 'star-in-tag-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -193,6 +208,7 @@ describe('admin panos routes', () => {
 
   it('400s a multi-tag If-Match', async () => {
     const panoId = 'multi-tag-if-match-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -241,6 +257,8 @@ describe('admin panos routes', () => {
   it('deletes a pano and it no longer lists, without touching a sibling', async () => {
     const panoId = 'delete-p1';
     const siblingId = 'delete-p1-sibling';
+    await uploaded(panoId);
+    await uploaded(siblingId);
     // A handler that wiped the whole user prefix instead of just panoId would
     // still pass a test that only checks the deleted id is gone - create a
     // sibling first so a too-broad delete has something to break.
@@ -304,11 +322,7 @@ describe('admin panos routes', () => {
 
   it('deletes a config-only pano (no original ever uploaded) and it no longer lists', async () => {
     const panoId = 'delete-no-original-p1';
-    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
-      method: 'PUT',
-      headers: { ...auth.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'No original', hotspots: [] }),
-    });
+    await legacyConfig(panoId, 'No original');
 
     const del = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
       method: 'DELETE',
@@ -327,13 +341,10 @@ describe('admin panos routes', () => {
     await env.BUCKET.put(originalKey(MY_SUB, panoId), 'a original bytes');
     await env.BUCKET.put(tileVersionPrefix(panoId, 't1-abc') + '0/px/0-0.webp', 'a tile');
 
-    // User B PUTs a config under the same panoId (allowed - config is keyed
-    // by (sub, panoId), not exclusive) but never uploaded an original there.
-    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
-      method: 'PUT',
-      headers: { ...authOther.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'B config', hotspots: [] }),
-    });
+    // User B has a config under the same panoId (config is keyed by (sub, panoId),
+    // not exclusive) but never uploaded an original there: legacy data, since the
+    // config PUT now refuses that.
+    await legacyConfig(panoId, 'B config', OTHER_SUB);
 
     const del = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
       method: 'DELETE',
@@ -352,11 +363,7 @@ describe('admin panos routes', () => {
 
   it('a repeat DELETE after a successful delete 404s', async () => {
     const panoId = 'delete-repeat-p1';
-    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
-      method: 'PUT',
-      headers: { ...auth.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'Repeat', hotspots: [] }),
-    });
+    await legacyConfig(panoId, 'Repeat');
 
     const first = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, {
       method: 'DELETE',
@@ -399,6 +406,7 @@ describe('admin panos routes', () => {
 
   it('round-trips a panoId containing "_" and "-" (the full URL-unreserved charset) through create and list', async () => {
     const panoId = 'Valid_Pano-Id-123';
+    await uploaded(panoId);
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -604,6 +612,7 @@ describe('admin tours routes', () => {
 describe('GET /api/admin/panos/:panoId', () => {
   it('reads its own config with a quoted ETag header matching the PUT-returned etag', async () => {
     const panoId = 'get-p1';
+    await uploaded(panoId);
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -622,6 +631,7 @@ describe('GET /api/admin/panos/:panoId', () => {
 
   it('304s on a matching If-None-Match and 200s on a stale one', async () => {
     const panoId = 'get-etag-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -645,6 +655,7 @@ describe('GET /api/admin/panos/:panoId', () => {
 
   it('304s on a weak (W/) etag and on a comma-separated list containing it', async () => {
     const panoId = 'get-weak-etag-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -667,6 +678,7 @@ describe('GET /api/admin/panos/:panoId', () => {
 
   it('a bare quote in If-None-Match is treated as no match (200), not a 500', async () => {
     const panoId = 'get-bad-quote-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -680,6 +692,7 @@ describe('GET /api/admin/panos/:panoId', () => {
 
   it('an "x*y" If-None-Match is a literal mismatching tag, not a wildcard match', async () => {
     const panoId = 'get-star-in-tag-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -693,6 +706,7 @@ describe('GET /api/admin/panos/:panoId', () => {
 
   it('round-trips a GET etag into a following PUT (If-Match) that succeeds', async () => {
     const panoId = 'get-roundtrip-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -864,6 +878,7 @@ describe('GET /api/admin/tours/:tourId', () => {
     const readyPano = 'include-ready-p1';
     const tombstonePano = 'include-tombstone-p1';
     const originalOnlyPano = 'include-original-p1';
+    await uploaded(readyPano);
 
     const putConfig = await SELF.fetch(`https://x/api/admin/panos/${readyPano}/config`, {
       method: 'PUT',
@@ -917,6 +932,7 @@ describe('GET /api/admin/tours/:tourId', () => {
 
   it("?include=configs never leaks another owner's config for a foreign scene panoId", async () => {
     const foreignPano = 'include-foreign-owner-p1';
+    await uploaded(foreignPano, OTHER_SUB);
     // The other owner really does have a config and an original here, so
     // this proves the response reflects the caller's own empty prefix.
     await SELF.fetch(`https://x/api/admin/panos/${foreignPano}/config`, {
@@ -978,6 +994,7 @@ describe('PUT /api/admin/tours/:tourId write guards', () => {
 describe('customMetadata writes (unit A2)', () => {
   it('a config PUT stamps customMetadata.title', async () => {
     const panoId = 'meta-config-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -1168,6 +1185,7 @@ describe('GET /api/admin/tours', () => {
 describe('GET /api/admin/panos summaries (unit A2)', () => {
   it('panoIds stays the full unpaginated list alongside the new panos summaries', async () => {
     const panoId = 'summary-panoids-p1';
+    await uploaded(panoId);
     await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -1185,11 +1203,7 @@ describe('GET /api/admin/panos summaries (unit A2)', () => {
 
   it('summarizes a config-only pano: hasConfig, no original, tiling none', async () => {
     const panoId = 'summary-config-only-p1';
-    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
-      method: 'PUT',
-      headers: { ...auth.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'Config Only', hotspots: [] }),
-    });
+    await legacyConfig(panoId, 'Config Only');
     const list = await SELF.fetch('https://x/api/admin/panos', auth);
     const body = (await list.json()) as {
       panos: Array<{
@@ -1354,6 +1368,8 @@ describe('GET /api/admin/panos summaries (unit A2)', () => {
   it('honours ?limit and a cursor over the sorted panoId keyset', async () => {
     const a = 'summary-cursor-a-p1';
     const b = 'summary-cursor-b-p1';
+    await uploaded(a);
+    await uploaded(b);
     for (const panoId of [a, b]) {
       await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
         method: 'PUT',
@@ -1374,11 +1390,7 @@ describe('GET /api/admin/panos summaries (unit A2)', () => {
 describe('GET /api/admin/panos/:panoId status (unit A2)', () => {
   it('the normal 200 response includes a status object alongside config/etag', async () => {
     const panoId = 'status-normal-p1';
-    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
-      method: 'PUT',
-      headers: { ...auth.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'Status Normal', hotspots: [] }),
-    });
+    await legacyConfig(panoId, 'Status Normal');
     const get = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
     const body = (await get.json()) as {
       config: { title: string };
@@ -1521,6 +1533,7 @@ describe('DELETE /api/admin/tours/:tourId (unit A2)', () => {
 
   it('Q5: deleting one tour leaves a pano shared with another tour of the same owner untouched', async () => {
     const sharedPano = 'delete-tour-shared-p1';
+    await uploaded(sharedPano);
     await SELF.fetch(`https://x/api/admin/panos/${sharedPano}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },
@@ -1621,13 +1634,9 @@ describe('review fix: manifest is not returned without ownership proof', () => {
       manifestKey(panoId),
       JSON.stringify({ pano: panoId, version, format: 'webp', tileSize: 256 }),
     );
-    // A has a config under the same panoId but never uploaded an original -
-    // proves the manifest gate is originalObj, not merely "some object exists".
-    await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
-      method: 'PUT',
-      headers: { ...auth.headers, 'If-Match': '*' },
-      body: JSON.stringify({ panoId, title: 'Mine, no original', hotspots: [] }),
-    });
+    // A has a config under the same panoId but never uploaded an original (legacy
+    // data) - proves the manifest gate is originalObj, not merely "some object exists".
+    await legacyConfig(panoId, 'Mine, no original');
 
     const full = await SELF.fetch(`https://x/api/admin/panos/${panoId}`, auth);
     expect(full.status).toBe(200);
@@ -1681,6 +1690,7 @@ describe('review fix: MAX_TITLE_LENGTH boundary (was: 9000-char title truncation
 
   it('a pano config PUT title near MAX_TITLE_LENGTH with multibyte (emoji) chars 200s', async () => {
     const panoId = 'max-title-config-p1';
+    await uploaded(panoId);
     // 99 emoji (2 UTF-16 units each) + 2 ASCII = 200 units, one short of a
     // surrogate pair straddling the cap - proves the cap counts units, not code points.
     const title = '\u{1F600}'.repeat(99) + 'ab';
@@ -1799,6 +1809,7 @@ describe('review fix: tours list page boundary never splits a tour from its publ
 describe('B1 schema extensions round-trip through PUT/GET', () => {
   it('round-trips north and a hotspot with icon/size/media through config PUT then GET', async () => {
     const panoId = 'b1-config-p1';
+    await uploaded(panoId);
     const body = {
       panoId,
       title: 'Hall',
@@ -1836,6 +1847,7 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
 
   it('round-trips linked audio, vimeo and link media from any https host', async () => {
     const panoId = 'b1-config-linked-media-p1';
+    await uploaded(panoId);
     const media = [
       { kind: 'audio', url: 'https://sounds.example.com/bell.mp3' },
       { kind: 'vimeo', id: '76979871', hash: '8272103f6e' },
@@ -1883,6 +1895,7 @@ describe('B1 schema extensions round-trip through PUT/GET', () => {
 
   it('wraps a finite out-of-range north instead of 400ing (the viewer produces such values)', async () => {
     const panoId = 'b1-config-wrap-north-p1';
+    await uploaded(panoId);
     const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...auth.headers, 'If-Match': '*' },

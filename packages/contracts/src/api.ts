@@ -190,6 +190,9 @@ export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'rese
 // 409 when a concurrent publish, rename or visibility change got there first; retry.
 export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
 export const NotPublishedSchema = z.object({ error: z.literal('not published') });
+// 409 for a slug change while the tour already holds MAX_ALIASES (admin-api) redirect
+// aliases; it works again once the oldest expires (SLUG_ALIAS_DAYS).
+export const TooManyRenamesSchema = z.object({ error: z.literal('too many renames') });
 
 export const SlugPutRequestSchema = z.object({ slug: z.string() });
 export const SlugPutOkSchema = z.object({

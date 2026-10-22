@@ -234,8 +234,13 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
         const doc: TourDocInput = { ...res.data.tour, title: copyTitle(res.data.tour.title) };
         delete doc.tourId;
         await api.createTour(doc);
-      } catch {
-        setNotice(`Couldn’t duplicate “${tour.title}”. Try again.`);
+      } catch (e) {
+        // The tour cap and the write rate limit say why; a retry wouldn't help the first.
+        setNotice(
+          isStatus(e, 403) || isStatus(e, 429)
+            ? `Couldn’t duplicate “${tour.title}”. ${(e as Error).message}`
+            : `Couldn’t duplicate “${tour.title}”. Try again.`,
+        );
         return;
       }
       await refreshTours();

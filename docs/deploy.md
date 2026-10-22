@@ -1184,9 +1184,9 @@ name.
   says so.
 - **Analytics Engine events** for the deleted tours. They're keyed by tourId, hold nothing about
   the owner, and age out with AE's three-month retention (see Insights).
-- **Redirect aliases past the 20 `publish.json` tracks** (`MAX_ALIASES`). They stop being
-  followed once the tour's live slug is gone and the daily alias sweep removes them when they
-  expire.
+- **Redirect aliases a tour dropped before every alias was tracked** (`MAX_ALIASES` was 20 and
+  older ones went untracked). They stop being followed once the tour's live slug is gone and the
+  daily alias sweep removes them when they expire.
 - **Copies already in a browser cache**, and edge copies if the purge isn't configured (see
   "Deleted panos").
 
@@ -1245,6 +1245,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | Worker | Binding | Route | Key | Limit | namespace_id dev / production |
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
+| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator route | owner (Auth0 sub), checked after the JWT, before any R2 read | 120/min | `1301` / `2301` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
@@ -1255,11 +1256,30 @@ to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). 
 the same id share counters, so every binding and every env has its own. The dashboard doesn't show
 these limits: watch for `429`s in Workers Logs. To change a limit, edit `simple.limit` in both env
 blocks; `period` may only be `10` or `60`, and if it changes, change the matching constant
-(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
+(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
 office or a carrier NAT shares one IP, which is why those limits are well above what one browser
 sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
 the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
-`TourStats` still never see it (the privacy rule in `docs/wave6-plan.md` holds).
+`TourStats` still never see it (the privacy rule in `docs/wave6-plan.md` holds). `admin-api`'s
+120/min is one editor Save of a full tour in a burst (`MAX_TOUR_SCENES` = 100 configs, the tour,
+the publish); people editing by hand stay far below it.
+
+### admin-api object caps
+
+- **Tours:** at most `MAX_TOURS_PER_OWNER` (200, `@internal/contracts`). `POST /api/admin/tours`
+  (new tour, upload into a new tour, dashboard Duplicate) answers `403 {"error":"tour limit reached"}`
+  once the owner has 200 `tour.json`s, counted with one LIST of `tours/<owner>/`. A soft cap, like
+  upload-api's: concurrent creates can each pass.
+- **Configs:** `PUT /api/admin/panos/:panoId/config` answers `404 {"error":"pano not found"}` unless
+  the caller has an original for that panoId, or already has a config there (a config-only pano
+  from before this check, which can still be updated). The delete tombstone's `409` comes first.
+- **Slugs:** a tour holds at most `MAX_ALIASES` (5) redirect aliases. A rename, or a publish with a
+  new slug, that would make a sixth answers `409 {"error":"too many renames"}` and claims nothing;
+  it works again once the oldest alias expires (`SLUG_ALIAS_DAYS`). Moving back onto an alias and a
+  bare republish still work. Unpublish (and so tour delete) releases the tour's aliases as well as
+  its live slug. Brand, support and sign-in words are reserved (`RESERVED_SLUGS`, plus any slug
+  starting `panote` or led by `login`/`signin`); a tour already live at a word reserved later keeps
+  republishing at it.
 
 ### Likes
 

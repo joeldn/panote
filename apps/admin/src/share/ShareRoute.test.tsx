@@ -148,6 +148,20 @@ describe('share route', () => {
     expect(screen.getByText('panote.io/s/old-town')).toBeTruthy();
   });
 
+  it.each([
+    [
+      409,
+      'too many renames',
+      'This tour’s link has changed too many times recently. Try again later.',
+    ],
+    [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
+  ])('shows a %i %s rename refusal inline', async (status, error, message) => {
+    const renameSlug = vi.fn(() => Promise.reject(new ApiError(status, { error })));
+    renderShare('/app/t/tour-1/share/link', fakeApi({ renameSlug }));
+    await editSlug('another-link');
+    expect(screen.getByRole('alert').textContent).toBe(message);
+  });
+
   it('keeps a failed rename visible when the blur came from a tab switch', async () => {
     let reject: (e: unknown) => void = () => {};
     const renameSlug = vi.fn(

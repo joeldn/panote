@@ -142,15 +142,13 @@ export const claimSlug = async (
   currentSlug: string | null,
 ): Promise<ClaimResult> => {
   const pointer: SlugRecord = { v: 1, kind: 'tour', tourId };
+  // The tour's own current slug was valid when claimed: a word reserved since
+  // (RESERVED_SLUGS) must not stop it republishing. A new slug is checked in full.
+  const key = slug === currentSlug ? storedSlugKey(slug) : slugKey(slug);
+  if (!key) return 'taken';
   // Bounded retry: each loop only repeats after the key changed under us.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const created = await putJson(
-      bucket,
-      slugKey(slug),
-      pointer,
-      { etagDoesNotMatch: '*' },
-      pointerMetadata,
-    );
+    const created = await putJson(bucket, key, pointer, { etagDoesNotMatch: '*' }, pointerMetadata);
     if (created.ok) return 'created';
     const existing = await readSlug(bucket, slug);
     if (!existing) continue;
@@ -161,7 +159,7 @@ export const claimSlug = async (
     if (record.redirect !== currentSlug || isExpired(record)) return 'taken';
     const reclaimed = await putJson(
       bucket,
-      slugKey(slug),
+      key,
       pointer,
       { etagMatches: existing.etag },
       pointerMetadata,
@@ -184,8 +182,11 @@ const claimDefaultSlug = async (
   return null;
 };
 
-// Tracked aliases per tour; older ones are re-pointed once more, then left to expire.
-export const MAX_ALIASES = 20;
+// Most redirect aliases one tour may hold at once: a slug change that would make
+// one more is refused (TOO_MANY_RENAMES) until the oldest expires, so a tour can't
+// squat slugs by renaming. Every alias stays tracked in publish.json (Q6 redirects
+// last SLUG_ALIAS_DAYS), and unpublish releases them.
+export const MAX_ALIASES = 5;
 
 type AliasPlan = { slug: string; etag: string; record: SlugRecord }[];
 
@@ -255,6 +256,11 @@ const SLUG_LOST = { status: 409, body: { error: 'slug lost' } } as const;
 const SLUG_TAKEN = { status: 409, body: { error: 'slug taken' } } as const;
 const CONFLICT = { status: 409, body: { error: 'conflict' } } as const;
 const NOT_PUBLISHED = { status: 409, body: { error: 'not published' } } as const;
+const TOO_MANY_RENAMES = { status: 409, body: { error: 'too many renames' } } as const;
+
+// A slug change leaves the current slug behind as one more alias.
+const overAliasCap = (plan: AliasPlan, from: string | undefined, to: string): boolean =>
+  from !== undefined && from !== to && plan.length > MAX_ALIASES;
 
 type Commit = {
   current: StoredRecord | null;
@@ -328,6 +334,10 @@ export const publishTour = async (
   const current = await readPublishRecord(bucket, sub, tourId);
   const cur = current?.value ?? null;
   const target = req.slug ?? cur?.slug;
+  // Planned before the claim, so a refused rename claims nothing. A default slug
+  // only happens on a first publish, which has no aliases to plan.
+  const plan = target !== undefined ? await planAliases(bucket, tourId, cur, target) : [];
+  if (target !== undefined && overAliasCap(plan, cur?.slug, target)) return TOO_MANY_RENAMES;
   let slug: string;
   let result: ClaimResult;
   if (target !== undefined) {
@@ -341,12 +351,11 @@ export const publishTour = async (
   // Another tour holds the current slug; retrying won't help, so say so.
   if (result === 'taken') return req.slug === undefined ? SLUG_LOST : SLUG_TAKEN;
 
-  const plan = await planAliases(bucket, tourId, cur, slug);
   const record: PublishRecord = {
     slug,
     visibility: req.visibility ?? cur?.visibility ?? DEFAULT_VISIBILITY,
     publishedAt: cur?.publishedAt ?? clock.now.toISOString(),
-    aliases: plan.slice(0, MAX_ALIASES).map((a) => a.slug),
+    aliases: plan.map((a) => a.slug),
   };
   const done = await commit(bucket, sub, tourId, {
     current,
@@ -394,14 +403,11 @@ export const renameSlug = async (
   const loaded = await loadPublished(bucket, sub, tourId);
   if (!loaded.ok) return loaded.outcome;
   const cur = loaded.current.value;
+  const plan = await planAliases(bucket, tourId, cur, target);
+  if (overAliasCap(plan, cur.slug, target)) return TOO_MANY_RENAMES;
   const result = await claimSlug(bucket, target, tourId, cur.slug);
   if (result === 'taken') return SLUG_TAKEN;
-  const plan = await planAliases(bucket, tourId, cur, target);
-  const record: PublishRecord = {
-    ...cur,
-    slug: target,
-    aliases: plan.slice(0, MAX_ALIASES).map((a) => a.slug),
-  };
+  const record: PublishRecord = { ...cur, slug: target, aliases: plan.map((a) => a.slug) };
   const done = await commit(bucket, sub, tourId, {
     current: loaded.current,
     record,
@@ -442,7 +448,10 @@ export const setVisibility = async (
 };
 
 // Idempotent; needs tour.json or publish.json as proof (pub/ is owner-free). Deletes the
-// slug only if it's a live pointer here. Returns the public keys to purge (B6).
+// slug only if it's a live pointer here, and the tracked aliases still naming this tour:
+// they redirect to a slug that is gone, and left in place they would hold their names
+// for SLUG_ALIAS_DAYS after every publish, rename, unpublish cycle. Returns the public
+// keys to purge (B6).
 export const unpublish = async (
   bucket: R2Bucket,
   sub: string,
@@ -460,6 +469,14 @@ export const unpublish = async (
     if (key && existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
       await bucket.delete(key);
       removed.push(key);
+    }
+    for (const alias of new Set(stored.value.aliases ?? [])) {
+      const aliasKey = storedSlugKey(alias);
+      const record = aliasKey ? (await readSlug(bucket, alias))?.record : null;
+      if (aliasKey && record?.kind === 'redirect' && record.tourId === tourId) {
+        await bucket.delete(aliasKey);
+        removed.push(aliasKey);
+      }
     }
   }
   await bucket.delete(pubTourKey(tourId));
