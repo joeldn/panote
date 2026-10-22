@@ -43,8 +43,9 @@ export function Privacy() {
       <p>
         Panoramas, tour titles, hotspot text and other content you add are stored on Cloudflare and
         served from our content network. A tour you publish can be opened by anyone with its link; a
-        public tour may also be shown elsewhere on Panote. When you delete a tour or panorama we
-        remove it from storage and our caches.
+        public tour is also listed on Explore (its title, cover image and scene count, never your
+        name) and can appear in search. When you delete a tour or panorama we remove it from storage
+        and our caches.
       </p>
 
       <h2>Visitors and analytics</h2>

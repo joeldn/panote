@@ -6,7 +6,7 @@ import { TourError, TourPage } from './tour/TourPage.js';
 // Everything under the Shell is its own chunk, so a tour visitor never downloads the
 // landing or legal pages. The tour routes stay eager: lazy-loading them would put a chunk
 // request in front of the tour data.
-const page = (name: 'Landing' | 'Privacy' | 'Terms' | 'NotFound') => async () => ({
+const page = (name: 'Landing' | 'Explore' | 'Privacy' | 'Terms' | 'NotFound') => async () => ({
   Component: (await import('./pages.js'))[name],
 });
 
@@ -22,6 +22,7 @@ export const routes: RouteObject[] = [
     errorElement: <RouteError />,
     children: [
       { index: true, lazy: page('Landing') },
+      { path: 'explore', lazy: page('Explore') },
       { path: 'privacy', lazy: page('Privacy') },
       { path: 'terms', lazy: page('Terms') },
       { path: '*', lazy: page('NotFound') },

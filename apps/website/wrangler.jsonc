@@ -1,7 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Static assets plus a small script that only runs for /s/*: slug alias 308s and tour
-  // page priming (docs/deploy.md Frontends). Deploy with --env, after `vite build`.
+  // Static assets plus a small script that only runs for /s/* (slug alias 308s and tour
+  // page priming) and /explore (its title and preview tags) (docs/deploy.md Frontends).
+  // Deploy with --env, after `vite build`.
   "name": "panote-website",
   "main": "worker/index.ts",
   "compatibility_date": "2026-01-01",
@@ -10,7 +11,7 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     // Every other path is served straight from assets, never through the script.
-    "run_worker_first": ["/s/*"],
+    "run_worker_first": ["/s/*", "/explore"],
   },
   "env": {
     "dev": {

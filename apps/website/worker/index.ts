@@ -1,5 +1,6 @@
 import { isLinkPreviewBot } from './bots.js';
 import { preloadLinks, preloadUrls, readTourBoot, scriptJson, type TourBoot } from './boot.js';
+import { EXPLORE_PATH, explorePage } from './explore.js';
 import { linkPreviewTags } from './og.js';
 import { parseSlugPath, resolveSlug, type SlugResolution } from './redirect.js';
 
@@ -234,11 +235,15 @@ async function tourPage(
   }
 }
 
-// Runs only for /s/* (assets.run_worker_first); every other path never reaches it.
+// Runs only for /s/* and /explore (assets.run_worker_first); every other path never reaches it.
 export default {
   async fetch(request, env): Promise<Response> {
     if (request.method === 'GET' || request.method === 'HEAD') {
       const url = new URL(request.url);
+      if (url.pathname === EXPLORE_PATH) {
+        const page = await env.ASSETS.fetch(request);
+        return withRobots(isHtml(page) ? explorePage(page, url.origin) : page, env);
+      }
       // A GET for a slug path fetches its HTML while the slug is read, so a live tour can
       // start streaming the moment the slug resolves.
       const page =

@@ -99,6 +99,9 @@ export function Shell() {
           </nav>
         )}
         <div className="app-shell__actions">
+          <Link to="/explore" className="app-shell__link">
+            Explore
+          </Link>
           <AccountNav />
           <UploadLink className="app-shell__cta">Upload a pano</UploadLink>
         </div>

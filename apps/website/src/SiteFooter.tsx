@@ -15,6 +15,7 @@ export function SiteFooter() {
         </div>
         <nav aria-label="Product">
           <div className="site-footer__label">Product</div>
+          <Link to="/explore">Explore</Link>
           {NAV_SECTIONS.map((s) => (
             <Link key={s.id} to={`/#${s.id}`}>
               {s.label}
