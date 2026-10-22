@@ -1142,12 +1142,12 @@ still catches it like any other late write; only if it happens after DELETE has 
 and removed the tombstone does a later DELETE take the no-proof path and skip `tiles/<panoId>/`
 entirely, leaving that one narrow case to the same manual per-key delete.
 
-A presigned upload URL stays valid for up to 900 seconds after `upload-api` issues it, and can
+A presigned upload URL stays valid for up to 600 seconds after `upload-api` issues it, and can
 still be used within that window to re-create a deleted pano's original — which re-tiles a pano
 that now has no `config.json`. That isn't a leak of anything new, and the pano can simply be
 deleted again. The replace-image path (`POST /api/upload-url` with `panoId`) has the same TOCTOU:
 its ownership HEAD check runs once, at presign time, so a presign issued just before a DELETE can
-still land up to 900s later and recreate the original after the delete completed. It stays
+still land up to 600s later and recreate the original after the delete completed. It stays
 confined to the caller's own owner-scoped prefix either way, so the impact is the same as the
 fresh-upload case above — the pano can simply be deleted again.
 
@@ -1187,6 +1187,7 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
    owner's original key, then the owner prefix). No reference or recent-upload checks: everything
    goes. A record a tiler job writes in the moment after that is dropped by the tile sweep 24-48
    hours later (see "Old version dirs").
+   Then `upload-log/<owner>/`, upload-api's log of the upload URLs it issued (Owner quotas).
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
 If any step throws, the route still answers `202 {"status":"pending"}`: the account is already
@@ -1199,7 +1200,7 @@ including for a partial run.
 
 - Interrupted deletes (no `completedAt`) first, oldest request first, then finished ones.
 - A finished account costs one `LIST` (`limit: 1`) per owner prefix; only if something turned up
-  there (a presigned upload issued before the marker, valid for 900s) does it run the full delete
+  there (a presigned upload issued before the marker, valid for 600s) does it run the full delete
   again.
 - One run deletes at most `SWEEP_ITEM_BUDGET` (400) tours plus panos, and one account at most
   `SWEEP_ACCOUNT_ITEM_BUDGET` (100) of them, so one huge account can't starve the rest; what's
@@ -1352,25 +1353,47 @@ don't check the bundle (a view stores one counter per tourId); the per-IP limit 
 
 ### Owner quotas
 
-`upload-api` calls `checkQuota` (`src/quota.ts`) last before it signs an upload URL, after the
-auth, rate limit, body checks and the account markers. Two optional vars:
+`upload-api` checks owner quotas (`src/quota.ts`) last before it signs an upload URL, after the
+auth, rate limit, body checks and the account markers. Three vars, set in both env blocks of
+`services/upload-api/wrangler.jsonc`:
 
-- `MAX_PANOS_PER_OWNER`: most panos (directories under `panos/<owner>/`) one owner may hold. A
-  replace doesn't count as a new pano.
-- `MAX_BYTES_PER_OWNER`: most bytes of originals one owner may hold, counting the declared `size`
-  of the upload; a replace frees the old original's bytes.
+- `MAX_PANOS_PER_OWNER` (`500`): most panos (directories under `panos/<owner>/`) one owner may
+  hold. A replace doesn't add a pano, so it is allowed at the limit, but not once the owner is
+  already over it (the limit was lowered under them).
+- `MAX_BYTES_PER_OWNER` (`21474836480`, 20 GiB): most bytes of originals one owner may hold,
+  counting the declared `size` of the upload; a replace frees the old original's bytes.
+- `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most upload URLs one owner may get in a rolling 24
+  hours, new uploads and replaces alike (each is a tiling job), counting this one. It bounds
+  tiling compute per account (a job is about $0.01); the global backstops are the 60-per-minute
+  `UPLOAD_URL_LIMITER` and the tiler's `max_concurrency`.
 
-Unset or empty means unlimited, and costs nothing: the owner's prefix is only listed (S3
-`ListObjectsV2`, one Class A operation per 1,000 objects) when a limit is set. That listing is a
-known cost: with a limit on, it runs in full on every upload-URL request. A pano with a delete
-tombstone (`deleting`) counts toward neither limit. Over a limit:
-`403 {"error":"pano limit reached"}` or `403 {"error":"storage limit reached"}`. A listing that
-fails is a `502`, and a value that isn't a non-negative integer refuses every upload (`500`), so a
-typo can't silently lift the limit. It is a soft cap: it counts what's stored now and the declared
-size, so concurrent requests can each pass, and the uploaded file can differ from the declared
-size (up to the 150 MiB cap). To turn a limit on, add it to `vars` in both env blocks of
-`services/upload-api/wrangler.jsonc`, delete its optional line from `src/env.d.ts`, run
-`pnpm --filter @service/upload-api run types` and deploy.
+Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
+limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
+1,000 objects) in full on every upload-URL request: that is a known cost. A pano with a delete
+tombstone (`deleting`) counts toward neither. Over a limit: `403 {"error":"pano limit reached"}`,
+`403 {"error":"storage limit reached"}` or `403 {"error":"daily upload limit reached"}`, checked
+in that order; the admin app words each one (`packages/web-kit/src/api/http.ts`). A listing or
+log write that fails is a `502` with no URL, and a value that isn't a non-negative integer refuses
+every upload (`500`), so a typo can't silently lift a limit. They are soft caps: concurrent
+requests can each pass, since each counts what is stored when it reads.
+
+**Upload log.** The daily limit counts URLs, not stored originals, so uploading and then deleting,
+or asking for URLs and never using them, doesn't get round it. Before it returns a URL,
+`upload-api` writes one empty object, `upload-log/<owner>/<issued, basic ISO 8601>-<panoId>`
+(`uploadLogKey` in `@internal/contracts`); if that write fails, no URL. Each request lists
+`upload-log/<owner>/` once (about one entry per URL in the past day, so a page or two at most) and
+counts the entries from the past 24 hours. Older entries, and any name it can't read, aren't
+counted and are deleted best-effort after the response (`waitUntil`, at most
+`UPLOAD_LOG_PRUNE_MAX` = 50 per request). It sits outside `panos/` because `admin-api` lists that
+prefix as the owner's panos, and outside the R2 notification rule (prefix `panos/`). It is private:
+the CDN's WAF rule only lets `tiles/`, `pub/` and `slugs/` through. Account deletion removes
+`upload-log/<owner>/` after the panos, and the daily sweep's "anything left?" check lists it too,
+so an entry logged just before the deletion marker is caught. An owner who stops uploading keeps
+up to a day's entries (empty objects) until their next upload-URL request. A Workers Rate Limiting
+binding can't express a day (its period is 10 or 60 seconds), which is why the count lives in R2.
+
+To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
+(the vars are in the generated `env.d.ts`) and deploy.
 
 ### Report link
 
@@ -1960,15 +1983,20 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   purge by URL or prefix — B6 adds a best-effort purge on delete, verified in dev on 2026-10-08
   (see "CDN purge on delete").
 - **Hardened, verified in dev (2026-10-08): the presigned upload PUT pins content-type.**
-  `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`). Against
+  `presignPut` signs `content-type` alongside `host` (then `SignedHeaders=content-type;host`). Against
   one presigned URL for an `image/jpeg` upload, a PUT with `content-type: image/png` and one with
   no content-type both got `403` (`SignatureDoesNotMatch`) and wrote nothing; the same PUT with
-  `image/jpeg` got `200`. **content-length is not signed, and R2 does not enforce it** — also
-  checked 2026-10-08: a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`. The
-  150 MiB size cap is therefore enforced only at presign (input validation on the presign request
-  in `upload-api`) and in the tiler, which backstops it with its own byte (`MAX_ORIGINAL_BYTES`
-  var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
-  (`packages/tiler/src/pyramid.ts:43`) caps.
+  `image/jpeg` got `200`.
+- **Signed but unverified: the presigned upload PUT pins content-length.** On 2026-10-08, with
+  content-length unsigned, a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`.
+  `upload-api` now also signs `content-length` as the declared `size`
+  (`SignedHeaders=content-length;content-type;host`); the browser sends a `File`'s size as
+  Content-Length itself, which is that `size`. Whether R2 checks a signed content-length on a
+  presigned PUT has not been verified in dev yet: until a PUT of a different length is seen to get
+  `403`, treat the 150 MiB size cap as enforced only at presign (input validation on the presign
+  request in `upload-api`) and in the tiler, which backstops it with its own byte
+  (`MAX_ORIGINAL_BYTES` var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
+  (`packages/tiler/src/pyramid.ts:43`) caps. If R2 ignores it, uploads still work as before.
 - **Fixed, live in dev (unit O1).** A tile 404 used to be edge-cached for 4h (`text/html`,
   `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
   `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge

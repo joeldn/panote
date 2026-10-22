@@ -216,6 +216,11 @@ describe('createAdminApi', () => {
     [403, 'account disabled', /has been disabled\. Write to hello@panote\.io/],
     [403, 'pano limit reached', 'This account has reached its pano limit.'],
     [403, 'storage limit reached', 'This account has reached its storage limit.'],
+    [
+      403,
+      'daily upload limit reached',
+      'This account has reached its daily upload limit. Try again later today or tomorrow.',
+    ],
     [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
     [403, 'tour limit reached', 'This account has reached its limit of 200 tours.'],
     [404, 'pano not found', 'This pano no longer exists.'],

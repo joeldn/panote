@@ -5,13 +5,15 @@ import {
   deletingKey,
   encodeId,
   originalKey,
+  uploadLogKey,
   userPanosPrefix,
+  userUploadLogPrefix,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
-import { env, SELF } from 'cloudflare:test';
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, it, expect, beforeAll, vi, type Mock } from 'vitest';
 
-import worker, { UPLOAD_URL_RATE_PERIOD_SECONDS } from './index.js';
+import worker, { UPLOAD_URL_EXPIRY_SECONDS, UPLOAD_URL_RATE_PERIOD_SECONDS } from './index.js';
 
 // Neither account marker (deletion, disabled) exists unless a test says so.
 const isMarker = (url: string): boolean =>
@@ -47,12 +49,26 @@ const post = (body?: unknown) =>
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
 
+// An empty ListObjectsV2 page: the owner quotas (set in wrangler.jsonc) list the
+// owner's prefix on every request that gets that far.
+const emptyListing = (): Response =>
+  new Response('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>');
+const isList = (input: Request | string): boolean =>
+  new URL(typeof input === 'string' ? input : input.url).searchParams.has('list-type');
+const methodOf = (input: Request | string): string =>
+  typeof input === 'string' ? 'GET' : input.method;
+
 // Every request HEADs the account deletion marker first: by default there is none
 // (and nothing else exists either). Tests that need other answers stub their own.
 beforeEach(() => {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => new Response(null, { status: 404 })),
+    vi.fn(async (input: Request | string) => {
+      if (isList(input)) return emptyListing();
+      // The daily limit's upload-log entry.
+      if (methodOf(input) === 'PUT') return new Response(null, { status: 200 });
+      return new Response(null, { status: 404 });
+    }),
   );
 });
 afterEach(() => {
@@ -87,18 +103,45 @@ describe('upload-url', () => {
     expect(j.url).toContain('X-Amz-Signature=');
   });
 
-  it('presigns with the default 15-minute expiry', async () => {
+  it('presigns with a 10-minute expiry', async () => {
+    expect(UPLOAD_URL_EXPIRY_SECONDS).toBe(600);
     const r = await post(validBody);
     expect(r.status).toBe(200);
     const j = (await r.json()) as { url: string };
-    expect(j.url).toContain('X-Amz-Expires=900');
+    expect(new URL(j.url).searchParams.get('X-Amz-Expires')).toBe('600');
   });
 
-  it('pins the content-type into the signed URL', async () => {
+  it('pins the content-type and the declared size into the signed URL', async () => {
     const r = await post({ contentType: 'image/webp', size: 1024 });
     expect(r.status).toBe(200);
     const { url } = (await r.json()) as { url: string };
-    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe('content-type;host');
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'content-length;content-type;host',
+    );
+  });
+
+  it('signs a different URL for a different declared size', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-22T12:00:00Z'), toFake: ['Date'] });
+    try {
+      const sign = async (size: number) => {
+        const r = await post({ contentType: 'image/webp', size, panoId: 'same-pano' });
+        const { url } = (await r.json()) as { url: string };
+        return new URL(url).searchParams.get('X-Amz-Signature');
+      };
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: Request | string) => {
+          if (isList(input)) return emptyListing();
+          const reqUrl = typeof input === 'string' ? input : input.url;
+          return new Response(null, {
+            status: isMarker(reqUrl) || reqUrl.endsWith('/deleting') ? 404 : 200,
+          });
+        }),
+      );
+      expect(await sign(1024)).not.toBe(await sign(1025));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('404 for GET /api/upload-url', async () => {
@@ -318,15 +361,24 @@ describe('upload-url for an account the operator disabled', () => {
 });
 
 // Calls the Worker directly, so a test can swap a binding or set a var.
+const request = (body: unknown) =>
+  new Request('https://x/api/upload-url', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer good', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+// Runs the Worker with a real ExecutionContext and waits for its waitUntil work.
+const run = async (req: Request, e: Env): Promise<Response> => {
+  const ctx = createExecutionContext();
+  const res = await worker.fetch(req, e, ctx);
+  await waitOnExecutionContext(ctx);
+  return res;
+};
+// The real per-minute limiter is shared by every test in this file, so `call`
+// swaps in one that always lets through, unless a test brings its own.
+const unlimited = { limit: async () => ({ success: true }) };
 const call = (body: unknown, overrides: Partial<Env>) =>
-  worker.fetch(
-    new Request('https://x/api/upload-url', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer good', 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    }),
-    { ...env, ...overrides },
-  );
+  run(request(body), { ...env, UPLOAD_URL_LIMITER: unlimited, ...overrides });
 
 describe('upload-url rate limit', () => {
   it('429s with Retry-After, keyed by the owner, before any R2 request', async () => {
@@ -343,7 +395,7 @@ describe('upload-url rate limit', () => {
 
   it('is not consulted for an unauthenticated request', async () => {
     const limit = vi.fn(async () => ({ success: false }));
-    const r = await worker.fetch(new Request('https://x/api/upload-url', { method: 'POST' }), {
+    const r = await run(new Request('https://x/api/upload-url', { method: 'POST' }), {
       ...env,
       UPLOAD_URL_LIMITER: { limit },
     });
@@ -360,12 +412,15 @@ describe('upload-url rate limit', () => {
 describe('upload-url owner quotas', () => {
   const prefix = userPanosPrefix('auth0|me');
   const MiB = 1024 * 1024;
-  // HEADs: no markers, every original exists, no tombstones. LIST: `objects`.
+  // HEADs: no markers, every original exists, no tombstones. PUTs (the upload
+  // log) succeed. LIST: the `objects` under the listed prefix.
   const storage = (objects: { key: string; size: number }[]) =>
     vi.fn(async (input: Request | string) => {
       const reqUrl = new URL(typeof input === 'string' ? input : input.url);
       if (reqUrl.searchParams.get('list-type') === '2') {
+        const listed = reqUrl.searchParams.get('prefix') ?? '';
         const contents = objects
+          .filter((o) => o.key.startsWith(listed))
           .map((o) => `<Contents><Key>${o.key}</Key><Size>${o.size}</Size></Contents>`)
           .join('');
         return new Response(
@@ -381,20 +436,35 @@ describe('upload-url owner quotas', () => {
     { key: `${prefix}${id}/original`, size },
     { key: `${prefix}${id}/config.json`, size: 100 },
   ];
+  // Every limit off, so a test sets only the one it is about.
+  const unset = {
+    MAX_PANOS_PER_OWNER: '',
+    MAX_BYTES_PER_OWNER: '',
+    MAX_UPLOADS_PER_OWNER_PER_DAY: '',
+  };
+  const only = (limits: Partial<Env>) => ({ ...unset, ...limits });
   const lists = (m: Mock) =>
     m.mock.calls.filter(([req]) => new URL((req as Request).url).searchParams.has('list-type'));
 
   it('unset limits: unlimited, and no listing at all', async () => {
     const fetchMock = storage([...pano('a', 10 * MiB), ...pano('b', 10 * MiB)]);
     vi.stubGlobal('fetch', fetchMock);
-    expect((await call(validBody, {})).status).toBe(200);
+    const bare: Partial<Env> = { ...env };
+    delete bare.MAX_PANOS_PER_OWNER;
+    delete bare.MAX_BYTES_PER_OWNER;
+    delete bare.MAX_UPLOADS_PER_OWNER_PER_DAY;
+    expect((await run(request(validBody), bare as Env)).status).toBe(200);
     expect(lists(fetchMock)).toHaveLength(0);
   });
 
   it('empty limits count as unset', async () => {
     const fetchMock = storage(pano('a', MiB));
     vi.stubGlobal('fetch', fetchMock);
-    const r = await call(validBody, { MAX_PANOS_PER_OWNER: '', MAX_BYTES_PER_OWNER: ' ' });
+    const r = await call(validBody, {
+      MAX_PANOS_PER_OWNER: '',
+      MAX_BYTES_PER_OWNER: ' ',
+      MAX_UPLOADS_PER_OWNER_PER_DAY: '',
+    });
     expect(r.status).toBe(200);
     expect(lists(fetchMock)).toHaveLength(0);
   });
@@ -402,7 +472,7 @@ describe('upload-url owner quotas', () => {
   it('403s a new pano once the owner holds MAX_PANOS_PER_OWNER', async () => {
     const fetchMock = storage([...pano('a', MiB), ...pano('b', MiB)]);
     vi.stubGlobal('fetch', fetchMock);
-    const r = await call(validBody, { MAX_PANOS_PER_OWNER: '2' });
+    const r = await call(validBody, only({ MAX_PANOS_PER_OWNER: '2' }));
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'pano limit reached' });
     expect(new URL((lists(fetchMock)[0]![0] as Request).url).searchParams.get('prefix')).toBe(
@@ -412,12 +482,12 @@ describe('upload-url owner quotas', () => {
 
   it('allows a new pano under MAX_PANOS_PER_OWNER', async () => {
     vi.stubGlobal('fetch', storage(pano('a', MiB)));
-    expect((await call(validBody, { MAX_PANOS_PER_OWNER: '2' })).status).toBe(200);
+    expect((await call(validBody, only({ MAX_PANOS_PER_OWNER: '2' }))).status).toBe(200);
   });
 
   it('a replace never counts as a new pano', async () => {
     vi.stubGlobal('fetch', storage([...pano('a', MiB), ...pano('b', MiB)]));
-    const r = await call({ ...validBody, panoId: 'a' }, { MAX_PANOS_PER_OWNER: '2' });
+    const r = await call({ ...validBody, panoId: 'a' }, only({ MAX_PANOS_PER_OWNER: '2' }));
     expect(r.status).toBe(200);
   });
 
@@ -425,7 +495,7 @@ describe('upload-url owner quotas', () => {
     vi.stubGlobal('fetch', storage(pano('a', 9 * MiB)));
     const r = await call(
       { contentType: 'image/jpeg', size: MiB + 1 },
-      { MAX_BYTES_PER_OWNER: String(10 * MiB) },
+      only({ MAX_BYTES_PER_OWNER: String(10 * MiB) }),
     );
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'storage limit reached' });
@@ -435,7 +505,7 @@ describe('upload-url owner quotas', () => {
     vi.stubGlobal('fetch', storage(pano('a', 9 * MiB)));
     const r = await call(
       { contentType: 'image/jpeg', size: MiB },
-      { MAX_BYTES_PER_OWNER: String(10 * MiB) },
+      only({ MAX_BYTES_PER_OWNER: String(10 * MiB) }),
     );
     expect(r.status).toBe(200);
   });
@@ -444,7 +514,7 @@ describe('upload-url owner quotas', () => {
     vi.stubGlobal('fetch', storage([...pano('a', 6 * MiB), ...pano('b', 4 * MiB)]));
     const r = await call(
       { contentType: 'image/jpeg', size: 6 * MiB, panoId: 'a' },
-      { MAX_BYTES_PER_OWNER: String(10 * MiB) },
+      only({ MAX_BYTES_PER_OWNER: String(10 * MiB) }),
     );
     expect(r.status).toBe(200);
   });
@@ -460,7 +530,7 @@ describe('upload-url owner quotas', () => {
     );
     const r = await call(
       { contentType: 'image/jpeg', size: MiB },
-      { MAX_PANOS_PER_OWNER: '2', MAX_BYTES_PER_OWNER: String(10 * MiB) },
+      only({ MAX_PANOS_PER_OWNER: '2', MAX_BYTES_PER_OWNER: String(10 * MiB) }),
     );
     expect(r.status).toBe(200);
   });
@@ -474,13 +544,171 @@ describe('upload-url owner quotas', () => {
           : new Response(null, { status: 404 }),
       ),
     );
-    expect((await call(validBody, { MAX_PANOS_PER_OWNER: '5' })).status).toBe(502);
+    expect((await call(validBody, only({ MAX_PANOS_PER_OWNER: '5' }))).status).toBe(502);
   });
 
   it('a malformed limit refuses uploads rather than lifting the limit', async () => {
     vi.stubGlobal('fetch', storage([]));
-    const r = await call(validBody, { MAX_PANOS_PER_OWNER: 'lots' });
+    const r = await call(validBody, only({ MAX_PANOS_PER_OWNER: 'lots' }));
     expect(r.status).toBe(500);
+  });
+
+  describe('replace while over a limit', () => {
+    it('403s a replace once the owner holds more than MAX_PANOS_PER_OWNER', async () => {
+      vi.stubGlobal('fetch', storage([...pano('a', MiB), ...pano('b', MiB), ...pano('c', MiB)]));
+      const r = await call({ ...validBody, panoId: 'a' }, only({ MAX_PANOS_PER_OWNER: '2' }));
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'pano limit reached' });
+    });
+
+    it('403s a replace whose new size would take the owner past MAX_BYTES_PER_OWNER', async () => {
+      vi.stubGlobal('fetch', storage([...pano('a', MiB), ...pano('b', 9 * MiB)]));
+      const r = await call(
+        { contentType: 'image/jpeg', size: 2 * MiB, panoId: 'a' },
+        only({ MAX_BYTES_PER_OWNER: String(10 * MiB) }),
+      );
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'storage limit reached' });
+    });
+  });
+
+  describe('daily upload limit', () => {
+    const logPrefix = userUploadLogPrefix('auth0|me');
+    let n = 0;
+    // One upload-log entry, issued `h` hours ago.
+    const issued = (h: number) => ({
+      key: uploadLogKey('auth0|me', new Date(Date.now() - h * 3600_000), `p${n++}`),
+      size: 0,
+    });
+    const daily = (max: number) => only({ MAX_UPLOADS_PER_OWNER_PER_DAY: String(max) });
+    const calls = (m: Mock, method: string) =>
+      m.mock.calls
+        .map(([req]) => req as Request)
+        .filter((req) => req.method === method && !new URL(req.url).searchParams.has('list-type'))
+        .map((req) => decodeURIComponent(new URL(req.url).pathname));
+
+    it('403s once the owner got MAX_UPLOADS_PER_OWNER_PER_DAY URLs in 24 hours, and logs nothing', async () => {
+      const fetchMock = storage([issued(1), issued(23)]);
+      vi.stubGlobal('fetch', fetchMock);
+      const r = await call(validBody, daily(2));
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'daily upload limit reached' });
+      expect(calls(fetchMock, 'PUT')).toEqual([]);
+    });
+
+    it('logs the URL it issues under upload-log/<owner>/, outside panos/', async () => {
+      const fetchMock = storage([issued(1)]);
+      vi.stubGlobal('fetch', fetchMock);
+      const r = await call(validBody, daily(2));
+      expect(r.status).toBe(200);
+      const { panoId } = (await r.json()) as { panoId: string };
+      const puts = calls(fetchMock, 'PUT');
+      expect(puts).toHaveLength(1);
+      expect(puts[0]).toMatch(new RegExp(`/${logPrefix}\\d{8}T\\d{9}Z-${panoId}$`));
+      expect(
+        lists(fetchMock).map(([req]) => new URL((req as Request).url).searchParams.get('prefix')),
+      ).toEqual([logPrefix]);
+    });
+
+    it('counts URLs, not stored originals: an upload deleted again still counts', async () => {
+      // Nothing under panos/ at all, but two URLs issued today.
+      vi.stubGlobal('fetch', storage([issued(2), issued(3)]));
+      expect((await call(validBody, daily(2))).status).toBe(403);
+    });
+
+    it('every replace counts, even of the same pano', async () => {
+      const fetchMock = storage([...pano('a', MiB), issued(1)]);
+      vi.stubGlobal('fetch', fetchMock);
+      expect((await call({ ...validBody, panoId: 'a' }, daily(2))).status).toBe(200);
+      const again = storage([...pano('a', MiB), issued(1), issued(0)]);
+      vi.stubGlobal('fetch', again);
+      const r = await call({ ...validBody, panoId: 'a' }, daily(2));
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'daily upload limit reached' });
+    });
+
+    it('entries older than 24 hours do not count, and are deleted', async () => {
+      const old = [issued(25), issued(48)];
+      const fetchMock = storage([issued(1), ...old]);
+      vi.stubGlobal('fetch', fetchMock);
+      expect((await call(validBody, daily(2))).status).toBe(200);
+      expect(calls(fetchMock, 'DELETE').sort()).toEqual(
+        old.map((o) => `/${env.R2_BUCKET}/${o.key}`).sort(),
+      );
+    });
+
+    it('a malformed entry does not count, and is deleted', async () => {
+      const fetchMock = storage([{ key: `${logPrefix}junk`, size: 0 }]);
+      vi.stubGlobal('fetch', fetchMock);
+      expect((await call(validBody, daily(1))).status).toBe(200);
+      expect(calls(fetchMock, 'DELETE')).toEqual([`/${env.R2_BUCKET}/${logPrefix}junk`]);
+    });
+
+    it('prunes at most UPLOAD_LOG_PRUNE_MAX entries per request', async () => {
+      const fetchMock = storage(Array.from({ length: 60 }, () => issued(30)));
+      vi.stubGlobal('fetch', fetchMock);
+      expect((await call(validBody, daily(1))).status).toBe(200);
+      expect(calls(fetchMock, 'DELETE')).toHaveLength(50);
+    });
+
+    it('a failed prune still answers', async () => {
+      const base = storage([issued(30)]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: Request) =>
+          input.method === 'DELETE' ? new Response(null, { status: 500 }) : base(input),
+        ),
+      );
+      expect((await call(validBody, daily(1))).status).toBe(200);
+    });
+
+    it('fails closed with 502, and no URL, when the log entry cannot be written', async () => {
+      const base = storage([]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: Request) =>
+          input.method === 'PUT' ? new Response(null, { status: 403 }) : base(input),
+        ),
+      );
+      const r = await call(validBody, daily(5));
+      expect(r.status).toBe(502);
+      expect(await r.json()).not.toHaveProperty('url');
+    });
+
+    it('fails closed with 502 when the log listing errors', async () => {
+      const base = storage([]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: Request) =>
+          isList(input) ? new Response('nope', { status: 500 }) : base(input),
+        ),
+      );
+      expect((await call(validBody, daily(5))).status).toBe(502);
+    });
+
+    it('unset: no log listing and no log entry', async () => {
+      const fetchMock = storage([]);
+      vi.stubGlobal('fetch', fetchMock);
+      expect((await call(validBody, only({}))).status).toBe(200);
+      expect(lists(fetchMock)).toHaveLength(0);
+      expect(calls(fetchMock, 'PUT')).toEqual([]);
+    });
+
+    it('pano and storage limits are reported before the daily one', async () => {
+      vi.stubGlobal('fetch', storage([...pano('a', MiB), issued(1)]));
+      const r = await call(
+        validBody,
+        only({ MAX_PANOS_PER_OWNER: '1', MAX_UPLOADS_PER_OWNER_PER_DAY: '1' }),
+      );
+      expect(await r.json()).toEqual({ error: 'pano limit reached' });
+    });
+
+    it('the limits from wrangler.jsonc apply with no override', async () => {
+      vi.stubGlobal('fetch', storage(Array.from({ length: 50 }, () => issued(1))));
+      const r = await call(validBody, {});
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'daily upload limit reached' });
+    });
   });
 
   it('the deletion 410 still comes before any quota listing', async () => {
@@ -490,7 +718,7 @@ describe('upload-url owner quotas', () => {
         : new Response(null, { status: 404 }),
     );
     vi.stubGlobal('fetch', fetchMock);
-    expect((await call(validBody, { MAX_PANOS_PER_OWNER: '0' })).status).toBe(410);
+    expect((await call(validBody, only({ MAX_PANOS_PER_OWNER: '0' }))).status).toBe(410);
     expect(lists(fetchMock as Mock)).toHaveLength(0);
   });
 });

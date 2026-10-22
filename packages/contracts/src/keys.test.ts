@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   accountDeletionKey,
   accountDisabledKey,
+  uploadLogKey,
+  uploadLogTime,
+  userUploadLogPrefix,
   configKey,
   deletingKey,
   originalKey,
@@ -263,5 +266,36 @@ describe('keys', () => {
         /panoId segment/,
       );
     });
+  });
+});
+
+describe('upload log keys', () => {
+  const at = new Date('2026-10-22T09:05:03.042Z');
+
+  it('sits under upload-log/<owner>/, outside panos/, owner encoded', () => {
+    expect(userUploadLogPrefix('auth0|abc')).toBe(`upload-log/${encodeId('auth0|abc')}/`);
+    expect(uploadLogKey('auth0|abc', at, 'p1')).toBe(
+      `upload-log/${encodeId('auth0|abc')}/20261022T090503042Z-p1`,
+    );
+  });
+
+  it('has no character the S3 and binding paths could spell differently', () => {
+    expect(uploadLogKey('auth0|abc', at, 'p1')).toMatch(/^[A-Za-z0-9_/-]+$/);
+  });
+
+  it('reads the issue time back from the name', () => {
+    const key = uploadLogKey('auth0|abc', at, 'a-uuid-like-id');
+    expect(uploadLogTime(key.slice(userUploadLogPrefix('auth0|abc').length))).toBe(at.getTime());
+  });
+
+  it.each(['', 'nonsense', '2026-10-22T09:05:03.042Z-p1', '20261022T0905Z-p1'])(
+    'a malformed name (%j) has no time',
+    (name) => {
+      expect(uploadLogTime(name)).toBeNaN();
+    },
+  );
+
+  it('refuses a panoId outside PANO_PATTERN', () => {
+    expect(() => uploadLogKey('auth0|abc', at, 'a/b')).toThrow();
   });
 });

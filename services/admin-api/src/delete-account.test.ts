@@ -11,6 +11,7 @@ import {
   storedSlugKey,
   tileVersionPrefix,
   tourKey,
+  uploadLogKey,
   type AccountDeletionRecord,
 } from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
@@ -83,7 +84,10 @@ const seedAccount = async (sub: string, tag: string) => {
   await put(manifestKey(panoId), '{}');
   await put(`${tileVersionPrefix(panoId, 'v1')}0/0_0.webp`, 'tile');
   await view(tourId);
-  return { tourId, panoId, slug, alias };
+  // upload-api's log entry for the URL that uploaded the pano.
+  const uploadLog = uploadLogKey(sub, new Date('2026-10-01T00:00:00.000Z'), panoId);
+  await put(uploadLog);
+  return { tourId, panoId, slug, alias, uploadLog };
 };
 
 const everyKey = (sub: string, s: Awaited<ReturnType<typeof seedAccount>>) => [
@@ -96,6 +100,7 @@ const everyKey = (sub: string, s: Awaited<ReturnType<typeof seedAccount>>) => [
   configKey(sub, s.panoId),
   manifestKey(s.panoId),
   `${tileVersionPrefix(s.panoId, 'v1')}0/0_0.webp`,
+  s.uploadLog,
 ];
 
 const marker = async (sub: string) =>
@@ -239,6 +244,13 @@ describe('sweepAccountDeletions', () => {
 
     await sweepAccountDeletions(depsWith(), new Date('2026-09-02T00:00:00.000Z'));
     expect(await has(originalKey(sub, 'acct-sweep-late'))).toBe(false);
+
+    // A presign issued just before the marker logs an entry after the delete: the
+    // sweep removes that too.
+    const lateLog = uploadLogKey(sub, new Date('2026-09-01T00:00:01.000Z'), 'acct-sweep-log');
+    await put(lateLog);
+    await sweepAccountDeletions(depsWith(), new Date('2026-09-03T00:00:00.000Z'));
+    expect(await has(lateLog)).toBe(false);
     expect((await marker(sub))?.completedAt).toBe(done.toISOString());
 
     const expiry = new Date(done.getTime() + ACCOUNT_MARKER_DAYS * 24 * 60 * 60 * 1000);
@@ -393,7 +405,8 @@ describe('sweep: retention, budget and order', () => {
       new Date('2026-10-20T00:00:00.000Z'),
     );
     expect(listed.every((o) => o.limit === 1 && o.delimiter === undefined)).toBe(true);
-    expect(listed).toHaveLength(2);
+    // tours/, panos/ and upload-log/.
+    expect(listed).toHaveLength(3);
     expect(await marker(sub)).not.toBeNull();
   });
 
