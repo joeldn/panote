@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 
 // Copy rule (docs/design/NOTES.md): free, not open source; no export/download promises.
 const BANNED = /open[\s-]*source|\bmit\b|github|export|download/i;
+// Product limits are real (caps per scene, tour and account): say "generous", never "unlimited".
+const LIMITLESS = /unlimited|no[\s-]+limits?\b|limitless|no counting/i;
 const SRC = new URL('.', import.meta.url).pathname;
 
 function sourceFiles(dir: string): string[] {
@@ -45,9 +47,22 @@ describe('copy rule', () => {
     for (const bad of ['Open source', 'MIT licence', 'on GitHub', 'Export tours', 'download'])
       expect(BANNED.test(bad)).toBe(true);
     expect(BANNED.test('No limits, submit')).toBe(false);
+    for (const bad of ['Unlimited tours', 'free with no limits', 'No-limit plan', 'no counting'])
+      expect(LIMITLESS.test(bad)).toBe(true);
+    for (const ok of ['Generous limits', 'Are there resolution limits?'])
+      expect(LIMITLESS.test(ok)).toBe(false);
   });
 
   it.each(files.map((f) => [relative(SRC, f), f]))('%s has no banned copy', (_, file) => {
     expect(copyIn(file).filter((text) => BANNED.test(text))).toEqual([]);
+  });
+
+  it.each(files.map((f) => [relative(SRC, f), f]))('%s promises no unlimited use', (_, file) => {
+    expect(copyIn(file).filter((text) => LIMITLESS.test(text))).toEqual([]);
+  });
+
+  it('index.html promises no unlimited use', () => {
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    expect(html.match(new RegExp(LIMITLESS.source, 'gi'))).toBeNull();
   });
 });
