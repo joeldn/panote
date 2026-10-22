@@ -886,20 +886,54 @@ notification on overwrite the same as on first create, so nothing else has to be
 hand.
 
 After a change to the tiler's output itself (tile layout, encoding, pyramid shape), bump
-`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then
-re-trigger each pano by re-putting its original (verify these flags against
-`wrangler r2 object --help` before running):
+`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then re-tile
+with `services/admin-api/scripts/retile.ts`. It doesn't touch the originals: it HEADs each one and
+puts the same message on the upload queue (`pano-uploads-dev` for `pano-content-dev`,
+`pano-uploads` for `pano-content`) that R2's object-create notification would have, with the
+original's current size and ETag, so `tiler-consumer` handles it exactly like a fresh upload. It
+runs like the other operator scripts (Node 24 straight from TypeScript, a built workspace, the R2
+S3 credentials, and `--allow-bucket` for anything but a `-dev` bucket). It only lists what it
+would queue unless you pass `--apply`, which also needs `CF_QUEUES_TOKEN`: a Cloudflare API token
+with Queues edit permission on the account (it lists the queues to find the id, then sends batches
+of 100).
 
 ```bash
-pnpm --filter @service/admin-api exec wrangler r2 object get pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
-pnpm --filter @service/admin-api exec wrangler r2 object put pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+# What it would queue, sending nothing
+node services/admin-api/scripts/retile.ts --all
+node services/admin-api/scripts/retile.ts --pano <pano-uuid> --pano <pano-uuid>
+# Queue them
+CF_QUEUES_TOKEN=... node services/admin-api/scripts/retile.ts --all --apply
 ```
 
-Both need `--remote`, for the same reason as the end-to-end test above. Re-putting identical
-bytes **without** a version bump yields the same ETag, so the derived version string
-(`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
-rewriting identical keys rather than creating a new one. Old version dirs are left in place after
-a re-tile; cleaning them up is deferred to Wave 6.
+Finding the originals: the owner is only in the key, so the script lists every object under
+`panos/` (also with `--pano`). A pano with a `deleting` tombstone is skipped, and so is a named pano
+with no original. Every message starts a container: the queue's `max_concurrency` (5) paces them,
+see "Tiling time and the queue limit" below for what that means for a large `--all`.
+
+Re-tiling identical bytes **without** a version bump yields the same ETag, so the derived version
+string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
+rewriting identical keys rather than creating a new one.
+
+### Old version dirs
+
+Every successful re-tile leaves the previous version's tiles behind under `tiles/<panoId>/`. Once a
+job's manifest swap is confirmed (its post-PUT HEAD still sees the ETag it tiled), it records every
+other version dir it finds there at `tile-gc/<panoId>/<version>.json` (`{ v, originalKey,
+tilerVersion, supersededAt }`, create-only so the first timestamp sticks). `admin-api`'s daily cron
+(`17 3 * * *`, the same one as the slug-alias and account sweeps) deletes a recorded dir once the
+record is over 24 hours old, so a version goes 24-48 hours after it was superseded. Before deleting
+it re-reads the manifest: the version it names is never deleted (the record just goes), and a dir
+the pano's current original would tile into again (same ETag, same tiler version as the job that
+superseded it) is kept and checked again the next day, since a job may be writing there. A pano
+whose original is gone has been deleted; its record and dir just go. At most 50 records per run;
+the rest wait a day. Nothing is purged: no manifest points at those URLs any more, and edge copies
+age out. Dirs left over from before this existed are recorded the next time that pano re-tiles,
+so a `retile.ts --all` after deploying this clears them too, a day later.
+
+The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
+fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
+anyway; uncached ones would 404.
 
 ## Link-preview image (og.jpg) and its backfill
 
@@ -1322,6 +1356,15 @@ Setup, once per environment: generate a long random token (`openssl rand -hex 32
   original, and a key `deriveUploadTarget` rejects. A charset-invalid key (bad owner or panoId) now
   gets no marker at all — `tileFailedKeyFromOriginalKey` validates both segments and the write is
   skipped with a log line, rather than writing a marker keyed on a junk panoId.
+- **Oversized originals are deleted.** Once the `oversize` marker is written, the consumer
+  deletes the original (`deleteOversizedOriginal` in `services/tiler-consumer/src/failure-marker.ts`),
+  after re-HEADing it to make sure it's still the one the event named; only that one key goes, the
+  marker stays. `admin-api` reads an `oversize` marker with no original as `tiling: 'failed'`, so the
+  upload chip and editor still show the failed state. It's kept when the pano already has a
+  manifest (an oversized replace): the old tiles are still live and the original is what proves
+  ownership of them. The web app rejects a file over 150 MB before upload, so this only happens to
+  an upload that bypassed it (content-length isn't signed); the chip shows the generic "couldn't
+  process this image" copy, since no failure reason reaches it.
 - **Resurrection guard (review fix, 2026-09-26).** Before writing, the consumer HEADs the original
   at `bucket.head(<notification key>)`; the write is skipped (logged) if the original no longer
   exists, or if its etag differs from the R2 event's `object.eTag` (a newer upload already
@@ -1639,6 +1682,10 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
   can't list bucket objects without S3 credentials.
+- **Originals that never tiled aren't swept.** An original whose tiling dead-lettered (or that was
+  abandoned before any config referenced it) stays until the owner deletes the pano. Sweeping them
+  safely needs a scan of every owner's `panos/` prefix and a check that none of that owner's tours
+  references the pano; that's a follow-up, not a daily job over the whole bucket.
 - **The DLQ alert email is throttled, not batched on a timer.** At most one email per queue per
   30 minutes; a burst sends the first email at once and counts the rest into the next one (see
   "Tiling failure marker and alerting"). If no failure follows the burst, the held count is never
