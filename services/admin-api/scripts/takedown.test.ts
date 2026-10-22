@@ -7,6 +7,7 @@ import {
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
   originalKey,
+  planKey,
   publishKey,
   pubTourKey,
   storedSlugKey,
@@ -523,6 +524,17 @@ describe('quarantine', () => {
       originalKey(SUB, 'p-2'),
       configKey(SUB, 'p-2'),
     ]);
+  });
+
+  it('collects the floor-plan images the tour and its bundle name', async () => {
+    const plan = (id: string) => ({ id, type: 'image/webp', width: 10, height: 10 });
+    const { store } = memoryStore({
+      [tourKey(SUB, 'tour-p')]: JSON.stringify({ tourId: 'tour-p', scenes: [], plan: plan('new') }),
+      [pubTourKey('tour-p')]: JSON.stringify({ scenes: [], plan: plan('old') }),
+    });
+    const { keys } = await tourContent(store, SUB, 'tour-p');
+    expect(keys).toContain(planKey('tour-p', 'new', 'image/webp'));
+    expect(keys).toContain(planKey('tour-p', 'old', 'image/webp'));
   });
 
   it('copies each object byte for byte under quarantine/<caseId>/, keeping its content type', async () => {

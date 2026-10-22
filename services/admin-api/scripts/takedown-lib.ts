@@ -13,6 +13,7 @@ import {
   OperatorTakedownOkSchema,
   originalKey,
   PANO_PATTERN,
+  planKey,
   PublishRecordSchema,
   publishKey,
   pubTourKey,
@@ -22,6 +23,7 @@ import {
   tourKey,
   tourOwnerKey,
   TourOwnerRecordSchema,
+  TourPlanSchema,
   userPanosPrefix,
   userToursPrefix,
   type AccountDisabledRecord,
@@ -424,6 +426,13 @@ const scenePanoIds = (doc: unknown): string[] => {
     .filter((id): id is string => typeof id === 'string' && PANO_PATTERN.test(id));
 };
 
+// The floor-plan image a tour.json or a public bundle names, if any (both carry `plan`).
+const planKeys = (tourId: string, ...docs: unknown[]): string[] =>
+  docs.flatMap((doc) => {
+    const plan = TourPlanSchema.safeParse((doc as { plan?: unknown } | null)?.plan);
+    return plan.success ? [planKey(tourId, plan.data.id, plan.data.type)] : [];
+  });
+
 const panoKeys = (sub: string, panoIds: Iterable<string>): string[] =>
   [...panoIds].flatMap((p) => [originalKey(sub, p), configKey(sub, p)]);
 
@@ -435,7 +444,7 @@ export interface TourContent {
 
 /**
  * What a tour is made of: its tour.json, publish record, public bundle, share links,
- * and each scene's original and config (scenes from the tour and from the bundle, which
+ * floor-plan image, and each scene's original and config (scenes from the tour and from the bundle, which
  * may still show one since removed from the tour).
  */
 export async function tourContent(
@@ -458,6 +467,7 @@ export async function tourContent(
     publishKey(sub, tourId),
     pubTourKey(tourId),
     ...slugs.filter((k): k is string => k !== null),
+    ...planKeys(tourId, tour, bundle),
     ...panoKeys(sub, panoIds),
   ];
   return { keys: [...new Set(keys)], panoIds };

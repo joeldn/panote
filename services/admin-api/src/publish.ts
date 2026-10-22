@@ -132,6 +132,7 @@ export const buildBundle = (
     ...(tour.languages && { languages: tour.languages }),
     ...(i18n && { i18n }),
     startPanoId,
+    ...(tour.plan && { plan: tour.plan }),
     scenes: tour.scenes.map((s) => ({
       panoId: s.panoId,
       ...(s.mapX !== undefined ? { mapX: s.mapX } : {}),

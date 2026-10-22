@@ -480,6 +480,29 @@ describe('tour description in the published bundle', () => {
     expect(await bundleOf(tourId)).not.toHaveProperty('description');
   });
 
+  it('publishes the floor plan: scene positions and the plan image', async () => {
+    await readyPano('plan-pub-p1');
+    await readyPano('plan-pub-p2');
+    const tourId = await createTour('Planned Tour', ['plan-pub-p1', 'plan-pub-p2']);
+    const plan = { id: 'plan-1', type: 'image/webp', width: 1200, height: 800 };
+    await editTour(tourId, {
+      title: 'Planned Tour',
+      plan,
+      scenes: [{ panoId: 'plan-pub-p1', mapX: 0.25, mapY: 0.5 }, { panoId: 'plan-pub-p2' }],
+    });
+    expect((await publish(tourId)).status).toBe(200);
+    const bundle = await bundleOf(tourId);
+    expect(bundle.plan).toEqual(plan);
+    expect(bundle.scenes.map(({ panoId, mapX, mapY }) => ({ panoId, mapX, mapY }))).toEqual([
+      { panoId: 'plan-pub-p1', mapX: 0.25, mapY: 0.5 },
+      { panoId: 'plan-pub-p2', mapX: undefined, mapY: undefined },
+    ]);
+    // Removing it publishes no plan.
+    await editTour(tourId, { title: 'Planned Tour', scenes: [{ panoId: 'plan-pub-p1' }] });
+    expect((await publish(tourId)).status).toBe(200);
+    expect(await bundleOf(tourId)).not.toHaveProperty('plan');
+  });
+
   it('leaves an empty description out of the bundle', async () => {
     await readyPano('desc-empty-p1');
     const tourId = await createTour('Blank Description', ['desc-empty-p1']);

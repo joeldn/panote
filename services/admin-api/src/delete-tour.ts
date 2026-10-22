@@ -9,6 +9,7 @@ import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
 import { forgetTourOwner } from './operator.js';
+import { deletePlans } from './plans.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
 
@@ -46,6 +47,8 @@ export const deleteTour = async (
   const files = await unpublishTour();
   // Any publish this lets through is caught by the second unpublish (or 404s on no tour.json).
   await bucket.delete(sharingStoppedKey(sub, tourId));
+  // Before tour.json, so a retry after a crash still finds the tour and gets here again.
+  files.push(...(await deletePlans(bucket, tourId)));
   const prefixes: string[] = [];
   const result = (): CdnPurge => mergePurges({ prefixes, files });
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
