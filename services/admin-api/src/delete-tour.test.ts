@@ -153,12 +153,14 @@ describe('deleteTour: two tours sharing a pano, deleted concurrently (review fix
     expect(purge.files).toEqual([mine]);
   });
 
-  it('still deletes plan images when tour.json is already gone (a retried delete)', async () => {
+  it('a caller without the tour deletes no plan images', async () => {
     const bucket = new FakeBucket();
-    const left = planKey('tour-i', 'plan-1', 'image/jpeg');
-    bucket.seed(left, 'img');
+    // Someone else's tour: its plan images are under the owner-free pub/plans/ prefix.
+    bucket.seed(tourKey('auth0|someone-else', 'tour-i'), tourDoc('tour-i', []));
+    const theirs = planKey('tour-i', 'plan-1', 'image/jpeg');
+    bucket.seed(theirs, 'img');
     const purge = await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-i', async () => []);
-    expect(await bucket.head(left)).toBeNull();
-    expect(purge.files).toEqual([left]);
+    expect(await bucket.head(theirs)).not.toBeNull();
+    expect(purge.files).toEqual([]);
   });
 });
