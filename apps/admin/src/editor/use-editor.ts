@@ -427,6 +427,26 @@ export function useEditor(
 
   const hasConflict = () => Object.values(failuresRef.current).some((f) => f?.kind === 'conflict');
 
+  /**
+   * The tour's 412 came only from scenes an upload appended since this editor last
+   * synced (several files uploading in turn make that likely): take them into the draft.
+   * False when the tour changed some other way, which stays a real conflict.
+   */
+  const foldAppends = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await api.getTourWithConfigs(tourId);
+      const now = docsRef.current;
+      if (res.status !== 'ok' || !now) return false;
+      const merged = mergeAppendedScenes(now.tour, { etag: res.data.etag, tour: res.data.tour });
+      if (!merged) return false;
+      dispatch({ type: 'add-scenes', scenes: fromServer(res.data).scenes });
+      dispatch({ type: 'replace-doc', key: 'tour', doc: merged });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [api, tourId, dispatch]);
+
   /** `resolving` is only for the conflict banner's overwrite; otherwise a conflict blocks saving. */
   const save = useCallback(
     async ({ resolving = false } = {}) => {
@@ -452,6 +472,14 @@ export function useEditor(
         await publishTail.current;
         const out = await runSave(api, tourId, plan);
         dispatch({ type: 'saved', ...(out.tour && { tour: out.tour }), configs: out.configs });
+        // A scene appended under this save: fold it in and send the tour once more.
+        if (out.failures.tour?.kind === 'conflict' && (await foldAppends())) {
+          const again = planSave(docsRef.current!);
+          const retry = again.tour ? await runSave(api, tourId, { ...again, configs: [] }) : null;
+          if (retry?.tour) dispatch({ type: 'saved', tour: retry.tour, configs: {} });
+          delete out.failures.tour;
+          if (retry?.failures.tour) out.failures.tour = retry.failures.tour;
+        }
         setFailures(out.failures);
         if (Object.keys(out.failures).length > 0) return;
         setSavedAt(new Date());
@@ -468,7 +496,18 @@ export function useEditor(
         }
       }
     },
-    [api, tourId, user, storage, dispatch, dismiss, setFailures, republishWith, setAwaiting],
+    [
+      api,
+      tourId,
+      user,
+      storage,
+      dispatch,
+      dismiss,
+      setFailures,
+      republishWith,
+      setAwaiting,
+      foldAppends,
+    ],
   );
 
   /**

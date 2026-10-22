@@ -657,8 +657,8 @@ works.
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
 for tour insights (see "Insights (unit B5)" below), the optional `CF_PURGE_TOKEN` (see "CDN
-purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" below; unset, the
-operator route answers `404`). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
+purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" and "Backups" below;
+unset, the operator routes answer `404`). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
 interactive `secret put` if scripting this. **Status: set for dev, outstanding for production** —
 `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
 environments; production has neither yet. `CF_ANALYTICS_TOKEN` and `CF_PURGE_TOKEN` are set on
@@ -1267,7 +1267,7 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
 
 1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
-   under `/api/admin/*`, except the account route itself and the operator route) and `upload-api`'s
+   under `/api/admin/*`, except the account route itself and the operator routes) and `upload-api`'s
    `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing
    closed), so nothing can recreate what the delete is removing. Reads still answer, with whatever
    is left. `accounts/` is owner-scoped like `panos/` and `tours/`: the CDN's WAF rule (above)
@@ -1350,6 +1350,9 @@ name.
   daily alias sweep removes them when they expire.
 - **Copies already in a browser cache**, and edge copies if the purge isn't configured (see
   "Deleted panos").
+- **The nightly backup's copies** of the account's tours, configs and markers (see "Backups"),
+  for up to 31 days: the delete never touches `backup/`, and each dated set goes when it ages
+  out. The privacy policy states this.
 
 ### Operator: the account-delete script
 
@@ -1384,6 +1387,141 @@ trailing whitespace is refused. The next daily sweep (03:17 UTC) then does the w
 
 For a deletion requested by email: `--sub` to mark it, `--status` the next day, then delete the
 Auth0 user as above and reply to the request.
+
+---
+
+## Backups
+
+There is one bucket per environment and R2 keeps no versions, so a bug or a bad script that
+deletes a prefix would otherwise be final. `admin-api` copies the small JSON documents that
+define user content to a private, dated prefix in the **same** bucket every day
+(`services/admin-api/src/backup.ts`).
+
+**What's in a set.** `BACKUP_SOURCES` in `@internal/contracts` (`keys.ts`): every `tours/<owner>/<tourId>/*.json`
+(`tour.json`, `publish.json`, `sharing-stopped.json`), each pano's `panos/<owner>/<panoId>/config.json`,
+`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, and the
+account markers `accounts/<owner>/{deletion,disabled}.json`. Not in it: originals (large, and the
+only copy of the photo, so a lost original is still lost), tiles and manifests (rebuilt from the
+original by a re-tile, "Re-tiling" above), and the derived or operational prefixes `tile-gc/`,
+`upload-log/`, `quarantine/` and `ops/`. Each copy keeps the object's content type, cache control
+and custom metadata (titles, visibility, an alias's expiry), since the app reads those.
+
+**Layout.** `backup/<YYYY-MM-DD>/<original key>`, with `backup/<YYYY-MM-DD>/complete.json`
+(`{ v, date, startedAt, completedAt, objects, bytes, failed, skipped, runs }`) once the set is
+whole, and `backup/progress.json` while one is being written. A set without `complete.json` is
+partial. `backup/` is private: the CDN's WAF rule only lets `/tiles/`, `/pub/` and `/slugs/`
+through (fail-closed), and the post-provision check lists `backup/x`. Nothing but the backup run
+and the operator restore route reads or writes it: account deletion, takedown, the tour and pano
+deletes and the daily sweeps only ever delete their own prefixes (a test runs all of them over a
+backed-up account and checks every copy is still there). So **a backup holds deleted data**,
+including a deleted account's, until its set ages out, at most 31 days.
+
+**Schedule and retention.** Its own Cron Trigger, `*/15 * * * *` (`BACKUP_CRON`, in both env
+blocks of `wrangler.jsonc` beside the daily `17 3 * * *`), so it gets an invocation, and a
+subrequest budget, of its own. The first run after 00:00 UTC starts that day's set. Each run makes
+at most `BACKUP_RUN_BUDGET` (900) R2 operations, records how far it got in `progress.json`, and
+the next run carries on from there; a set that runs past midnight is finished before the next
+day's starts, so sets are never left half-done by the calendar. Once a day's set is complete, a
+run costs one GET and one HEAD. A run saves its progress every 100 objects and after every
+listing page, so one that dies part way loses little, and it holds a lease (`lockedUntil` in
+`progress.json`, taken with a conditional PUT) while it writes: a run that finds a live lease does
+nothing, and a lease (20 minutes) outlasts any run, as Cloudflare stops a Cron Trigger invocation
+after 15 minutes.
+The run that completes a set deletes every set more than `BACKUP_RETENTION_DAYS` (30) days older
+than today, but never the newest **good** set (complete, no failed copy, at least one object),
+however old, and nothing at all if there is no good set; a prune cut short by the budget finishes
+after the next set. A copy that fails is counted (`failed`), left
+out and tried again in the next day's set; an object over 8 MiB is counted as `skipped` and never
+copied (nothing the app writes is close).
+
+**Logs** (`admin-api` observability), each starting `[backup]`, never with a key (the owner segment
+is reversible): `set <date>: N object(s) copied this run, M so far; the next run carries on` while
+a set is being written, `set <date> complete: …` when it's whole (an error, not a warning, if any
+object failed or was skipped), and `set <date> is still being written; the backup is falling
+behind` when a set is more than a day old: that is the signal for the scaling step below.
+
+**Limits and when to move it.** A copy is a GET and a PUT (2 operations); listing is one per
+1,000 keys under a source prefix (all of `panos/` is listed, originals included, to find the
+configs); the lease is one per run, and a progress write one per 100 objects or page. So a run
+copies about 440 objects, and at 96 runs a day the backup keeps up with roughly **40,000 backed-up objects** in all. One account at today's
+caps (500 panos, 200 tours, each published with a slug and up to 5 aliases, on Explore) is about
+500 configs + 400 tour records + 2,000 public keys, about 3,000 objects or 6,000 operations: 7
+runs. A typical account is a few dozen objects. Past ~40,000 objects (the "falling behind" log, or
+a `complete.json` whose `runs` passes 90), move the copy off the cron: have the cron enqueue one
+message per source page on a Queue, or start a Workflow with a step per page, so each batch gets
+its own invocation and budget. Raising `BACKUP_RUN_BUDGET` is the stopgap, as long as it stays
+under the Workers per-invocation subrequest limit for the account's plan (check the current
+figure in Cloudflare's Workers limits docs first); CPU is not the constraint (copying JSON is
+milliseconds).
+
+**Cost.** Per set, one Class A operation (the PUT) and one Class B (the GET) per object, plus
+the listing; storage is 31 copies of the JSON. Pre-launch that is well inside R2's free tier.
+At 40,000 objects it is about 1.2 million Class A operations a month (about $1 past the free
+million, shared with everything else) and 31 × the JSON's total size in storage.
+
+### Restoring
+
+`services/admin-api/scripts/restore-backup.ts` restores one tour, one owner, or everything, from
+a chosen day's set. It plans over the R2 S3 API (the same `R2_*` variables as the other operator
+scripts) and writes through `admin-api`'s operator route `POST /api/admin/operator/restore`
+(`OPERATOR_TOKEN`, the takedown route's secret), because only the native binding puts an object's
+custom metadata back exactly. Like the others it is a dry run unless `--apply`, and a bucket that
+doesn't end in `-dev` has to be named again with `--allow-bucket`.
+
+```bash
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+export OPERATOR_TOKEN=...   # only for --apply
+cd services/admin-api
+# The sets there are, and whether each is complete
+node scripts/restore-backup.ts --list
+# One tour (its owner is found in the set; --sub <auth0 user id> to name it)
+node scripts/restore-backup.ts --date 2026-10-21 --tour <tourId>
+node scripts/restore-backup.ts --date 2026-10-21 --tour <tourId> --apply
+# Everything one owner had, by Auth0 user id
+node scripts/restore-backup.ts --date 2026-10-21 --sub 'google-oauth2|1234' --apply
+# The whole bucket: after an incident, from the last set before it
+node scripts/restore-backup.ts --date 2026-10-21 --all --apply
+```
+
+- A tour is its `tours/<owner>/<tourId>/` records, the configs of the panos its tour and bundle
+  show, its bundle, its owner pointer, its Explore pointer, entry and hidden marker, and the share
+  links its backed-up publish record names that point at it. An owner is every tour and config
+  under their prefix, with those tours' public keys.
+- **Create-only by default**: a key that exists now is left as it is and only missing keys come
+  back. `--overwrite` replaces existing keys with the backed-up copy too (an owner's edits since
+  that day are lost). The dry run lists every key as `restore`, `replace` or `keep (exists)`.
+- **It brings back whatever was deleted after that date**, deliberate deletes and takedowns
+  included, so use the narrowest scope that covers the damage, and read the dry run of an
+  `--all` before applying it.
+- It refuses an owner whose account is marked for deletion now (the daily sweep would delete the
+  restore again); `--all` leaves such owners out, with their tours' public keys. The route checks
+  each key too: a public, share-link, Explore or owner-pointer key is matched to its owner through
+  the tour's `tour-owners/` pointer (the set's, or else the live one), and refused if that owner is
+  marked for deletion or can't be found (a tour older than the pointers: its owner re-publishing
+  writes them again). Remove the marker first only if the deletion itself was the mistake. The
+  account markers are never restored; `takedown.ts --disable-owner` blocks an owner again if the
+  set shows they were disabled.
+- A key whose write fails (an R2 error, or a request that got no answer) is listed as `FAILED` and
+  the script exits 1; the rest are restored. Run the same command again: create-only keeps what
+  already came back.
+- Restored bundles and share links are purged from the CDN (as an unpublish is), and Explore
+  re-checks each entry, so a restored tour shows up within a minute. The writes bypass the tour's
+  `TourPublisher`, so don't restore a tour its owner is editing at that moment.
+- It doesn't bring back originals or tiles. If the originals are still there but tiles or
+  manifests are gone, re-tile them ("Re-tiling"); a config whose original is gone shows as a
+  missing pano in the editor.
+
+**TODO (Joel): a second copy outside this bucket.** These backups live in the same bucket, under
+the same account and the same API tokens, so they protect only against mistakes in code and
+scripts: a bug or a bad run that deletes or overwrites content. They do **not** protect against
+the bucket being deleted, a leaked R2 or account token (anyone who can delete `tours/` can delete
+`backup/`), or losing the Cloudflare account. When that matters, add a second bucket, ideally in a
+separate Cloudflare account with its own tokens (or another provider), and copy each completed set
+there: a bucket binding to it in `admin-api` (repeated under both env blocks, and only after the
+bucket exists, or the deploy fails), or a scheduled copy over the S3 API with that account's own
+token. A bucket lock (retention) rule on the second bucket would also stop its copies being
+deleted early, by anyone. The separation of credentials is what protects them; the same-bucket
+sets stay as the quick path for everyday mistakes.
 
 ---
 
@@ -1466,7 +1604,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | Worker | Binding | Route | Key | Limit | namespace_id dev / production |
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
-| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator route | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
+| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator routes (takedown, restore) | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
@@ -2195,7 +2333,7 @@ the account has the resources the config names.
    `wrangler r2 bucket domain add pano-content --domain cdn.panote.io --zone-id <panote.io zone id>`).
    Only once step 4's rule is enabled.
    Verify, straight away, while the bucket is still empty:
-   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/` and
+   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/backup/x`, `/` and
      `/tiles/../panos/x` (that one with `curl --path-as-is`, or curl collapses the `..` itself):
      all `403`.
    - `curl -sI https://cdn.panote.io/tiles/x`: `404` from R2, not `403`.
@@ -2302,7 +2440,7 @@ Run after step 12, before telling anyone the site exists. The first group is wha
 
 ```bash
 # Private prefixes stay private (step 4): every line 403
-for p in panos/x tours/x accounts/x ops/x explore/index/x '' tiles/../panos/x; do
+for p in panos/x tours/x accounts/x ops/x explore/index/x backup/x '' tiles/../panos/x; do
   curl -sI --path-as-is -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
 # Public prefixes pass through to R2: 404 for a key that doesn't exist, not 403
 curl -sI -o /dev/null -w '%{http_code}\n' https://cdn.panote.io/tiles/x/manifest.json

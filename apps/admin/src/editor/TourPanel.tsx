@@ -5,7 +5,7 @@ import { Link } from 'react-router';
 import type { PendingUpload } from '../upload/upload-context.js';
 import { findLink, yawDegrees, type EditorDocs } from './model.js';
 import { pendingLine, pendingPct, type SceneStatus } from './scene-status.js';
-import { addPanoPath, replaceImagePath } from './upload-links.js';
+import { replaceImagePath } from './upload-links.js';
 
 // Each nudge turns a connection by this much (design: "nudge ±degrees").
 export const NUDGE_DEG = 5;
@@ -15,7 +15,7 @@ export interface TourPanelProps {
   docs: EditorDocs;
   currentId: string | null;
   startId: string | null;
-  /** Unsaved edits: adding a pano leaves the editor, so it waits for a save. */
+  /** Unsaved edits: adding from the library waits for a save. */
   dirty: boolean;
   /** Uploads into this tour that have no scene yet, oldest first. */
   pending?: PendingUpload[];
@@ -32,6 +32,11 @@ export interface TourPanelProps {
   onDisconnect: (to: string) => void;
   /** Opens the library picker: add a pano that's already uploaded. */
   onAddFromLibrary?: () => void;
+  /**
+   * Opens the upload picker over the editor. Unsaved edits stay: each upload appends its
+   * scene on the server and the editor folds it into the draft (useEditor's syncAppended).
+   */
+  onAddPano: () => void;
 }
 
 const STATUS_LABEL: Record<SceneStatus, string> = {
@@ -61,6 +66,7 @@ export function TourPanel({
   onNudge,
   onDisconnect,
   onAddFromLibrary,
+  onAddPano,
 }: TourPanelProps) {
   const scenes = docs.tour.current.scenes;
   const current = currentId ? docs.scenes[currentId] : undefined;
@@ -87,25 +93,16 @@ export function TourPanel({
               From library
             </Button>
           )}
-          {dirty ? (
-            <Button
-              variant="accent"
-              size="sm"
-              pill
-              icon="fa-solid fa-plus"
-              disabled
-              title="Save your changes first"
-            >
-              Add pano
-            </Button>
-          ) : (
-            <Link
-              className="pn-btn pn-btn--accent pn-btn--sm pn-btn--pill"
-              to={addPanoPath(docs.tourId)}
-            >
-              <i className="fa-solid fa-plus" aria-hidden="true" /> Add pano
-            </Link>
-          )}
+          <Button
+            variant="accent"
+            size="sm"
+            pill
+            icon="fa-solid fa-plus"
+            aria-haspopup="dialog"
+            onClick={onAddPano}
+          >
+            Add pano
+          </Button>
         </div>
       </header>
       <p className="ed-hint">

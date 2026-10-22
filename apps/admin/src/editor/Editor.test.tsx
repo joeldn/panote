@@ -10,6 +10,12 @@ import { StageFactoryContext } from './stage-factory.js';
 
 afterEach(cleanup);
 
+// Each test here drives one or two whole editor tabs through load, edits and save round
+// trips: about 0.3 s alone, but CI's Coverage job runs every package's suite at once under
+// V8 coverage, and the first save tests of this file ran past 5 s there, on main as well
+// (CI runs on 0c7574e and 68efe24). The work is the same; the runner is just that much slower.
+vi.setConfig({ testTimeout: 15_000 });
+
 let server: FakeServer;
 let viewers: FakeViewer[];
 let create: ReturnType<typeof viewerFactory>['create'];
@@ -267,10 +273,11 @@ describe('editor: save', () => {
     await loaded(ui);
     await rename(ui, /Pano name: Square/, 'Square (local)');
     await rename(ui, /Tour title: Old town/, 'Local title');
-    // Another device adds a pano to the tour.
+    // Another device adds a pano to the tour, and renames it: a real conflict.
     server.setConfig('cellar', { title: 'Cellar', hotspots: [] });
     server.setTour({
       ...server.tour!.body,
+      title: 'Their title',
       scenes: [...(server.tour!.body.scenes as object[]), { panoId: 'cellar' }],
     });
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
@@ -278,11 +285,36 @@ describe('editor: save', () => {
     expect(banner.textContent).toContain('Tour details');
     fireEvent.click(within(banner).getByRole('button', { name: 'Reload' }));
     expect(await ui.findByRole('button', { name: /^Cellar/ })).toBeTruthy();
-    expect(ui.getByRole('button', { name: /Tour title: Old town/ })).toBeTruthy();
+    expect(ui.getByRole('button', { name: /Tour title: Their title/ })).toBeTruthy();
     // The square config saved fine before the conflict, so it is the server's now.
     expect(server.configs.get('square')!.body.title).toBe('Square (local)');
     fireEvent.click(ui.getByRole('button', { name: /^Cellar/ }));
     expect(await ui.findByRole('button', { name: /Pano name: Cellar/ })).toBeTruthy();
+  });
+
+  it('a save that only meets a scene appended meanwhile folds it in and saves, no conflict', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Local title');
+    // An upload (this tab's or another's) appends a pano before this editor synced it.
+    server.setConfig('cellar', { title: 'Cellar', hotspots: [] });
+    server.setTour({
+      ...server.tour!.body,
+      scenes: [...(server.tour!.body.scenes as object[]), { panoId: 'cellar' }],
+    });
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect(ui.queryByText(/changed elsewhere/)).toBeNull();
+    expect(server.tour!.body).toMatchObject({
+      title: 'Local title',
+      scenes: [
+        { panoId: 'square' },
+        { panoId: 'church' },
+        { panoId: 'hall' },
+        { panoId: 'cellar' },
+      ],
+    });
+    expect(ui.getByRole('button', { name: /^Cellar/ })).toBeTruthy();
   });
 
   it('keeps local dirty configs when reloading a tour conflict', async () => {

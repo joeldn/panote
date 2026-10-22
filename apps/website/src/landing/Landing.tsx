@@ -151,7 +151,7 @@ function DropTarget() {
       </span>
       <span>
         <span className="landing-drop__title">Upload your first tour</span>{' '}
-        <span className="landing-drop__sub">free — sign in with Google, live in seconds</span>
+        <span className="landing-drop__sub">free, sign in and go live in seconds</span>
       </span>
     </UploadLink>
   );
@@ -393,8 +393,8 @@ function FinalCta() {
       <div className="landing-final__card">
         <h2 className="landing-h2">Your tour. Full resolution. Free.</h2>
         <p>
-          Upload a panorama and get a link people can step inside. No watermark, no paywall — sign
-          in with Google and you’re live.
+          Upload a panorama and get a link people can step inside. No watermark, no paywall. Sign in
+          and you’re live.
         </p>
         <UploadLink className="landing-final__cta">
           Upload your first tour — free <span aria-hidden="true">→</span>

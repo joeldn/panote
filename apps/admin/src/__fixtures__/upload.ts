@@ -52,11 +52,15 @@ export function fakeBackend() {
     configs: {} as Record<string, { title: string }>,
     hasConfig: false,
     presignStatus: 200,
+    /** The `error` a failing presign answers with (upload-api's quota refusals, say). */
+    presignError: 'nope',
     statusStatus: 200,
     createTourStatus: 201,
     getTourStatus: 200,
     /** The panoId the presign hands a new pano. */
     newPanoId: 'pano-1',
+    /** Handed out first, one per presign of a new pano; then `newPanoId`. */
+    newPanoIds: [] as string[],
     /** Panos the tour publish reports as `not-ready` (a 422); empty publishes. */
     publishNotReady: [] as string[],
     /** What the library listing (`GET /api/admin/panos`) returns. */
@@ -97,9 +101,11 @@ export function fakeBackend() {
       return next ? json(next, 200, { 'cache-control': 'public, max-age=30' }) : json({}, 404);
     }
     if (method === 'POST' && path === '/api/upload-url') {
-      if (state.presignStatus !== 200) return json({ error: 'nope' }, state.presignStatus);
+      if (state.presignStatus !== 200) {
+        return json({ error: state.presignError }, state.presignStatus);
+      }
       const req = body as { panoId?: string };
-      const panoId = req.panoId ?? state.newPanoId;
+      const panoId = req.panoId ?? state.newPanoIds.shift() ?? state.newPanoId;
       return json({ panoId, key: `panos/o/${panoId}/original`, url: PUT_URL });
     }
     if (method === 'POST' && path === '/api/admin/tours') {

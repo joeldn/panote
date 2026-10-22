@@ -89,6 +89,39 @@ export function r2ConfigFromEnv(
   };
 }
 
+// Where admin-api answers for each bucket, unless ADMIN_API_ORIGIN says otherwise.
+const DEFAULT_ORIGINS: Record<string, string> = {
+  'pano-content-dev': 'https://panote.dev',
+  'pano-content': 'https://panote.io',
+};
+
+/**
+ * admin-api's operator routes for the bucket: the default origin for it unless
+ * ADMIN_API_ORIGIN says otherwise, and the OPERATOR_TOKEN secret. Shared by takedown.ts and restore-backup.ts.
+ */
+export function operatorApiFromEnv(
+  env: Record<string, string | undefined>,
+  bucket: string,
+  allowBucket: string | undefined,
+): { origin: string; token: string } {
+  const token = env.OPERATOR_TOKEN;
+  if (!token) throw new Error('missing env OPERATOR_TOKEN (admin-api secret of the same name)');
+  const fallback = DEFAULT_ORIGINS[bucket];
+  const origin = env.ADMIN_API_ORIGIN || fallback;
+  if (!origin) throw new Error(`no default admin-api origin for ${bucket}; set ADMIN_API_ORIGIN`);
+  if (!/^https:\/\/[^/]+$/.test(origin)) {
+    throw new Error('ADMIN_API_ORIGIN must be an https origin with no path');
+  }
+  // An override must not quietly point one env's bucket at another env's admin-api
+  // (a dev bucket at panote.io, say): anything but the default is named twice too.
+  if (origin !== fallback && allowBucket !== bucket) {
+    throw new Error(
+      `ADMIN_API_ORIGIN ${origin} isn't the default for ${bucket}; pass --allow-bucket ${bucket} to use it`,
+    );
+  }
+  return { origin, token };
+}
+
 export type MarkerStore = Pick<R2S3Client, 'get' | 'head' | 'put' | 'listPrefixes'>;
 
 /** The marker as admin-api wrote it, or null when there is none (or it's unreadable). */

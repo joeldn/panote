@@ -216,7 +216,7 @@ describe('share route', () => {
     expect(screen.getByLabelText('Embed code', { selector: 'pre' }).textContent).toBe(
       '<iframe src="https://panote.io/s/old-town/embed?pano=pano-2"\n' +
         '  width="100%" height="480" style="border:0"\n' +
-        '  allow="fullscreen; xr-spatial-tracking"></iframe>',
+        '  allow="fullscreen"></iframe>',
     );
   });
 

@@ -58,6 +58,13 @@ the code wins:
   the plan (drag its dot, click the plan, or the arrow keys) and takes an optional
   plan image; the viewer's Map panel draws the dots as buttons over it, keeps the
   scene list under them, and turns a facing wedge on the current dot.
+- **Several photos at once.** The design's drop zone takes one file. New tour and
+  Add pano take several: they upload one at a time, in the order picked, into one
+  tour. The chip shows the file in flight plus "N more waiting" and a "Cancel the
+  rest" action; waiting files show as "Waiting" cards in the editor. An account
+  limit or a sign-in stops the rest, and the chip says how many never started.
+  Add pano opens over the editor, so unsaved edits stay; the editor folds each
+  appended scene into its draft. Replace image still takes one file.
 
 ## Mini-map: how the code reads the design
 
@@ -92,6 +99,10 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   dashboard (`/panos/unused`), where the owner can put it back into a tour
   from the editor's library or delete it for good. (Deleting a whole tour
   deletes the panos only it used.)
+- **Embed `allow` list.** The README's embed snippet asks for
+  `allow="fullscreen; xr-spatial-tracking"`. The code asks only for
+  `fullscreen`: there is no VR mode, so the snippet shouldn't imply one.
+  Embeds already pasted with the old list keep working.
 
 ## Auth
 
