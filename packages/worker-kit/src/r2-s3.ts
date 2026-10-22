@@ -75,8 +75,6 @@ export interface R2S3Client {
 export interface R2ListedObject {
   readonly key: string;
   readonly size: number;
-  /** Epoch ms of the last write (an overwrite resets it), NaN if the listing had none. */
-  readonly lastModified: number;
 }
 
 const XML_ENTITIES: Record<string, string> = {
@@ -208,14 +206,7 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
         for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
           const key = /<Key>([^<]*)<\/Key>/.exec(m[1]!)?.[1];
           const size = /<Size>(\d+)<\/Size>/.exec(m[1]!)?.[1];
-          const modified = /<LastModified>([^<]*)<\/LastModified>/.exec(m[1]!)?.[1];
-          if (key !== undefined) {
-            found.push({
-              key: unescapeXml(key),
-              size: Number(size ?? 0),
-              lastModified: modified === undefined ? NaN : Date.parse(modified),
-            });
-          }
+          if (key !== undefined) found.push({ key: unescapeXml(key), size: Number(size ?? 0) });
         }
       }
       return found;

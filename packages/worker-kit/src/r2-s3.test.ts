@@ -511,10 +511,9 @@ describe('listObjects', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = createR2S3Client(config);
 
-    const lastModified = Date.parse('2026-01-01T00:00:00.000Z');
     expect(await client.listObjects('panos/o/')).toEqual([
-      { key: 'panos/o/p1/original', size: 1024, lastModified },
-      { key: 'panos/o/a&b/config.json', size: 12, lastModified },
+      { key: 'panos/o/p1/original', size: 1024 },
+      { key: 'panos/o/a&b/config.json', size: 12 },
     ]);
     const url = new URL(fetchMock.mock.calls[0]![0].url);
     expect(url.searchParams.get('list-type')).toBe('2');
@@ -530,28 +529,13 @@ describe('listObjects', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = createR2S3Client(config);
 
-    expect((await client.listObjects('')).map(({ key, size }) => ({ key, size }))).toEqual([
+    expect(await client.listObjects('')).toEqual([
       { key: 'a', size: 1 },
       { key: 'b', size: 2 },
     ]);
     expect(new URL(fetchMock.mock.calls[1]![0].url).searchParams.get('continuation-token')).toBe(
       'tok',
     );
-  });
-
-  it('reports a missing LastModified as NaN, never as a real time', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(
-            '<ListBucketResult><IsTruncated>false</IsTruncated>' +
-              '<Contents><Key>k</Key><Size>3</Size></Contents></ListBucketResult>',
-          ),
-      ),
-    );
-    const [obj] = await createR2S3Client(config).listObjects('');
-    expect(obj?.lastModified).toBeNaN();
   });
 
   it('throws on a non-2xx response', async () => {
