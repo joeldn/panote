@@ -388,7 +388,7 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   }
   // Plan images the tour stopped using (replaced or removed): best-effort, after the answer.
   c.executionCtx.waitUntil(
-    sweepPlans(c.env.BUCKET, tourId, parsed.data.plan, Date.now())
+    sweepPlans(c.env.BUCKET, sub, tourId, Date.now())
       .then((files) => (files.length ? purgeCdn(c.env, { prefixes: [], files }) : undefined))
       .catch((e: unknown) => {
         console.error('plan sweep failed:', e instanceof Error ? e.name : 'unknown error');
