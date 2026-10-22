@@ -583,7 +583,7 @@ describe('quarantine', () => {
     raced.store.put = async (key, body, opts) => {
       // Another run on the same case writes first.
       raced.objects.set(key, JSON.stringify({ ...JSON.parse(body as string), keys: ['other'] }));
-      return real(key, body, opts);
+      await real(key, body, opts);
     };
     await expect(writeCaseRecord(raced.store, CASE, add, new Date())).rejects.toThrow(
       /changed while this run was writing it/,
@@ -650,7 +650,7 @@ describe('runTakedown', () => {
     const realPut = m.store.put.bind(m.store);
     m.store.put = async (key, body, opts) => {
       events.push(`put ${key}`);
-      return realPut(key, body, opts);
+      await realPut(key, body, opts);
     };
     const fetchFn = vi.fn(async (_input: string, init: RequestInit) => {
       const { tourId } = JSON.parse(init.body as string) as { tourId: string };
@@ -672,7 +672,7 @@ describe('runTakedown', () => {
     const put = t.store.put;
     t.store.put = async (key, body, opts) => {
       if (key === quarantineKey(CASE, originalKey(SUB, 'p-1'))) throw new Error('R2 PUT -> 500');
-      return put(key, body, opts);
+      await put(key, body, opts);
     };
     await expect(runTakedown(parseTakedownArgs(ARGV, ENV), t.deps)).rejects.toThrow(/500/);
     expect(t.fetchFn).not.toHaveBeenCalled();
