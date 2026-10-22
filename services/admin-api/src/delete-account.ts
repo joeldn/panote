@@ -82,8 +82,8 @@ const markComplete = async (bucket: R2Bucket, sub: string, now: Date): Promise<v
   );
 };
 
-// Redirect aliases this tour still owns. unpublish only removes the live slug and
-// leaves aliases to expire; an account delete removes them now.
+// Redirect aliases this tour still owns. unpublish releases them too; this keeps
+// the account delete from depending on it for that.
 const deleteAliases = async (bucket: R2Bucket, sub: string, tourId: string): Promise<string[]> => {
   const stored = await readPublishRecord(bucket, sub, tourId);
   const removed: string[] = [];

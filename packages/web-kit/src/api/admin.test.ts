@@ -222,6 +222,8 @@ describe('createAdminApi', () => {
       'This account has reached its daily upload limit. Try again later today or tomorrow.',
     ],
     [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
+    [403, 'tour limit reached', 'This account has reached its limit of 200 tours.'],
+    [404, 'pano not found', 'This pano no longer exists.'],
     [403, 'forbidden', '403: forbidden'],
   ] as const)('a %i %s says so in words', async (status, error, message) => {
     const { api } = setup(json({ error }, status));
@@ -327,6 +329,8 @@ describe('publish routes', () => {
     [409, { error: 'not published' }, { kind: 'not-published' }],
     [409, { error: 'sharing stopped' }, { kind: 'sharing-stopped' }],
     [404, { error: 'not found' }, { kind: 'not-found' }],
+    [409, { error: 'too many renames' }, { kind: 'too-many-renames' }],
+    [429, { error: 'rate limited' }, { kind: 'rate-limited' }],
     [400, { error: 'reserved slug' }, { kind: 'slug-invalid', reason: 'reserved' }],
     [400, { error: 'invalid slug' }, { kind: 'slug-invalid', reason: 'invalid' }],
     [

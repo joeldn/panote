@@ -160,6 +160,9 @@ export type TourScene = z.infer<typeof TourSceneSchema>;
 // scene fan-out); also used as a defensive cap on the read side.
 export const MAX_TOUR_SCENES = 100;
 
+// Most tours one owner may hold (admin-api's POST /tours refuses the next one).
+export const MAX_TOURS_PER_OWNER = 200;
+
 // Plain text: C0 control characters and DEL are refused, except tab and line breaks.
 const isPlainText = (s: string): boolean => {
   for (let i = 0; i < s.length; i++) {
