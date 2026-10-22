@@ -255,6 +255,17 @@ export const AccountDeletionRecordSchema = z.object({
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
 
+// The record at tileGcKey, written create-only by the tiler after a manifest
+// swap. `tilerVersion` is the TILER_OUTPUT_VERSION of the job that superseded it,
+// so the sweep can tell whether the current original would tile into this dir again.
+export const TileGcRecordSchema = z.object({
+  v: z.literal(1),
+  originalKey: z.string().min(1),
+  tilerVersion: z.number().int().nonnegative(),
+  supersededAt: z.string(),
+});
+export type TileGcRecord = z.infer<typeof TileGcRecordSchema>;
+
 // --- Operator takedown (abuse groundwork) ---
 
 // 403 from every owner write (and upload-url) while the operator has the account disabled.

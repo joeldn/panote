@@ -13,6 +13,7 @@ import {
 } from '@internal/contracts';
 import { deriveUploadTarget, errorText } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
+import { recordSupersededVersions } from './superseded.js';
 
 // The Tiler DO (src/consumer.ts) forwards these through `Container.envVars`
 // (src/container-env.ts) because wrangler's `[[containers]]` block only
@@ -204,6 +205,26 @@ createServer((req, res) => {
             await r2.deleteObject(tileFailedKeyFromOriginalKey(key)).catch((e: unknown) => {
               console.warn(`failed to clear tile-failed marker pano=${panoId}: ${errorText(e)}`);
             });
+            // Only now, with the swap confirmed: the older version dirs go on
+            // the list admin-api's daily sweep deletes after a grace period.
+            // Best-effort - a dir missed here only costs storage.
+            await recordSupersededVersions(r2, {
+              panoId,
+              current: version,
+              originalKey: key,
+              tilerVersion: TILER_OUTPUT_VERSION,
+              now: new Date(),
+            }).then(
+              (v) => {
+                if (v.length)
+                  logPhase(panoId, `${v.length} superseded version(s) queued for cleanup`);
+              },
+              (e: unknown) => {
+                console.warn(
+                  `failed to record superseded versions pano=${panoId}: ${errorText(e)}`,
+                );
+              },
+            );
           }
         }
         logPhase(panoId, `job done in ${secsSince(jobT0)}`);
