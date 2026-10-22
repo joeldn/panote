@@ -1,0 +1,4 @@
+{
+  "extends": ["./tsconfig.json", "@internal/typescript-config/tests.json"],
+  "include": ["src/**/*.cjs", "src/**/*.ts"]
+}

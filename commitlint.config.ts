@@ -49,6 +49,7 @@ const config: UserConfig = {
         'worker-kit',
         'ui',
         'web-kit',
+        'auth0-actions',
         // shared config packages
         'typescript-config',
         'eslint-config',
