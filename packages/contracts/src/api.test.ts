@@ -137,9 +137,11 @@ describe('CLIENT_ID_PATTERN', () => {
 describe('OperatorTakedownRequestSchema', () => {
   const ok = { sub: 'auth0|abc', tourId: 'tour-1', action: 'unpublish' };
 
-  it('takes a sub, a tourId and one of the two actions', () => {
+  it('takes a sub, a tourId and one of the actions', () => {
     expect(OperatorTakedownRequestSchema.safeParse(ok).success).toBe(true);
-    expect(OperatorTakedownRequestSchema.safeParse({ ...ok, action: 'delete' }).success).toBe(true);
+    for (const action of ['delete', 'hide', 'unhide']) {
+      expect(OperatorTakedownRequestSchema.safeParse({ ...ok, action }).success).toBe(true);
+    }
   });
 
   it.each([
