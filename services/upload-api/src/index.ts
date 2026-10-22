@@ -20,6 +20,11 @@ const assertHeadIsDefinitive = (head: R2HeadResult): void => {
 // The UPLOAD_URL_LIMITER binding's `simple.period` (wrangler.jsonc), sent as the
 // 429's Retry-After. The limit itself lives in wrangler.jsonc, per env.
 export const UPLOAD_URL_RATE_PERIOD_SECONDS = 60;
+// How long an upload URL stays valid. The admin uploader PUTs the moment it gets
+// the URL, so this mostly bounds replays of a leaked or reused URL. 600 s still
+// covers a whole 150 MiB PUT at ~2 Mbit/s, in case R2 (unlike S3, which checks
+// only when the request starts) were to check expiry at the end of a slow upload.
+export const UPLOAD_URL_EXPIRY_SECONDS = 600;
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 interface UploadUrlBody {
@@ -115,6 +120,7 @@ export default {
       const refusal = await checkQuota(r2, sub, limits, {
         size,
         replacing: 'panoId' in body ? panoId : undefined,
+        now: Date.now(),
       }).catch(() => {
         // A failed listing is no answer either: fail closed, as for the HEADs.
         throw new WorkerError('storage unavailable', 502);
@@ -122,7 +128,13 @@ export default {
       if (refusal) return Response.json({ error: refusal }, { status: 403 });
 
       const key = originalKey(sub, panoId);
-      const putUrl = await r2.presignPut(key, { headers: { 'content-type': contentType } });
+      // content-length is signed too: the browser sends the File's size, which is the
+      // declared `size`, so a body of any other length breaks the signature.
+      const putUrl = await r2.presignPut(key, {
+        expiresInSeconds: UPLOAD_URL_EXPIRY_SECONDS,
+        headers: { 'content-type': contentType },
+        contentLength: size,
+      });
       return Response.json({ panoId, key, url: putUrl });
     } catch (e) {
       return toErrorResponse(e);
