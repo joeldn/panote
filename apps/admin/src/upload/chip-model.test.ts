@@ -187,6 +187,20 @@ describe('chipModel', () => {
     expect(actions(active(f, { limited: 'rate' }))).toEqual(['retry-upload']);
   });
 
+  it('a disabled or deleted account gets its own title, no retry, and no "add again"', () => {
+    const f = {
+      phase: 'failed',
+      panoId: null,
+      stage: 'presign',
+      message: 'This account has been deleted.',
+    } as UploadState;
+    expect(chipModel(active(f, { limited: 'account', skipped: 2 }))).toMatchObject({
+      title: 'Uploads are off for this account',
+      note: 'This account has been deleted. 2 more photos weren’t uploaded.',
+      actions: [],
+    });
+  });
+
   it('a sign-in that stopped a batch says the rest has to be added again', () => {
     const f = { phase: 'failed', panoId: null, stage: 'auth', message: 'm' } as UploadState;
     expect(chipModel(active(f, { skipped: 2 }))?.note).toBe(

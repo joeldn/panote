@@ -3,7 +3,7 @@ import { isAuthError, UPLOAD_CONTENT_TYPES, validateUploadImage } from '@interna
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 
-import { FinalizeError } from './finalize.js';
+import { FinalizeError, SignedOutBatchError } from './finalize.js';
 import { targetFromParams, type UploadTarget } from './resume-store.js';
 import { useUploads } from './upload-context.js';
 import { repickNotice } from './repick-notice.js';
@@ -30,10 +30,21 @@ const TITLES: Record<UploadTarget['kind'], string> = {
 type Status =
   | { kind: 'idle' }
   | { kind: 'starting' }
-  /** `files`: one line per photo that failed the checks, when several were picked. */
+  /** `files`: one line per photo the message is about, when several were picked. */
   | { kind: 'error'; message: string; files?: string[] };
 
-const startError = (e: unknown): string => {
+const startError = (e: unknown): Extract<Status, { kind: 'error' }> => {
+  if (e instanceof SignedOutBatchError) {
+    return {
+      kind: 'error',
+      message: `You’ve been signed out. Sign in again to continue. Only “${e.kept}” is kept while you sign in: there’s room for one photo. Add these again after:`,
+      files: e.dropped,
+    };
+  }
+  return { kind: 'error', message: startMessage(e) };
+};
+
+const startMessage = (e: unknown): string => {
   if (isAuthError(e)) return 'You’ve been signed out. Sign in again to continue.';
   // A tour that's gone or full: retrying won't help, so say exactly why.
   if (e instanceof FinalizeError) return e.message;
@@ -86,7 +97,7 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
       setStatus({ kind: 'idle' });
       onStarted?.(result);
     } catch (e) {
-      setStatus({ kind: 'error', message: startError(e) });
+      setStatus(startError(e));
     }
   }
 

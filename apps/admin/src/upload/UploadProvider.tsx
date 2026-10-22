@@ -48,6 +48,7 @@ import {
   addPanoToTour,
   assertTourHasRoom,
   FinalizeError,
+  SignedOutBatchError,
   titleFromFileName,
   tourRoomMessage,
 } from './finalize.js';
@@ -156,7 +157,10 @@ function limitOf(e: unknown): UploadLimit {
   if (e.status === 429) return 'rate';
   // upload-api answers 403 only for a quota ('pano limit reached', 'storage limit reached',
   // 'daily upload limit reached') or 'account disabled', and 410 only for 'account deleted'.
-  return e.status === 403 || e.status === 410 ? 'quota' : null;
+  if (e.status === 410) return 'account';
+  if (e.status !== 403) return null;
+  const code = (e.body as { error?: unknown } | null)?.error;
+  return code === 'account disabled' ? 'account' : 'quota';
 }
 
 const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null): boolean => {
@@ -710,7 +714,16 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           panoTarget = target;
         }
       } catch (e) {
-        if (isAuthError(e)) persist(-1, file.name, target, null, file);
+        if (isAuthError(e)) {
+          persist(-1, file.name, target, null, file);
+          // The stash holds one file: say which photos the user has to add again.
+          if (files.length > 1) {
+            throw new SignedOutBatchError(
+              file.name,
+              files.slice(1).map((f) => f.name),
+            );
+          }
+        }
         throw e;
       }
       forget();

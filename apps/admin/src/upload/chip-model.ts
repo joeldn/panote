@@ -31,8 +31,11 @@ export interface ActiveUpload {
   limited?: UploadLimit;
 }
 
-/** Why a presign was refused for good (`quota`), or for now (`rate`); null when it wasn't. */
-export type UploadLimit = 'quota' | 'rate' | null;
+/**
+ * Why a presign was refused: an account quota (`quota`), the per-minute rate limit
+ * (`rate`), or an account that is disabled or deleted (`account`); null when it wasn't.
+ */
+export type UploadLimit = 'quota' | 'rate' | 'account' | null;
 
 export type ChipActionId =
   'retry-upload' | 'retry-poll' | 'retry-finalize' | 'sign-in' | 'repick' | 'cancel-queue';
@@ -88,11 +91,11 @@ const failed = (title: string, note: string, actions: ChipModel['actions']): Chi
 const SIGNED_OUT = 'You’ve been signed out';
 
 /** The rest of a batch that a limit or a sign-in stopped: it has to be picked again. */
-const skippedNote = (a: ActiveUpload, when: string): string => {
+const skippedNote = (a: ActiveUpload, when: string | null): string => {
   if (!a.skipped) return '';
   const one = a.skipped === 1;
   const what = one ? '1 more photo wasn’t' : `${a.skipped} more photos weren’t`;
-  return ` ${what} uploaded. Add ${one ? 'it' : 'them'} again ${when}.`;
+  return ` ${what} uploaded.` + (when ? ` Add ${one ? 'it' : 'them'} again ${when}.` : '');
 };
 
 const finalizeFailed = (f: Extract<FinalizeState, { status: 'failed' }>): ChipModel =>
@@ -197,6 +200,10 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         case 'presign':
           // An account limit: the server's message says which, and retrying can't help.
           // The rate limit clears within a minute, so that one can be tried again.
+          // Disabled or deleted: the server's message says which, and what to do.
+          if (a.limited === 'account') {
+            return failed('Uploads are off for this account', m.message + skippedNote(a, null), []);
+          }
           if (a.limited) {
             return failed(
               'Upload limit reached',

@@ -483,6 +483,22 @@ describe('several photos at once', () => {
     expect(backend.presigns()).toHaveLength(2);
   });
 
+  it('a disabled account stops the rest under its own title, not as a limit', async () => {
+    const { backend } = setup();
+    backend.state.newPanoIds = ['pano-a'];
+    await tick();
+    await pickMany(three());
+    backend.state.presignStatus = 403;
+    backend.state.presignError = 'account disabled';
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(chipTitle()).toBe('Uploads are off for this account');
+    expect(within(chip()).getByText(/disabled/).textContent).toContain(
+      '1 more photo wasn’t uploaded.',
+    );
+    expect(backend.presigns()).toHaveLength(2);
+  });
+
   it('a failed PUT mid-batch lets the rest go on; its Try again shows once the chip is free', async () => {
     const { backend } = setup();
     backend.state.newPanoIds = ['pano-a', 'pano-c'];
@@ -1156,6 +1172,27 @@ describe('sign-in during an upload', () => {
     expect(back.backend.state.calls[0]?.url).toBe('/api/admin/tours');
     expect(back.router.state.location.pathname).toBe('/app/t/tour-1');
     expect(FakeXhr.last.body).toBe(file);
+  });
+
+  it('a 401 starting several photos keeps the first through sign-in and names the rest', async () => {
+    const { backend, pending } = setup();
+    backend.state.createTourStatus = 401;
+    await tick();
+    const files = ['Hall.png', 'Kitchen.png', 'Cellar.png'].map((n) => pngFile(n));
+    fireEvent.change(screen.getByTestId('upload-input'), { target: { files } });
+    await tick();
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('You’ve been signed out');
+    expect(alert.textContent).toContain(
+      'Only “Hall.png” is kept while you sign in: there’s room for one photo. Add these again after:',
+    );
+    expect(
+      within(alert)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Kitchen.png', 'Cellar.png']);
+    expect(pending.peek()).toBe(files[0]);
+    expect(readResumeRecord()).toMatchObject({ fileName: 'Hall.png', landed: null });
   });
 
   it('a 401 while polling resumes polling after sign-in, with no file and no re-upload', async () => {

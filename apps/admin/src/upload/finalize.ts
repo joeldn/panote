@@ -23,6 +23,20 @@ export class FinalizeError extends Error {
   }
 }
 
+/**
+ * Signed out while starting several photos: the sign-in stash keeps one file (it is shared
+ * with the landing page's single drop), so only `kept` uploads after sign-in.
+ */
+export class SignedOutBatchError extends Error {
+  override name = 'SignedOutBatchError';
+  constructor(
+    readonly kept: string,
+    readonly dropped: string[],
+  ) {
+    super('signed out');
+  }
+}
+
 export const TOUR_FULL_MESSAGE = 'This tour already has the maximum number of panos.';
 const tourFull = () => new FinalizeError(TOUR_FULL_MESSAGE, false);
 
