@@ -27,7 +27,11 @@ const TITLES: Record<UploadTarget['kind'], string> = {
   replace: 'Replace image',
 };
 
-type Status = { kind: 'idle' } | { kind: 'starting' } | { kind: 'error'; message: string };
+type Status =
+  | { kind: 'idle' }
+  | { kind: 'starting' }
+  /** `files`: one line per photo that failed the checks, when several were picked. */
+  | { kind: 'error'; message: string; files?: string[] };
 
 const startError = (e: unknown): string => {
   if (isAuthError(e)) return 'You’ve been signed out. Sign in again to continue.';
@@ -44,23 +48,40 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const [dragging, setDragging] = useState(false);
   const [missing, setMissing] = useState(false);
-  const blocked = uploads.busy;
-  const disabled = blocked || status.kind === 'starting';
+  // A replace takes one image; a new tour or Add pano takes several, uploaded in turn.
+  const multiple = target.kind !== 'replace';
+  // An upload already under way doesn't block: these join the queue behind it.
+  const queues = uploads.busy;
+  const disabled = status.kind === 'starting';
 
-  async function accept(file: File | undefined) {
-    if (!file || disabled) return;
-    await start(file);
+  async function accept(picked: File[]) {
+    if (picked.length === 0 || disabled) return;
+    await start(multiple ? picked : picked.slice(0, 1));
   }
 
-  async function start(file: File) {
+  async function start(files: File[]) {
     setStatus({ kind: 'starting' });
-    const invalid = await validateUploadImage(file);
-    if (invalid) {
-      setStatus({ kind: 'error', message: invalid.message });
+    // Every file passes the checks, or none is sent: a partial batch would be easy to miss.
+    const checked = await Promise.all(files.map(validateUploadImage));
+    const invalid = files.flatMap((f, i) => {
+      const bad = checked[i];
+      return bad ? [{ name: f.name, message: bad.message }] : [];
+    });
+    const [first] = invalid;
+    if (first && files.length === 1) {
+      setStatus({ kind: 'error', message: first.message });
+      return;
+    }
+    if (first) {
+      setStatus({
+        kind: 'error',
+        message: 'Nothing was uploaded. Pick again without these photos:',
+        files: invalid.map((x) => `${x.name}: ${x.message}`),
+      });
       return;
     }
     try {
-      const result = await uploads.begin(file, target);
+      const result = await uploads.begin(files, target);
       setStatus({ kind: 'idle' });
       onStarted?.(result);
     } catch (e) {
@@ -75,7 +96,7 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
     resumed.current = true;
     setStatus({ kind: 'starting' });
     void resume.take().then((file) => {
-      if (file) return start(file);
+      if (file) return start([file]);
       setStatus({ kind: 'idle' });
       setMissing(true);
     });
@@ -87,7 +108,7 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    void accept(e.dataTransfer.files[0]);
+    void accept([...e.dataTransfer.files]);
   };
 
   return (
@@ -102,9 +123,9 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
             {shownNotice}
           </p>
         )}
-        {blocked && (
+        {queues && (
           <p className="up-overlay__notice" role="note">
-            Another upload is still in progress. Wait for it to finish, or cancel it, first.
+            Another upload is still running. Anything you add here waits its turn.
           </p>
         )}
         <button
@@ -124,10 +145,16 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
             <i className="fa-solid fa-arrow-up" />
           </span>
           <span className="up-drop__label">
-            {status.kind === 'starting' ? 'Starting upload…' : 'Drop an equirectangular photo'}
+            {status.kind === 'starting'
+              ? 'Starting upload…'
+              : multiple
+                ? 'Drop equirectangular photos'
+                : 'Drop an equirectangular photo'}
           </span>
           <span id={`${titleId}-hint`} className="up-drop__hint">
-            or click to browse · JPG, PNG or WebP, up to 150 MB
+            {multiple
+              ? 'or click to browse · JPG, PNG or WebP, up to 150 MB each'
+              : 'or click to browse · JPG, PNG or WebP, up to 150 MB'}
           </span>
           <span className="up-drop__mono">2:1 ratio works best</span>
         </button>
@@ -136,17 +163,25 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
           type="file"
           hidden
           accept={UPLOAD_CONTENT_TYPES.join(',')}
+          multiple={multiple}
           data-testid="upload-input"
           onChange={(e) => {
-            const file = e.target.files?.[0];
+            const files = [...(e.target.files ?? [])];
             e.target.value = '';
-            void accept(file);
+            void accept(files);
           }}
         />
         {status.kind === 'error' && (
-          <p className="up-overlay__error" role="alert">
-            {status.message}
-          </p>
+          <div className="up-overlay__error" role="alert">
+            <p>{status.message}</p>
+            {status.files && (
+              <ul>
+                {status.files.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         <button type="button" className="up-overlay__cancel" onClick={onClose}>
           Cancel
@@ -157,7 +192,7 @@ export function UploadOverlay({ target, notice, resume, onClose, onStarted }: Up
 }
 
 /**
- * `/app/new`: a new tour from one pano, or (from the editor) `?tour=<id>[&replace=<panoId>]`.
+ * `/app/new`: a new tour from one or more panos, or (from the editor) `?tour=<id>[&replace=<panoId>]`.
  * `?resume=upload` is where sign-in from the landing returns.
  */
 export function NewPanoOverlay() {

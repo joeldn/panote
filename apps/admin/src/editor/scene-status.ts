@@ -116,6 +116,7 @@ export function pendingProblem(p: PendingUpload): boolean {
 
 /** The short line under a pending card's name. */
 export function pendingLine(p: PendingUpload): string {
+  if (p.queued) return 'Waiting';
   const m = p.machine;
   if (p.finalize.status === 'failed') {
     return p.finalize.auth ? 'Sign in again to add it' : 'Couldn’t add it to the tour';
@@ -141,4 +142,10 @@ export function pendingLine(p: PendingUpload): string {
 
 /** The upload's determinate progress, while there is one. */
 export const pendingPct = (p: PendingUpload): number | null =>
-  p.machine.phase === 'upload' ? p.machine.pct : p.machine.phase === 'preparing' ? 0 : null;
+  p.queued
+    ? null
+    : p.machine.phase === 'upload'
+      ? p.machine.pct
+      : p.machine.phase === 'preparing'
+        ? 0
+        : null;

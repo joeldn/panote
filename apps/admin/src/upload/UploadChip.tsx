@@ -60,6 +60,7 @@ export function UploadChip({ model, onAction, onDismiss }: UploadChipProps) {
         </div>
       )}
       <p className="up-chip__note">{model.note}</p>
+      {model.queue && <p className="up-chip__queue">{model.queue}</p>}
       {model.actions.length > 0 && (
         <div className="up-chip__actions">
           {model.actions.map((a) => (

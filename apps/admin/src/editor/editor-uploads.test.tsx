@@ -170,6 +170,39 @@ describe('editor and the upload chip', () => {
     expect(screen.queryByText(/changed elsewhere/)).toBeNull();
   });
 
+  it('Add pano with unsaved edits opens over the editor; several land and the edits stay', async () => {
+    const { backend, router } = setup('/app/t/tour-1');
+    backend.state.newPanoIds = ['pano-a', 'pano-b'];
+    await tick();
+    await renameTour('Town hall', 'Harbour walk');
+    const add = screen.getByRole('button', { name: 'Add pano' }) as HTMLButtonElement;
+    expect(add.disabled).toBe(false);
+    fireEvent.click(add);
+    // A dialog over the editor: no navigation, so nothing asks to save first.
+    expect(screen.getByRole('dialog', { name: 'Add pano' })).toBeTruthy();
+    const files = [pngFile('Hall.png'), pngFile('Kitchen.png')];
+    fireEvent.change(screen.getByTestId('upload-input'), { target: { files } });
+    await tick();
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    await land();
+    backend.state.hasConfig = false;
+    await land();
+    expect(sceneNames()).toEqual(['Hall', 'Kitchen']);
+    expect(
+      screen.getByRole('button', { name: 'Tour title: Harbour walk. Click to edit' }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await tick();
+    expect(tourPuts(backend).at(-1)?.body).toMatchObject({
+      title: 'Harbour walk',
+      scenes: [{ panoId: 'pano-a' }, { panoId: 'pano-b' }],
+    });
+    expect(screen.queryByText(/changed elsewhere/)).toBeNull();
+  });
+
   it('falls back to the conflict banner when the tour also changed some other way', async () => {
     const { backend } = await pickPano();
     await renameTour('Town hall', 'Harbour walk');

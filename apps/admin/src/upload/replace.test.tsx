@@ -162,15 +162,24 @@ describe('replace image', () => {
     expect(backend.presigns()[1]?.body).toMatchObject({ panoId: 'pano-9' });
   });
 
-  it('only one upload runs at a time', async () => {
-    renderProvider();
+  it('one PUT at a time: an upload picked meanwhile waits its turn, then goes', async () => {
+    const { backend } = renderProvider();
     await replaceWith();
-    await expect(
-      probe.uploads!.begin(pngFile(), { kind: 'add', tourId: 'tour-1' }),
-    ).rejects.toThrow('already in progress');
     act(() => probe.uploads?.pick({ kind: 'add', tourId: 'tour-1' }));
     expect(screen.getByRole('dialog', { name: 'Add pano' }).textContent).toContain(
-      'Another upload is still in progress',
+      'Another upload is still running. Anything you add here waits its turn.',
     );
+    await act(() => probe.uploads!.begin(pngFile('next.png'), { kind: 'add', tourId: 'tour-1' }));
+    expect(backend.presigns()).toHaveLength(1);
+    expect(probe.uploads!.pendingFor('tour-1').map((p) => [p.fileName, !!p.queued])).toEqual([
+      ['new.png', false],
+      ['next.png', true],
+    ]);
+    // The replace lands: the queued add starts, and the replace tiles on hidden.
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(backend.presigns()).toHaveLength(2);
+    expect(backend.presigns()[1]?.body).not.toHaveProperty('panoId');
+    expect(chipTitle()).toBe('Uploading panorama');
   });
 });

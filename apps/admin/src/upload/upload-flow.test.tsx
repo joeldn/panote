@@ -320,6 +320,188 @@ describe('fresh upload from /app/new', () => {
   });
 });
 
+describe('several photos at once', () => {
+  const pickMany = async (files: File[]) => {
+    fireEvent.change(screen.getByTestId('upload-input'), { target: { files } });
+    await tick();
+  };
+  const three = () => ['Hall.png', 'Kitchen.png', 'Cellar.png'].map((n) => pngFile(n));
+
+  it('a new tour from several photos: one tour, one PUT at a time, scenes in the order picked', async () => {
+    const { backend, router } = setup();
+    backend.state.newPanoIds = ['pano-a', 'pano-b', 'pano-c'];
+    await tick();
+    expect(screen.getByTestId('upload-input').hasAttribute('multiple')).toBe(true);
+    await pickMany(three());
+
+    // One tour, named after the first photo.
+    const creates = backend.state.calls.filter((c) => c.url === '/api/admin/tours');
+    expect(creates).toHaveLength(1);
+    expect(creates[0]?.body).toEqual({ title: 'Hall', scenes: [] });
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+    expect(backend.presigns()).toHaveLength(1);
+    expect(FakeXhr.all).toHaveLength(1);
+    expect(chipTitle()).toBe('Uploading panorama');
+    expect(within(chip()).getByText('2 more waiting')).toBeTruthy();
+
+    // Each landing starts the next upload; the landed one tiles on, hidden.
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(FakeXhr.all).toHaveLength(2);
+    expect(FakeXhr.last.body).toMatchObject({ name: 'Kitchen.png' });
+    expect(within(chip()).getByText('1 more waiting')).toBeTruthy();
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(FakeXhr.all).toHaveLength(3);
+    expect(within(chip()).queryByText(/more waiting/)).toBeNull();
+    FakeXhr.last.respond(200);
+    await tick();
+
+    expect(backend.state.tour.scenes).toEqual([
+      { panoId: 'pano-a' },
+      { panoId: 'pano-b' },
+      { panoId: 'pano-c' },
+    ]);
+    expect(
+      backend
+        .writes()
+        .filter((w) => w.url.endsWith('/config'))
+        .map((w) => w.body),
+    ).toEqual([{ title: 'Hall' }, { title: 'Kitchen' }, { title: 'Cellar' }]);
+    expect(chipTitle()).toBe('Processing on our side');
+
+    // All three finish, hidden or not.
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(5_000);
+    expect(chipTitle()).toBe('Ready at full resolution');
+    expect(backend.manifestRefreshes()).toHaveLength(3);
+  });
+
+  it('a waiting photo shows as a card in the editor until its turn', async () => {
+    const { backend } = setup();
+    backend.state.newPanoIds = ['pano-a', 'pano-b'];
+    await tick();
+    await pickMany(three().slice(0, 2));
+    await tick();
+    const card = screen.getByText('Kitchen.png').closest('li')!;
+    expect(within(card).getByText('Waiting')).toBeTruthy();
+    expect(within(card).queryByRole('progressbar')).toBeNull();
+  });
+
+  it('Add pano takes several photos into an existing tour, after a room check for all of them', async () => {
+    const { backend } = setup('/app/new?tour=tour-1');
+    backend.state.tour.scenes = Array.from({ length: 98 }, (_, i) => ({ panoId: `p${i}` }));
+    await tick();
+    await pickMany(three());
+    expect(screen.getByRole('alert').textContent).toBe(
+      'This tour has room for 2 more panos. Choose fewer photos.',
+    );
+    expect(backend.presigns()).toHaveLength(0);
+
+    backend.state.tour.scenes = [];
+    await pickMany(three());
+    expect(backend.state.calls.some((c) => c.url === '/api/admin/tours')).toBe(false);
+    expect(backend.presigns()).toHaveLength(1);
+    expect(within(chip()).getByText('2 more waiting')).toBeTruthy();
+  });
+
+  it('one photo failing the checks stops the whole pick, and says which', async () => {
+    const { backend } = setup();
+    await tick();
+    const files = three();
+    files.splice(1, 0, new File(['GIF89a'], 'Loft.gif', { type: 'image/gif' }));
+    await pickMany(files);
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Nothing was uploaded. Pick again without these photos:');
+    expect(
+      within(alert)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Loft.gif: Use a JPG, PNG or WebP image.']);
+    expect(backend.state.calls).toEqual([]);
+  });
+
+  it('a limit on a later presign stops the rest, once, with how many never started', async () => {
+    const { backend } = setup();
+    backend.state.newPanoIds = ['pano-a', 'pano-b', 'pano-c'];
+    await tick();
+    await pickMany([...three(), pngFile('Attic.png')]);
+    backend.state.presignStatus = 403;
+    backend.state.presignError = 'daily upload limit reached';
+    FakeXhr.last.respond(200);
+    await tick();
+
+    expect(chipTitle()).toBe('Upload limit reached');
+    expect(within(chip()).getByText(/daily upload limit/).textContent).toBe(
+      'This account has reached its daily upload limit. Try again later today or tomorrow. 2 more photos weren’t uploaded. Add them again later.',
+    );
+    expect(within(chip()).queryByRole('button', { name: 'Try again' })).toBeNull();
+    // Kitchen asked once; Cellar and Attic never did.
+    expect(backend.presigns()).toHaveLength(2);
+    expect(FakeXhr.all).toHaveLength(1);
+    // The one that landed still joins the tour.
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-a' }]);
+
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Dismiss' }));
+    await tick();
+    expect(backend.presigns()).toHaveLength(2);
+  });
+
+  it('a failed PUT mid-batch lets the rest go on; its Try again shows once the chip is free', async () => {
+    const { backend } = setup();
+    backend.state.newPanoIds = ['pano-a', 'pano-c'];
+    await tick();
+    await pickMany(three());
+    FakeXhr.last.respond(200);
+    await tick();
+    FakeXhr.last.fail();
+    await tick();
+    // Kitchen failed; Cellar goes anyway, and Kitchen's card says so.
+    expect(FakeXhr.all).toHaveLength(3);
+    expect(chipTitle()).toBe('Uploading panorama');
+    const card = screen.getByText('Kitchen.png').closest('li')!;
+    expect(within(card).getByText('Upload failed')).toBeTruthy();
+
+    FakeXhr.last.respond(200);
+    await tick();
+    backend.state.manifests = [manifest('t1-abc')];
+    await tick(5_000);
+    expect(chipTitle()).toBe('Ready at full resolution');
+    await tick(READY_CHIP_MS);
+    expect(chipTitle()).toBe('Upload failed');
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Try again' }));
+    await tick();
+    expect(FakeXhr.last.body).toMatchObject({ name: 'Kitchen.png' });
+  });
+
+  it('Cancel the rest drops the waiting photos and keeps the one uploading', async () => {
+    const { backend } = setup();
+    await tick();
+    await pickMany(three());
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel the rest' }));
+    await tick();
+    expect(within(chip()).queryByText(/more waiting/)).toBeNull();
+    expect(screen.queryByText('Kitchen.png')).toBeNull();
+    FakeXhr.last.respond(200);
+    await tick();
+    expect(FakeXhr.all).toHaveLength(1);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
+  });
+
+  it('cancelling the first photo of a new tour moves on to the next, and keeps the tour', async () => {
+    const { backend, router } = setup();
+    backend.state.newPanoIds = ['pano-b'];
+    await tick();
+    await pickMany(three().slice(0, 2));
+    fireEvent.click(within(chip()).getByRole('button', { name: 'Cancel upload' }));
+    await tick();
+    expect(FakeXhr.all[0]?.aborted).toBe(true);
+    expect(FakeXhr.all).toHaveLength(2);
+    expect(backend.state.calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+  });
+});
+
 describe('editor links into /app/new', () => {
   it('?tour= adds the uploaded pano to that tour and returns to its editor', async () => {
     const { backend, router } = setup('/app/new?tour=tour-1');

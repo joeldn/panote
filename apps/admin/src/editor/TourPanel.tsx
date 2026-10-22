@@ -15,7 +15,7 @@ export interface TourPanelProps {
   docs: EditorDocs;
   currentId: string | null;
   startId: string | null;
-  /** Unsaved edits: adding a pano leaves the editor, so it waits for a save. */
+  /** Unsaved edits: the library and the Add pano link (no `onAddPano`) wait for a save. */
   dirty: boolean;
   /** Uploads into this tour that have no scene yet, oldest first. */
   pending?: PendingUpload[];
@@ -32,6 +32,11 @@ export interface TourPanelProps {
   onDisconnect: (to: string) => void;
   /** Opens the library picker: add a pano that's already uploaded. */
   onAddFromLibrary?: () => void;
+  /**
+   * Opens the upload picker over the editor. Unsaved edits stay: each upload appends its
+   * scene on the server and the editor folds it into the draft (useEditor's syncAppended).
+   */
+  onAddPano?: () => void;
 }
 
 const STATUS_LABEL: Record<SceneStatus, string> = {
@@ -61,6 +66,7 @@ export function TourPanel({
   onNudge,
   onDisconnect,
   onAddFromLibrary,
+  onAddPano,
 }: TourPanelProps) {
   const scenes = docs.tour.current.scenes;
   const current = currentId ? docs.scenes[currentId] : undefined;
@@ -87,7 +93,18 @@ export function TourPanel({
               From library
             </Button>
           )}
-          {dirty ? (
+          {onAddPano ? (
+            <Button
+              variant="accent"
+              size="sm"
+              pill
+              icon="fa-solid fa-plus"
+              aria-haspopup="dialog"
+              onClick={onAddPano}
+            >
+              Add pano
+            </Button>
+          ) : dirty ? (
             <Button
               variant="accent"
               size="sm"

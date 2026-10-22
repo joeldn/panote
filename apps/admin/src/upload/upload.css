@@ -77,6 +77,15 @@
   font: 500 13.5px/1.4 var(--fbody);
   color: var(--accent);
 }
+.up-overlay__error p {
+  margin: 0;
+}
+.up-overlay__error ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
 .up-overlay__cancel {
   margin-top: 20px;
   border: 0;
@@ -187,6 +196,11 @@
   margin: 10px 0 0;
   font: 400 12px/1.45 var(--fbody);
   color: rgba(244, 241, 234, 0.62);
+}
+.up-chip__queue {
+  margin: 6px 0 0;
+  font: 400 11.5px/1.4 var(--fmono);
+  color: rgba(244, 241, 234, 0.6);
 }
 .up-chip__actions {
   display: flex;

@@ -56,6 +56,13 @@ the code wins:
   `docs/decisions.md`); the editor's language switcher sits in the top-right bar.
 - The 2D floor-plan mini-map — `mapX`/`mapY` already exist on `TourDoc`, but
   the viewer feature itself is not built.
+- **Several photos at once.** The design's drop zone takes one file. New tour and
+  Add pano take several: they upload one at a time, in the order picked, into one
+  tour. The chip shows the file in flight plus "N more waiting" and a "Cancel the
+  rest" action; waiting files show as "Waiting" cards in the editor. An account
+  limit or a sign-in stops the rest, and the chip says how many never started.
+  Add pano opens over the editor, so unsaved edits stay; the editor folds each
+  appended scene into its draft. Replace image still takes one file.
 
 ## Where the code deliberately drops part of the design
 

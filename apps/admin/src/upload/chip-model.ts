@@ -23,9 +23,19 @@ export interface ActiveUpload {
   /** Set once the PUT completed, so a retry re-uploads over the same pano. */
   landed: { panoId: string; mode: UploadMode } | null;
   finalize: FinalizeState;
+  /** Files picked with this one that wait for their turn (uploads run one at a time). */
+  queued?: number;
+  /** Files of its batch that never started: this one hit a limit or needs a sign-in. */
+  skipped?: number;
+  /** The presign was refused by an account limit (`quota`) or the rate limit (`rate`). */
+  limited?: UploadLimit;
 }
 
-export type ChipActionId = 'retry-upload' | 'retry-poll' | 'retry-finalize' | 'sign-in' | 'repick';
+/** Why a presign was refused for good (`quota`), or for now (`rate`); null when it wasn't. */
+export type UploadLimit = 'quota' | 'rate' | null;
+
+export type ChipActionId =
+  'retry-upload' | 'retry-poll' | 'retry-finalize' | 'sign-in' | 'repick' | 'cancel-queue';
 
 export interface ChipModel {
   tone: 'upload' | 'processing' | 'ready' | 'failed' | 'timed-out';
@@ -37,6 +47,8 @@ export interface ChipModel {
   pct: number | null;
   bar: 'determinate' | 'indeterminate' | 'none';
   note: string;
+  /** "3 more waiting": the rest of a batch, one line under the note. */
+  queue: string | null;
   actions: Array<{ id: ChipActionId; label: string }>;
   dismissLabel: string;
 }
@@ -54,6 +66,7 @@ const processing = (note: string): ChipModel => ({
   pct: null,
   bar: 'indeterminate',
   note,
+  queue: null,
   actions: [],
   // Hiding never stops the work: it finishes in the background (UploadProvider.dismiss).
   dismissLabel: 'Hide (keeps processing)',
@@ -67,11 +80,20 @@ const failed = (title: string, note: string, actions: ChipModel['actions']): Chi
   pct: null,
   bar: 'none',
   note,
+  queue: null,
   actions,
   dismissLabel: 'Dismiss',
 });
 
 const SIGNED_OUT = 'You’ve been signed out';
+
+/** The rest of a batch that a limit or a sign-in stopped: it has to be picked again. */
+const skippedNote = (a: ActiveUpload, when: string): string => {
+  if (!a.skipped) return '';
+  const one = a.skipped === 1;
+  const what = one ? '1 more photo wasn’t' : `${a.skipped} more photos weren’t`;
+  return ` ${what} uploaded. Add ${one ? 'it' : 'them'} again ${when}.`;
+};
 
 const finalizeFailed = (f: Extract<FinalizeState, { status: 'failed' }>): ChipModel =>
   f.auth
@@ -105,7 +127,8 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         pct,
         bar: 'determinate',
         note: 'Full-resolution original — keep this tab open',
-        actions: [],
+        queue: a.queued ? `${a.queued} more waiting` : null,
+        actions: a.queued ? [{ id: 'cancel-queue', label: 'Cancel the rest' }] : [],
         dismissLabel: 'Cancel upload',
       };
     }
@@ -119,6 +142,7 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         value: null,
         pct: null,
         bar: 'none',
+        queue: null,
         // Still slow-polling until the give-up cap; a manifest switches over on its own.
         note: m.checking
           ? 'Taking longer than usual — we’ll keep checking.'
@@ -143,6 +167,7 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         pct: null,
         bar: 'none',
         note: 'Tiles cached · zoom into every pixel',
+        queue: null,
         actions: [],
         dismissLabel: 'Dismiss',
       };
@@ -152,9 +177,9 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         case 'auth':
           return failed(
             SIGNED_OUT,
-            m.resumable
+            (m.resumable
               ? 'Your photo is uploaded. Sign in again and we’ll pick up where we left off.'
-              : 'Sign in again to finish uploading it.',
+              : 'Sign in again to finish uploading it.') + skippedNote(a, 'after you sign in'),
             [{ id: 'sign-in', label: 'Sign in' }],
           );
         case 'tiling':
@@ -169,6 +194,19 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
             'The upload didn’t finish. Check your connection and try again.',
             [reupload(a)],
           );
+        case 'presign':
+          // An account limit: the server's message says which, and retrying can't help.
+          // The rate limit clears within a minute, so that one can be tried again.
+          if (a.limited) {
+            return failed(
+              'Upload limit reached',
+              m.message + skippedNote(a, 'later'),
+              a.limited === 'rate' ? [reupload(a)] : [],
+            );
+          }
+          return failed('Couldn’t start the upload', 'Something went wrong on our side.', [
+            reupload(a),
+          ]);
         default:
           return failed('Couldn’t start the upload', 'Something went wrong on our side.', [
             reupload(a),

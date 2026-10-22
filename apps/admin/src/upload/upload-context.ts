@@ -28,17 +28,21 @@ export interface PendingUpload {
   finalize: FinalizeState;
   /** A local preview is decoded: `previewFor(panoId)` returns it once `panoId` is known. */
   hasPreview: boolean;
+  /** Picked with others and waiting its turn: nothing has been sent for it yet. */
+  queued?: boolean;
 }
 
 export interface Uploads {
   active: ActiveUpload | null;
-  /** True while an upload is in flight; a new one can't start until it settles. */
+  /** True while an upload is in flight; files picked meanwhile wait their turn. */
   busy: boolean;
   /**
-   * Starts an upload (creating the tour first for `new-tour`). Resolves once it's
-   * under way with the tour it lands in; rejects if it couldn't start.
+   * Starts uploading (creating the tour first for `new-tour`): one file, or several that
+   * go one after another into the same tour, in the order given (a replace takes one).
+   * Resolves once the first is under way, or queued behind an upload already running,
+   * with the tour they land in; rejects if they couldn't start.
    */
-  begin(file: File, target: UploadTarget): Promise<{ tourId: string | null }>;
+  begin(files: File | readonly File[], target: UploadTarget): Promise<{ tourId: string | null }>;
   /** Opens the picker for "Add pano" (`add`) or the camera icon (`replace`). */
   pick(target: PanoTarget): void;
   /** Set after a sign-in redirect lost the file: the target to re-pick it for. */
