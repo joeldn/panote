@@ -109,13 +109,13 @@ describe('createAuth', () => {
   it('signs in with passwordless email through Universal Login, like any connection', async () => {
     const client = fakeClient();
     const auth = createAuth(
-      { ...config, connections: ['google-oauth2', 'github', 'linkedin', 'email'] },
+      { ...config, connections: ['google-oauth2', 'apple', 'facebook', 'email'] },
       { redirectUri: CB, createClient: async () => client },
     );
     expect(auth.connections.map((c) => [c.id, c.kind])).toEqual([
       ['google-oauth2', 'social'],
-      ['github', 'social'],
-      ['linkedin', 'social'],
+      ['apple', 'social'],
+      ['facebook', 'social'],
       ['email', 'email'],
     ]);
     await auth.signIn({ connection: 'email', returnTo: '/app/new' });

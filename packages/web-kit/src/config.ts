@@ -13,8 +13,6 @@ export const KNOWN_CONNECTIONS = {
   'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
   apple: { label: 'Apple', icon: 'fa-brands fa-apple', kind: 'social' },
   windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft', kind: 'social' },
-  github: { label: 'GitHub', icon: 'fa-brands fa-github', kind: 'social' },
-  linkedin: { label: 'LinkedIn', icon: 'fa-brands fa-linkedin-in', kind: 'social' },
   facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook', kind: 'social' },
   email: { label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' },
 } as const;

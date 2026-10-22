@@ -7,15 +7,6 @@ import { describe, expect, it } from 'vitest';
 
 // Copy rule (docs/design/NOTES.md): free, not open source; no export/download promises.
 const BANNED = /open[\s-]*source|\bmit\b|github|export|download/i;
-// GitHub as a sign-in provider names an account you sign in with, not where code lives, so it
-// may appear only inside a list of sign-in providers: another provider before it, and another
-// provider (or the email code option) after it.
-const PROVIDER = '(?:Google|Apple|Microsoft|LinkedIn|Facebook)';
-const SIGN_IN_PROVIDERS = new RegExp(
-  `${PROVIDER},\\s+GitHub(?=(?:,|\\s+or)\\s+(?:${PROVIDER}|an email code)\\b)`,
-  'g',
-);
-const isBanned = (text: string) => BANNED.test(text.replace(SIGN_IN_PROVIDERS, ''));
 // Product limits are real (caps per scene, tour and account): say "generous", never "unlimited".
 const LIMITLESS = /unlimited|no[\s-]+limits?\b|limitless|no counting/i;
 const SRC = new URL('.', import.meta.url).pathname;
@@ -53,29 +44,25 @@ describe('copy rule', () => {
   });
 
   it('flags banned words', () => {
-    for (const bad of ['Open source', 'MIT licence', 'on GitHub', 'Export tours', 'download'])
-      expect(isBanned(bad)).toBe(true);
-    expect(isBanned('No limits, submit')).toBe(false);
+    for (const bad of [
+      'Open source',
+      'MIT licence',
+      'on GitHub',
+      'Continue with GitHub',
+      'Google, Apple, GitHub or Facebook',
+      'Export tours',
+      'download',
+    ])
+      expect(BANNED.test(bad)).toBe(true);
+    expect(BANNED.test('No limits, submit')).toBe(false);
     for (const bad of ['Unlimited tours', 'free with no limits', 'No-limit plan', 'no counting'])
       expect(LIMITLESS.test(bad)).toBe(true);
     for (const ok of ['Generous limits', 'Are there resolution limits?'])
       expect(LIMITLESS.test(ok)).toBe(false);
   });
 
-  it('lets GitHub appear only inside a list of sign-in providers', () => {
-    expect(isBanned('Google, Apple, Microsoft, GitHub, LinkedIn or Facebook')).toBe(false);
-    expect(isBanned('Microsoft, GitHub,\n        LinkedIn')).toBe(false);
-    expect(isBanned('Google, Apple, GitHub or an email code')).toBe(false);
-    expect(isBanned('Apple, GitHub and our source')).toBe(true);
-    expect(isBanned('Apple, GitHub, and the code')).toBe(true);
-    expect(isBanned('Apple, GitHub or download')).toBe(true);
-    expect(isBanned('GitHub, LinkedIn')).toBe(true);
-    expect(isBanned('Microsoft, GitHub, LinkedIn. Source on GitHub')).toBe(true);
-    expect(isBanned('Continue with GitHub')).toBe(true);
-  });
-
   it.each(files.map((f) => [relative(SRC, f), f]))('%s has no banned copy', (_, file) => {
-    expect(copyIn(file).filter(isBanned)).toEqual([]);
+    expect(copyIn(file).filter((text) => BANNED.test(text))).toEqual([]);
   });
 
   it.each(files.map((f) => [relative(SRC, f), f]))('%s promises no unlimited use', (_, file) => {

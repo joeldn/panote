@@ -41,8 +41,8 @@ const without = (u: User, key: 'email' | 'email_verified' | 'created_at'): User 
 
 const google = user('google-oauth2|111', '2026-01-01T00:00:00.000Z');
 const emailUser = user('email|222', '2026-03-01T00:00:00.000Z');
-const github = user('github|333', '2026-05-01T00:00:00.000Z', {
-  identities: [{ provider: 'github', user_id: 333 }],
+const appleUser = user('apple|333', '2026-05-01T00:00:00.000Z', {
+  identities: [{ provider: 'apple', user_id: 333 }],
 });
 
 const fakeApi = () => ({ authentication: { setPrimaryUser: vi.fn() } });
@@ -55,18 +55,18 @@ const fakeManagement = (
 });
 
 describe('TRUSTED_PROVIDERS', () => {
-  it('trusts passwordless email, Google, Apple and GitHub only', () => {
-    expect([...TRUSTED_PROVIDERS].sort()).toEqual(['apple', 'email', 'github', 'google-oauth2']);
+  it('trusts passwordless email, Google and Apple only', () => {
+    expect([...TRUSTED_PROVIDERS].sort()).toEqual(['apple', 'email', 'google-oauth2']);
   });
 });
 
 describe('choosePrimary', () => {
   it('picks the oldest verified user with the same email', () => {
-    expect(choosePrimary(emailUser, [emailUser, github, google])).toBe('google-oauth2|111');
+    expect(choosePrimary(emailUser, [emailUser, appleUser, google])).toBe('google-oauth2|111');
   });
 
   it('leaves the current user alone when it is the oldest', () => {
-    expect(choosePrimary(google, [google, emailUser, github])).toBeNull();
+    expect(choosePrimary(google, [google, emailUser, appleUser])).toBeNull();
     expect(choosePrimary(google, [])).toBeNull();
   });
 
@@ -75,17 +75,17 @@ describe('choosePrimary', () => {
       { ...google, email_verified: false },
       { ...user('apple|9', '2025-01-01T00:00:00.000Z'), blocked: true },
       user('google-oauth2|8', '2025-02-01T00:00:00.000Z', { email: 'someone@else.example' }),
-      without(user('github|7', '2025-03-01T00:00:00.000Z'), 'email_verified'),
+      without(user('apple|7', '2025-03-01T00:00:00.000Z'), 'email_verified'),
     ];
     expect(choosePrimary(emailUser, others)).toBeNull();
   });
 
   it('never links from an unverified current email', () => {
-    expect(choosePrimary({ ...github, email_verified: false }, [google])).toBeNull();
-    expect(choosePrimary(without(github, 'email'), [google])).toBeNull();
+    expect(choosePrimary({ ...appleUser, email_verified: false }, [google])).toBeNull();
+    expect(choosePrimary(without(appleUser, 'email'), [google])).toBeNull();
   });
 
-  it.each(['windowslive', 'linkedin', 'facebook', 'auth0'])(
+  it.each(['windowslive', 'facebook', 'github', 'linkedin', 'auth0'])(
     'never joins a %s sign-in, as the current user or as the primary',
     (provider) => {
       const untrusted = user(`${provider}|5`, '2025-01-01T00:00:00.000Z');
@@ -126,26 +126,26 @@ describe('choosePrimary', () => {
 
   it('is deterministic: same created_at breaks on user_id, a missing created_at sorts last', () => {
     const a = user('apple|a', '2026-02-01T00:00:00.000Z');
-    const b = user('github|b', '2026-02-01T00:00:00.000Z');
+    const b = user('apple|b', '2026-02-01T00:00:00.000Z');
     expect(choosePrimary(b, [a])).toBe('apple|a');
     expect(choosePrimary(a, [b])).toBeNull();
     const undated = without(user('apple|0', ''), 'created_at');
-    expect(choosePrimary(undated, [github])).toBe('github|333');
-    expect(choosePrimary(github, [undated])).toBeNull();
+    expect(choosePrimary(undated, [appleUser])).toBe('apple|333');
+    expect(choosePrimary(appleUser, [undated])).toBeNull();
   });
 });
 
 describe('linkAccounts', () => {
   it('links the current user into the primary and continues the login as the primary', async () => {
     const api = fakeApi();
-    const management = fakeManagement([google, github]);
+    const management = fakeManagement([google, appleUser]);
     const log = vi.fn();
-    const result = await linkAccounts({ user: github }, api, { management, log });
+    const result = await linkAccounts({ user: appleUser }, api, { management, log });
     expect(result).toBe('google-oauth2|111');
     expect(management.usersByEmail).toHaveBeenCalledWith(EMAIL, expect.any(AbortSignal));
     expect(management.link).toHaveBeenCalledWith(
       'google-oauth2|111',
-      { provider: 'github', user_id: '333' },
+      { provider: 'apple', user_id: '333' },
       expect.any(AbortSignal),
     );
     expect(api.authentication.setPrimaryUser).toHaveBeenCalledWith('google-oauth2|111');
@@ -172,7 +172,7 @@ describe('linkAccounts', () => {
     async (status) => {
       const api = fakeApi();
       // A concurrent first login: the first lookup saw a primary that was itself just linked away.
-      const gone = user('github|1', '2025-12-01T00:00:00.000Z');
+      const gone = user('apple|1', '2025-12-01T00:00:00.000Z');
       const management = fakeManagement([]);
       management.usersByEmail.mockResolvedValueOnce([gone, google]).mockResolvedValueOnce([google]);
       management.link.mockRejectedValueOnce(new ManagementError('stale', status));
@@ -181,7 +181,7 @@ describe('linkAccounts', () => {
       expect(management.usersByEmail).toHaveBeenCalledTimes(2);
       expect(management.link).toHaveBeenNthCalledWith(
         1,
-        'github|1',
+        'apple|1',
         expect.anything(),
         expect.anything(),
       );
@@ -339,9 +339,9 @@ describe('linkAccounts', () => {
   it('does not link a user that already has linked identities', async () => {
     const management = fakeManagement([google]);
     const primaryOfItsOwn = {
-      ...github,
+      ...appleUser,
       identities: [
-        { provider: 'github', user_id: 333 },
+        { provider: 'apple', user_id: 333 },
         { provider: 'email', user_id: '444' },
       ],
     };
@@ -431,10 +431,10 @@ describe('managementClient', () => {
   });
 
   it('finds users stored in either case: the address as given and in lower case, de-duplicated', async () => {
-    const mixed = { ...github, email: 'Maya@Example.com' };
+    const mixed = { ...appleUser, email: 'Maya@Example.com' };
     const { m, fetch } = setup([google, mixed]);
     expect((await m.usersByEmail('Maya@Example.com')).map((u) => u.user_id).sort()).toEqual([
-      'github|333',
+      'apple|333',
       'google-oauth2|111',
     ]);
     const lookups = fetch.mock.calls
@@ -451,7 +451,7 @@ describe('managementClient', () => {
   });
 
   it('shares one token request between the two lookups', async () => {
-    const mixed = { ...github, email: 'Maya@Example.com' };
+    const mixed = { ...appleUser, email: 'Maya@Example.com' };
     const { m, fetch } = setup([google, mixed]);
     await m.usersByEmail('Maya@Example.com');
     expect(fetch.mock.calls.filter(([u]) => u.endsWith('/oauth/token'))).toHaveLength(1);

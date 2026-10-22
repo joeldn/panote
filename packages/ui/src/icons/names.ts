@@ -163,7 +163,6 @@ export const BRAND_ICONS = [
   'apple',
   'facebook',
   'facebook-f',
-  'github',
   'google',
   'linkedin-in',
   'microsoft',

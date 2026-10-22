@@ -31,11 +31,10 @@
  * on both sides of a link. Anything else signs in normally but is never joined.
  * - email: Auth0 passwordless, the one-time code itself proves the address.
  * - google-oauth2, apple: the provider verifies the address it reports.
- * - github: Auth0 passes on GitHub's verified flag (false for an unverified address).
  * Left out until reviewed: windowslive (Microsoft has a history of unverified email claims),
- * linkedin, facebook.
+ * facebook.
  */
-const TRUSTED_PROVIDERS = Object.freeze(['email', 'google-oauth2', 'apple', 'github']);
+const TRUSTED_PROVIDERS = Object.freeze(['email', 'google-oauth2', 'apple']);
 
 /** Each Management API and token call gives up after this, so a hung API can't fail a login. */
 const TIMEOUT_MS = 5000;

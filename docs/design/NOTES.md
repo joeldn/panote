@@ -16,9 +16,7 @@ only the UI chrome around it has to match.
 ## Copy rule
 
 The product is free, not open source. No "open source", "MIT", "GitHub", or
-export/download promises in UI copy. The one exception is GitHub as a sign-in
-provider ("Continue with GitHub", and the provider list on the privacy page):
-that names an account you sign in with, not where code lives.
+export/download promises in UI copy.
 
 ## Where API_BRIEF.md disagrees with the code
 
