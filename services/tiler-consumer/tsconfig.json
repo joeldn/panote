@@ -6,6 +6,7 @@
     "src/consumer.ts",
     "src/container-env.ts",
     "src/r2io.ts",
+    "src/superseded.ts",
     "src/backfill-args.ts",
     "src/failure-marker.ts",
     "src/alert.ts",

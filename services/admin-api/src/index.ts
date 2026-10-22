@@ -49,6 +49,7 @@ import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
@@ -488,12 +489,15 @@ app.onError(errorHandler);
 
 export default {
   fetch: app.fetch,
-  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6), and
-  // finishes (or re-sweeps) every account marked for deletion.
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
+  // finishes (or re-sweeps) every account marked for deletion, and deletes tile
+  // versions a re-tile superseded more than a day ago (no purge: nothing
+  // references their URLs any more, and edge copies age out on their own).
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
     ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
     ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
+    ctx.waitUntil(sweepSupersededTiles(env.BUCKET, now));
   },
 } satisfies ExportedHandler<Env>;
 

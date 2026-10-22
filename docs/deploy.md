@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
@@ -946,20 +946,71 @@ notification on overwrite the same as on first create, so nothing else has to be
 hand.
 
 After a change to the tiler's output itself (tile layout, encoding, pyramid shape), bump
-`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then
-re-trigger each pano by re-putting its original (verify these flags against
-`wrangler r2 object --help` before running):
+`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then re-tile
+with `services/admin-api/scripts/retile.ts`. It doesn't touch the originals: it HEADs each one and
+puts the same message on the upload queue (`pano-uploads-dev` for `pano-content-dev`,
+`pano-uploads` for `pano-content`) that R2's object-create notification would have, with the
+original's current size and ETag, so `tiler-consumer` handles it exactly like a fresh upload. It
+runs like the other operator scripts (Node 24 straight from TypeScript, a built workspace, the R2
+S3 credentials, and `--allow-bucket` for anything but a `-dev` bucket). It only lists what it
+would queue unless you pass `--apply`, which also needs `CF_QUEUES_TOKEN`: a Cloudflare API token
+with Queues edit permission on the account (it lists the queues to find the id, then sends batches
+of 100).
 
 ```bash
-pnpm --filter @service/admin-api exec wrangler r2 object get pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
-pnpm --filter @service/admin-api exec wrangler r2 object put pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+# What it would queue, sending nothing
+node services/admin-api/scripts/retile.ts --all
+node services/admin-api/scripts/retile.ts --pano <pano-uuid> --pano <pano-uuid>
+# Queue them
+CF_QUEUES_TOKEN=... node services/admin-api/scripts/retile.ts --all --apply
 ```
 
-Both need `--remote`, for the same reason as the end-to-end test above. Re-putting identical
-bytes **without** a version bump yields the same ETag, so the derived version string
-(`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
-rewriting identical keys rather than creating a new one. Old version dirs are left in place after
-a re-tile; cleaning them up is deferred to Wave 6.
+Finding the originals: the owner is only in the key, so the script lists every object under
+`panos/` (also with `--pano`). A pano with a `deleting` tombstone is skipped, and so is a named pano
+with no original. Every message starts a container: the queue's `max_concurrency` (5) paces them,
+see "Tiling time and the queue limit" below for what that means for a large `--all`.
+
+Re-tiling identical bytes **without** a version bump yields the same ETag, so the derived version
+string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
+rewriting identical keys rather than creating a new one.
+
+### Old version dirs
+
+Every successful re-tile leaves the previous version's tiles behind under `tiles/<panoId>/`. Once a
+job's manifest swap is confirmed (its post-PUT HEAD still sees the ETag it tiled), it records every
+other version dir it finds there at `tile-gc/<panoId>/<version>.json` (`{ v, originalKey,
+tilerVersion, supersededAt }`). Records are overwritten on every swap, so their time and tiler
+version always follow the latest one. `admin-api`'s daily cron (`17 3 * * *`, the same one as the
+slug-alias and account sweeps) deletes a recorded dir once the record is over 24 hours old, so a
+version goes 24-48 hours after it was superseded. Before deleting it checks, and keeps the dir if
+any check fails:
+
+- the manifest must be readable and name a different version (the version it names is never
+  deleted; that record just goes);
+- the pano's current original must not tile into that dir again (same ETag, same tiler version as
+  the job that superseded it), since a job may be writing there;
+- nothing in the dir may have been written after the record (a re-upload of old bytes, or a tiler
+  rollback, rewrote it); the record's time then moves to now.
+
+A pano whose original is gone has been deleted; its record and dir just go. A run acts on at most
+50 records (deleted or dropped) and looks at no more than 500; kept ones are checked again the next
+day. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+left over from before this existed are recorded the next time that pano re-tiles, so a
+`retile.ts --all` after deploying this clears them too, a day later.
+
+Records hold the owner-bearing original key, so deleting a pano (including through account
+deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job that confirmed its
+swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
+(the original is gone by then).
+
+After a tiler rollback, don't run `retile.ts` around the cron time (03:17 UTC). A job that starts
+writing into an old version dir while the sweep is deleting it would leave a manifest pointing at
+a half-deleted dir. The window is seconds, but there is no lock between the two.
+
+The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
+fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
+anyway; uncached ones would 404.
 
 ## Link-preview image (og.jpg) and its backfill
 
@@ -1091,12 +1142,12 @@ still catches it like any other late write; only if it happens after DELETE has 
 and removed the tombstone does a later DELETE take the no-proof path and skip `tiles/<panoId>/`
 entirely, leaving that one narrow case to the same manual per-key delete.
 
-A presigned upload URL stays valid for up to 900 seconds after `upload-api` issues it, and can
+A presigned upload URL stays valid for up to 600 seconds after `upload-api` issues it, and can
 still be used within that window to re-create a deleted pano's original — which re-tiles a pano
 that now has no `config.json`. That isn't a leak of anything new, and the pano can simply be
 deleted again. The replace-image path (`POST /api/upload-url` with `panoId`) has the same TOCTOU:
 its ownership HEAD check runs once, at presign time, so a presign issued just before a DELETE can
-still land up to 900s later and recreate the original after the delete completed. It stays
+still land up to 600s later and recreate the original after the delete completed. It stays
 confined to the caller's own owner-scoped prefix either way, so the impact is the same as the
 fresh-upload case above — the pano can simply be deleted again.
 
@@ -1132,7 +1183,11 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
    (`crypto.randomUUID()`, `PANO_PATTERN`); an id that fails it can't have been published, so only
    its counters and prefix are deleted.
 3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
-   `tiles/<panoId>/`, then the owner prefix). No reference or recent-upload checks: everything goes.
+   `tiles/<panoId>/` and of its superseded-version records under `tile-gc/<panoId>/`, which name the
+   owner's original key, then the owner prefix). No reference or recent-upload checks: everything
+   goes. A record a tiler job writes in the moment after that is dropped by the tile sweep 24-48
+   hours later (see "Old version dirs").
+   Then `upload-log/<owner>/`, upload-api's log of the upload URLs it issued (Owner quotas).
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
 If any step throws, the route still answers `202 {"status":"pending"}`: the account is already
@@ -1145,7 +1200,7 @@ including for a partial run.
 
 - Interrupted deletes (no `completedAt`) first, oldest request first, then finished ones.
 - A finished account costs one `LIST` (`limit: 1`) per owner prefix; only if something turned up
-  there (a presigned upload issued before the marker, valid for 900s) does it run the full delete
+  there (a presigned upload issued before the marker, valid for 600s) does it run the full delete
   again.
 - One run deletes at most `SWEEP_ITEM_BUDGET` (400) tours plus panos, and one account at most
   `SWEEP_ACCOUNT_ITEM_BUDGET` (100) of them, so one huge account can't starve the rest; what's
@@ -1275,25 +1330,47 @@ don't check the bundle (a view stores one counter per tourId); the per-IP limit 
 
 ### Owner quotas
 
-`upload-api` calls `checkQuota` (`src/quota.ts`) last before it signs an upload URL, after the
-auth, rate limit, body checks and the account markers. Two optional vars:
+`upload-api` checks owner quotas (`src/quota.ts`) last before it signs an upload URL, after the
+auth, rate limit, body checks and the account markers. Three vars, set in both env blocks of
+`services/upload-api/wrangler.jsonc`:
 
-- `MAX_PANOS_PER_OWNER`: most panos (directories under `panos/<owner>/`) one owner may hold. A
-  replace doesn't count as a new pano.
-- `MAX_BYTES_PER_OWNER`: most bytes of originals one owner may hold, counting the declared `size`
-  of the upload; a replace frees the old original's bytes.
+- `MAX_PANOS_PER_OWNER` (`500`): most panos (directories under `panos/<owner>/`) one owner may
+  hold. A replace doesn't add a pano, so it is allowed at the limit, but not once the owner is
+  already over it (the limit was lowered under them).
+- `MAX_BYTES_PER_OWNER` (`21474836480`, 20 GiB): most bytes of originals one owner may hold,
+  counting the declared `size` of the upload; a replace frees the old original's bytes.
+- `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most upload URLs one owner may get in a rolling 24
+  hours, new uploads and replaces alike (each is a tiling job), counting this one. It bounds
+  tiling compute per account (a job is about $0.01); the global backstops are the 60-per-minute
+  `UPLOAD_URL_LIMITER` and the tiler's `max_concurrency`.
 
-Unset or empty means unlimited, and costs nothing: the owner's prefix is only listed (S3
-`ListObjectsV2`, one Class A operation per 1,000 objects) when a limit is set. That listing is a
-known cost: with a limit on, it runs in full on every upload-URL request. A pano with a delete
-tombstone (`deleting`) counts toward neither limit. Over a limit:
-`403 {"error":"pano limit reached"}` or `403 {"error":"storage limit reached"}`. A listing that
-fails is a `502`, and a value that isn't a non-negative integer refuses every upload (`500`), so a
-typo can't silently lift the limit. It is a soft cap: it counts what's stored now and the declared
-size, so concurrent requests can each pass, and the uploaded file can differ from the declared
-size (up to the 150 MiB cap). To turn a limit on, add it to `vars` in both env blocks of
-`services/upload-api/wrangler.jsonc`, delete its optional line from `src/env.d.ts`, run
-`pnpm --filter @service/upload-api run types` and deploy.
+Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
+limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
+1,000 objects) in full on every upload-URL request: that is a known cost. A pano with a delete
+tombstone (`deleting`) counts toward neither. Over a limit: `403 {"error":"pano limit reached"}`,
+`403 {"error":"storage limit reached"}` or `403 {"error":"daily upload limit reached"}`, checked
+in that order; the admin app words each one (`packages/web-kit/src/api/http.ts`). A listing or
+log write that fails is a `502` with no URL, and a value that isn't a non-negative integer refuses
+every upload (`500`), so a typo can't silently lift a limit. They are soft caps: concurrent
+requests can each pass, since each counts what is stored when it reads.
+
+**Upload log.** The daily limit counts URLs, not stored originals, so uploading and then deleting,
+or asking for URLs and never using them, doesn't get round it. Before it returns a URL,
+`upload-api` writes one empty object, `upload-log/<owner>/<issued, basic ISO 8601>-<panoId>`
+(`uploadLogKey` in `@internal/contracts`); if that write fails, no URL. Each request lists
+`upload-log/<owner>/` once (about one entry per URL in the past day, so a page or two at most) and
+counts the entries from the past 24 hours. Older entries, and any name it can't read, aren't
+counted and are deleted best-effort after the response (`waitUntil`, at most
+`UPLOAD_LOG_PRUNE_MAX` = 50 per request). It sits outside `panos/` because `admin-api` lists that
+prefix as the owner's panos, and outside the R2 notification rule (prefix `panos/`). It is private:
+the CDN's WAF rule only lets `tiles/`, `pub/` and `slugs/` through. Account deletion removes
+`upload-log/<owner>/` after the panos, and the daily sweep's "anything left?" check lists it too,
+so an entry logged just before the deletion marker is caught. An owner who stops uploading keeps
+up to a day's entries (empty objects) until their next upload-URL request. A Workers Rate Limiting
+binding can't express a day (its period is 10 or 60 seconds), which is why the count lives in R2.
+
+To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
+(the vars are in the generated `env.d.ts`) and deploy.
 
 ### Report link
 
@@ -1493,6 +1570,15 @@ the US Copyright Office.
   original, and a key `deriveUploadTarget` rejects. A charset-invalid key (bad owner or panoId) now
   gets no marker at all — `tileFailedKeyFromOriginalKey` validates both segments and the write is
   skipped with a log line, rather than writing a marker keyed on a junk panoId.
+- **Oversized originals are deleted.** Once the `oversize` marker is written, the consumer
+  deletes the original (`deleteOversizedOriginal` in `services/tiler-consumer/src/failure-marker.ts`),
+  after re-HEADing it to make sure it's still the one the event named; only that one key goes, the
+  marker stays. `admin-api` reads an `oversize` marker with no original as `tiling: 'failed'`, so the
+  upload chip and editor still show the failed state. It's kept when the pano already has a
+  manifest (an oversized replace): the old tiles are still live and the original is what proves
+  ownership of them. The web app rejects a file over 150 MB before upload, so this only happens to
+  an upload that bypassed it (content-length isn't signed); the chip shows the generic "couldn't
+  process this image" copy, since no failure reason reaches it.
 - **Resurrection guard (review fix, 2026-09-26).** Before writing, the consumer HEADs the original
   at `bucket.head(<notification key>)`; the write is skipped (logged) if the original no longer
   exists, or if its etag differs from the R2 event's `object.eTag` (a newer upload already
@@ -1985,15 +2071,20 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   purge by URL or prefix — B6 adds a best-effort purge on delete, verified in dev on 2026-10-08
   (see "CDN purge on delete").
 - **Hardened, verified in dev (2026-10-08): the presigned upload PUT pins content-type.**
-  `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`). Against
+  `presignPut` signs `content-type` alongside `host` (then `SignedHeaders=content-type;host`). Against
   one presigned URL for an `image/jpeg` upload, a PUT with `content-type: image/png` and one with
   no content-type both got `403` (`SignatureDoesNotMatch`) and wrote nothing; the same PUT with
-  `image/jpeg` got `200`. **content-length is not signed, and R2 does not enforce it** — also
-  checked 2026-10-08: a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`. The
-  150 MiB size cap is therefore enforced only at presign (input validation on the presign request
-  in `upload-api`) and in the tiler, which backstops it with its own byte (`MAX_ORIGINAL_BYTES`
-  var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
-  (`packages/tiler/src/pyramid.ts:43`) caps.
+  `image/jpeg` got `200`.
+- **Signed but unverified: the presigned upload PUT pins content-length.** On 2026-10-08, with
+  content-length unsigned, a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`.
+  `upload-api` now also signs `content-length` as the declared `size`
+  (`SignedHeaders=content-length;content-type;host`); the browser sends a `File`'s size as
+  Content-Length itself, which is that `size`. Whether R2 checks a signed content-length on a
+  presigned PUT has not been verified in dev yet: until a PUT of a different length is seen to get
+  `403`, treat the 150 MiB size cap as enforced only at presign (input validation on the presign
+  request in `upload-api`) and in the tiler, which backstops it with its own byte
+  (`MAX_ORIGINAL_BYTES` var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
+  (`packages/tiler/src/pyramid.ts:43`) caps. If R2 ignores it, uploads still work as before.
 - **Fixed, live in dev (unit O1).** A tile 404 used to be edge-cached for 4h (`text/html`,
   `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
   `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge
@@ -2011,6 +2102,10 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
   can't list bucket objects without S3 credentials.
+- **Originals that never tiled aren't swept.** An original whose tiling dead-lettered (or that was
+  abandoned before any config referenced it) stays until the owner deletes the pano. Sweeping them
+  safely needs a scan of every owner's `panos/` prefix and a check that none of that owner's tours
+  references the pano; that's a follow-up, not a daily job over the whole bucket.
 - **The DLQ alert email is throttled, not batched on a timer.** At most one email per queue per
   30 minutes; a burst sends the first email at once and counts the rest into the next one (see
   "Tiling failure marker and alerting"). If no failure follows the burst, the held count is never
