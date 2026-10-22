@@ -28,6 +28,26 @@ describe('keys', () => {
   it('builds a config key with an encoded (base64url) owner segment and a verbatim panoId', () => {
     expect(configKey('auth0|abc', 'p1')).toBe(`panos/${encodeId('auth0|abc')}/p1/config.json`);
   });
+  it('encodes every sign-in provider sub to a distinct, URL-safe owner segment', () => {
+    const subs = [
+      'google-oauth2|111',
+      'apple|000123.abc.4567',
+      'windowslive|9f8e7d',
+      'github|583231',
+      'linkedin|AbC-123_x',
+      'facebook|10220',
+      'email|65f1c0de2a',
+    ];
+    const owners = subs.map(encodeId);
+    expect(new Set(owners).size).toBe(subs.length);
+    for (const [i, owner] of owners.entries()) {
+      expect(owner).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(atob(owner.replace(/-/g, '+').replace(/_/g, '/'))).toBe(subs[i]);
+      expect(tileFailedKeyFromOriginalKey(`panos/${owner}/p1/original`)).toBe(
+        `panos/${owner}/p1/tile-failed`,
+      );
+    }
+  });
   it('builds a list prefix', () => {
     expect(userPanosPrefix('auth0|abc')).toBe(`panos/${encodeId('auth0|abc')}/`);
   });

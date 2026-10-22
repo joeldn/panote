@@ -102,6 +102,8 @@ export interface SignInConnection {
   id: ConnectionId;
   label: string;
   icon: string;
+  /** `email` is the passwordless one-time-code button, shown apart from the social ones. */
+  kind: 'social' | 'email';
 }
 
 export interface Auth {

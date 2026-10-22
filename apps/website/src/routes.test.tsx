@@ -53,6 +53,16 @@ describe('website routes', () => {
     const account = await screen.findByRole('heading', { name: 'Your account' });
     const text = account.nextElementSibling?.textContent ?? '';
     for (const { label } of Object.values(KNOWN_CONNECTIONS)) expect(text).toContain(label);
+    expect(text).toContain('a one-time code we email to it');
+  });
+
+  it('privacy says sign-ins with the same verified email are one account', async () => {
+    renderAt('/privacy');
+    const account = await screen.findByRole('heading', { name: 'Your account' });
+    const text = (account.nextElementSibling?.textContent ?? '').replace(/\s+/g, ' ');
+    expect(text).toContain(
+      'has confirmed that address is yours, they are joined into one Panote account',
+    );
   });
 
   it('falls back to a 404 page', async () => {

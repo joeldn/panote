@@ -26,7 +26,9 @@ export const USER = { sub: 'google-oauth2|1', name: 'Maya Larsson', email: 'maya
 export function fakeAuth(overrides: Partial<Auth> = {}): Auth {
   return {
     configured: true,
-    connections: [{ id: 'google-oauth2', label: 'Google', icon: 'fa-brands fa-google' }],
+    connections: [
+      { id: 'google-oauth2', label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
+    ],
     signIn: vi.fn(async () => {}),
     handleCallback: vi.fn(async () => '/app/'),
     getAccessToken: vi.fn(async () => 'jwt-token'),

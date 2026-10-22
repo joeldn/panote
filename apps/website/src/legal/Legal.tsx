@@ -31,12 +31,14 @@ export function Privacy() {
 
       <h2>Your account</h2>
       <p>
-        You sign in with an account you already have with Google, Apple, Microsoft or Facebook
-        (whichever the sign-in screen offers). Sign-in is handled by Auth0, which passes us an
-        account id and, where the provider shares them, your name, email address and profile
-        picture. We use these to sign you in, show who is signed in, and link your tours to you.
-        Your browser keeps the sign-in session in local storage so you stay signed in between
-        visits.
+        You sign in with an account you already have with Google, Apple, Microsoft, GitHub, LinkedIn
+        or Facebook, or with your email address and a one-time code we email to it (whichever the
+        sign-in screen offers). Sign-in is handled by Auth0, which passes us an account id and,
+        where the provider shares them, your name, email address and profile picture. We use these
+        to sign you in, show who is signed in, and link your tours to you. If you sign in in more
+        than one of these ways with the same email address, and each one has confirmed that address
+        is yours, they are joined into one Panote account. Your browser keeps the sign-in session in
+        local storage so you stay signed in between visits.
       </p>
 
       <h2>What you upload</h2>
@@ -66,7 +68,11 @@ export function Privacy() {
       <ul>
         <li>Cloudflare: hosting, storage, content delivery and visit counts.</li>
         <li>Auth0 (Okta): sign-in.</li>
-        <li>Google, Apple, Microsoft or Facebook: whichever account you sign in with.</li>
+        <li>
+          Google, Apple, Microsoft, GitHub, LinkedIn or Facebook: whichever account you sign in
+          with.
+        </li>
+        <li>Our email delivery provider: sending one-time sign-in codes.</li>
       </ul>
       <p>We don’t show ads and we don’t sell or rent personal data.</p>
 

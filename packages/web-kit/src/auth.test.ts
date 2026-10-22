@@ -71,7 +71,7 @@ describe('createAuth', () => {
   it('exposes only configured connections (Google only by default)', () => {
     const auth = createAuth(config, { redirectUri: CB, createClient: async () => fakeClient() });
     expect(auth.connections).toEqual([
-      { id: 'google-oauth2', label: 'Google', icon: 'fa-brands fa-google' },
+      { id: 'google-oauth2', label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
     ]);
   });
 
@@ -104,6 +104,25 @@ describe('createAuth', () => {
         authorizationParams: { connection: 'windowslive', redirect_uri: CB },
       }),
     );
+  });
+
+  it('signs in with passwordless email through Universal Login, like any connection', async () => {
+    const client = fakeClient();
+    const auth = createAuth(
+      { ...config, connections: ['google-oauth2', 'github', 'linkedin', 'email'] },
+      { redirectUri: CB, createClient: async () => client },
+    );
+    expect(auth.connections.map((c) => [c.id, c.kind])).toEqual([
+      ['google-oauth2', 'social'],
+      ['github', 'social'],
+      ['linkedin', 'social'],
+      ['email', 'email'],
+    ]);
+    await auth.signIn({ connection: 'email', returnTo: '/app/new' });
+    expect(client.loginWithRedirect).toHaveBeenCalledWith({
+      authorizationParams: { connection: 'email', redirect_uri: CB },
+      appState: { returnTo: '/app/new' },
+    });
   });
 
   it('handleCallback returns the stored path', async () => {

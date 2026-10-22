@@ -344,6 +344,32 @@ button.pn-chip {
   background: var(--ink-05);
   border-color: var(--ink-40);
 }
+.pn-signin__option--email {
+  background: var(--paper);
+  border-style: dashed;
+  border-color: var(--ink-40);
+}
+.pn-signin__divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0;
+  font: 400 11px var(--fmono);
+  color: var(--ink-40);
+}
+.pn-signin__divider::before,
+.pn-signin__divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--ink-09);
+}
+.pn-signin__hint {
+  margin: -2px 0 0;
+  font: 400 12px/1.5 var(--fbody);
+  text-align: center;
+  color: var(--ink-55);
+}
 .pn-signin__option:disabled {
   cursor: default;
   opacity: 0.7;

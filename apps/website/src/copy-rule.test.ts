@@ -7,6 +7,10 @@ import { describe, expect, it } from 'vitest';
 
 // Copy rule (docs/design/NOTES.md): free, not open source; no export/download promises.
 const BANNED = /open[\s-]*source|\bmit\b|github|export|download/i;
+// GitHub as a sign-in provider names an account you sign in with, not where code lives, so the
+// provider list (always in this order, from KNOWN_CONNECTIONS) is the one place it may appear.
+const SIGN_IN_PROVIDERS = /Microsoft, GitHub,\s+LinkedIn/g;
+const isBanned = (text: string) => BANNED.test(text.replace(SIGN_IN_PROVIDERS, ''));
 const SRC = new URL('.', import.meta.url).pathname;
 
 function sourceFiles(dir: string): string[] {
@@ -43,11 +47,18 @@ describe('copy rule', () => {
 
   it('flags banned words', () => {
     for (const bad of ['Open source', 'MIT licence', 'on GitHub', 'Export tours', 'download'])
-      expect(BANNED.test(bad)).toBe(true);
-    expect(BANNED.test('No limits, submit')).toBe(false);
+      expect(isBanned(bad)).toBe(true);
+    expect(isBanned('No limits, submit')).toBe(false);
+  });
+
+  it('lets GitHub appear only in the sign-in provider list', () => {
+    expect(isBanned('Google, Apple, Microsoft, GitHub, LinkedIn or Facebook')).toBe(false);
+    expect(isBanned('Microsoft, GitHub,\n        LinkedIn')).toBe(false);
+    expect(isBanned('Microsoft, GitHub, LinkedIn. Source on GitHub')).toBe(true);
+    expect(isBanned('Continue with GitHub')).toBe(true);
   });
 
   it.each(files.map((f) => [relative(SRC, f), f]))('%s has no banned copy', (_, file) => {
-    expect(copyIn(file).filter((text) => BANNED.test(text))).toEqual([]);
+    expect(copyIn(file).filter(isBanned)).toEqual([]);
   });
 });
