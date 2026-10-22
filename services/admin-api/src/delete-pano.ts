@@ -1,4 +1,10 @@
-import { deletingKey, originalKey, panoPrefix, tilesPrefix } from '@internal/contracts';
+import {
+  deletingKey,
+  originalKey,
+  panoPrefix,
+  tileGcPrefix,
+  tilesPrefix,
+} from '@internal/contracts';
 import { deletePrefix } from '@internal/worker-kit/r2-binding';
 
 // tilesDeleted: the tiles/<panoId>/ sweep removed objects, so their edge copies need a purge.
@@ -26,6 +32,9 @@ export const deletePano = async (
   // One sweep suffices: every tiler write precedes that job's own last HEAD
   // of the original, which 404s after this delete and self-cleans that job's writes.
   const tiles = await deletePrefix(bucket, tilesPrefix(panoId));
+  // The tiler's superseded-version records name the owner-bearing original key;
+  // they go with the tiles rather than waiting on the daily sweep.
+  await deletePrefix(bucket, tileGcPrefix(panoId));
   // Tombstone included: a retry with no proof left still clears this prefix
   // via the no-proof branch above.
   await deletePrefix(bucket, panoPrefix(sub, panoId));

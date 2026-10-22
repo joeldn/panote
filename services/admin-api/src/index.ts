@@ -49,6 +49,7 @@ import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
 import { isAccountDisabled, isOperator, tourExists } from './operator.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
@@ -425,7 +426,8 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const files = await publisher(c.env, tourId).unpublish(sub, tourId);
+  // The owner's "Stop sharing": the editor's later Saves leave it offline.
+  const files = await publisher(c.env, tourId).unpublish(sub, tourId, true);
   purgeLater(c, { prefixes: [], files });
   return c.body(null, 204);
 });
@@ -473,7 +475,7 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   const purge =
     action === 'delete'
       ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
-      : { prefixes: [], files: await stub.unpublish(sub, tourId) };
+      : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
   purgeLater(c, purge);
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
   console.warn(`[takedown] operator ${action} of tour ${tourId} done`);
@@ -484,12 +486,15 @@ app.onError(errorHandler);
 
 export default {
   fetch: app.fetch,
-  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6), and
-  // finishes (or re-sweeps) every account marked for deletion.
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
+  // finishes (or re-sweeps) every account marked for deletion, and deletes tile
+  // versions a re-tile superseded more than a day ago (no purge: nothing
+  // references their URLs any more, and edge copies age out on their own).
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
     ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
     ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
+    ctx.waitUntil(sweepSupersededTiles(env.BUCKET, now));
   },
 } satisfies ExportedHandler<Env>;
 

@@ -11,6 +11,9 @@ import {
   manifestKey,
   previewKey,
   ogKey,
+  TILE_GC_ROOT,
+  tileGcKey,
+  tileGcPrefix,
   userPanosPrefix,
   tourKey,
   panoPrefix,
@@ -174,6 +177,18 @@ describe('keys', () => {
     it('ogKey throws on an invalid panoId or version', () => {
       expect(() => ogKey('a/b', 't1-abc123')).toThrow(/panoId must match/);
       expect(() => ogKey(panoId, 'v/1')).toThrow(/version must match/);
+    });
+
+    it('tileGcKey sits outside tiles/, so the CDN never serves a record', () => {
+      expect(tileGcKey(panoId, 't1-abc123')).toBe(`tile-gc/${panoId}/t1-abc123.json`);
+      expect(tileGcKey(panoId, 't1-abc123').startsWith(TILES_ROOT)).toBe(false);
+      expect(tileGcKey(panoId, 't1-abc123').startsWith(TILE_GC_ROOT)).toBe(true);
+      expect(tileGcKey(panoId, 't1-abc123').startsWith(tileGcPrefix(panoId))).toBe(true);
+    });
+
+    it('tileGcKey throws on an invalid panoId or version', () => {
+      expect(() => tileGcKey('a/b', 't1-abc123')).toThrow(/panoId must match/);
+      expect(() => tileGcKey(panoId, 'v/1')).toThrow(/version must match/);
     });
   });
 

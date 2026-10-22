@@ -96,6 +96,16 @@ function publishNotice(
             text: 'Saved. Your tour is now live for anyone with the link (unlisted).',
             link: { to: 'share/link', label: 'Share' },
           };
+    case 'sharing-stopped':
+      // Only worth saying when this editor still thought the tour was live.
+      return wasPublished
+        ? {
+            id: 'publish',
+            tone: 'info',
+            text: 'Saved. Sharing is off for this tour, so its link stays offline.',
+            link: { to: 'share/link', label: 'Share' },
+          }
+        : null;
     case 'slug-lost':
       return {
         id: 'publish',
@@ -325,6 +335,9 @@ export function useEditor(
           const { slug, visibility, publishedAt } = published.publish;
           publishRef.current = { slug, visibility, publishedAt };
           setPublish(publishRef.current);
+        } else if (published.kind === 'sharing-stopped') {
+          publishRef.current = null;
+          setPublish(null);
         }
         // Superseded (a save started meanwhile): its own publish decides what to show.
         if (seq !== publishSeq.current) return;
@@ -459,6 +472,18 @@ export function useEditor(
   useEffect(() => {
     syncRef.current = syncAppended;
   });
+
+  /** The share modal changed sharing (shared again, or stopped): the editor follows it. */
+  const setShared = useCallback(
+    (next: TourPublishState | null) => {
+      publishRef.current = next;
+      setPublish(next);
+      // Whatever the last publish said or waited on is moot once sharing changed by hand.
+      setAwaiting(null);
+      dismiss('publish');
+    },
+    [dismiss, setAwaiting],
+  );
 
   /** The publish notice's "Try again": publishes the already-saved tour. */
   const republish = useCallback(async () => {
@@ -596,6 +621,7 @@ export function useEditor(
     reloadConflicts,
     overwriteConflicts,
     publish,
+    setShared,
     republish,
     publishing,
     awaitingTiles,

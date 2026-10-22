@@ -358,3 +358,53 @@ describe('useEditor autoRepublish', () => {
     expect(publishTour).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useEditor and a tour whose owner stopped sharing', () => {
+  const live = { slug: 's', visibility: 'unlisted' as const, publishedAt: 'x' };
+  const stopped = new ApiError(409, { error: 'sharing stopped' });
+
+  const setup = (publishTour: EditorApi['publishTour'], publish: typeof live | null = live) => {
+    const res = tourRes('t1', ['p1']);
+    const api = {
+      getTourWithConfigs: async () => ({ ...res, data: { ...res.data, publish } }),
+      putTour: async () => ({ etag: 't2' }),
+      publishTour,
+    } as unknown as EditorApi;
+    return renderHook(() => useEditor(api, 'tour-1', 'user-1', null));
+  };
+
+  it('Save asks for an after-Save publish, and a refusal leaves the tour offline', async () => {
+    const publishTour = vi.fn().mockRejectedValue(stopped);
+    const { result } = setup(publishTour);
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    expect(result.current.publish).toEqual(live);
+    act(() => result.current.dispatch({ type: 'tour/title', title: 'Renamed' }));
+    await act(() => result.current.save());
+
+    expect(publishTour).toHaveBeenCalledWith('tour-1', { afterSave: true });
+    expect(result.current.publish).toBeNull();
+    expect(result.current.dirty).toEqual([]);
+    // It was live as far as this editor knew: say why the link didn't update.
+    const notice = result.current.notices.find((n) => n.id === 'publish');
+    expect(notice?.text).toMatch(/Sharing is off/);
+    expect(notice?.tone).toBe('info');
+  });
+
+  it('says nothing when the editor already knew it was offline', async () => {
+    const publishTour = vi.fn().mockRejectedValue(stopped);
+    const { result } = setup(publishTour, null);
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    act(() => result.current.dispatch({ type: 'tour/title', title: 'Renamed' }));
+    await act(() => result.current.save());
+    expect(result.current.notices.find((n) => n.id === 'publish')).toBeUndefined();
+  });
+
+  it('follows the share modal: stopping and sharing again update the publish state', async () => {
+    const { result } = setup(vi.fn());
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    act(() => result.current.setShared(null));
+    expect(result.current.publish).toBeNull();
+    act(() => result.current.setShared({ ...live, slug: 'back' }));
+    expect(result.current.publish).toEqual({ ...live, slug: 'back' });
+  });
+});

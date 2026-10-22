@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5) | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion; vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
 
@@ -303,6 +303,55 @@ rotation is on and the API `https://api.panote.dev` allows offline access.
   silent-auth iframe (`useRefreshTokensFallback: false`), so no `frame-src` entry is needed. The
   avatar is the user's initial, not the Google profile photo, so `img-src` stays as is.
 
+**More sign-in providers (Apple, Microsoft, Facebook).** The apps know four connections
+(`KNOWN_CONNECTIONS` in `packages/web-kit/src/config.ts`), shown in this order: Google
+(`google-oauth2`), Apple (`apple`), Microsoft (`windowslive`), Facebook (`facebook`). A button is
+shown only when its connection name is in `VITE_AUTH0_CONNECTIONS`, so today only Google shows.
+Turning one on is an account task, done once per Auth0 tenant (dev now, production when its tenant
+exists). Below, `<tenant>` is the tenant's domain (`panote-dev.au.auth0.com` for dev), and every
+provider's redirect/return URL is `https://<tenant>/login/callback`.
+
+1. **Create the provider's app.**
+   - **Apple.** Needs a paid Apple Developer Program membership. In Certificates, Identifiers &
+     Profiles: register an App ID with *Sign in with Apple*, then a *Services ID* (this is the
+     client id Auth0 asks for), enable *Sign in with Apple* on it with domain `<tenant>` and return
+     URL `https://<tenant>/login/callback`. Create a *Key* with *Sign in with Apple* and download its
+     `.p8` (once only). Note the Team ID and Key ID. Apple sends the user's name only on their first
+     sign-in, and the email may be a private relay address; the apps already cope with neither.
+   - **Microsoft.** In the Microsoft Entra admin center → App registrations → New registration:
+     supported account types *Accounts in any organizational directory and personal Microsoft
+     accounts*, redirect URI (platform *Web*) `https://<tenant>/login/callback`. Copy the
+     Application (client) ID and create a client secret under Certificates & secrets. Secrets
+     expire (24 months at most): put the expiry in the calendar and rotate it in Auth0 before then.
+   - **Facebook.** In Meta for Developers, create an app (use case *Authenticate and request data
+     from users with Facebook Login*), add *Facebook Login*, set Valid OAuth Redirect URIs to
+     `https://<tenant>/login/callback`. Under App settings → Basic set the privacy policy URL
+     (`https://panote.dev/privacy`, `https://panote.io/privacy` for production) and the user data
+     deletion instructions URL (the same page: it explains Delete account). Copy the App ID and
+     App Secret, and switch the app to *Live*; only `public_profile` and `email` are needed.
+2. **Add the Auth0 connection.** Auth0 dashboard → Authentication → Social → Create Connection →
+   Apple / Microsoft Account / Facebook, and paste the credentials from step 1 (Apple: Services ID,
+   Team ID, Key ID and the `.p8` contents; Microsoft: client id and secret; Facebook: App ID and
+   secret). Request only basic profile and email. Check the connection's name is `apple`,
+   `windowslive` or `facebook`: the apps send that exact name. Auth0 offers its own developer keys
+   for some providers when the credential fields are left blank; they are for a quick try only
+   (the consent screen names Auth0, not Panote, and they carry limits). Never leave a production
+   connection on developer keys.
+3. **Enable it for the SPA.** On the connection's Applications tab, turn on the tenant's SPA
+   application (the one whose client id is `VITE_AUTH0_CLIENT_ID`). Use the connection's *Try*
+   button to check a sign-in reaches the callback.
+4. **Show the button.** Add the connection name to `VITE_AUTH0_CONNECTIONS` in both
+   `apps/website/.env.<env>` and `apps/admin/.env.<env>` for that environment (comma-separated;
+   order doesn't matter, the apps sort them), e.g.
+   `VITE_AUTH0_CONNECTIONS=google-oauth2,apple,windowslive,facebook`, and ship that as a PR. Do
+   this last: a button for a connection the tenant doesn't have fails at Auth0's `/authorize`.
+
+Nothing on the API side changes. Workers only check the JWT, and owner keys are
+`base64url(sub)`, so any sub prefix (`apple|…`, `windowslive|…`, `facebook|…`) works, as do
+account deletion and the `delete-account.ts --sub` CLI. One Auth0 user per provider: someone who
+signs in with Google once and Apple once has two separate Panote accounts unless the tenant links
+them.
+
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
 Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
 `http://localhost:5174/`. Both proxy `/api` to `https://panote.dev`, so the APIs stay
@@ -319,7 +368,7 @@ resolve-environment` and runs only when it says `proceed`, so it shares every ga
 deploy jobs: `DEV_AUTO_DEPLOY`, the main-tip check, the production guards. It checks out the
 commit CI verified (`workflow_run.head_sha`), builds with `turbo run build
 --filter="@app/<app>..."` and `APP_MODE=<env>`, then runs `wrangler deploy --env <env>`. CI's
-`deploy-dry-run` job dry-runs both apps with `--env dev`. The existing `CLOUDFLARE_API_TOKEN`
+`deploy-dry-run` job dry-runs both apps with `--env dev` and, against their production builds, `--env production`. The existing `CLOUDFLARE_API_TOKEN`
 scopes (Workers Scripts + Routes) should cover assets-only Workers; confirm on the first deploy.
 
 **Status: not deployed yet.** The first dev deploy happens through `DEV_AUTO_DEPLOY` when this
@@ -335,7 +384,7 @@ lands on `main`. After it, check:
   menu; the access token is a JWT (three dot-separated parts) and `GET /api/admin/tours` with it
   returns 200. Sign out returns to `https://panote.dev/`.
 
-Production is unprovisioned, like the rest (see Production status).
+Production is unprovisioned, like the rest (see Production runbook).
 
 ---
 
@@ -356,8 +405,8 @@ and the Auth0 dev tenant are now in place too (see each subsection below). `pano
 53 to Cloudflare on 2026-09-26 (see DNS section), which clears the one blocker that kept
 production provisioning from starting at all — but none of the steps below have actually been
 run against production yet, and production is still unprovisioned for other reasons too (no
-production Auth0 tenant, no `PRODUCTION_PROVISIONED` repository variable — see Production status
-below). The `production` GitHub Environment itself already exists, with a required reviewer and a
+production Auth0 tenant, no `PRODUCTION_PROVISIONED` repository variable — see Production runbook
+below, which runs these steps for production in order). The `production` GitHub Environment itself already exists, with a required reviewer and a
 main-only branch policy, and holds `CLOUDFLARE_API_TOKEN`.
 
 None of `r2 bucket create` / `queues create` / `r2 bucket notification create` take a
@@ -378,7 +427,7 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket create pano-content-dev
 pnpm --filter @service/admin-api exec wrangler queues create pano-uploads-dev
 pnpm --filter @service/admin-api exec wrangler queues create pano-uploads-dlq-dev
 
-# production — outstanding, blocked on panote.io becoming a Cloudflare zone
+# production — outstanding (Production runbook, step 1)
 pnpm --filter @service/admin-api exec wrangler r2 bucket create pano-content
 pnpm --filter @service/admin-api exec wrangler queues create pano-uploads
 pnpm --filter @service/admin-api exec wrangler queues create pano-uploads-dlq
@@ -396,7 +445,7 @@ below.
 pnpm --filter @service/admin-api exec wrangler r2 bucket notification create pano-content-dev \
   --event-type object-create --prefix "panos/" --suffix "/original" --queue pano-uploads-dev
 
-# production — outstanding
+# production — outstanding (Production runbook, step 2)
 pnpm --filter @service/admin-api exec wrangler r2 bucket notification create pano-content \
   --event-type object-create --prefix "panos/" --suffix "/original" --queue pano-uploads
 ```
@@ -418,7 +467,7 @@ whole ruleset (prompts for confirmation unless `--force`), so it's genuinely saf
 ```bash
 pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content-dev \
   --file ../../infra/r2/cors.json
-# production, once the bucket exists:
+# production, once the bucket exists (Production runbook, step 3):
 pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content \
   --file ../../infra/r2/cors.json
 ```
@@ -593,8 +642,12 @@ shows `tiles-404-short-ttl` kept and the one new rule appended. After applying, 
 - A tile 404 is still `BYPASS` and a manifest is still `DYNAMIC`.
 
 Rollback: taking the rule out of the JSON doesn't remove it live, because the script only
-upserts. Remove it in the dashboard (Rules → Cache Rules) instead. Production gets
-its own `cache-rules.production.json` once `panote.io` is a zone.
+upserts. Remove it in the dashboard (Rules → Cache Rules) instead.
+
+Production has its own `cache-rules.production.json` (hosts `cdn.panote.io`), applied with
+`apply-cache-rules.sh production` (Production runbook, step 5). It also manages the tile-404 rule
+that dev keeps in the dashboard, as `panote-tiles-404-no-store`. Its `zoneId` is
+`YOUR_PANOTE_IO_ZONE_ID` until then, and the script refuses any `zoneId` that isn't a 32-hex id.
 
 ---
 
@@ -614,7 +667,7 @@ its own `cache-rules.production.json` once `panote.io` is a zone.
   `issue`/`issuewild "amazon.com"` CAA records left over from an abandoned ACM/CloudFront plan;
   they weren't carried over, and nothing Amazon-only should be added back to the Cloudflare
   zone — an Amazon-only CAA record would block Cloudflare from issuing its own certificate for
-  the zone. This move clears the DNS blocker on production provisioning (see Production status
+  the zone. This move clears the DNS blocker on production provisioning (see Production runbook
   below); production remains otherwise unprovisioned.
 - The old Route 53 hosted zone for `panote.io` (in the panote AWS management account) was deleted
   on 2026-09-26, via a targeted `pulumi destroy` of the zone and its three records in the legacy
@@ -713,8 +766,7 @@ services' placeholders. Before this workflow can succeed:
   permissions.
 - `CLOUDFLARE_ACCOUNT_ID` as a repository variable (not per-environment — one account for both).
 - `PRODUCTION_PROVISIONED` as a repository variable, set to the literal string `true` **only**
-  once production provisioning (this whole doc, run with `production` in place of `dev`) is
-  actually done. Until then, leave it unset or anything other than `true` — the
+  once steps 1-11 of the Production runbook below are done (step 12 is setting it). Until then, leave it unset or anything other than `true` — the
   `resolve-environment` job's "Fail unless production is provisioned" step is a hard stop
   otherwise, independent of the main-only guard and the `YOUR_` placeholder check above.
 - `DEV_AUTO_DEPLOY` as a repository variable, set to the literal string `true` only once both
@@ -726,6 +778,14 @@ services' placeholders. Before this workflow can succeed:
   has no pre-deploy check specific to `tiler-consumer`/queue-consumer changes — a change there
   deploys straight to the live dev queue on the next green `CI` run on `main`, same as any other
   service.
+
+After every deploy, dev included, a `smoke-test` job (needs all the deploy jobs) curls public
+URLs on the environment just deployed, with no secrets: `GET /api/tours/x/stats` → `200`,
+`/api/admin/panos` and `POST /api/upload-url` with no token → `401`, the CDN's `/panos/x`,
+`/tours/x` and `/` → `403` (the WAF rule) and a missing `/tiles/` key → `404` (not blocked). On
+production it also checks `/`, `/app/` and `/robots.txt` → `200`; on dev those are behind
+Cloudflare Access, so it doesn't. Each check gets three tries 10s apart. A red smoke test means
+the deploy went out and something answers wrongly: see Rollback.
 
 ---
 
@@ -886,20 +946,71 @@ notification on overwrite the same as on first create, so nothing else has to be
 hand.
 
 After a change to the tiler's output itself (tile layout, encoding, pyramid shape), bump
-`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then
-re-trigger each pano by re-putting its original (verify these flags against
-`wrangler r2 object --help` before running):
+`TILER_OUTPUT_VERSION` in `packages/tiler/src/version.ts`, deploy `tiler-consumer`, then re-tile
+with `services/admin-api/scripts/retile.ts`. It doesn't touch the originals: it HEADs each one and
+puts the same message on the upload queue (`pano-uploads-dev` for `pano-content-dev`,
+`pano-uploads` for `pano-content`) that R2's object-create notification would have, with the
+original's current size and ETag, so `tiler-consumer` handles it exactly like a fresh upload. It
+runs like the other operator scripts (Node 24 straight from TypeScript, a built workspace, the R2
+S3 credentials, and `--allow-bucket` for anything but a `-dev` bucket). It only lists what it
+would queue unless you pass `--apply`, which also needs `CF_QUEUES_TOKEN`: a Cloudflare API token
+with Queues edit permission on the account (it lists the queues to find the id, then sends batches
+of 100).
 
 ```bash
-pnpm --filter @service/admin-api exec wrangler r2 object get pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
-pnpm --filter @service/admin-api exec wrangler r2 object put pano-content-dev/panos/<owner>/<pano-uuid>/original --file x --remote
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+# What it would queue, sending nothing
+node services/admin-api/scripts/retile.ts --all
+node services/admin-api/scripts/retile.ts --pano <pano-uuid> --pano <pano-uuid>
+# Queue them
+CF_QUEUES_TOKEN=... node services/admin-api/scripts/retile.ts --all --apply
 ```
 
-Both need `--remote`, for the same reason as the end-to-end test above. Re-putting identical
-bytes **without** a version bump yields the same ETag, so the derived version string
-(`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
-rewriting identical keys rather than creating a new one. Old version dirs are left in place after
-a re-tile; cleaning them up is deferred to Wave 6.
+Finding the originals: the owner is only in the key, so the script lists every object under
+`panos/` (also with `--pano`). A pano with a `deleting` tombstone is skipped, and so is a named pano
+with no original. Every message starts a container: the queue's `max_concurrency` (5) paces them,
+see "Tiling time and the queue limit" below for what that means for a large `--all`.
+
+Re-tiling identical bytes **without** a version bump yields the same ETag, so the derived version
+string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
+rewriting identical keys rather than creating a new one.
+
+### Old version dirs
+
+Every successful re-tile leaves the previous version's tiles behind under `tiles/<panoId>/`. Once a
+job's manifest swap is confirmed (its post-PUT HEAD still sees the ETag it tiled), it records every
+other version dir it finds there at `tile-gc/<panoId>/<version>.json` (`{ v, originalKey,
+tilerVersion, supersededAt }`). Records are overwritten on every swap, so their time and tiler
+version always follow the latest one. `admin-api`'s daily cron (`17 3 * * *`, the same one as the
+slug-alias and account sweeps) deletes a recorded dir once the record is over 24 hours old, so a
+version goes 24-48 hours after it was superseded. Before deleting it checks, and keeps the dir if
+any check fails:
+
+- the manifest must be readable and name a different version (the version it names is never
+  deleted; that record just goes);
+- the pano's current original must not tile into that dir again (same ETag, same tiler version as
+  the job that superseded it), since a job may be writing there;
+- nothing in the dir may have been written after the record (a re-upload of old bytes, or a tiler
+  rollback, rewrote it); the record's time then moves to now.
+
+A pano whose original is gone has been deleted; its record and dir just go. A run acts on at most
+50 records (deleted or dropped) and looks at no more than 500; kept ones are checked again the next
+day. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+left over from before this existed are recorded the next time that pano re-tiles, so a
+`retile.ts --all` after deploying this clears them too, a day later.
+
+Records hold the owner-bearing original key, so deleting a pano (including through account
+deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job that confirmed its
+swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
+(the original is gone by then).
+
+After a tiler rollback, don't run `retile.ts` around the cron time (03:17 UTC). A job that starts
+writing into an old version dir while the sweep is deleting it would leave a manifest pointing at
+a half-deleted dir. The window is seconds, but there is no lock between the two.
+
+The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
+fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
+anyway; uncached ones would 404.
 
 ## Link-preview image (og.jpg) and its backfill
 
@@ -1072,7 +1183,10 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
    (`crypto.randomUUID()`, `PANO_PATTERN`); an id that fails it can't have been published, so only
    its counters and prefix are deleted.
 3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
-   `tiles/<panoId>/`, then the owner prefix). No reference or recent-upload checks: everything goes.
+   `tiles/<panoId>/` and of its superseded-version records under `tile-gc/<panoId>/`, which name the
+   owner's original key, then the owner prefix). No reference or recent-upload checks: everything
+   goes. A record a tiler job writes in the moment after that is dropped by the tile sweep 24-48
+   hours later (see "Old version dirs").
    Then `upload-log/<owner>/`, upload-api's log of the upload URLs it issued (Owner quotas).
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
@@ -1345,6 +1459,15 @@ Setup, once per environment: generate a long random token (`openssl rand -hex 32
   original, and a key `deriveUploadTarget` rejects. A charset-invalid key (bad owner or panoId) now
   gets no marker at all — `tileFailedKeyFromOriginalKey` validates both segments and the write is
   skipped with a log line, rather than writing a marker keyed on a junk panoId.
+- **Oversized originals are deleted.** Once the `oversize` marker is written, the consumer
+  deletes the original (`deleteOversizedOriginal` in `services/tiler-consumer/src/failure-marker.ts`),
+  after re-HEADing it to make sure it's still the one the event named; only that one key goes, the
+  marker stays. `admin-api` reads an `oversize` marker with no original as `tiling: 'failed'`, so the
+  upload chip and editor still show the failed state. It's kept when the pano already has a
+  manifest (an oversized replace): the old tiles are still live and the original is what proves
+  ownership of them. The web app rejects a file over 150 MB before upload, so this only happens to
+  an upload that bypassed it (content-length isn't signed); the chip shows the generic "couldn't
+  process this image" copy, since no failure reason reaches it.
 - **Resurrection guard (review fix, 2026-09-26).** Before writing, the consumer HEADs the original
   at `bucket.head(<notification key>)`; the write is skipped (logged) if the original no longer
   exists, or if its etag differs from the R2 event's `object.eTag` (a newer upload already
@@ -1565,30 +1688,231 @@ the shape, scrubs again and re-caps each field, since masking can lengthen it.
 
 ---
 
-## Production status
+## Production runbook
 
-**Unprovisioned.** None of the following exist yet: `pano-content`, `pano-uploads`,
-`pano-uploads-dlq`, the R2→queue notification, bucket CORS, the `cdn.panote.io` custom domain,
-`R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` secrets, the `CF_ANALYTICS_TOKEN` secret, or a production
-Auth0 tenant. `panote.io`
-became a Cloudflare zone on 2026-09-26 (see DNS section above), so that particular blocker on
-the `routes` blocks each Worker's `wrangler.jsonc` already declares for `production` is cleared
-— but the zone has no web records yet, so nothing is actually live, and every other piece of
-production provisioning below is still outstanding. Every `production` env block in every
-`wrangler.jsonc` is deliberately declared-but-unprovisioned — the config exists so Wave 5
-doesn't have to reverse-engineer it, but none of it is live. Before a production deploy can
-succeed: run every "outstanding" step in One-time provisioning above with `production` in place
-of `dev`, provision the production Auth0 tenant, add the web DNS records on `panote.io`, replace
-`admin-api`'s `YOUR_PANOTE_IO_ZONE_ID` (production deploys fail on any `YOUR_` placeholder until
-then) and set its `CF_PURGE_TOKEN` (see "CDN purge on delete"), and —
-only once all of that is actually done — set the repository variable `PRODUCTION_PROVISIONED` to
-the literal string `true`. The `production` GitHub Environment itself is already provisioned (a
-required reviewer, a main-only branch policy, and `CLOUDFLARE_API_TOKEN` — see GitHub setup
-above); it's the resources and config underneath it that are missing. `deploy.yml`'s
-`resolve-environment` job hard-stops any production deploy until that variable is `true` (see
-GitHub setup above); it exists because nothing downstream can otherwise tell "provisioned" from
-"not provisioned" on its own — `wrangler deploy` would just fail mid-matrix against whichever
-resource happens to be missing for whichever service deploys first.
+**Status: unprovisioned.** `panote.io` is an Active Cloudflare zone (since 2026-09-26, see DNS /
+zone setup) with Email Routing and no web records. Every `production` env block in every
+`wrangler.jsonc` is declared but nothing behind it exists: no bucket, queues, notification, CORS,
+`cdn.panote.io`, WAF or cache rules, secrets, or Auth0 tenant. The `production` GitHub Environment
+is the one piece already done (a required reviewer, a main-only branch policy and
+`CLOUDFLARE_API_TOKEN`, see GitHub setup).
+
+`deploy.yml` refuses a production deploy until the repository variable `PRODUCTION_PROVISIONED`
+is the literal `true`, and fails on any `YOUR_` placeholder left in a `production` env block or an
+`apps/*/.env.production`. Nothing else checks that the account is ready: the variable is set by
+hand, so it means only what this runbook says it means. Run the steps **in order**. Several depend
+on the one before, and step 4 must be done before step 6, or the private keys under `panos/` and
+`tours/` become public the moment the domain attaches. Each step links to the section that
+explains it; the dev version of every step has been done and is recorded there.
+
+All commands run from the repo root. CI already dry-runs every Worker with `--env production`
+(`deploy-dry-run` in `ci.yml`), so the production config bundles; what it can't check is whether
+the account has the resources the config names.
+
+1. **Bucket and queues.** Create `pano-content`, `pano-uploads` and `pano-uploads-dlq` (commands
+   in Bucket + queues).
+   Verify: `wrangler r2 bucket list` shows `pano-content`, `wrangler queues list` both queues.
+   **Status: outstanding.**
+
+2. **R2 → queue notification.** Prefix `panos/`, suffix `/original` → `pano-uploads` (command in
+   R2 → queue notification). Run it once: check
+   `wrangler r2 bucket notification list pano-content` first.
+   Verify: the list shows exactly one rule, object-create, `panos/` / `/original`, queue
+   `pano-uploads`.
+   **Status: outstanding.**
+
+3. **Bucket CORS.** `infra/r2/cors.json` on `pano-content`, never `cors.dev.json` (Bucket CORS).
+   Verify: `wrangler r2 bucket cors list pano-content` shows origins `https://panote.dev` and
+   `https://panote.io` only, no `localhost`.
+   **Status: outstanding.**
+
+4. **WAF custom rule for `cdn.panote.io`, before step 6.** On the `panote.io` zone, Security →
+   Security rules → custom rule, action **Block**, the expression from "Prerequisite: WAF custom
+   rule" with the host changed:
+   ```
+   (http.host eq "cdn.panote.io" and not (starts_with(http.request.uri.path, "/tiles/") or starts_with(http.request.uri.path, "/pub/") or starts_with(http.request.uri.path, "/slugs/")))
+   ```
+   Also check Rules → Settings → URL normalization is on for the zone (it is what makes
+   `/tiles/../panos/` hit the rule).
+   Verify: the rule is listed, **enabled**, action Block, host `cdn.panote.io` (not
+   `cdn.panote.dev`, an easy copy-paste miss). It can't be curled until step 6; step 6 does that
+   first thing.
+   **Status: outstanding.**
+
+5. **Cache rules.** In your local checkout, put the `panote.io` zone id (Overview → API → Zone
+   ID) into `infra/cloudflare/cache-rules.production.json` in place of `YOUR_PANOTE_IO_ZONE_ID`
+   (the script refuses the placeholder), then
+   `infra/cloudflare/apply-cache-rules.sh production --dry-run` and `--yes` (CDN cache rules; the
+   token is scoped to `panote.io` this time). Production's file manages two rules:
+   `panote-json-edge-cache`, as on dev, and `panote-tiles-404-no-store`, which does what dev's
+   dashboard-made `tiles-404-short-ttl` does (a tile `404` is never edge-cached), so production
+   needs no dashboard rule. It sets only the `404` TTL, not `cache`, and leaves out
+   `manifest.json`, so the manifest stays `DYNAMIC` (see Known limitations). Keep the zone id
+   edit uncommitted for now: step 10 commits it with the other placeholders.
+   Verify: the dry run on an empty zone shows only the two rules being added; after `--yes` the
+   script prints both as `enabled=true`. Their effect is checked in the final block.
+   **Status: outstanding.**
+
+6. **Attach `cdn.panote.io` to `pano-content`** (Attaching the domain; dashboard, or
+   `wrangler r2 bucket domain add pano-content --domain cdn.panote.io --zone-id <panote.io zone id>`).
+   Only once step 4's rule is enabled.
+   Verify, straight away, while the bucket is still empty:
+   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/` and
+     `/tiles/../panos/x` (that one with `curl --path-as-is`, or curl collapses the `..` itself):
+     all `403`.
+   - `curl -sI https://cdn.panote.io/tiles/x`: `404` from R2, not `403`.
+   If any private path isn't `403`, detach the domain before doing anything else.
+   **Status: outstanding.**
+
+7. **Web DNS records and the `www` redirect.** On `panote.io`: a proxied `AAAA @ 100::` (the
+   same placeholder dev has; the Workers' routes serve it), and a proxied `AAAA www 100::` with a
+   Redirect Rule (Rules → Redirect Rules → single redirect): hostname equals `www.panote.io` →
+   dynamic `concat("https://panote.io", http.request.uri.path)`, `301`, preserve query string.
+   Don't touch the MX, SPF or DKIM records (Email). Never add the dev zone's noindex Transform
+   Rule (Search engines) or Cloudflare Access (Cloudflare Access) to this zone.
+   Verify: `dig +short AAAA panote.io` and `www.panote.io` return Cloudflare addresses;
+   `curl -sI 'https://www.panote.io/privacy?x=1'` is `301` to `https://panote.io/privacy?x=1`.
+   The apex itself answers with a Cloudflare error page until step 12 deploys.
+   **Status: outstanding.**
+
+8. **Production Auth0 tenant.** A new tenant (not `panote-dev`), with:
+   - an API, identifier `https://api.panote.io` (must match `OAUTH_AUDIENCE` and
+     `VITE_AUTH0_AUDIENCE`), offline access allowed;
+   - a Single Page Application: callback `https://panote.io/app/callback`, logout URLs
+     `https://panote.io/` and `https://panote.io/app/`, allowed web origin `https://panote.io`,
+     refresh-token rotation on (the dev settings are in Sign-in, unit C3; production has no
+     `localhost` entries);
+   - the `google-oauth2` connection with **its own Google OAuth client**, not Auth0's dev keys
+     (those are for testing only, and Google's consent screen would name Auth0, not panote). In Google Cloud: an OAuth
+     consent screen for panote with the `panote.io` domain and the privacy and terms URLs
+     (`https://panote.io/privacy`, `/terms`), published to production; a Web client with
+     authorized redirect URI `https://<tenant domain>/login/callback`. Put its client id and
+     secret into the Auth0 connection and enable the connection for the SPA only. No other
+     connection is enabled (`VITE_AUTH0_CONNECTIONS=google-oauth2`).
+   Verify: `curl -s https://<tenant domain>/.well-known/openid-configuration | jq -r .issuer`
+   prints the issuer URL step 10 will use, trailing slash included.
+   **Status: outstanding.**
+
+9. **Secrets.** All with `--env production` (Secrets, CDN purge on delete, Insights, Takedown,
+   Tiling failure marker and alerting):
+   - `upload-api` and `tiler-consumer`: `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, from a new R2
+     API token with Object Read & Write scoped to `pano-content` only (not dev's token).
+   - `tiler-consumer`: `ALERT_EMAIL_TO`, byte-identical to a verified Email Routing destination.
+   - `admin-api`: `CF_ANALYTICS_TOKEN` (Account Analytics Read), `CF_PURGE_TOKEN` (Zone → Cache
+     Purge, scoped to `panote.io`), `OPERATOR_TOKEN` (a new `openssl rand -hex 32`, not dev's).
+   A Worker that has never been deployed doesn't exist yet: `wrangler secret put` then offers to
+   create an empty Worker of that name, and saying yes is fine, since step 12's deploy replaces
+   it (not tried on this account yet).
+   Verify: `wrangler secret list --env production` in each of the three services lists the names
+   above.
+   **Status: outstanding.**
+
+10. **Replace every `YOUR_` placeholder, in one PR.** `OAUTH_ISSUER` in the `production` block of
+    `services/{admin-api,public-api,upload-api}/wrangler.jsonc` (the step 8 issuer, the whole URL:
+    the tenant may be regional, `https://<name>.<region>.auth0.com/`); `CDN_ZONE_ID` in
+    `services/admin-api/wrangler.jsonc`; `VITE_AUTH0_DOMAIN` and `VITE_AUTH0_CLIENT_ID` in
+    `apps/website/.env.production` and `apps/admin/.env.production` (the SPA's client id is
+    public); and step 5's zone id. Replace each only with the real value, never another made-up
+    name (`docs/decisions.md`). Run `pnpm -r run types` and commit any `env.d.ts` change (CI fails
+    on drift).
+    Verify: this prints nothing (comment lines mention `YOUR_` and are skipped):
+    ```bash
+    grep -rn YOUR_ services/*/wrangler.jsonc apps/*/wrangler.jsonc apps/*/.env.production infra/cloudflare \
+      | grep -vE '^[^:]+:[0-9]+:\s*(#|//)'
+    ```
+    CI's production dry-runs and production app build must pass too. Merging deploys dev
+    only, as always.
+    **Status: outstanding.**
+
+11. **Rate limits and Analytics Engine: nothing to create.** The production `namespace_id`s
+    (`2101`, `2201`–`2204`, Rate limits) are already in config and only have to be unique in the
+    account; the `panote_events` dataset appears on the first write (Insights).
+    Verify: `grep -rn namespace_id services/*/wrangler.jsonc` shows no id used twice.
+    **Status: done in config.**
+
+12. **Unlock and deploy.** Only now set the repository variable `PRODUCTION_PROVISIONED` to
+    `true` (GitHub → Settings → Secrets and variables → Actions → Variables), then run Deploy with
+    `workflow_dispatch`, environment `production`, from `main`, and approve it. The four Worker
+    jobs and two app jobs run in parallel; `admin-api` binds `public-api`'s `TourStats` across
+    scripts, so if `admin-api` fails on this first run because `panote-public-api` doesn't exist
+    yet, re-run that one job once `public-api` is in. The `smoke-test` job then checks the public
+    URLs (below).
+    Verify: every job green, `smoke-test` included.
+    **Status: outstanding.**
+
+13. **DLQ alert test.** As dev's Ops step 2 (Tiling failure marker and alerting), on
+    `pano-uploads-dlq`: dashboard → Queues → `pano-uploads-dlq` → Send message, body
+    `{ "object": { "key": "panos/alert-test/alert-test/original" }, "action": "PutObject" }`.
+    Verify: an email `[panote] tiling failed permanently (1) - pano-uploads-dlq` arrives, and
+    `tiler-consumer`'s logs show the marker skipped (the key doesn't exist).
+    **Status: outstanding.**
+
+### Post-provision verification
+
+Run after step 12, before telling anyone the site exists. The first group is what `deploy.yml`'s
+`smoke-test` job checks on every production deploy; the rest needs a person.
+
+```bash
+# Private prefixes stay private (step 4): every line 403
+for p in panos/x tours/x accounts/x ops/x '' tiles/../panos/x; do
+  curl -sI --path-as-is -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
+# Public prefixes pass through to R2: 404 for a key that doesn't exist, not 403
+curl -sI -o /dev/null -w '%{http_code}\n' https://cdn.panote.io/tiles/x/manifest.json
+# APIs: 200 (no auth), 401, 401
+curl -s -o /dev/null -w '%{http_code}\n' https://panote.io/api/tours/x/stats
+curl -s -o /dev/null -w '%{http_code}\n' https://panote.io/api/admin/panos
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://panote.io/api/upload-url
+# Apps: 200, 200, 307 to /app/; indexable (no X-Robots-Tag), robots.txt says Allow: /
+curl -sI https://panote.io/ | grep -iE '^(HTTP|x-robots-tag|content-security-policy)'
+curl -sI https://panote.io/app/t/anything | head -1
+curl -sI https://panote.io/app | grep -iE '^(HTTP|location)'
+curl -s https://panote.io/robots.txt
+```
+
+Then, by hand:
+
+- **Auth round trip.** Sign in with Google from `https://panote.io/?signin=1`: it lands on
+  `/app/` signed in, Google's consent screen names panote (not Auth0), and sign-out returns to
+  `https://panote.io/`. A `curl -H 'Authorization: Bearer x' https://panote.io/api/admin/panos`
+  is `401` with `auth rejected` in `admin-api`'s logs and no placeholder-issuer line.
+- **A test upload tiles.** Upload a pano in the admin: within a minute or two it shows as ready.
+  `https://cdn.panote.io/tiles/<panoId>/manifest.json` is `200`, a tile is `200` with
+  `cache-control: public, max-age=31536000, immutable` (`HIT` on the second fetch), and the
+  original at `https://cdn.panote.io/panos/<owner>/<panoId>/original` is `403`.
+- **Cache rules.** A tile URL that doesn't exist is `404` twice, never `HIT`, and the test pano's
+  `tiles/<panoId>/manifest.json` still returns `cf-cache-status: DYNAMIC`. Publish a test tour:
+  `https://cdn.panote.io/slugs/<slug>.json` is `HIT` on the second fetch; `/s/<slug>` on
+  `panote.io` shows the tour and a Slack DM of the link unfurls with its image (Link previews).
+- **Purge and delete.** Delete the test tour and pano (wait an hour after upload, the
+  recent-upload guard): the tile and slug URLs come back `404` within a minute, and `admin-api`
+  logs no `cdn purge failed` or `cdn purge skipped`.
+- **DLQ alert**: step 13.
+
+Anything that fails here: roll the Worker back (Rollback, below) or unset
+`PRODUCTION_PROVISIONED` while it's fixed. A CDN privacy failure means detaching `cdn.panote.io`
+first and asking questions after.
+
+---
+
+## Rollback
+
+Every deploy makes a new Worker version, and the last 100 are kept. To put the previous one back
+on a Worker without waiting for a fix to go through CI:
+
+```bash
+pnpm --filter @service/admin-api exec wrangler deployments list --env production   # what's live, and when it went out
+pnpm --filter @service/admin-api exec wrangler versions list --env production      # the 10 most recent versions
+pnpm --filter @service/admin-api exec wrangler rollback <version-id> --env production -m 'why'
+```
+
+Without a version id it rolls back to the version before the live one. The same works for every
+Worker, the two app Workers included (a version carries its static assets), and for `--env dev`.
+It only changes what serves traffic: the next deploy from `main` replaces it again, so revert the
+bad commit on `main` too (on dev, merging the revert is the redeploy). Per Cloudflare's
+rollback docs, it can't go back past a change to the Durable Object migrations. Bucket contents,
+queues and the zone's cache and WAF rules are not part of a version and stay as they are; if a
+secret changed since the target version, check `wrangler secret list` afterwards. For `tiler-consumer`, whether a rollback also brings back the previous container image
+hasn't been checked; if the bad change is in the container, redeploy the last good commit instead.
 
 ---
 
@@ -1667,6 +1991,10 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120
   can't list bucket objects without S3 credentials.
+- **Originals that never tiled aren't swept.** An original whose tiling dead-lettered (or that was
+  abandoned before any config referenced it) stays until the owner deletes the pano. Sweeping them
+  safely needs a scan of every owner's `panos/` prefix and a check that none of that owner's tours
+  references the pano; that's a follow-up, not a daily job over the whole bucket.
 - **The DLQ alert email is throttled, not batched on a timer.** At most one email per queue per
   30 minutes; a burst sends the first email at once and counts the rest into the next one (see
   "Tiling failure marker and alerting"). If no failure follows the burst, the held count is never

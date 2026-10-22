@@ -7,6 +7,7 @@ import {
   originalKey,
   publishKey,
   pubTourKey,
+  sharingStoppedKey,
   slugKey,
   storedSlugKey,
   SlugRecordSchema,
@@ -255,6 +256,7 @@ const SLUG_LOST = { status: 409, body: { error: 'slug lost' } } as const;
 const SLUG_TAKEN = { status: 409, body: { error: 'slug taken' } } as const;
 const CONFLICT = { status: 409, body: { error: 'conflict' } } as const;
 const NOT_PUBLISHED = { status: 409, body: { error: 'not published' } } as const;
+const SHARING_STOPPED = { status: 409, body: { error: 'sharing stopped' } } as const;
 
 type Commit = {
   current: StoredRecord | null;
@@ -304,7 +306,11 @@ export type PublishBody = {
   url: string;
   publishedAt: string;
 };
-export type PublishRequest = { slug?: string | undefined; visibility?: Visibility | undefined };
+export type PublishRequest = {
+  slug?: string | undefined;
+  visibility?: Visibility | undefined;
+  afterSave?: boolean | undefined;
+};
 
 // POST …/publish: idempotent, safe to retry (plan 3.2).
 export const publishTour = async (
@@ -316,6 +322,10 @@ export const publishTour = async (
 ): Promise<Outcome<PublishBody>> => {
   const tour = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
   if (!tour) return NOT_FOUND;
+  // Q3 still holds for a tour never shared; one the owner stopped sharing stays off
+  // until they share it again from the share modal.
+  const stopped = sharingStoppedKey(sub, tourId);
+  if (req.afterSave && (await bucket.head(stopped))) return SHARING_STOPPED;
   if (tour.value.scenes.length === 0) {
     return { status: 422, body: { error: 'tour has no scenes', scenes: [] } };
   }
@@ -341,6 +351,9 @@ export const publishTour = async (
   // Another tour holds the current slug; retrying won't help, so say so.
   if (result === 'taken') return req.slug === undefined ? SLUG_LOST : SLUG_TAKEN;
 
+  // Cleared before the commit: a crash between the two leaves the tour unshared
+  // with no marker, and the owner asked to share it, so the next Save may publish.
+  if (!req.afterSave) await bucket.delete(stopped);
   const plan = await planAliases(bucket, tourId, cur, slug);
   const record: PublishRecord = {
     slug,
@@ -443,16 +456,23 @@ export const setVisibility = async (
 
 // Idempotent; needs tour.json or publish.json as proof (pub/ is owner-free). Deletes the
 // slug only if it's a live pointer here. Returns the public keys to purge (B6).
+// `stopSharing` (the owner's "Stop sharing", or a takedown) also leaves the
+// sharing-stopped marker, so the editor's next Save doesn't publish it again.
 export const unpublish = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
+  { stopSharing = false }: { stopSharing?: boolean } = {},
 ): Promise<string[]> => {
   const [stored, tour] = await Promise.all([
     readPublishRecord(bucket, sub, tourId),
     bucket.head(tourKey(sub, tourId)),
   ]);
   if (!stored && !tour) return [];
+  // First, so a crash partway still leaves the tour off for the next Save.
+  if (stopSharing && tour) {
+    await putJson(bucket, sharingStoppedKey(sub, tourId), { stoppedAt: new Date().toISOString() });
+  }
   const removed: string[] = [];
   if (stored) {
     const existing = await readSlug(bucket, stored.value.slug);

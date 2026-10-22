@@ -160,6 +160,9 @@ export type ToursListOk = z.infer<typeof ToursListOkSchema>;
 export const PublishRequestSchema = z.object({
   visibility: VisibilitySchema.optional(),
   slug: z.string().optional(),
+  // The editor's publish after a Save. Refused (409 'sharing stopped') once the
+  // owner stopped sharing; a publish without it (the share modal's) shares again.
+  afterSave: z.boolean().optional(),
 });
 export type PublishRequest = z.infer<typeof PublishRequestSchema>;
 
@@ -190,6 +193,8 @@ export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'rese
 // 409 when a concurrent publish, rename or visibility change got there first; retry.
 export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
 export const NotPublishedSchema = z.object({ error: z.literal('not published') });
+// An after-Save publish of a tour whose owner stopped sharing it: nothing was published.
+export const SharingStoppedSchema = z.object({ error: z.literal('sharing stopped') });
 
 export const SlugPutRequestSchema = z.object({ slug: z.string() });
 export const SlugPutOkSchema = z.object({
@@ -254,6 +259,17 @@ export const AccountDeletionRecordSchema = z.object({
   completedAt: z.string().optional(),
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
+
+// The record at tileGcKey, overwritten by the tiler after every confirmed manifest
+// swap. `tilerVersion` is the TILER_OUTPUT_VERSION of the job that superseded it,
+// so the sweep can tell whether the current original would tile into this dir again.
+export const TileGcRecordSchema = z.object({
+  v: z.literal(1),
+  originalKey: z.string().min(1),
+  tilerVersion: z.number().int().nonnegative(),
+  supersededAt: z.string(),
+});
+export type TileGcRecord = z.infer<typeof TileGcRecordSchema>;
 
 // --- Operator takedown (abuse groundwork) ---
 

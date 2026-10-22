@@ -325,6 +325,7 @@ describe('publish routes', () => {
     [409, { error: 'slug lost' }, { kind: 'slug-lost' }],
     [409, { error: 'conflict' }, { kind: 'conflict' }],
     [409, { error: 'not published' }, { kind: 'not-published' }],
+    [409, { error: 'sharing stopped' }, { kind: 'sharing-stopped' }],
     [404, { error: 'not found' }, { kind: 'not-found' }],
     [400, { error: 'reserved slug' }, { kind: 'slug-invalid', reason: 'reserved' }],
     [400, { error: 'invalid slug' }, { kind: 'slug-invalid', reason: 'invalid' }],

@@ -1,6 +1,6 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { tileFailedKeyFromOriginalKey } from '@internal/contracts';
+import { manifestKey, tileFailedKeyFromOriginalKey } from '@internal/contracts';
 import { ALERT_THROTTLE_MS, alertThrottleKey } from './alert.js';
 import worker from './consumer.js';
 
@@ -165,7 +165,49 @@ describe('queue()', () => {
     expect(result.retryMessages).toEqual([]);
     const marker = await env.BUCKET.get(tileFailedKeyFromOriginalKey(key));
     expect((await marker!.json()) as { reason: string }).toMatchObject({ reason: 'oversize' });
+    // A fresh upload that can never tile: the original goes, the marker stays.
+    expect(await env.BUCKET.head(key)).toBeNull();
     expectOwnerNeverLogged(consoleSpies);
+  });
+
+  const oversizedBatch = (id: string, key: string, eTag: string | undefined) =>
+    createMessageBatch('pano-uploads-dev', [
+      {
+        id,
+        timestamp: new Date(),
+        body: {
+          object: { key, size: Number(env.MAX_ORIGINAL_BYTES) + 1, ...(eTag ? { eTag } : {}) },
+          action: 'PutObject',
+        },
+        attempts: 1,
+      },
+    ]);
+
+  it('keeps an oversized original when the pano already has live tiles (an oversized replace)', async () => {
+    const ctx = createExecutionContext();
+    const panoId = 'oversized-replace';
+    const key = `panos/u1/${panoId}/original`;
+    await env.BUCKET.put(key, 'original bytes');
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ version: 't1-old' }));
+    const head = await env.BUCKET.head(key);
+    const batch = oversizedBatch('msg-oversized-replace', key, head!.etag);
+    await worker.queue(batch, env, ctx);
+    expect((await getQueueResult(batch, ctx)).explicitAcks).toEqual(['msg-oversized-replace']);
+    expect(await env.BUCKET.head(tileFailedKeyFromOriginalKey(key))).not.toBeNull();
+    expect(await env.BUCKET.head(key)).not.toBeNull();
+  });
+
+  it('never deletes an original a newer upload replaced (no marker, nothing deleted)', async () => {
+    const ctx = createExecutionContext();
+    const key = 'panos/u1/oversized-superseded/original';
+    await env.BUCKET.put(key, 'oversized bytes');
+    const stale = await env.BUCKET.head(key);
+    await env.BUCKET.put(key, 'a newer, smaller original');
+    const batch = oversizedBatch('msg-oversized-stale', key, stale!.etag);
+    await worker.queue(batch, env, ctx);
+    expect((await getQueueResult(batch, ctx)).explicitAcks).toEqual(['msg-oversized-stale']);
+    expect(await env.BUCKET.head(tileFailedKeyFromOriginalKey(key))).toBeNull();
+    expect(await (await env.BUCKET.get(key))!.text()).toBe('a newer, smaller original');
   });
 
   it('does not oversize-skip a size exactly at MAX_ORIGINAL_BYTES', async () => {

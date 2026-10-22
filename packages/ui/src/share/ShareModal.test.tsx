@@ -193,6 +193,55 @@ describe('ShareModal', () => {
     });
   });
 
+  describe('stop sharing', () => {
+    it('sits below the two options and stops sharing only after the confirm', async () => {
+      const onStopSharing = vi.fn(async () => {});
+      renderModal({ tab: 'privacy', onStopSharing });
+      // Still exactly two options: stopping is an action, not a third visibility.
+      expect(within(screen.getByRole('radiogroup')).getAllByRole('radio')).toHaveLength(2);
+      fireEvent.click(screen.getByRole('button', { name: 'Stop sharing' }));
+      const confirm = screen.getByRole('dialog', { name: 'Stop sharing this tour?' });
+      expect(confirm.textContent).toMatch(/link and embeds stop working/);
+      expect(onStopSharing).not.toHaveBeenCalled();
+      await act(async () =>
+        fireEvent.click(within(confirm).getByRole('button', { name: 'Stop sharing' })),
+      );
+      expect(onStopSharing).toHaveBeenCalledOnce();
+      expect(screen.queryByRole('dialog', { name: 'Stop sharing this tour?' })).toBeNull();
+    });
+
+    it('cancelling keeps the tour shared', () => {
+      const onStopSharing = vi.fn(async () => {});
+      renderModal({ tab: 'privacy', onStopSharing });
+      fireEvent.click(screen.getByRole('button', { name: 'Stop sharing' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByRole('dialog', { name: 'Stop sharing this tour?' })).toBeNull();
+      expect(onStopSharing).not.toHaveBeenCalled();
+    });
+
+    it('shows a failure in the confirm and leaves it open', async () => {
+      renderModal({
+        tab: 'privacy',
+        onStopSharing: () => Promise.reject(new Error('Sign in again.')),
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Stop sharing' }));
+      const confirm = screen.getByRole('dialog', { name: 'Stop sharing this tour?' });
+      await act(async () =>
+        fireEvent.click(within(confirm).getByRole('button', { name: 'Stop sharing' })),
+      );
+      expect(within(confirm).getByRole('alert').textContent).toBe('Sign in again.');
+    });
+
+    it('is not offered without a handler, or to an unpublished tour', () => {
+      renderModal({ tab: 'privacy' });
+      expect(screen.queryByRole('button', { name: 'Stop sharing' })).toBeNull();
+      cleanup();
+      renderModal({ slug: null, tab: 'privacy', onStopSharing: vi.fn(async () => {}) });
+      expect(screen.queryByRole('button', { name: 'Stop sharing' })).toBeNull();
+      expect(screen.getByText('This tour isn’t live yet')).toBeTruthy();
+    });
+  });
+
   describe('embed', () => {
     const code = () => screen.getByLabelText('Embed code', { selector: 'pre' }).textContent;
 
