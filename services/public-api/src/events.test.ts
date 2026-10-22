@@ -1,8 +1,8 @@
 // Ingest routes (unit B5), driven through app.request with a mocked EVENTS
 // binding so every writeDataPoint call can be asserted field by field.
-import { env } from 'cloudflare:test';
-import { MAX_DWELL_MS } from '@internal/contracts';
-import { describe, expect, it, vi } from 'vitest';
+import { env, runInDurableObject } from 'cloudflare:test';
+import { MAX_DWELL_MS, pubTourKey } from '@internal/contracts';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { clampDwell, toDataPoint } from './events.js';
 import app from './index.js';
@@ -26,6 +26,46 @@ const setup = () => {
     (await app.request(`/api/tours/${tourId}/stats`, {}, testEnv)).json();
   return { writeDataPoint, post, stats };
 };
+
+// Views and events only count for a published tour; these ids get a public bundle.
+beforeAll(async () => {
+  for (const id of [
+    'ae-view-1',
+    'ae-view-empty',
+    'ae-ev-1',
+    'ae-ev-clamp',
+    'ae-ev-priv',
+    'ae-ev-cap',
+  ]) {
+    await env.BUCKET.put(pubTourKey(id), '{}');
+  }
+});
+
+const storedKeys = async (tourId: string) =>
+  runInDurableObject(env.STATS.get(env.STATS.idFromName(tourId)), async (_instance, state) => [
+    ...(await state.storage.list()).keys(),
+  ]);
+
+describe('unpublished tours', () => {
+  it('404s a view, writing no point and storing no count', async () => {
+    const { writeDataPoint, post } = setup();
+    const r = await post('/api/tours/ae-unpub-view/view', { panoId: 'p1' });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: 'tour not found' });
+    expect(writeDataPoint).not.toHaveBeenCalled();
+    expect(await storedKeys('ae-unpub-view')).toEqual([]);
+  });
+
+  it('404s an events batch, writing no point', async () => {
+    const { writeDataPoint, post } = setup();
+    const r = await post('/api/tours/ae-unpub-ev/events', {
+      events: [{ type: 'scene', panoId: 'p1' }],
+    });
+    expect(r.status).toBe(404);
+    expect(await r.json()).toEqual({ error: 'tour not found' });
+    expect(writeDataPoint).not.toHaveBeenCalled();
+  });
+});
 
 describe('toDataPoint', () => {
   it('writes the documented v1 schema', () => {
