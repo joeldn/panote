@@ -1419,9 +1419,15 @@ subrequest budget, of its own. The first run after 00:00 UTC starts that day's s
 at most `BACKUP_RUN_BUDGET` (900) R2 operations, records how far it got in `progress.json`, and
 the next run carries on from there; a set that runs past midnight is finished before the next
 day's starts, so sets are never left half-done by the calendar. Once a day's set is complete, a
-run costs one GET and one HEAD. The run that completes a set deletes every set more than
-`BACKUP_RETENTION_DAYS` (30) days older than today, but never the set it just completed; a prune
-cut short by the budget finishes after the next set. A copy that fails is counted (`failed`), left
+run costs one GET and one HEAD. A run saves its progress every 100 objects and after every
+listing page, so one that dies part way loses little, and it holds a lease (`lockedUntil` in
+`progress.json`, taken with a conditional PUT) while it writes: a run that finds a live lease does
+nothing, and a lease (20 minutes) outlasts any run, as Cloudflare stops a Cron Trigger invocation
+after 15 minutes.
+The run that completes a set deletes every set more than `BACKUP_RETENTION_DAYS` (30) days older
+than today, but never the newest **good** set (complete, no failed copy, at least one object),
+however old, and nothing at all if there is no good set; a prune cut short by the budget finishes
+after the next set. A copy that fails is counted (`failed`), left
 out and tried again in the next day's set; an object over 8 MiB is counted as `skipped` and never
 copied (nothing the app writes is close).
 
@@ -1433,8 +1439,8 @@ behind` when a set is more than a day old: that is the signal for the scaling st
 
 **Limits and when to move it.** A copy is a GET and a PUT (2 operations); listing is one per
 1,000 keys under a source prefix (all of `panos/` is listed, originals included, to find the
-configs); a progress write is one per page. So a run copies about 440 objects, and at 96 runs a
-day the backup keeps up with roughly **40,000 backed-up objects** in all. One account at today's
+configs); the lease is one per run, and a progress write one per 100 objects or page. So a run
+copies about 440 objects, and at 96 runs a day the backup keeps up with roughly **40,000 backed-up objects** in all. One account at today's
 caps (500 panos, 200 tours, each published with a slug and up to 5 aliases, on Explore) is about
 500 configs + 400 tour records + 2,000 public keys, about 3,000 objects or 6,000 operations: 7
 runs. A typical account is a few dozen objects. Past ~40,000 objects (the "falling behind" log, or
@@ -1485,9 +1491,16 @@ node scripts/restore-backup.ts --date 2026-10-21 --all --apply
   included, so use the narrowest scope that covers the damage, and read the dry run of an
   `--all` before applying it.
 - It refuses an owner whose account is marked for deletion now (the daily sweep would delete the
-  restore again); `--all` leaves such owners out, with their tours' public keys. Remove the marker
-  first only if the deletion itself was the mistake. The account markers are never restored;
-  `takedown.ts --disable-owner` blocks an owner again if the set shows they were disabled.
+  restore again); `--all` leaves such owners out, with their tours' public keys. The route checks
+  each key too: a public, share-link, Explore or owner-pointer key is matched to its owner through
+  the tour's `tour-owners/` pointer (the set's, or else the live one), and refused if that owner is
+  marked for deletion or can't be found (a tour older than the pointers: its owner re-publishing
+  writes them again). Remove the marker first only if the deletion itself was the mistake. The
+  account markers are never restored; `takedown.ts --disable-owner` blocks an owner again if the
+  set shows they were disabled.
+- A key whose write fails (an R2 error, or a request that got no answer) is listed as `FAILED` and
+  the script exits 1; the rest are restored. Run the same command again: create-only keeps what
+  already came back.
 - Restored bundles and share links are purged from the CDN (as an unpublish is), and Explore
   re-checks each entry, so a restored tour shows up within a minute. The writes bypass the tour's
   `TourPublisher`, so don't restore a tour its owner is editing at that moment.
