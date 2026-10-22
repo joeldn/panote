@@ -107,6 +107,38 @@ export const accountDeletionKey = (u: string): string =>
 export const accountDisabledKey = (u: string): string =>
   `${ACCOUNTS_ROOT}${encodeId(u)}/disabled.json`;
 
+// Operator lookup: which owner holds a tour, written when admin-api creates or publishes
+// it, so the takedown script needn't scan every owner (it still does for older tours).
+// Private like accounts/: the CDN's WAF rule only lets tiles/, pub/ and slugs/ through,
+// and the body (TourOwnerRecord) carries the raw sub.
+export const TOUR_OWNERS_ROOT = 'tour-owners/';
+export const tourOwnerKey = (t: string): string =>
+  `${TOUR_OWNERS_ROOT}${assertValidId(t, 'tourId')}.json`;
+// Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
+// kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
+// public prefixes, and nothing in the Workers reads, lists or deletes it.
+export const QUARANTINE_ROOT = 'quarantine/';
+// One empty object per upload URL that upload-api issued, for the per-owner daily
+// upload limit: it counts URLs, so an upload that was deleted again, or a URL
+// never used, still counts. Owner-scoped, outside panos/ (admin-api lists that as
+// panos), and private: the CDN's WAF rule only lets tiles/, pub/ and slugs/
+// through. The name is the issue time in basic ISO 8601 (no `:`, which the S3 and
+// binding paths could spell differently) and the panoId.
+export const UPLOAD_LOG_ROOT = 'upload-log/';
+export const userUploadLogPrefix = (u: string): string => `${UPLOAD_LOG_ROOT}${encodeId(u)}/`;
+const UPLOAD_LOG_STAMP_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/;
+export const uploadLogKey = (u: string, at: Date, p: string): string => {
+  const stamp = at.toISOString().replace(/[-:.]/g, '');
+  return `${userUploadLogPrefix(u)}${stamp}-${assertValidId(p, 'panoId')}`;
+};
+/** When an upload-log entry (the part after the owner prefix) was written, in epoch ms; NaN if malformed. */
+export const uploadLogTime = (name: string): number => {
+  const m = UPLOAD_LOG_STAMP_RE.exec(name.split('-', 1)[0] ?? '');
+  if (!m) return NaN;
+  const [, y, mo, d, h, mi, sec, ms] = m;
+  return Date.parse(`${y}-${mo}-${d}T${h}:${mi}:${sec}.${ms}Z`);
+};
+
 // Owner-free: base64url(sub) is reversible, so these must stay safe for a
 // public bucket - panoId alone (a server-generated UUID) is unique enough.
 export const TILES_ROOT = 'tiles/';

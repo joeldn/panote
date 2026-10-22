@@ -219,6 +219,30 @@ jobs:
               console.log(`${file}: no YOUR_ placeholders.`);
             }
           }
+          // The legal pages name the operator, governing law and so on; until those are
+          // decided they hold YOUR_ placeholders (apps/website/src/legal/operator.ts).
+          const legalDir = "apps/website/src/legal";
+          // Recursive, so a page moved into a subfolder is still scanned.
+          const legalFiles = fs
+            .readdirSync(legalDir, { recursive: true })
+            .map(String)
+            .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f));
+          if (legalFiles.length === 0) {
+            console.log(`::error::${legalDir}: no sources found - the guard would silently skip them.`);
+            failed = true;
+          }
+          for (const name of legalFiles) {
+            const file = `${legalDir}/${name}`;
+            const hits = fs
+              .readFileSync(file, "utf8")
+              .split("\n")
+              .filter((line) => !/^(\/\/|\/\*|\*|\{\s*\/\*)/.test(line.trim()))
+              .filter((line) => /\bYOUR_[A-Z0-9_]+/.test(line));
+            for (const hit of hits) {
+              console.log(`::error::${file}: ${hit.trim()} is still a YOUR_ placeholder. Fill in the operator's real details (docs/deploy.md, Takedown) before deploying production.`);
+            }
+            if (hits.length > 0) failed = true;
+          }
           if (failed) process.exit(1);
           EOF
 

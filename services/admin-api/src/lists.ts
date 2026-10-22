@@ -320,3 +320,26 @@ export const listTourSummaries = async (
   }
   return { tours, cursor: hasMore ? (pageTourIds[pageTourIds.length - 1] ?? null) : null };
 };
+
+/**
+ * How many tours (tour.json objects) `sub` holds, counting no further than
+ * `stopAt`. One LIST per 1,000 objects, and a tour is at most two
+ * (tour.json, publish.json), so a 200-tour cap costs one request.
+ */
+export const countTours = async (
+  bucket: R2Bucket,
+  sub: string,
+  stopAt: number,
+): Promise<number> => {
+  const prefix = userToursPrefix(sub);
+  let count = 0;
+  let cursor: string | undefined;
+  do {
+    const listed = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
+    for (const obj of listed.objects) {
+      if (obj.key.endsWith('/tour.json')) count += 1;
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor && count < stopAt);
+  return count;
+};

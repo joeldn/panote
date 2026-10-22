@@ -17,6 +17,7 @@ import {
   PublishUnprocessableSchema,
   SlugInvalidSchema,
   SlugLostSchema,
+  TooManyRenamesSchema,
   SlugPutOkSchema,
   SlugTakenSchema,
   TourNotFoundSchema,
@@ -135,7 +136,14 @@ export interface AdminApi {
 export type PublishError =
   | {
       kind:
-        'slug-taken' | 'slug-lost' | 'conflict' | 'not-published' | 'not-found' | 'sharing-stopped';
+        | 'slug-taken'
+        | 'slug-lost'
+        | 'conflict'
+        | 'not-published'
+        | 'not-found'
+        | 'sharing-stopped'
+        | 'too-many-renames'
+        | 'rate-limited';
     }
   | { kind: 'slug-invalid'; reason: 'invalid' | 'reserved' }
   | { kind: 'unprocessable'; scenes: Array<{ panoId: string; reason: PublishFailureReason }> };
@@ -151,7 +159,10 @@ export function publishErrorOf(e: unknown): PublishError | null {
     if (is(NotPublishedSchema)) return { kind: 'not-published' };
     if (is(SharingStoppedSchema)) return { kind: 'sharing-stopped' };
     if (is(PublishConflictSchema)) return { kind: 'conflict' };
+    if (is(TooManyRenamesSchema)) return { kind: 'too-many-renames' };
   }
+  // admin-api's per-owner write rate limit.
+  if (e.status === 429) return { kind: 'rate-limited' };
   if (e.status === 400) {
     const invalid = SlugInvalidSchema.safeParse(e.body);
     if (invalid.success) {

@@ -1,4 +1,12 @@
-import { accountDisabledKey, PANO_PATTERN, publishKey, tourKey } from '@internal/contracts';
+import {
+  accountDisabledKey,
+  PANO_PATTERN,
+  publishKey,
+  tourKey,
+  tourOwnerKey,
+  type TourOwnerRecord,
+} from '@internal/contracts';
+import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 
 // Helpers for the operator-only takedown route (OPERATOR_TAKEDOWN_PATH in
 // index.ts; scripts/takedown.ts, "Takedown" in docs/deploy.md). It needs no
@@ -39,4 +47,43 @@ export const tourExists = async (
     bucket.head(publishKey(sub, tourId)),
   ]);
   return !!tour || !!record;
+};
+
+/**
+ * Writes the tour's owner pointer (tourOwnerKey) for the takedown script, create-only:
+ * a tourId is only ever one owner's, so an existing pointer is already right.
+ * Best-effort: it runs after a create or publish has succeeded, and a failure only
+ * logs, since the script falls back to scanning owners without it. A publish racing a
+ * delete can leave an orphan pointer to a tour that's gone; harmless, because the
+ * script checks the owner still holds the tour before trusting it.
+ */
+export const recordTourOwner = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+): Promise<void> => {
+  const record: TourOwnerRecord = { v: 1, sub };
+  try {
+    await putJson(bucket, tourOwnerKey(tourId), record, { etagDoesNotMatch: '*' });
+  } catch (e) {
+    // The name only: R2 error messages can carry keys, and this record holds the sub.
+    console.error(
+      `[takedown] owner pointer for tour ${tourId} not written:`,
+      e instanceof Error ? e.name : 'unknown error',
+    );
+  }
+};
+
+/**
+ * Removes the owner pointer for a tour that has no tour.json (a publish-only leftover),
+ * but only if it names this owner: anyone can DELETE any tourId, and must not clear
+ * another owner's pointer by doing so.
+ */
+export const forgetTourOwner = async (
+  bucket: R2Bucket,
+  sub: string,
+  tourId: string,
+): Promise<void> => {
+  const got = await getJson<TourOwnerRecord>(bucket, tourOwnerKey(tourId)).catch(() => null);
+  if (got?.value.sub === sub) await bucket.delete(tourOwnerKey(tourId));
 };

@@ -336,6 +336,24 @@ describe('Dashboard', () => {
     );
   });
 
+  it('says why a duplicate was refused at the tour limit', async () => {
+    const { fetch } = server({
+      ...lists([tour()]),
+      'GET /api/admin/tours/t1': () =>
+        json({
+          tour: { tourId: 't1', title: 'St Lawrence Jewry', scenes: [] },
+          etag: 'e1',
+          publish: null,
+        }),
+      'POST /api/admin/tours': () => json({ error: 'tour limit reached' }, 403),
+    });
+    renderAdmin('/app/', { fetch });
+    fireEvent.click(await screen.findByRole('button', { name: 'Duplicate “St Lawrence Jewry”' }));
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Couldn’t duplicate “St Lawrence Jewry”. This account has reached its limit of 200 tours.',
+    );
+  });
+
   describe('delete', () => {
     it('confirms, deletes once despite a double click, and removes the card', async () => {
       let release: () => void = () => {};

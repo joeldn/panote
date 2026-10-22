@@ -30,7 +30,32 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'cdn',
   'www',
   'panote',
+  // Support and sign-in lures a share link could impersonate. Kept short on
+  // purpose: a reserved word is gone for every user for good.
+  'support',
+  'abuse',
+  'security',
+  'account',
+  'billing',
+  'password',
+  'verify',
+  'signin',
+  'sign-in',
+  'signup',
+  'sign-up',
 ]);
+
+// Any slug starting with the brand name ("panote-team", "panotesupport").
+const RESERVED_PREFIXES = ['panote'];
+// A sign-in word as the whole slug or its first dash-separated part ("login-help"),
+// but not a longer word that merely starts with one ("signing-day").
+const RESERVED_FIRST_WORDS = ['login', 'log-in', 'signin', 'sign-in'];
+
+/** Exact reservations, the brand prefix, and a sign-in word leading the slug. */
+export const isReservedSlug = (slug: string): boolean =>
+  RESERVED_SLUGS.has(slug) ||
+  RESERVED_PREFIXES.some((p) => slug.startsWith(p)) ||
+  RESERVED_FIRST_WORDS.some((w) => slug === w || slug.startsWith(`${w}-`));
 
 /** Lowercase, `[^a-z0-9-]` to `-`, collapse repeated `-`, trim `-` at both ends. */
 export const normalizeSlug = (raw: string): string =>
@@ -44,7 +69,7 @@ export type SlugCheck = { ok: true } | { ok: false; reason: 'invalid' | 'reserve
 
 export const checkSlug = (slug: string): SlugCheck => {
   if (!SLUG_PATTERN.test(slug)) return { ok: false, reason: 'invalid' };
-  if (RESERVED_SLUGS.has(slug)) return { ok: false, reason: 'reserved' };
+  if (isReservedSlug(slug)) return { ok: false, reason: 'reserved' };
   return { ok: true };
 };
 

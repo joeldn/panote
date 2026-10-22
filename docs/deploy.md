@@ -1234,12 +1234,12 @@ still catches it like any other late write; only if it happens after DELETE has 
 and removed the tombstone does a later DELETE take the no-proof path and skip `tiles/<panoId>/`
 entirely, leaving that one narrow case to the same manual per-key delete.
 
-A presigned upload URL stays valid for up to 900 seconds after `upload-api` issues it, and can
+A presigned upload URL stays valid for up to 600 seconds after `upload-api` issues it, and can
 still be used within that window to re-create a deleted pano's original — which re-tiles a pano
 that now has no `config.json`. That isn't a leak of anything new, and the pano can simply be
 deleted again. The replace-image path (`POST /api/upload-url` with `panoId`) has the same TOCTOU:
 its ownership HEAD check runs once, at presign time, so a presign issued just before a DELETE can
-still land up to 900s later and recreate the original after the delete completed. It stays
+still land up to 600s later and recreate the original after the delete completed. It stays
 confined to the caller's own owner-scoped prefix either way, so the impact is the same as the
 fresh-upload case above — the pano can simply be deleted again.
 
@@ -1279,6 +1279,7 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
    owner's original key, then the owner prefix). No reference or recent-upload checks: everything
    goes. A record a tiler job writes in the moment after that is dropped by the tile sweep 24-48
    hours later (see "Old version dirs").
+   Then `upload-log/<owner>/`, upload-api's log of the upload URLs it issued (Owner quotas).
 4. `completedAt` is stamped on the marker, and the response is `200 {"status":"deleted"}`.
 
 If any step throws, the route still answers `202 {"status":"pending"}`: the account is already
@@ -1291,7 +1292,7 @@ including for a partial run.
 
 - Interrupted deletes (no `completedAt`) first, oldest request first, then finished ones.
 - A finished account costs one `LIST` (`limit: 1`) per owner prefix; only if something turned up
-  there (a presigned upload issued before the marker, valid for 900s) does it run the full delete
+  there (a presigned upload issued before the marker, valid for 600s) does it run the full delete
   again.
 - One run deletes at most `SWEEP_ITEM_BUDGET` (400) tours plus panos, and one account at most
   `SWEEP_ACCOUNT_ITEM_BUDGET` (100) of them, so one huge account can't starve the rest; what's
@@ -1334,9 +1335,9 @@ name.
   says so.
 - **Analytics Engine events** for the deleted tours. They're keyed by tourId, hold nothing about
   the owner, and age out with AE's three-month retention (see Insights).
-- **Redirect aliases past the 20 `publish.json` tracks** (`MAX_ALIASES`). They stop being
-  followed once the tour's live slug is gone and the daily alias sweep removes them when they
-  expire.
+- **Redirect aliases a tour dropped before every alias was tracked** (`MAX_ALIASES` was 20 and
+  older ones went untracked). They stop being followed once the tour's live slug is gone and the
+  daily alias sweep removes them when they expire.
 - **Copies already in a browser cache**, and edge copies if the purge isn't configured (see
   "Deleted panos").
 
@@ -1395,6 +1396,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | Worker | Binding | Route | Key | Limit | namespace_id dev / production |
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
+| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator route | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
@@ -1405,11 +1407,33 @@ to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). 
 the same id share counters, so every binding and every env has its own. The dashboard doesn't show
 these limits: watch for `429`s in Workers Logs. To change a limit, edit `simple.limit` in both env
 blocks; `period` may only be `10` or `60`, and if it changes, change the matching constant
-(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
+(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
 office or a carrier NAT shares one IP, which is why those limits are well above what one browser
 sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
 the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
-`TourStats` still never see it (the privacy rule in `docs/wave6-plan.md` holds).
+`TourStats` still never see it (the privacy rule in `docs/wave6-plan.md` holds). `admin-api`'s
+300/min lets two editor Saves of a full tour through in one minute (each is up to `MAX_TOUR_SCENES`
+= 100 configs, the tour and the publish); people editing by hand stay far below it. A Save cut off
+by a `429` keeps the refused documents unsaved, and pressing Save again sends just those.
+
+### admin-api object caps
+
+- **Tours:** at most `MAX_TOURS_PER_OWNER` (200, `@internal/contracts`). `POST /api/admin/tours`
+  (new tour, upload into a new tour, dashboard Duplicate) answers `403 {"error":"tour limit reached"}`
+  once the owner has 200 `tour.json`s, counted with one LIST of `tours/<owner>/`. A soft cap, like
+  upload-api's: concurrent creates can each pass.
+- **Configs:** `PUT /api/admin/panos/:panoId/config` answers `404 {"error":"pano not found"}` unless
+  the caller has an original for that panoId, or already has a config there (a config-only pano
+  from before this check, which can still be updated). The delete tombstone's `409` comes first.
+- **Slugs:** a tour holds at most `MAX_ALIASES` (5) redirect aliases. A rename, or a publish with a
+  new slug, that would make a sixth answers `409 {"error":"too many renames"}` and claims nothing;
+  it works again once the oldest alias expires (`SLUG_ALIAS_DAYS`). Moving back onto an alias and a
+  bare republish still work. An alias past its expiry stops counting at once, before the daily
+  sweep deletes it. Unpublish (Stop sharing, takedown, and so tour delete) releases the tour's
+  aliases as well as its live slug: an old shared URL then stops redirecting and its slug is free
+  for anyone to claim, as the live slug already was. A short list of support and sign-in words is
+  reserved (`RESERVED_SLUGS`, plus any slug starting `panote` or led by `login`/`signin`); a tour
+  already live at a word reserved later keeps republishing at it.
 
 ### Likes
 
@@ -1425,32 +1449,56 @@ don't check the bundle (a view stores one counter per tourId); the per-IP limit 
 
 ### Owner quotas
 
-`upload-api` calls `checkQuota` (`src/quota.ts`) last before it signs an upload URL, after the
-auth, rate limit, body checks and the account markers. Two optional vars:
+`upload-api` checks owner quotas (`src/quota.ts`) last before it signs an upload URL, after the
+auth, rate limit, body checks and the account markers. Three vars, set in both env blocks of
+`services/upload-api/wrangler.jsonc`:
 
-- `MAX_PANOS_PER_OWNER`: most panos (directories under `panos/<owner>/`) one owner may hold. A
-  replace doesn't count as a new pano.
-- `MAX_BYTES_PER_OWNER`: most bytes of originals one owner may hold, counting the declared `size`
-  of the upload; a replace frees the old original's bytes.
+- `MAX_PANOS_PER_OWNER` (`500`): most panos (directories under `panos/<owner>/`) one owner may
+  hold. A replace doesn't add a pano, so it is allowed at the limit, but not once the owner is
+  already over it (the limit was lowered under them).
+- `MAX_BYTES_PER_OWNER` (`21474836480`, 20 GiB): most bytes of originals one owner may hold,
+  counting the declared `size` of the upload; a replace frees the old original's bytes.
+- `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most upload URLs one owner may get in a rolling 24
+  hours, new uploads and replaces alike (each is a tiling job), counting this one. It bounds
+  tiling compute per account (a job is about $0.01); the global backstops are the 60-per-minute
+  `UPLOAD_URL_LIMITER` and the tiler's `max_concurrency`.
 
-Unset or empty means unlimited, and costs nothing: the owner's prefix is only listed (S3
-`ListObjectsV2`, one Class A operation per 1,000 objects) when a limit is set. That listing is a
-known cost: with a limit on, it runs in full on every upload-URL request. A pano with a delete
-tombstone (`deleting`) counts toward neither limit. Over a limit:
-`403 {"error":"pano limit reached"}` or `403 {"error":"storage limit reached"}`. A listing that
-fails is a `502`, and a value that isn't a non-negative integer refuses every upload (`500`), so a
-typo can't silently lift the limit. It is a soft cap: it counts what's stored now and the declared
-size, so concurrent requests can each pass, and the uploaded file can differ from the declared
-size (up to the 150 MiB cap). To turn a limit on, add it to `vars` in both env blocks of
-`services/upload-api/wrangler.jsonc`, delete its optional line from `src/env.d.ts`, run
-`pnpm --filter @service/upload-api run types` and deploy.
+Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
+limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
+1,000 objects) in full on every upload-URL request: that is a known cost. A pano with a delete
+tombstone (`deleting`) counts toward neither. Over a limit: `403 {"error":"pano limit reached"}`,
+`403 {"error":"storage limit reached"}` or `403 {"error":"daily upload limit reached"}`, checked
+in that order; the admin app words each one (`packages/web-kit/src/api/http.ts`). A listing or
+log write that fails is a `502` with no URL, and a value that isn't a non-negative integer refuses
+every upload (`500`), so a typo can't silently lift a limit. They are soft caps: concurrent
+requests can each pass, since each counts what is stored when it reads.
+
+**Upload log.** The daily limit counts URLs, not stored originals, so uploading and then deleting,
+or asking for URLs and never using them, doesn't get round it. Before it returns a URL,
+`upload-api` writes one empty object, `upload-log/<owner>/<issued, basic ISO 8601>-<panoId>`
+(`uploadLogKey` in `@internal/contracts`); if that write fails, no URL. Each request lists
+`upload-log/<owner>/` once (about one entry per URL in the past day, so a page or two at most) and
+counts the entries from the past 24 hours. Older entries, and any name it can't read, aren't
+counted and are deleted best-effort after the response (`waitUntil`, at most
+`UPLOAD_LOG_PRUNE_MAX` = 50 per request). It sits outside `panos/` because `admin-api` lists that
+prefix as the owner's panos, and outside the R2 notification rule (prefix `panos/`). It is private:
+the CDN's WAF rule only lets `tiles/`, `pub/` and `slugs/` through. Account deletion removes
+`upload-log/<owner>/` after the panos, and the daily sweep's "anything left?" check lists it too,
+so an entry logged just before the deletion marker is caught. An owner who stops uploading keeps
+up to a day's entries (empty objects) until their next upload-URL request. A Workers Rate Limiting
+binding can't express a day (its period is 10 or 60 seconds), which is why the count lives in R2.
+
+To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
+(the vars are in the generated `env.d.ts`) and deploy.
 
 ### Report link
 
 The visitor viewer (`/s/<slug>`, not the embed) has a **Report** chip at the end of the tour bar
 (a flag only, on a phone). It's a `mailto:hello@panote.io` with the subject "Report a tour" and the
 tour's share link in the body. Reports arrive at the Email Routing address like any other mail; act
-on them with the takedown script below.
+on them with the takedown script below, following the procedures after it. What a reporter may
+send, and what we promise to do, is the website's `/content-policy` page
+(`apps/website/src/legal/Legal.tsx`, linked from the footer and the Terms).
 
 ### Takedown
 
@@ -1459,10 +1507,12 @@ Two ways to stop abuse, usually together:
 - **Take a tour down.** admin-api's operator-only route `POST /api/admin/operator/takedown`
   (`{ sub, tourId, action: "unpublish" | "delete" }`, header `X-Operator-Token`) runs exactly what
   the owner's own unpublish or tour delete runs, through the tour's `TourPublisher`, with the CDN
-  purge. `unpublish` removes the share link, bundle and slug and keeps the tour and panos; `delete`
-  also deletes the tour and every pano no other tour of that owner uses. It answers `404` for a
-  missing or wrong token, and always while the `OPERATOR_TOKEN` secret isn't set on that env, so
-  the route doesn't exist until you set it. It skips the write gate (no Auth0 user).
+  purge. `unpublish` removes the share link, bundle and slug and keeps the tour and panos (their
+  tiles under `tiles/<panoId>/` stay reachable by anyone who has the URL); `delete` also deletes the
+  tour and every pano no other tour of that owner uses, tiles included, purged from the CDN. It
+  answers `404` for a missing or wrong token, and always while the `OPERATOR_TOKEN` secret isn't
+  set on that env, so the route doesn't exist until you set it. It skips the write gate (no Auth0
+  user).
 - **Disable the owner.** A marker `accounts/<owner>/disabled.json` (`{ v, disabledAt, reason? }`).
   While it exists every `admin-api` write and `upload-api`'s upload URL answer
   `403 {"error":"account disabled"}` (one more R2 `HEAD` each, in parallel with the deletion
@@ -1471,45 +1521,152 @@ Two ways to stop abuse, usually together:
   an account delete and the same sign-in stays blocked. Removing it re-enables the owner. It
   doesn't take anything down by itself.
 
-`services/admin-api/scripts/takedown.ts` does both. It runs like the account-delete script: Node 24
-straight from TypeScript, a built workspace, the same R2 S3 credentials, and the same rule that
-anything but a `-dev` bucket is named twice with `--allow-bucket`. Tour actions also need
-`OPERATOR_TOKEN` (the same value as the `admin-api` secret) and call `https://panote.dev` for
-`pano-content-dev` and `https://panote.io` for `pano-content`. `ADMIN_API_ORIGIN` overrides that,
-but any origin other than the bucket's default also needs `--allow-bucket <bucket>`, so a dev
-bucket can't quietly be sent to production's admin-api.
+`services/admin-api/scripts/takedown.ts` does both, and on top of them:
+
+- **`--quarantine <caseId>`** keeps a private copy before anything is removed: the tour's
+  `tour.json` and `publish.json`, its public bundle, its slug records, and the original and
+  `config.json` of every scene in the tour or its bundle, each copied byte for byte (content type
+  kept, create-only so a rerun keeps the first copy) to `quarantine/<caseId>/<its key>`, plus
+  `quarantine/<caseId>/case.json` (`{ caseId, sub, tourIds, keys, firstAt, lastAt, reason? }`).
+  Each copy is checked with a `HEAD` and only then does the tour go through the route's `delete`.
+  Tiles aren't copied: they're derived from the original. `quarantine/` is outside the CDN WAF
+  rule's three public prefixes (`/tiles/`, `/pub/`, `/slugs/`, see "CDN custom domain"), so it is
+  never served, and no Worker reads, lists or deletes it: the account-deletion sweep only touches
+  `tours/<owner>/`, `panos/<owner>/` and the owner's public keys. A case id is lowercase letters,
+  digits and `-` (e.g. `2026-10-22-report-3`); one case holds one owner. Each copy is checked for
+  size and, where both ETags are content hashes, ETag. `case.json` is rewritten only if it hasn't
+  changed since it was read. `--quarantine` needs `--disable-owner`, so the owner can't write
+  between the copy and the delete.
+- **`--all-tours`** applies the tour action to every tour the owner has (named by `--sub`, or by
+  any one of their tours' `--slug`/`--tour`), one at a time, so the last delete also takes the panos
+  the tours shared. With `--quarantine` it also copies every pano the owner has, in a tour or not.
+- **`--close-account`** writes the account-deletion marker, as the owner's own Delete account
+  does (see "Account deletion"): the next daily sweep deletes what is left (panos in no tour, with
+  their tiles, purged), and the Auth0 user is yours to remove from the `delete-account.ts --list`.
+  It needs `--disable-owner` too.
+- **`--delete` keeps no copy, so it needs `--nothing-to-preserve` as well**, the operator's word
+  that nothing it destroys may be evidence. `--close-account` needs the same, unless it goes with
+  `--all-tours --quarantine <caseId>`. If in doubt, quarantine.
+
+After a quarantine the script `HEAD`s each pano's manifest and names any whose tiles are still
+public: a pano another of the owner's tours still uses. `--all-tours` takes those down too.
+
+It runs like the account-delete script: Node 24 straight from TypeScript, a built workspace, the
+same R2 S3 credentials, and the same rule that anything but a `-dev` bucket is named twice with
+`--allow-bucket`. Tour actions also need `OPERATOR_TOKEN` (the same value as the `admin-api`
+secret) and call `https://panote.dev` for `pano-content-dev` and `https://panote.io` for
+`pano-content`. `ADMIN_API_ORIGIN` overrides that, but any origin other than the bucket's default
+also needs `--allow-bucket <bucket>`, so a dev bucket can't quietly be sent to production's
+admin-api.
 
 ```bash
 export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
-export OPERATOR_TOKEN=...    # only for --unpublish / --delete
+export OPERATOR_TOKEN=...    # only for --unpublish / --quarantine / --delete
 # Report only: which tour the share link is, who owns it, whether they're disabled
 node services/admin-api/scripts/takedown.ts --slug old-town
 # What it would do, without doing it
 node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disable-owner --dry-run
-# Take the tour down and block its owner, noting why (never shown to the owner)
-node services/admin-api/scripts/takedown.ts --slug old-town --unpublish --disable-owner --reason 'report 2026-10-21'
-# Or delete it outright; --tour takes a tourId instead of a slug
-node services/admin-api/scripts/takedown.ts --tour <tourId> --delete
+# Copyright: take the tour's share link down (--reason only goes with --disable-owner)
+node services/admin-api/scripts/takedown.ts --slug old-town --unpublish
+# Illegal images: block the owner, keep a copy of everything, take it all down, close the account
+node services/admin-api/scripts/takedown.ts --slug old-town --disable-owner --reason 'case 2026-10-22-3' \
+  --all-tours --quarantine 2026-10-22-3 --close-account
+# Delete outright, keeping nothing (spam, say); --tour takes a tourId instead of a slug
+node services/admin-api/scripts/takedown.ts --tour <tourId> --delete --nothing-to-preserve
 # An owner alone, by Auth0 user id
 node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --disable-owner
 node services/admin-api/scripts/takedown.ts --sub 'google-oauth2|1234' --enable-owner
 ```
 
 `--dry-run` writes nothing and calls no admin-api route, but it still makes the read-only R2
-requests above (the slug `GET`, the owner scan, the marker `GET`/`HEAD`), so it needs the same R2
-credentials and shows up in R2 request metrics.
+requests above (the slug `GET`, the owner lookup, the tour listing for `--all-tours`, the marker
+`GET`/`HEAD`), so it needs the same R2 credentials and shows up in R2 request metrics.
 
-Finding the owner: tour keys carry the owner and `pub/` deliberately doesn't, so with only a slug or
-tourId the script lists `tours/` and `HEAD`s that tourId under each owner (one request per owner).
-Pass `--sub` as well to skip that scan; the script then checks that this sub really holds the tour
+Finding the owner: tour keys carry the owner and `pub/` deliberately doesn't, so admin-api writes
+a pointer `tour-owners/<tourId>.json` (`{ v, sub }`, private like `accounts/`) when a tour is
+created, and when one is published (which covers older tours). The write is best-effort: a
+failure logs `[takedown] owner pointer ... not written` and the create or publish still succeeds. Tour delete and account delete
+remove it. The script reads the pointer and checks that sub really holds the tour; with no
+usable pointer (a tour that hasn't been published since) it falls back to listing `tours/` and
+`HEAD`ing that tourId under each owner (one request per owner).
+Pass `--sub` as well to skip both; the script then checks that this sub really holds the tour
 (its `tour.json` or `publish.json`) and stops before writing anything if not, so a mistyped sub
 can't disable someone else. A slug that is now a redirect alias still names its tour.
-The owner is disabled before the tour comes down, so they can't republish in between. Both steps
-are idempotent: rerunning is harmless, and disabling again only rewrites `disabledAt`/`reason`.
+The owner is disabled before the tour comes down, so they can't republish in between. Every step
+is idempotent: rerunning is harmless, and disabling again only rewrites `disabledAt`/`reason`.
 
 Setup, once per environment: generate a long random token (`openssl rand -hex 32`), then
 `pnpm --filter @service/admin-api exec wrangler secret put OPERATOR_TOKEN --env dev` (and
 `--env production`). Keep it with the R2 credentials; rotate it by putting a new value.
+
+### Takedown procedures
+
+The public promises are on `/content-policy`; this is how to keep them. Keep a **case log**: a
+private spreadsheet or document only the operator can open, one row per report, with the date,
+case id, the tour link and tourId, the owner's sub, the reporter's email, the kind (copyright,
+illegal, other), what you did and when, and the outcome. Nothing in the bucket replaces it; the
+`reason` and `case.json` only point back to it.
+
+**Copyright notice.**
+
+1. Check the notice has everything the policy lists: the reporter's name, postal address, phone
+   and email; the work; the Panote link; the good-faith statement; the accuracy and authority
+   statement under penalty of perjury; a signature (a typed name will do). If anything is missing,
+   reply asking for it and do nothing else yet.
+2. Run the report-only command on the link to find the tour and owner, then
+   `--unpublish` (the case log, not the bucket, records why). That takes the share link down and
+   keeps the tour in the owner's account so it can be restored, **but it leaves
+   `tiles/<panoId>/` reachable by direct URL**: anyone who kept a tile or preview URL can still
+   load the image. And without `--disable-owner` the owner can share it again from the share
+   modal straight away (only the editor's Saves leave it off), so add `--disable-owner` while the
+   case is open if they shouldn't. For the infringing image
+   itself, use `--disable-owner --quarantine <case id>` (keeps a copy for the dispute and deletes
+   the tour, its panos and their tiles, purged) or, if nothing needs keeping,
+   `--delete --nothing-to-preserve`. A counter-notice can then only restore from the quarantine
+   copy, by hand.
+3. Email the owner (their address is on their Auth0 user): which tour, that it was taken offline
+   after a copyright notice, a copy of the notice, and how to send a counter-notice.
+4. Log it, and check the log for the owner's earlier upheld notices (see repeat infringers).
+
+**Counter-notice.**
+
+1. Check it has the owner's name, postal address, phone and email; what was removed and its link;
+   the statement under penalty of perjury that it was a mistake or misidentification; consent to
+   the courts named on the policy page and to service from the reporter; a signature.
+2. Forward it to the reporter, saying the content may go back in 10 to 14 working days unless they
+   tell you they have started legal action.
+3. If they haven't by then, tell the owner they may share the tour again from its share modal
+   (it was only unpublished; the takedown left the sharing-stopped marker, so the editor's Saves
+   don't republish it on their own), and log it. If they have, leave it down and log that.
+
+**Illegal images (child sexual abuse material above all).**
+
+1. Don't open, save, forward or screenshot the images, and don't email the owner. Note only the
+   link and the tourId.
+2. Run, the same day: `--disable-owner --reason '<case id>' --all-tours --quarantine <case id>
+   --close-account`. That keeps the evidence in `quarantine/<case id>/`, takes every tour and
+   tile down with the CDN purge, and closes the account. **Never `--delete --nothing-to-preserve`
+   here**, and never delete anything under `quarantine/`.
+3. Report it: in the US to NCMEC's CyberTipline (report.cybertip.org), otherwise the national
+   hotline (inhope.org lists them) or the police, giving the link, the time, what you did, and
+   that a copy is preserved. Note the report's reference in the case log.
+4. Keep `quarantine/<case id>/` until the authorities say it may go, or as long as the law there
+   requires (in the US, at least one year after the report). Don't remove the Auth0 user until
+   then either; the disabled marker keeps that sign-in blocked meanwhile.
+
+**Repeat infringers.** The case log is the record. Before closing a copyright case, count the
+owner's earlier upheld notices (ones not reversed by a counter-notice). At the third, close the
+account: `--sub '<sub>' --disable-owner --reason '<case id>' --all-tours --unpublish`, then
+`--sub '<sub>' --disable-owner --close-account --nothing-to-preserve` once nothing is in dispute,
+and tell the owner.
+
+**TODO (Joel):** the legal pages still carry `YOUR_` placeholders for the operator's legal name,
+postal address and the counter-notice jurisdiction (`apps/website/src/legal/operator.ts`), and the
+minimum age isn't on the Terms yet. They show as-is on dev; the production deploy refuses to run
+while any file under `apps/website/src/legal/` has one (`.github/workflows/deploy.yml`, the
+`YOUR_` placeholder step). Have the Terms and the content policy reviewed before production. If
+Panote is to rely on the US DMCA safe harbour, a designated agent must also be registered with
+the US Copyright Office.
 
 ---
 
@@ -2033,15 +2190,20 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   purge by URL or prefix — B6 adds a best-effort purge on delete, verified in dev on 2026-10-08
   (see "CDN purge on delete").
 - **Hardened, verified in dev (2026-10-08): the presigned upload PUT pins content-type.**
-  `presignPut` signs `content-type` alongside `host` (`SignedHeaders=content-type;host`). Against
+  `presignPut` signs `content-type` alongside `host` (then `SignedHeaders=content-type;host`). Against
   one presigned URL for an `image/jpeg` upload, a PUT with `content-type: image/png` and one with
   no content-type both got `403` (`SignatureDoesNotMatch`) and wrote nothing; the same PUT with
-  `image/jpeg` got `200`. **content-length is not signed, and R2 does not enforce it** — also
-  checked 2026-10-08: a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`. The
-  150 MiB size cap is therefore enforced only at presign (input validation on the presign request
-  in `upload-api`) and in the tiler, which backstops it with its own byte (`MAX_ORIGINAL_BYTES`
-  var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
-  (`packages/tiler/src/pyramid.ts:43`) caps.
+  `image/jpeg` got `200`.
+- **Signed but unverified: the presigned upload PUT pins content-length.** On 2026-10-08, with
+  content-length unsigned, a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`.
+  `upload-api` now also signs `content-length` as the declared `size`
+  (`SignedHeaders=content-length;content-type;host`); the browser sends a `File`'s size as
+  Content-Length itself, which is that `size`. Whether R2 checks a signed content-length on a
+  presigned PUT has not been verified in dev yet: until a PUT of a different length is seen to get
+  `403`, treat the 150 MiB size cap as enforced only at presign (input validation on the presign
+  request in `upload-api`) and in the tiler, which backstops it with its own byte
+  (`MAX_ORIGINAL_BYTES` var, `services/tiler-consumer/wrangler.jsonc:55,92`) and pixel
+  (`packages/tiler/src/pyramid.ts:43`) caps. If R2 ignores it, uploads still work as before.
 - **Fixed, live in dev (unit O1).** A tile 404 used to be edge-cached for 4h (`text/html`,
   `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
   `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge
