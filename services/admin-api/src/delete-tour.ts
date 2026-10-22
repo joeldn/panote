@@ -1,4 +1,10 @@
-import { sharingStoppedKey, tilesPrefix, tourKey, tourOwnerKey, type TourDoc } from '@internal/contracts';
+import {
+  sharingStoppedKey,
+  tilesPrefix,
+  tourKey,
+  tourOwnerKey,
+  type TourDoc,
+} from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
