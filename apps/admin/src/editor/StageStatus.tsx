@@ -68,7 +68,7 @@ export function StageStatus({
         </h2>
         <p>
           {failed
-            ? `“${name}” needs a new image: an equirectangular JPG, PNG or WebP. Or remove it from the tour.`
+            ? `We hit an error processing “${name}”. Replace its image to try again, or remove it from the tour.`
             : onCheckAgain
               ? `“${name}” is taking longer than usual. Check again, replace its image, or remove it from the tour.`
               : `“${name}” is taking longer than usual. We’ll keep checking, or you can replace its image or remove it from the tour.`}

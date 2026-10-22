@@ -112,6 +112,7 @@ const toActive = (j: Job): ActiveUpload => ({
   key: j.key,
   fileName: j.fileName,
   hasFile: j.file !== null,
+  file: j.file,
   target: j.target,
   machine: j.machine,
   landed: j.landed,
@@ -821,7 +822,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           onClose={closePicker}
         />
       )}
-      {model && <UploadChip model={model} onAction={onAction} onDismiss={dismiss} />}
+      {model && (
+        <UploadChip model={model} file={active?.file} onAction={onAction} onDismiss={dismiss} />
+      )}
     </UploadsContext>
   );
 }

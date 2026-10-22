@@ -188,6 +188,18 @@
   font: 400 12px/1.45 var(--fbody);
   color: rgba(244, 241, 234, 0.62);
 }
+.up-chip__aspect {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 0;
+  font: 400 12px/1.45 var(--fbody);
+  color: var(--chip-text);
+}
+.up-chip__aspect > i {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
 .up-chip__actions {
   display: flex;
   gap: 8px;
