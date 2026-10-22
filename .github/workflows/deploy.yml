@@ -360,6 +360,64 @@ jobs:
           TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
         run: pnpm --filter "@app/${{ matrix.app }}" exec wrangler deploy --env "$TARGET_ENVIRONMENT"
 
+  # Post-deploy smoke test: public, unauthenticated URLs on the environment
+  # just deployed, no secrets. Dev's pages are behind Cloudflare Access (a 302
+  # to the login), so on dev it only checks /api/* (Access bypass) and the
+  # CDN; production also checks the two apps. The CDN checks are the WAF rule
+  # that keeps panos/ and tours/ private: a 403 there is the point. Runs only
+  # when every deploy job succeeded, so a failure here means the deploy went
+  # out but something answers wrongly - see docs/deploy.md, "Rollback".
+  smoke-test:
+    name: Smoke test (${{ needs.resolve-environment.outputs.environment }})
+    needs:
+      - resolve-environment
+      - deploy-workers
+      - deploy-tiler-consumer
+      - deploy-apps
+    if: needs.resolve-environment.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check public endpoints
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.resolve-environment.outputs.environment }}
+        run: |
+          case "$TARGET_ENVIRONMENT" in
+            dev) site=https://panote.dev cdn=https://cdn.panote.dev ;;
+            production) site=https://panote.io cdn=https://cdn.panote.io ;;
+            *) echo "::error::unknown environment $TARGET_ENVIRONMENT"; exit 1 ;;
+          esac
+          failed=0
+          # expect <status> <curl args...>: three tries 10s apart, since a
+          # route can take a few seconds to answer after a deploy.
+          expect() {
+            local want=$1 got=""; shift
+            for _ in 1 2 3; do
+              got=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$@" || true)
+              [ "$got" = "$want" ] && break
+              sleep 10
+            done
+            if [ "$got" = "$want" ]; then
+              echo "ok   $want  $*"
+            else
+              echo "::error::expected $want, got ${got:-no response}: $*"
+              failed=1
+            fi
+          }
+          expect 200 "$site/api/tours/x/stats"
+          expect 401 "$site/api/admin/panos"
+          expect 401 -X POST "$site/api/upload-url"
+          expect 403 -I "$cdn/panos/x"
+          expect 403 -I "$cdn/tours/x"
+          expect 403 -I "$cdn/"
+          expect 404 -I "$cdn/tiles/smoke-test/manifest.json"
+          if [ "$TARGET_ENVIRONMENT" = production ]; then
+            expect 200 -I "$site/"
+            expect 200 -I "$site/app/"
+            expect 200 -I "$site/robots.txt"
+          fi
+          exit "$failed"
+
 # Before this can succeed: CLOUDFLARE_API_TOKEN must be an environment
 # secret on both dev and production (not a repo secret); production needs
 # required reviewers and a main-only deployment branch policy. Full
