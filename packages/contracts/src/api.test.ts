@@ -8,6 +8,7 @@ import {
   QuarantineCaseRecordSchema,
   CLIENT_ID_PATTERN,
   OperatorTakedownRequestSchema,
+  OPERATOR_RESTORE_MAX_KEY_LENGTH,
   OperatorRestoreRequestSchema,
   PANO_DELETE_CONFLICTS,
   PanoConfigOkSchema,
@@ -194,6 +195,10 @@ describe('OperatorRestoreRequestSchema', () => {
     { date: '2026-10-22', keys: ['panos/abc/p1/original'] },
     { date: '2026-10-22', keys: ['backup/2026-10-21/tours/abc/t1/tour.json'] },
     { date: '2026-10-22', keys: Array.from({ length: 101 }, () => key) },
+    {
+      date: '2026-10-22',
+      keys: [`tours/abc/t1/${'x'.repeat(OPERATOR_RESTORE_MAX_KEY_LENGTH)}.json`],
+    },
   ])('refuses %j', (body) => {
     expect(OperatorRestoreRequestSchema.safeParse(body).success).toBe(false);
   });

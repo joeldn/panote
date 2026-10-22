@@ -332,22 +332,33 @@ export type OperatorTakedownOk = z.infer<typeof OperatorTakedownOkSchema>;
 // `overwrite`. Keys are original keys, at most OPERATOR_RESTORE_MAX_KEYS per request.
 export const OPERATOR_RESTORE_PATH = '/api/admin/operator/restore';
 export const OPERATOR_RESTORE_MAX_KEYS = 100;
+// Far past any key the app writes (an encoded owner, a tourId and a file name), and under
+// R2's 1,024-byte key limit, so a request can't make the route build huge strings.
+export const OPERATOR_RESTORE_MAX_KEY_LENGTH = 512;
 export const OperatorRestoreRequestSchema = z.object({
   date: z.string().regex(BACKUP_DATE_PATTERN),
   keys: z
-    .array(z.string().refine(isRestorableKey, 'not a restorable key'))
+    .array(
+      z
+        .string()
+        .max(OPERATOR_RESTORE_MAX_KEY_LENGTH)
+        .refine(isRestorableKey, 'not a restorable key'),
+    )
     .min(1)
     .max(OPERATOR_RESTORE_MAX_KEYS),
   overwrite: z.boolean().default(false),
 });
 export type OperatorRestoreRequest = z.infer<typeof OperatorRestoreRequestSchema>;
 // 200: what happened to each key. `existing`: left as it is (create-only); `missing`: not
-// in that day's set; `refused`: its owner's account is marked for deletion.
+// in that day's set; `refused`: its owner's account is marked for deletion, or its owner
+// can't be found (a public key whose tour has no owner pointer); `failed`: an R2 error, so
+// worth another try.
 export const OperatorRestoreOkSchema = z.object({
   restored: z.array(z.string()),
   existing: z.array(z.string()),
   missing: z.array(z.string()),
   refused: z.array(z.string()),
+  failed: z.array(z.string()),
 });
 export type OperatorRestoreOk = z.infer<typeof OperatorRestoreOkSchema>;
 
@@ -366,10 +377,12 @@ export const BackupCompleteRecordSchema = z.object({
 });
 export type BackupCompleteRecord = z.infer<typeof BackupCompleteRecordSchema>;
 // backup/progress.json: the set being written, and the last key done in the current source.
+// `lockedUntil`: the lease of the run writing it now; another run leaves the set alone until then.
 export const BackupProgressSchema = BackupCompleteRecordSchema.omit({ completedAt: true }).extend({
   runs: z.number().int().nonnegative(),
   source: z.number().int().nonnegative(),
   startAfter: z.string().optional(),
+  lockedUntil: z.string().optional(),
 });
 export type BackupProgress = z.infer<typeof BackupProgressSchema>;
 
