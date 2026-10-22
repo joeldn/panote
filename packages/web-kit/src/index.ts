@@ -60,6 +60,7 @@ export {
 } from './api/admin.js';
 export {
   createPublicApi,
+  exploreCoverUrl,
   fetchManifest,
   refreshManifestCache,
   TourStatsSchema,

@@ -66,9 +66,10 @@ export interface ShareModalProps {
   notice?: ReactNode;
 }
 
+// Exactly two (design README, Share modal). Public is what the website's /explore lists.
 const VISIBILITY_OPTIONS: ReadonlyArray<{ value: Visibility; desc: string }> = [
-  { value: 'public', desc: 'Anyone with the link; may appear in panote discovery.' },
-  { value: 'unlisted', desc: 'Only people with the link. Hidden from discovery.' },
+  { value: 'public', desc: 'Listed on Explore and can appear in search.' },
+  { value: 'unlisted', desc: 'Only people with the link.' },
 ];
 
 const TAB_OPTIONS = [

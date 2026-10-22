@@ -3,6 +3,8 @@ import {
   AnalyticsEventBatchSchema,
   CLIENT_ID_PATTERN,
   ClientErrorReportSchema,
+  EXPLORE_CURSOR_PATTERN,
+  EXPLORE_PATH,
   pubTourKey,
   ViewBeaconSchema,
 } from '@internal/contracts';
@@ -17,6 +19,7 @@ import { errorHandler } from '@internal/worker-kit/hono';
 
 import { logClientError } from './client-error.js';
 import { readJsonBody, toDataPoint } from './events.js';
+import { listExplore } from './explore.js';
 import { rateLimitKeyForIp } from './ip-key.js';
 import { TourStats } from './stats.js';
 
@@ -141,6 +144,35 @@ app.get('/api/tours/:tourId/stats', async (c) => {
       'cache-control': 'public, max-age=30',
     },
   });
+});
+
+// How long a page of Explore is reused, at the edge and in the browser. A tour taken
+// off the list can stay on a cached page this long, but its link stops working at once.
+export const EXPLORE_MAX_AGE_SECONDS = 60;
+
+app.get(
+  EXPLORE_PATH,
+  limitByIp((env) => env.EXPLORE_LIMITER),
+);
+app.get(EXPLORE_PATH, async (c) => {
+  const cursor = c.req.query('cursor');
+  if (cursor !== undefined && !EXPLORE_CURSOR_PATTERN.test(cursor)) {
+    return c.json({ error: 'invalid cursor' }, 400);
+  }
+  // One cache entry per page: any other query parameter is dropped from the key, so
+  // made-up parameters can't push every request past the cache.
+  const keyUrl = new URL(EXPLORE_PATH, c.req.url);
+  if (cursor !== undefined) keyUrl.searchParams.set('cursor', cursor);
+  const cacheKey = new Request(keyUrl.toString(), { method: 'GET' });
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return hit;
+  const page = await listExplore(c.env.BUCKET, cursor);
+  const res = Response.json(page, {
+    headers: { 'cache-control': `public, max-age=${EXPLORE_MAX_AGE_SECONDS}` },
+  });
+  c.executionCtx.waitUntil(cache.put(cacheKey, res.clone()));
+  return res;
 });
 
 app.onError(errorHandler);

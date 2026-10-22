@@ -18,6 +18,7 @@
       "routes": [
         { "pattern": "panote.dev/api/tours/*", "zone_name": "panote.dev" },
         { "pattern": "panote.dev/api/errors", "zone_name": "panote.dev" },
+        { "pattern": "panote.dev/api/explore", "zone_name": "panote.dev" },
       ],
       "observability": { "enabled": true },
       "durable_objects": {
@@ -43,8 +44,14 @@
           "namespace_id": "1204",
           "simple": { "limit": 20, "period": 60 },
         },
+        {
+          "name": "EXPLORE_LIMITER",
+          "namespace_id": "1205",
+          "simple": { "limit": 60, "period": 60 },
+        },
       ],
-      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist.
+      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist,
+      // and Explore reads its index (explore/) and re-checks each entry against pub/.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
@@ -59,6 +66,7 @@
       "routes": [
         { "pattern": "panote.io/api/tours/*", "zone_name": "panote.io" },
         { "pattern": "panote.io/api/errors", "zone_name": "panote.io" },
+        { "pattern": "panote.io/api/explore", "zone_name": "panote.io" },
       ],
       "observability": { "enabled": true },
       "durable_objects": {
@@ -80,8 +88,14 @@
           "namespace_id": "2204",
           "simple": { "limit": 20, "period": 60 },
         },
+        {
+          "name": "EXPLORE_LIMITER",
+          "namespace_id": "2205",
+          "simple": { "limit": 60, "period": 60 },
+        },
       ],
-      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist.
+      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist,
+      // and Explore reads its index (explore/) and re-checks each entry against pub/.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it

@@ -176,4 +176,39 @@ const STORED_SLUG_RE = /^[a-z0-9-]{1,64}$/;
 export const storedSlugKey = (slug: string): string | null =>
   STORED_SLUG_RE.test(slug) ? `${SLUGS_ROOT}${slug}.json` : null;
 
+// Explore (the public discovery list): private, read only through public-api's
+// GET /api/explore, never served raw (the CDN WAF rule only lets tiles/, pub/ and
+// slugs/ through). Owner-free, like pub/: an entry may name a tour, never its owner.
+export const EXPLORE_ROOT = 'explore/';
+export const EXPLORE_INDEX_ROOT = `${EXPLORE_ROOT}index/`;
+// R2 lists keys in ascending order, so an inverted timestamp lists newest first.
+export const EXPLORE_RANK_MAX = 9_999_999_999_999;
+const RANK_DIGITS = String(EXPLORE_RANK_MAX).length;
+/** `<rank>-<tourId>`: an index entry's name, and the opaque cursor of the page after it. */
+export const EXPLORE_CURSOR_PATTERN = /^\d{13}-[A-Za-z0-9_-]{1,64}$/;
+export const exploreRank = (listedAtMs: number): string => {
+  if (!Number.isSafeInteger(listedAtMs) || listedAtMs < 0 || listedAtMs > EXPLORE_RANK_MAX) {
+    throw new Error(`listedAtMs out of range (got ${listedAtMs})`);
+  }
+  return String(EXPLORE_RANK_MAX - listedAtMs).padStart(RANK_DIGITS, '0');
+};
+/** One listed tour, newest-listed first: `explore/index/<rank>-<tourId>.json`. */
+export const exploreEntryKey = (listedAtMs: number, tourId: string): string =>
+  `${EXPLORE_INDEX_ROOT}${exploreRank(listedAtMs)}-${assertValidId(tourId, 'tourId')}.json`;
+/** The entry key for a page cursor (see EXPLORE_CURSOR_PATTERN), or null if it isn't one. */
+export const exploreCursorKey = (cursor: string): string | null =>
+  EXPLORE_CURSOR_PATTERN.test(cursor) ? `${EXPLORE_INDEX_ROOT}${cursor}.json` : null;
+/** The cursor naming an entry key, or null for a key outside the index. */
+export const exploreCursorOf = (key: string): string | null => {
+  if (!key.startsWith(EXPLORE_INDEX_ROOT) || !key.endsWith('.json')) return null;
+  const name = key.slice(EXPLORE_INDEX_ROOT.length, -'.json'.length);
+  return EXPLORE_CURSOR_PATTERN.test(name) ? name : null;
+};
+// Per-tour pointer ({ v, key }) at the tour's index entry, so removal finds it by tourId.
+export const exploreTourKey = (t: string): string =>
+  `${EXPLORE_ROOT}tours/${assertValidId(t, 'tourId')}.json`;
+// Operator marker: the tour stays published by link but is never listed.
+export const exploreHiddenKey = (t: string): string =>
+  `${EXPLORE_ROOT}hidden/${assertValidId(t, 'tourId')}.json`;
+
 export { PANO_PATTERN };

@@ -60,11 +60,13 @@ export interface TakedownArgs {
 
 export const USAGE =
   'usage: takedown.ts (--slug <slug> | --tour <tourId> | --sub <auth0 user id>) [--sub <auth0 user id>]\n' +
-  '         [--unpublish | --quarantine <caseId> | --delete --nothing-to-preserve] [--all-tours]\n' +
+  '         [--unpublish | --quarantine <caseId> | --delete --nothing-to-preserve |\n' +
+  '          --hide-from-explore | --show-on-explore] [--all-tours]\n' +
   '         [--disable-owner [--reason <text>] | --enable-owner] [--close-account]\n' +
   '         [--dry-run] [--allow-bucket <bucket>]\n' +
   '       --quarantine copies the tour (with --all-tours, everything the owner has) to\n' +
   '       quarantine/<caseId>/ and then deletes it; --delete keeps no copy.\n' +
+  '       --hide-from-explore keeps the tour live by link but off Explore; --show-on-explore undoes it.\n' +
   '       With no action it only reports: the tour, its owner, and whether the owner is disabled.';
 
 const VALUE_FLAGS = [
@@ -79,6 +81,25 @@ type ValueFlag = (typeof VALUE_FLAGS)[number];
 const TOUR_FLAGS: Record<string, OperatorTakedownAction> = {
   '--unpublish': 'unpublish',
   '--delete': 'delete',
+  // Explore only: the tour stays live by link.
+  '--hide-from-explore': 'hide',
+  '--show-on-explore': 'unhide',
+};
+const TOUR_FLAG_OF: Record<TourAction, string> = {
+  ...(Object.fromEntries(Object.entries(TOUR_FLAGS).map(([f, a]) => [a, f])) as Record<
+    OperatorTakedownAction,
+    string
+  >),
+  quarantine: '--quarantine',
+};
+const EXCLUSIVE_TOUR_FLAGS =
+  '--unpublish, --quarantine, --delete, --hide-from-explore and --show-on-explore are exclusive';
+/** What the operator sees once the route has done an action. */
+export const TOUR_ACTION_DONE: Record<OperatorTakedownAction, string> = {
+  unpublish: 'unpublished',
+  delete: 'deleted',
+  hide: 'hidden from Explore',
+  unhide: 'shown on Explore again',
 };
 const BOOLEAN_FLAGS = ['--dry-run', '--all-tours', '--close-account', '--nothing-to-preserve'];
 // A case id names a folder: short, lowercase, no slashes. A date and a ticket, say.
@@ -107,7 +128,7 @@ export function parseTakedownArgs(
     if (BOOLEAN_FLAGS.includes(arg)) {
       flags.add(arg);
     } else if (TOUR_FLAGS[arg]) {
-      if (tourAction) throw new Error('--unpublish, --quarantine and --delete are exclusive');
+      if (tourAction) throw new Error(EXCLUSIVE_TOUR_FLAGS);
       tourAction = TOUR_FLAGS[arg];
     } else if (OWNER_FLAGS[arg]) {
       if (ownerAction) throw new Error('--disable-owner and --enable-owner are exclusive');
@@ -120,7 +141,7 @@ export function parseTakedownArgs(
         throw new Error(`${arg} has leading or trailing whitespace`);
       values[arg as ValueFlag] = value;
       if (arg === '--quarantine') {
-        if (tourAction) throw new Error('--unpublish, --quarantine and --delete are exclusive');
+        if (tourAction) throw new Error(EXCLUSIVE_TOUR_FLAGS);
         tourAction = 'quarantine';
       }
     } else {
@@ -139,10 +160,12 @@ export function parseTakedownArgs(
     throw new Error('name a tour (--slug or --tour) or an owner (--sub)');
   }
   if (tourAction && !allTours && slug === undefined && tourId === undefined) {
-    throw new Error(`--${tourAction} needs --slug or --tour, or --all-tours`);
+    throw new Error(`${TOUR_FLAG_OF[tourAction]} needs --slug or --tour, or --all-tours`);
   }
   if (allTours && !tourAction) {
-    throw new Error('--all-tours goes with --unpublish, --quarantine or --delete');
+    throw new Error(
+      '--all-tours goes with a tour action (--unpublish, --quarantine, --delete, ...)',
+    );
   }
   if (caseId !== undefined && !CASE_ID_PATTERN.test(caseId)) {
     throw new Error('--quarantine needs a case id: lowercase letters, digits and -');
@@ -639,7 +662,9 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
   const tourIds = args.allTours ? await listOwnerTours(store, sub) : tourId ? [tourId] : [];
   if (args.allTours) log(`owner has ${tourIds.length} tour(s): ${tourIds.join(', ')}`);
 
-  const routeAction = args.tourAction === 'unpublish' ? 'unpublish' : 'delete';
+  // A quarantine is copy-then-delete; every other action is the route's own.
+  const routeAction: OperatorTakedownAction | undefined =
+    args.tourAction === 'quarantine' ? 'delete' : args.tourAction;
   const planned = [
     args.ownerAction && `${args.ownerAction} owner`,
     args.tourAction === 'quarantine' &&
@@ -687,9 +712,9 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
       const done = await requestTourTakedown(deps.fetch, args.api, {
         sub,
         tourId: id,
-        action: routeAction,
+        action: routeAction!,
       });
-      log(`tour ${id} ${done.action}d; ${done.purged} CDN purge target(s) queued`);
+      log(`tour ${id} ${TOUR_ACTION_DONE[done.action]}; ${done.purged} CDN purge target(s) queued`);
     }
     if (routeAction === 'unpublish') {
       log('panos and their tiles are kept (reachable by direct URL); --quarantine removes them');
