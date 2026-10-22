@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
-import { PANO_PATTERN } from './keys.js';
+import { PANO_PATTERN, PLAN_IMAGE_TYPES, type PlanImageType } from './keys.js';
 import { LanguageTagSchema, MAX_TOUR_LANGUAGES, TourLanguagesSchema } from './languages.js';
+import { MAX_PLAN_EDGE } from './plan.js';
 
 // Radians/degrees, canonicalized not bounded: the viewer's yaw is unbounded
 // (PanoViewer.ts panByPixels:292) and pitch/fov clamp only on setView (:344-346).
@@ -209,12 +210,25 @@ export const SceneConfigSchema = z
 export type SceneConfig = z.infer<typeof SceneConfigSchema>;
 
 // Same reason as SceneConfigSchema.panoId above.
+// mapX/mapY: where the scene sits on the floor plan, 0..1 fractions of it (plan.ts).
+// Any finite number still parses, so tours saved before that convention stay valid.
 export const TourSceneSchema = z.object({
   panoId: z.string().regex(PANO_PATTERN, `panoId must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
   mapX: z.number().finite().optional(),
   mapY: z.number().finite().optional(),
 });
 export type TourScene = z.infer<typeof TourSceneSchema>;
+
+// The floor-plan image behind the mini-map's dots, at planKey(tourId, id, type) (keys.ts).
+// The key is built from the tour's own id, so a tour can only point at its own plans.
+const planEdge = () => z.number().int().min(1).max(MAX_PLAN_EDGE);
+export const TourPlanSchema = z.object({
+  id: z.string().regex(PANO_PATTERN, `plan id must match ${PANO_PATTERN}`).max(MAX_ID_LENGTH),
+  type: z.enum(PLAN_IMAGE_TYPES as [PlanImageType, ...PlanImageType[]]),
+  width: planEdge(),
+  height: planEdge(),
+});
+export type TourPlan = z.infer<typeof TourPlanSchema>;
 
 // Bounds a tour's own R2 read/write cost (e.g. admin-api's ?include=configs
 // scene fan-out); also used as a defensive cap on the read side.
@@ -270,6 +284,8 @@ export const TourDocSchema = z.object({
     .max(MAX_ID_LENGTH)
     .optional(),
   settings: TourSettingsSchema.optional(),
+  // Optional: most tours have no plan image; the mini-map then shows the dots alone.
+  plan: TourPlanSchema.optional(),
   // Optional: a tour without it has one, unnamed language (Q4).
   languages: TourLanguagesSchema.optional(),
   i18n: TourTranslationsSchema.optional(),

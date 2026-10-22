@@ -256,11 +256,76 @@ describe('mergeAppendedScenes', () => {
     });
   });
 
+  it('keeps unsaved map placements and a new plan image while folding in an appended scene', () => {
+    const plan = { id: 'plan-1', type: 'image/webp' as const, width: 10, height: 10 };
+    const local = {
+      etag: 'e1',
+      base,
+      current: { ...base, plan, scenes: [{ panoId: 'a', mapX: 0.25, mapY: 0.5 }, { panoId: 'b' }] },
+    };
+    const tour = { ...base, scenes: [...base.scenes, { panoId: 'c' }] };
+    expect(mergeAppendedScenes(local, { etag: 'e2', tour })?.current).toEqual({
+      ...base,
+      plan,
+      scenes: [{ panoId: 'a', mapX: 0.25, mapY: 0.5 }, { panoId: 'b' }, { panoId: 'c' }],
+    });
+  });
+
   it('is null when the server tour changed in any other way', () => {
     const local = { etag: 'e1', base, current: base };
     const renamed = { ...base, title: 'Elsewhere', scenes: [...base.scenes, { panoId: 'c' }] };
     expect(mergeAppendedScenes(local, { etag: 'e2', tour: renamed })).toBeNull();
     const removed = { ...base, scenes: [{ panoId: 'a' }, { panoId: 'c' }] };
     expect(mergeAppendedScenes(local, { etag: 'e2', tour: removed })).toBeNull();
+  });
+});
+
+describe('editor model: the floor plan', () => {
+  const scenesOf = (docs: EditorDocs) => docs.tour.current.scenes;
+
+  it('places, moves and removes a scene, in 0..1 plan fractions, as a tour edit', () => {
+    let docs = run({ type: 'map/place', panoId: 'a', x: 0.25, y: 0.123456 });
+    expect(scenesOf(docs)[0]).toEqual({ panoId: 'a', mapX: 0.25, mapY: 0.1235 });
+    expect(dirtyKeys(docs)).toEqual(['tour']);
+    docs = editorReducer(docs, { type: 'map/place', panoId: 'a', x: 1.4, y: -1 })!;
+    expect(scenesOf(docs)[0]).toEqual({ panoId: 'a', mapX: 1, mapY: 0 });
+    docs = editorReducer(docs, { type: 'map/remove', panoId: 'a' })!;
+    expect(scenesOf(docs)[0]).toEqual({ panoId: 'a' });
+    // Back where it was loaded: no edit left.
+    expect(dirtyKeys(docs)).toEqual([]);
+  });
+
+  it('converts older, unit-free positions where they were drawn before placing another', () => {
+    const legacy = {
+      ...server,
+      tour: {
+        ...server.tour,
+        scenes: [
+          { panoId: 'a', mapX: 10, mapY: 0 },
+          { panoId: 'b', mapX: 30, mapY: 20 },
+          { panoId: 'gone' },
+        ],
+      },
+    };
+    const docs = editorReducer(fromServer(legacy), {
+      type: 'map/place',
+      panoId: 'gone',
+      x: 0.5,
+      y: 0.5,
+    })!;
+    expect(scenesOf(docs)).toEqual([
+      { panoId: 'a', mapX: 0.08, mapY: 0.08 },
+      { panoId: 'b', mapX: 0.92, mapY: 0.92 },
+      { panoId: 'gone', mapX: 0.5, mapY: 0.5 },
+    ]);
+  });
+
+  it('sets and removes the plan image', () => {
+    const plan = { id: 'pl1', type: 'image/webp' as const, width: 800, height: 600 };
+    let docs = run({ type: 'tour/plan', plan });
+    expect(docs.tour.current.plan).toEqual(plan);
+    docs = editorReducer(docs, { type: 'tour/plan', plan: null })!;
+    expect(docs.tour.current).not.toHaveProperty('plan');
+    expect(dirtyKeys(docs)).toEqual([]);
   });
 });

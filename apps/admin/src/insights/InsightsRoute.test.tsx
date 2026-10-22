@@ -105,7 +105,7 @@ function renderInsights(api: AdminApi, fetch = statsFetch(3), path = '/app/t/tou
           value={{
             user: { sub: 'u1' },
             api,
-            upload: { presign: vi.fn() },
+            upload: { presign: vi.fn(), presignPlan: vi.fn() },
             requestSignIn: () => {},
             holdSignIn: () => {},
             signOut: async () => {},

@@ -5,6 +5,7 @@ import {
   deletingKey,
   manifestKey,
   originalKey,
+  planKey,
   publishKey,
   pubTourKey,
   encodeId,
@@ -79,6 +80,9 @@ const seedAccount = async (sub: string, tag: string) => {
     expiresAt: '2099-01-01T00:00:00.000Z',
   });
   await put(pubTourKey(tourId), { v: 1, tourId });
+  // A floor-plan image: public and owner-free, so not under the owner's prefix.
+  const plan = planKey(tourId, `${tag}-plan`, 'image/webp');
+  await put(plan, 'img');
   await put(originalKey(sub, panoId), 'bytes');
   await put(configKey(sub, panoId), { panoId, title: 'p', hotspots: [] });
   await put(manifestKey(panoId), '{}');
@@ -87,7 +91,7 @@ const seedAccount = async (sub: string, tag: string) => {
   // upload-api's log entry for the URL that uploaded the pano.
   const uploadLog = uploadLogKey(sub, new Date('2026-10-01T00:00:00.000Z'), panoId);
   await put(uploadLog);
-  return { tourId, panoId, slug, alias, uploadLog };
+  return { tourId, panoId, slug, alias, uploadLog, plan };
 };
 
 const everyKey = (sub: string, s: Awaited<ReturnType<typeof seedAccount>>) => [
@@ -101,6 +105,7 @@ const everyKey = (sub: string, s: Awaited<ReturnType<typeof seedAccount>>) => [
   manifestKey(s.panoId),
   `${tileVersionPrefix(s.panoId, 'v1')}0/0_0.webp`,
   s.uploadLog,
+  s.plan,
 ];
 
 const marker = async (sub: string) =>

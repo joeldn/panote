@@ -52,6 +52,7 @@ import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
+import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
@@ -388,6 +389,14 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   if (!result.ok) {
     return c.json({ error: result.status === 404 ? 'not found' : 'conflict' }, result.status);
   }
+  // Plan images the tour stopped using (replaced or removed): best-effort, after the answer.
+  c.executionCtx.waitUntil(
+    sweepPlans(c.env.BUCKET, sub, tourId, Date.now())
+      .then((files) => (files.length ? purgeCdn(c.env, { prefixes: [], files }) : undefined))
+      .catch((e: unknown) => {
+        console.error('plan sweep failed:', e instanceof Error ? e.name : 'unknown error');
+      }),
+  );
   return c.json({ etag: result.etag });
 });
 

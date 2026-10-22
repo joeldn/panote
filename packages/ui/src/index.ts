@@ -67,7 +67,12 @@ export { HotspotMarkers, type HotspotMarkersProps } from './viewer/HotspotMarker
 export { HotspotPanel, type HotspotPanelProps } from './viewer/HotspotPanel.js';
 export { LanguagePicker, type LanguagePickerProps } from './viewer/LanguagePicker.js';
 export { MediaEmbed, type MediaEmbedProps } from './viewer/MediaEmbed.js';
-export { SceneMap, type SceneMapEntry, type SceneMapProps } from './viewer/SceneMap.js';
+export {
+  SceneMap,
+  type SceneMapEntry,
+  type SceneMapPlan,
+  type SceneMapProps,
+} from './viewer/SceneMap.js';
 export type { ViewerHotspot, ViewerLinkArrow, ViewerMedia } from './viewer/types.js';
 export {
   TourViewer,

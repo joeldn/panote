@@ -165,6 +165,17 @@ export const tileGcKey = (p: string, v: string): string =>
 export const PUB_TOURS_ROOT = 'pub/tours/';
 export const pubTourKey = (t: string): string =>
   `${PUB_TOURS_ROOT}${assertValidId(t, 'tourId')}.json`;
+// Tour floor-plan images: public and owner-free like tiles/, under pub/ so the CDN's
+// WAF rule serves them. upload-api presigns the PUT straight here (the key names a fresh
+// planId, so a URL is unguessable until the tour references it); admin-api deletes the
+// prefix with the tour and sweeps replaced images. See plan.ts for the shape.
+export const PLANS_ROOT = 'pub/plans/';
+export const planPrefix = (t: string): string => `${PLANS_ROOT}${assertValidId(t, 'tourId')}/`;
+const PLAN_EXTENSIONS = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png' } as const;
+export type PlanImageType = keyof typeof PLAN_EXTENSIONS;
+export const PLAN_IMAGE_TYPES = Object.keys(PLAN_EXTENSIONS) as PlanImageType[];
+export const planKey = (t: string, planId: string, type: PlanImageType): string =>
+  `${planPrefix(t)}${assertValidId(planId, 'planId')}.${PLAN_EXTENSIONS[type]}`;
 export const SLUGS_ROOT = 'slugs/';
 export const slugKey = (slug: string): string => {
   if (!isValidSlug(slug)) throw new Error(`invalid or reserved slug ${JSON.stringify(slug)}`);

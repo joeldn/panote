@@ -1,4 +1,4 @@
-import { PANO_PATTERN } from '@internal/contracts';
+import { PANO_PATTERN, type PlanImageType } from '@internal/contracts';
 import { z } from 'zod';
 
 import { AuthRequiredError } from '../auth.js';
@@ -24,6 +24,20 @@ export interface PresignRequest {
   panoId?: string;
 }
 
+export const PlanUrlOkSchema = z.object({
+  planId: z.string().regex(PANO_PATTERN),
+  key: z.string().min(1),
+  url: z.string().url(),
+});
+export type PlanUrlOk = z.infer<typeof PlanUrlOkSchema>;
+
+/** A floor-plan image for a tour (services/upload-api's `kind: 'plan'`). */
+export interface PlanPresignRequest {
+  tourId: string;
+  contentType: PlanImageType;
+  size: number;
+}
+
 export interface UploadApiOptions {
   getToken: TokenGetter;
   baseUrl?: string;
@@ -32,28 +46,37 @@ export interface UploadApiOptions {
 
 export interface UploadApi {
   presign(req: PresignRequest): Promise<UploadUrlOk>;
+  /** A PUT URL for a tour's new floor-plan image, at a fresh key of its own. */
+  presignPlan(req: PlanPresignRequest): Promise<PlanUrlOk>;
 }
 
 export function createUploadApi(opts: UploadApiOptions): UploadApi {
   const base = (opts.baseUrl ?? '').replace(/\/+$/, '');
   const doFetch: FetchLike = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const url = `${base}/api/upload-url`;
+  const post = async (req: object): Promise<{ status: number; body: unknown }> => {
+    const res = await doFetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${await opts.getToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    });
+    if (res.status === 401) throw new AuthRequiredError('401 from /api/upload-url');
+    const body = await readJson(res);
+    if (!res.ok) throw new ApiError(res.status, body);
+    return { status: res.status, body };
+  };
   return {
+    async presignPlan(req) {
+      return parseWith(PlanUrlOkSchema, url, (await post({ kind: 'plan', ...req })).body);
+    },
     async presign(req) {
-      const url = `${base}/api/upload-url`;
-      const res = await doFetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${await opts.getToken()}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-      });
-      if (res.status === 401) throw new AuthRequiredError('401 from /api/upload-url');
-      const body = await readJson(res);
-      if (!res.ok) throw new ApiError(res.status, body);
+      const { status, body } = await post(req);
       const ok = parseWith(UploadUrlOkSchema, url, body);
       if (req.panoId !== undefined && ok.panoId !== req.panoId) {
-        throw new ApiError(res.status, body, 'presign returned a different panoId');
+        throw new ApiError(status, body, 'presign returned a different panoId');
       }
       return ok;
     },

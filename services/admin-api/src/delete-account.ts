@@ -16,6 +16,7 @@ import {
 import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
+import { deletePlans } from './plans.js';
 import { readPublishRecord } from './publish.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY } from './references.js';
@@ -140,6 +141,8 @@ const deleteOwnedTour = async (
       purge.files.push(...(await deps.unpublishTour(sub, tourId)));
     };
     await unpublish();
+    // Its plan images are public and owner-free: they don't go with the owner's prefix.
+    purge.files.push(...(await deletePlans(bucket, tourId)));
     // While tour.json exists a retry lists this tour again, so stats go before it.
     await deps.clearStats(tourId);
     await bucket.delete(tourKey(sub, tourId));

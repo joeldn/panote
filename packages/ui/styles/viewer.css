@@ -201,17 +201,89 @@
   border-radius: var(--r-row);
   background: var(--ink-05);
 }
+/* With a plan image: the box takes the image's shape, at most the panel's width and 200px tall.
+   220px is the panel's inner width (240px less its padding). */
+.pn-scenemap__plan--image {
+  height: min(200px, calc(220px / var(--pn-plan-ratio, 1)));
+  aspect-ratio: var(--pn-plan-ratio, 1);
+  max-width: 100%;
+  margin-inline: auto;
+  background: #fff;
+}
+.pn-scenemap__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  /* The box has the image's own ratio, so filling it neither crops nor stretches. */
+  object-fit: fill;
+  user-select: none;
+  pointer-events: none;
+}
+/* A 24px target; the visible dot is its ::after, drawn over the facing cone. */
 .pn-scenemap__dot {
   position: absolute;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+}
+.pn-scenemap__dot::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
   width: 10px;
   height: 10px;
   border: 2px solid #fff;
   border-radius: 50%;
   background: var(--ink-40);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
   transform: translate(-50%, -50%);
 }
+.pn-scenemap__dot:hover::after {
+  background: var(--ink-70);
+}
 .pn-scenemap__dot--on {
+  z-index: 1;
+}
+.pn-scenemap__dot--on::after,
+.pn-scenemap__dot--on:hover::after {
+  width: 14px;
+  height: 14px;
   background: var(--accent);
+}
+.pn-scenemap__dot--pending::after {
+  border-color: var(--accent);
+}
+.pn-scenemap__dot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+/* Which way the view faces: a 60° wedge pointing up, turned with the view (JS). */
+.pn-scenemap__facing {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from -30deg,
+    rgba(181, 72, 58, 0.55) 0deg 60deg,
+    transparent 60deg 360deg
+  );
+  -webkit-mask: radial-gradient(circle, #000 30%, transparent 70%);
+  mask: radial-gradient(circle, #000 30%, transparent 70%);
+  pointer-events: none;
+  will-change: transform;
 }
 .pn-scenemap__list {
   margin: 0;

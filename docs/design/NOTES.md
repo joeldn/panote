@@ -1,6 +1,6 @@
 # Design handoff notes
 
-How to read `docs/design/` against the current code, as of 2026-09-26.
+How to read `docs/design/` against the current code, as of 2026-10-22.
 
 ## What it is
 
@@ -54,8 +54,10 @@ the code wins:
   tour-wide map/compass settings. All built. The design's `langs[]`/`lang`/`i18n{}`
   became `TourDoc.languages` plus an `i18n` map beside each translated field (see
   `docs/decisions.md`); the editor's language switcher sits in the top-right bar.
-- The 2D floor-plan mini-map — `mapX`/`mapY` already exist on `TourDoc`, but
-  the viewer feature itself is not built.
+- The 2D floor-plan mini-map. Built: the editor's **Map** card places each pano on
+  the plan (drag its dot, click the plan, or the arrow keys) and takes an optional
+  plan image; the viewer's Map panel draws the dots as buttons over it, keeps the
+  scene list under them, and turns a facing wedge on the current dot.
 - **Several photos at once.** The design's drop zone takes one file. New tour and
   Add pano take several: they upload one at a time, in the order picked, into one
   tour. The chip shows the file in flight plus "N more waiting" and a "Cancel the
@@ -63,6 +65,28 @@ the code wins:
   limit or a sign-in stops the rest, and the chip says how many never started.
   Add pano opens over the editor, so unsaved edits stay; the editor folds each
   appended scene into its draft. Replace image still takes one file.
+
+## Mini-map: how the code reads the design
+
+The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code:
+
+- **Coordinates.** `mapX`/`mapY` are 0..1 fractions of the plan, x right and y
+  down (`packages/contracts/src/plan.ts`). With a plan image they are fractions of
+  the image. Tours saved before this held any units; they still parse, and both
+  the viewer and the editor fit such a set into the plan by its bounding box, the
+  way the viewer always drew them. Placing a scene in the editor converts the whole
+  set to fractions, where it was drawn.
+- **North is up.** The plan is drawn with north at the top, so the editor's hint
+  says to keep it that way. The facing wedge on the current dot only shows for a
+  scene whose north has been set ("North is here"); without it there is no way to
+  know which way the view faces on the plan.
+- **Plan image.** Not in the prototype. The editor redraws the picked image in the
+  browser (WebP, or JPG where the browser can't encode WebP, at most 2048 px on its
+  long side and 4 MB) before it goes up, which also drops its photo metadata. See
+  `docs/decisions.md` for where it is stored.
+- **Editor layout.** The design has no editor screen for the plan. It is a third
+  card under Points and Tour, collapsed to its title (with an "n of m placed"
+  count) until opened, so the side column keeps its room.
 
 ## Where the code deliberately drops part of the design
 

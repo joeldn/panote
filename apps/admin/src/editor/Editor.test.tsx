@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin, USER } from '../__fixtures__/auth.js';
 import { FakeServer, viewerFactory, type FakeViewer } from '../__fixtures__/editor-server.js';
+import { FakeXhr } from '../__fixtures__/upload.js';
 import { draftKey, resumeDraftWrites } from './draft.js';
+import { PlanImageError } from './plan-image.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 afterEach(cleanup);
@@ -998,5 +1000,121 @@ describe('editor: points, connections, views and settings', () => {
     fireEvent.click(within(modal).getByRole('button', { name: 'Leave' }));
     await waitFor(() => expect(router.state.location.pathname).not.toBe('/app/t/t1'));
     expect(localStorage.getItem(DRAFT)).toBeNull();
+  });
+});
+
+describe('editor: map', () => {
+  const tourPut = () =>
+    server.writes().find((w) => w.method === 'PUT' && w.path === '/api/admin/tours/t1');
+
+  it('places the open pano on the plan from the keyboard, and saves it with the tour', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
+    fireEvent.click(ui.getByRole('button', { name: 'Place on map' }));
+    const dot = ui.getByRole('button', { name: /^Square, 50% across, 50% down/ });
+    await waitFor(() => expect(document.activeElement).toBe(dot));
+    fireEvent.keyDown(dot, { key: 'ArrowRight', shiftKey: true });
+    expect(ui.getByRole('button', { name: /^Square, 55% across, 50% down/ })).toBeTruthy();
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect((tourPut()?.body as { scenes: unknown[] }).scenes).toEqual([
+      { panoId: 'square', mapX: 0.55, mapY: 0.5 },
+      { panoId: 'church' },
+      { panoId: 'hall' },
+    ]);
+    // Taking it off the map is another tour edit.
+    fireEvent.click(ui.getByRole('button', { name: 'Remove from map' }));
+    expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
+  });
+
+  it('a click on a dot opens that pano', async () => {
+    server.setTour({
+      tourId: 't1',
+      title: 'Old town',
+      scenes: [
+        { panoId: 'square', mapX: 0.2, mapY: 0.2 },
+        { panoId: 'church', mapX: 0.7, mapY: 0.6 },
+      ],
+      startPanoId: 'square',
+    });
+    const { ui, router } = openTab();
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
+    fireEvent.click(ui.getByRole('button', { name: /^Church, 70% across/ }));
+    await waitFor(() => expect(router.state.location.search).toBe('?pano=church'));
+  });
+
+  it('adds a plan image: redrawn, uploaded to its own key, then saved with the tour', async () => {
+    const prepared = new Blob(['webp'], { type: 'image/webp' });
+    const preparePlan = vi.fn(async () => ({
+      blob: prepared,
+      type: 'image/webp' as const,
+      width: 1200,
+      height: 600,
+    }));
+    server.intercept = (r) =>
+      r.path === '/api/upload-url'
+        ? new Response(
+            JSON.stringify({
+              planId: 'plan-9',
+              key: 'pub/plans/t1/plan-9.webp',
+              url: 'https://r2.test/put?sig',
+            }),
+            { headers: { 'content-type': 'application/json' } },
+          )
+        : undefined;
+    FakeXhr.all = [];
+    const r = renderAdmin('/app/t/t1', {
+      fetch: server.fetch,
+      upload: { preparePlan, createXhr: () => new FakeXhr() },
+      wrap: (tree) => <StageFactoryContext value={create}>{tree}</StageFactoryContext>,
+    });
+    const ui = within(r.container);
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
+    const file = new File(['raw'], 'plan.jpg', { type: 'image/jpeg' });
+    fireEvent.change(ui.getByTestId('plan-input'), { target: { files: [file] } });
+    await waitFor(() => expect(FakeXhr.all).toHaveLength(1));
+    expect(server.requests.find((q) => q.path === '/api/upload-url')?.body).toEqual({
+      kind: 'plan',
+      tourId: 't1',
+      contentType: 'image/webp',
+      size: prepared.size,
+    });
+    FakeXhr.last.respond(200);
+    await waitFor(() =>
+      expect(r.container.querySelector('.ed-map__img')?.getAttribute('src')).toBe(
+        'https://cdn.panote.dev/pub/plans/t1/plan-9.webp',
+      ),
+    );
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect((tourPut()?.body as { plan: unknown }).plan).toEqual({
+      id: 'plan-9',
+      type: 'image/webp',
+      width: 1200,
+      height: 600,
+    });
+  });
+
+  it('says why an image can’t be used, and saves nothing', async () => {
+    const preparePlan = vi.fn(async () => {
+      throw new PlanImageError('Use a JPG, PNG or WebP image.');
+    });
+    const r = renderAdmin('/app/t/t1', {
+      fetch: server.fetch,
+      upload: { preparePlan },
+      wrap: (tree) => <StageFactoryContext value={create}>{tree}</StageFactoryContext>,
+    });
+    const ui = within(r.container);
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
+    fireEvent.change(ui.getByTestId('plan-input'), {
+      target: { files: [new File(['x'], 'plan.gif', { type: 'image/gif' })] },
+    });
+    expect((await ui.findByRole('alert')).textContent).toBe('Use a JPG, PNG or WebP image.');
+    expect(server.requests.some((q) => q.path === '/api/upload-url')).toBe(false);
+    expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 });

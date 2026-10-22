@@ -5,6 +5,7 @@ import { TourLanguagesSchema } from './languages.js';
 import {
   MAX_ID_LENGTH,
   SceneConfigSchema,
+  TourPlanSchema,
   TourSettingsSchema,
   TourTranslationsSchema,
   type TourSettings,
@@ -55,6 +56,8 @@ export const PublishedTourSchema = z.object({
   // Held to the TourDoc rules: admin-api only publishes what that schema accepted.
   i18n: TourTranslationsSchema.optional(),
   startPanoId: publicId(),
+  // Optional: bundles published before plan images, and tours without one.
+  plan: TourPlanSchema.optional(),
   scenes: z.array(
     z
       .object({

@@ -1,4 +1,4 @@
-import { configKey, manifestKey, originalKey, tourKey } from '@internal/contracts';
+import { configKey, manifestKey, originalKey, planKey, tourKey } from '@internal/contracts';
 import { describe, expect, it } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
@@ -136,5 +136,31 @@ describe('deleteTour: two tours sharing a pano, deleted concurrently (review fix
       prefixes: ['tiles/own-1/', 'tiles/own-2/'],
       files: ['pub/tours/tour-e.json'],
     });
+  });
+
+  it('deletes the tour’s plan images (public, owner-free) and purges them', async () => {
+    const bucket = new FakeBucket();
+    bucket.seed(tourKey(SUB, 'tour-g'), tourDoc('tour-g', []));
+    const mine = planKey('tour-g', 'plan-1', 'image/webp');
+    const other = planKey('tour-h', 'plan-2', 'image/png');
+    bucket.seed(mine, 'img');
+    bucket.seed(other, 'img');
+
+    const purge = await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-g', async () => []);
+
+    expect(await bucket.head(mine)).toBeNull();
+    expect(await bucket.head(other)).not.toBeNull();
+    expect(purge.files).toEqual([mine]);
+  });
+
+  it('a caller without the tour deletes no plan images', async () => {
+    const bucket = new FakeBucket();
+    // Someone else's tour: its plan images are under the owner-free pub/plans/ prefix.
+    bucket.seed(tourKey('auth0|someone-else', 'tour-i'), tourDoc('tour-i', []));
+    const theirs = planKey('tour-i', 'plan-1', 'image/jpeg');
+    bucket.seed(theirs, 'img');
+    const purge = await deleteTour(bucket as unknown as R2Bucket, SUB, 'tour-i', async () => []);
+    expect(await bucket.head(theirs)).not.toBeNull();
+    expect(purge.files).toEqual([]);
   });
 });

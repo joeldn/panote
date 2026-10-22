@@ -297,6 +297,26 @@ describe('TourViewer', () => {
     expect(document.querySelector('.pn-scenemap')).toBeTruthy();
   });
 
+  it('draws the plan from the tour: image, dots, and a facing cone where north is set', async () => {
+    renderViewer({
+      data: data({
+        mapPositions: { square: { x: 0.25, y: 0.5 }, church: { x: 0.75, y: 0.5 } },
+        hasNorth: { square: true, church: false },
+        plan: { url: 'https://cdn.test/pub/plans/t1/p1.webp', width: 300, height: 200 },
+      }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+    const plan = screen.getByRole('group', { name: 'Floor plan' });
+    expect(plan.querySelector('img')?.getAttribute('src')).toBe(
+      'https://cdn.test/pub/plans/t1/p1.webp',
+    );
+    const square = within(plan).getByRole('button', { name: 'Square' });
+    expect(square.getAttribute('aria-current')).toBe('location');
+    await waitFor(() => expect(square.querySelector('.pn-scenemap__facing')).not.toBeNull());
+    fireEvent.click(within(plan).getByRole('button', { name: 'Church' }));
+    expect(screen.queryByRole('group', { name: 'Floor plan' })).toBeNull();
+  });
+
   it('pins one scene with no links or map when single', () => {
     renderViewer({ single: true });
     expect(screen.queryByRole('button', { name: 'Go to To the church' })).toBeNull();

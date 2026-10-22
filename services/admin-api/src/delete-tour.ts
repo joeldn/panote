@@ -9,6 +9,7 @@ import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
 import { forgetTourOwner } from './operator.js';
+import { deletePlans } from './plans.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
 
@@ -54,6 +55,10 @@ export const deleteTour = async (
     await forgetTourOwner(bucket, sub, tourId);
     return result();
   }
+  // Plan images sit under an owner-free prefix (pub/plans/<tourId>/), so only once the
+  // caller's own tour.json proves the tour is theirs; before tour.json goes, so a retry
+  // after a crash still finds the tour and gets here again.
+  files.push(...(await deletePlans(bucket, tourId)));
   const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
 
   const referenced = await referencedPanoIds(bucket, sub, tourId);

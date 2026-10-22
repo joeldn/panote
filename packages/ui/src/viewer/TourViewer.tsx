@@ -12,7 +12,7 @@ import { FloorLinks } from './FloorLinks.js';
 import { HotspotMarkers } from './HotspotMarkers.js';
 import { HotspotPanel } from './HotspotPanel.js';
 import { LanguagePicker } from './LanguagePicker.js';
-import { SceneMap } from './SceneMap.js';
+import { SceneMap, type SceneMapPlan } from './SceneMap.js';
 import type { ViewerHotspot, ViewerLinkArrow, ViewerTourGraph } from './types.js';
 import { ViewerControls } from './ViewerControls.js';
 
@@ -27,6 +27,10 @@ export interface TourViewerData {
   north: Record<string, number>;
   titles: Record<string, string>;
   mapPositions: Record<string, { x: number; y: number }>;
+  /** Scenes whose north is set: the map shows which way their view faces. */
+  hasNorth?: Record<string, boolean>;
+  /** The floor-plan image behind the map's dots. */
+  plan?: SceneMapPlan | null;
   settings: TourSettings;
 }
 
@@ -294,8 +298,9 @@ export function TourViewer({
         id,
         title: data.titles[id] ?? id,
         ...data.mapPositions[id],
+        hasNorth: data.hasNorth?.[id] ?? false,
       })),
-    [data.tour, data.titles, data.mapPositions],
+    [data.tour, data.titles, data.mapPositions, data.hasNorth],
   );
   const { controls, showCompass, showMap } = data.settings;
   const picker =
@@ -362,6 +367,7 @@ export function TourViewer({
           <SceneMap
             scenes={scenes}
             current={panoId}
+            plan={data.plan ?? null}
             {...(moving && { pending: target.id })}
             // Back to the scene on screen cancels the change in flight: PanoStage
             // calls cancelLoad rather than load it again, so its tiles and camera stay.

@@ -7,6 +7,7 @@ import {
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
   originalKey,
+  planKey,
   publishKey,
   pubTourKey,
   storedSlugKey,
@@ -523,6 +524,28 @@ describe('quarantine', () => {
       originalKey(SUB, 'p-2'),
       configKey(SUB, 'p-2'),
     ]);
+  });
+
+  it('collects every floor-plan image under the tour, named or not, and no other tour’s', async () => {
+    const plan = (id: string) => ({ id, type: 'image/webp', width: 10, height: 10 });
+    const replaced = planKey('tour-p', 'replaced', 'image/png');
+    const { store } = memoryStore({
+      [tourKey(SUB, 'tour-p')]: JSON.stringify({ tourId: 'tour-p', scenes: [], plan: plan('new') }),
+      [pubTourKey('tour-p')]: JSON.stringify({ scenes: [], plan: plan('old') }),
+      [planKey('tour-p', 'new', 'image/webp')]: 'img',
+      [planKey('tour-p', 'old', 'image/webp')]: 'img',
+      // Replaced or never saved: named by neither, but the tour's delete takes it too.
+      [replaced]: 'img',
+      [planKey('tour-q', 'theirs', 'image/webp')]: 'img',
+    });
+    const { keys } = await tourContent(store, SUB, 'tour-p');
+    expect(keys.filter((k) => k.startsWith('pub/plans/')).sort()).toEqual(
+      [
+        planKey('tour-p', 'new', 'image/webp'),
+        planKey('tour-p', 'old', 'image/webp'),
+        replaced,
+      ].sort(),
+    );
   });
 
   it('copies each object byte for byte under quarantine/<caseId>/, keeping its content type', async () => {

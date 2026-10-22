@@ -13,6 +13,7 @@ import {
   OperatorTakedownOkSchema,
   originalKey,
   PANO_PATTERN,
+  planPrefix,
   PublishRecordSchema,
   publishKey,
   pubTourKey,
@@ -415,7 +416,7 @@ export interface TourContent {
 
 /**
  * What a tour is made of: its tour.json, publish record, public bundle, share links,
- * and each scene's original and config (scenes from the tour and from the bundle, which
+ * floor-plan images, and each scene's original and config (scenes from the tour and from the bundle, which
  * may still show one since removed from the tour).
  */
 export async function tourContent(
@@ -423,10 +424,13 @@ export async function tourContent(
   sub: string,
   tourId: string,
 ): Promise<TourContent> {
-  const [tour, bundle, record] = await Promise.all([
+  const [tour, bundle, record, plans] = await Promise.all([
     readJson(store, tourKey(sub, tourId)),
     readJson(store, pubTourKey(tourId)),
     readJson(store, publishKey(sub, tourId)),
+    // Every plan image under the tour's prefix, not just the ones named: the tour's
+    // delete takes the whole prefix (replaced and never-saved uploads too).
+    store.listObjects(planPrefix(tourId)),
   ]);
   const panoIds = [...new Set([...scenePanoIds(tour), ...scenePanoIds(bundle)])];
   const published = PublishRecordSchema.safeParse(record);
@@ -438,6 +442,7 @@ export async function tourContent(
     publishKey(sub, tourId),
     pubTourKey(tourId),
     ...slugs.filter((k): k is string => k !== null),
+    ...plans.map((o) => o.key),
     ...panoKeys(sub, panoIds),
   ];
   return { keys: [...new Set(keys)], panoIds };

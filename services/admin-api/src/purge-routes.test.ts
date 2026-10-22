@@ -1,10 +1,18 @@
-import { manifestKey, originalKey, pubTourKey, slugKey } from '@internal/contracts';
+import {
+  manifestKey,
+  originalKey,
+  planKey,
+  pubTourKey,
+  slugKey,
+  tourKey,
+} from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { RECENT_UPLOAD_MS, STALLED_TILING_MS } from './delete-owned-pano.js';
 import worker from './index.js';
+import { PLAN_SWEEP_GRACE_MS } from './plans.js';
 
 const MY_SUB = 'auth0|purge-me';
 const TOKEN = 'route-test-purge-token';
@@ -137,6 +145,59 @@ describe('CDN purge on delete/unpublish (B6)', () => {
     expect(spy).not.toHaveBeenCalled();
     expect(await env.BUCKET.head(pubTourKey(tourId))).not.toBeNull();
     expect(await env.BUCKET.head(slugKey('purge-foreign'))).not.toBeNull();
+  });
+
+  it("another owner's DELETE of a tour leaves its plan images; the owner's takes and purges them", async () => {
+    const tourId = await publishedTour(['purge-plan-del-p'], 'purge-plan-del');
+    const image = planKey(tourId, 'plan-1', 'image/webp');
+    await env.BUCKET.put(image, 'img');
+    const { spy, bodies } = mockPurgeFetch();
+    const other = { Authorization: 'Bearer good-other' };
+    expect(
+      (await call(`/api/admin/tours/${tourId}`, { method: 'DELETE' }, true, other)).status,
+    ).toBe(204);
+    expect(await env.BUCKET.head(image)).not.toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+
+    expect((await call(`/api/admin/tours/${tourId}`, { method: 'DELETE' })).status).toBe(204);
+    expect(await env.BUCKET.head(image)).toBeNull();
+    expect(bodies).toContainEqual({
+      files: expect.arrayContaining([`https://cdn.panote.dev/${image}`]),
+    });
+  });
+
+  it('a tour save deletes and purges the plan image it replaced, and keeps the saved one', async () => {
+    await readyPano('purge-plan-put-p');
+    const created = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: AUTH,
+      body: JSON.stringify({ title: 'plans', scenes: [{ panoId: 'purge-plan-put-p' }] }),
+    });
+    const { tourId } = (await created.json()) as { tourId: string };
+    const oldImage = planKey(tourId, 'plan-old', 'image/webp');
+    const newImage = planKey(tourId, 'plan-new', 'image/webp');
+    await env.BUCKET.put(oldImage, 'img');
+    await env.BUCKET.put(newImage, 'img');
+    clockPast(PLAN_SWEEP_GRACE_MS + 60_000);
+    const { bodies } = mockPurgeFetch();
+    const head = await env.BUCKET.head(tourKey(MY_SUB, tourId));
+    const saved = await call(
+      `/api/admin/tours/${tourId}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: 'plans',
+          scenes: [{ panoId: 'purge-plan-put-p' }],
+          plan: { id: 'plan-new', type: 'image/webp', width: 10, height: 10 },
+        }),
+      },
+      true,
+      { ...AUTH, 'If-Match': head!.etag },
+    );
+    expect(saved.status).toBe(200);
+    expect(await env.BUCKET.head(oldImage)).toBeNull();
+    expect(await env.BUCKET.head(newImage)).not.toBeNull();
+    expect(bodies).toEqual([{ files: [`https://cdn.panote.dev/${oldImage}`] }]);
   });
 
   it('DELETE tour batches every deleted pano into one prefix purge, plus the pub URLs', async () => {
