@@ -10,6 +10,11 @@ export interface SettingsPopoverProps {
   /** Every edit, untrimmed; the editor stores it trimmed. */
   onDescription: (text: string) => void;
   onClose: () => void;
+  /**
+   * The description is being translated: `description` is the translation, and the
+   * default-language one shows as the placeholder.
+   */
+  translating?: { name: string; placeholder: string } | null;
 }
 
 const TOGGLES: Array<{
@@ -29,6 +34,7 @@ export function SettingsPopover({
   onChange,
   onDescription,
   onClose,
+  translating = null,
 }: SettingsPopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -63,12 +69,13 @@ export function SettingsPopover({
       <h2 className="ed-popover__title">Tour settings</h2>
       <div className="ed-field ed-popover__description">
         <label className="ed-label" htmlFor={`${id}-description`}>
-          Description
+          Description {translating && <span className="ed-label__hint">{translating.name}</span>}
         </label>
         <textarea
           id={`${id}-description`}
           className="ed-input ed-textarea"
           value={text}
+          {...(translating && { placeholder: translating.placeholder })}
           maxLength={MAX_TOUR_DESCRIPTION_LENGTH}
           rows={3}
           aria-describedby={`${id}-description-hint ${id}-description-count`}
