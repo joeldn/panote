@@ -7,11 +7,14 @@ import { ConfigContext } from '../config-context.js';
 import { SessionContext } from '../session.js';
 import { ShareRoute } from './ShareRoute.js';
 
+// The editor under the share routes hears about sharing changed there.
+const onSharingChange = vi.fn();
+
 // The share routes alone, under a stand-in editor: the real tree's guard is tested elsewhere.
 const routes: RouteObject[] = [
   {
     path: 't/:tourId',
-    element: <Outlet />,
+    element: <Outlet context={{ onSharingChange }} />,
     children: [
       { index: true, element: <p>Editor</p> },
       ...(['link', 'privacy', 'embed'] as const).map((tab) => ({
@@ -119,7 +122,10 @@ const clickPublish = async () => {
   await act(async () => fireEvent.click(button));
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  onSharingChange.mockReset();
+});
 
 describe('share route', () => {
   it('loads the tour and shows its link on the env host', async () => {
@@ -221,6 +227,44 @@ describe('share route', () => {
     await act(async () => fireEvent.click(within(group).getByRole('radio', { name: /Unlisted/ })));
     expect(api.setVisibility).toHaveBeenCalledWith('tour-1', 'unlisted');
     expect(screen.getByText('Unlisted', { selector: 'b' })).toBeTruthy();
+  });
+
+  it('stops sharing after the confirm, shows the not-live state and tells the editor', async () => {
+    const unpublishTour = vi.fn(async () => {});
+    const { api } = renderShare('/app/t/tour-1/share/privacy', fakeApi({ unpublishTour }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop sharing' }));
+    const confirm = screen.getByRole('dialog', { name: 'Stop sharing this tour?' });
+    await act(async () =>
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Stop sharing' })),
+    );
+    expect(api.unpublishTour).toHaveBeenCalledWith('tour-1');
+    expect(screen.getByText('This tour isn’t live yet')).toBeTruthy();
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(onSharingChange).toHaveBeenCalledExactlyOnceWith(null);
+
+    // Sharing again from the same modal is a plain publish (not an after-Save one).
+    await clickPublish();
+    expect(api.publishTour).toHaveBeenCalledWith('tour-1');
+    expect(screen.getByText('Unlisted', { selector: 'b' })).toBeTruthy();
+    expect(onSharingChange).toHaveBeenLastCalledWith({
+      slug: 'old-town',
+      visibility: 'unlisted',
+      publishedAt: '2026-09-26T00:00:00.000Z',
+    });
+  });
+
+  it('keeps the tour shared and says why when stopping fails', async () => {
+    const unpublishTour = vi.fn(async () => {
+      throw new AuthRequiredError();
+    });
+    renderShare('/app/t/tour-1/share/privacy', fakeApi({ unpublishTour }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop sharing' }));
+    const confirm = screen.getByRole('dialog', { name: 'Stop sharing this tour?' });
+    await act(async () =>
+      fireEvent.click(within(confirm).getByRole('button', { name: 'Stop sharing' })),
+    );
+    expect(within(confirm).getByRole('alert').textContent).toBe('Sign in again to change sharing.');
+    expect(onSharingChange).not.toHaveBeenCalled();
   });
 
   it('closes back to the editor', async () => {

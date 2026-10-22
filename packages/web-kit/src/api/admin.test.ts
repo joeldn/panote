@@ -322,6 +322,7 @@ describe('publish routes', () => {
     [409, { error: 'slug lost' }, { kind: 'slug-lost' }],
     [409, { error: 'conflict' }, { kind: 'conflict' }],
     [409, { error: 'not published' }, { kind: 'not-published' }],
+    [409, { error: 'sharing stopped' }, { kind: 'sharing-stopped' }],
     [404, { error: 'not found' }, { kind: 'not-found' }],
     [409, { error: 'too many renames' }, { kind: 'too-many-renames' }],
     [429, { error: 'rate limited' }, { kind: 'rate-limited' }],

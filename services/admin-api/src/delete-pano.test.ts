@@ -4,6 +4,8 @@ import {
   manifestKey,
   originalKey,
   panoPrefix,
+  tileGcKey,
+  tileGcPrefix,
   tilesPrefix,
   tileVersionPrefix,
 } from '@internal/contracts';
@@ -79,6 +81,7 @@ const seededBucket = (): RecordingBucket =>
     originalKey(SUB, PANO),
     configKey(SUB, PANO),
     tileVersionPrefix(PANO, 't1-abc') + '0/px/0-0.webp',
+    tileGcKey(PANO, 't0-old'),
   ]);
 
 describe('deletePano', () => {
@@ -95,6 +98,9 @@ describe('deletePano', () => {
       `delete:${originalKey(SUB, PANO)}`,
       `list:${tilesPrefix(PANO)}`,
       `delete:${tileVersionPrefix(PANO, 't1-abc') + '0/px/0-0.webp'}`,
+      // The superseded-version records go too: they name the owner's original key.
+      `list:${tileGcPrefix(PANO)}`,
+      `delete:${tileGcKey(PANO, 't0-old')}`,
       `list:${panoPrefix(SUB, PANO)}`,
       `delete:${configKey(SUB, PANO)},${deletingKey(SUB, PANO)}`,
     ]);

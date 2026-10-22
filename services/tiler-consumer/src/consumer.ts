@@ -1,7 +1,7 @@
 import { Container } from '@cloudflare/containers';
 import { containerEnvVars } from './container-env.js';
 import { deriveUploadTarget, errorText, panoIdForLog, redactOwner } from './upload-prefix.js';
-import { writeFailureMarker } from './failure-marker.js';
+import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
 import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
 
 export class Tiler extends Container<Env> {
@@ -78,9 +78,14 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
     }
     if (typeof size === 'number' && size > maxBytes) {
       // ack (not retry): an oversized original will never fit, so
-      // retrying only burns the container until it dead-letters.
+      // retrying only burns the container until it dead-letters. The
+      // original itself is deleted too, unless the pano has live tiles.
       console.warn(`skip oversized original pano=${panoIdForLog(key)}: ${size} > ${maxBytes}`);
-      await writeFailureMarker(env.BUCKET, key, 'oversize', msg.body.object.eTag);
+      const marker = await writeFailureMarker(env.BUCKET, key, 'oversize', msg.body.object.eTag);
+      // Only with the marker in place, or the owner would see the pano vanish
+      // rather than fail.
+      if (marker === 'written')
+        await deleteOversizedOriginal(env.BUCKET, key, msg.body.object.eTag);
       msg.ack();
       continue;
     }

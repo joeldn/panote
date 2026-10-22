@@ -8,6 +8,7 @@ import {
   PublishOkSchema,
   publishKey,
   pubTourKey,
+  sharingStoppedKey,
   slugKey,
   tourKey,
   SlugPutOkSchema,
@@ -557,6 +558,54 @@ describe('DELETE /api/admin/tours/:tourId/publish', () => {
       tourId: 'someone-else',
     });
     expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
+  });
+
+  it('stop sharing: a later after-Save publish is refused and leaves it offline', async () => {
+    const tourId = await publishedTour('stop', 'stop-slug');
+    expect((await unpublishReq(tourId)).status).toBe(204);
+    expect(await env.BUCKET.head(sharingStoppedKey(MY_SUB, tourId))).not.toBeNull();
+    const saved = await publish(tourId, { afterSave: true });
+    expect(saved.status).toBe(409);
+    expect(await saved.json()).toEqual({ error: 'sharing stopped' });
+    expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
+    expect(await env.BUCKET.head(publishKey(MY_SUB, tourId))).toBeNull();
+    expect(await env.BUCKET.head(slugKey('stop-slug'))).toBeNull();
+  });
+
+  it('sharing again from the share modal clears the stop, so Saves publish again', async () => {
+    const tourId = await publishedTour('restart', 'restart-slug');
+    expect((await unpublishReq(tourId)).status).toBe(204);
+    const shared = await publish(tourId);
+    expect(shared.status).toBe(200);
+    expect(await env.BUCKET.head(sharingStoppedKey(MY_SUB, tourId))).toBeNull();
+    expect((await publish(tourId, { afterSave: true })).status).toBe(200);
+  });
+
+  it('a never-shared tour still goes live on its first after-Save publish (Q3)', async () => {
+    await readyPano('first-save-p1');
+    const tourId = await createTour('First save', ['first-save-p1']);
+    const r = await publish(tourId, { afterSave: true });
+    expect(r.status).toBe(200);
+    expect(await env.BUCKET.head(pubTourKey(tourId))).not.toBeNull();
+  });
+
+  it("another user's stop leaves no marker on my tour", async () => {
+    const tourId = await publishedTour('stop-foreign', 'stop-foreign-slug');
+    expect((await unpublishReq(tourId, 'other')).status).toBe(204);
+    expect(await env.BUCKET.head(sharingStoppedKey(OTHER_SUB, tourId))).toBeNull();
+    expect(await env.BUCKET.head(sharingStoppedKey(MY_SUB, tourId))).toBeNull();
+    expect((await publish(tourId, { afterSave: true })).status).toBe(200);
+  });
+
+  it('deleting a stopped tour removes its marker too', async () => {
+    const tourId = await publishedTour('stop-del', 'stop-del-slug');
+    expect((await unpublishReq(tourId)).status).toBe(204);
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: bearer('me'),
+    });
+    expect(r.status).toBe(204);
+    expect(await env.BUCKET.head(sharingStoppedKey(MY_SUB, tourId))).toBeNull();
   });
 
   it('deleting a tour also unpublishes it', async () => {

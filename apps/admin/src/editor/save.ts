@@ -114,16 +114,22 @@ export async function runSave(api: SaveApi, tourId: string, plan: SavePlan): Pro
 export type PublishOutcome =
   | { kind: 'ok'; publish: PublishOk }
   | { kind: 'slug-lost' }
+  /** The owner stopped sharing this tour: nothing was published, and it stays offline. */
+  | { kind: 'sharing-stopped' }
   | { kind: 'unpublishable'; scenes: Array<{ panoId: string; reason: PublishFailureReason }> }
   | { kind: 'failed'; message: string };
 
-/** Publish after a successful Save (plan 3.2, D7). Never throws: the save already succeeded. */
+/**
+ * Publish after a successful Save (plan 3.2, D7). Never throws: the save already succeeded.
+ * `afterSave`: a tour the owner stopped sharing is left offline (only Share puts it back).
+ */
 export async function runPublish(api: SaveApi, tourId: string): Promise<PublishOutcome> {
   try {
-    return { kind: 'ok', publish: await api.publishTour(tourId) };
+    return { kind: 'ok', publish: await api.publishTour(tourId, { afterSave: true }) };
   } catch (e) {
     const err = publishErrorOf(e);
     if (err?.kind === 'slug-lost') return { kind: 'slug-lost' };
+    if (err?.kind === 'sharing-stopped') return { kind: 'sharing-stopped' };
     if (err?.kind === 'unprocessable') return { kind: 'unpublishable', scenes: err.scenes };
     if (isAuthError(e))
       return { kind: 'failed', message: 'Sign in again to update the share link.' };

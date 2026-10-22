@@ -1319,6 +1319,16 @@ describe('GET /api/admin/panos summaries (unit A2)', () => {
     expect(body.panos.find((p) => p.panoId === panoId)?.tiling).toBe('failed');
   });
 
+  it('summarizes an oversize marker whose original the tiler deleted as failed, via the status poll', async () => {
+    const panoId = 'summary-oversize-p1';
+    await env.BUCKET.put(tileFailedKey(MY_SUB, panoId), JSON.stringify({ reason: 'oversize' }), {
+      customMetadata: { reason: 'oversize', originalEtag: 'deleted-etag' },
+    });
+    const res = await SELF.fetch(`https://x/api/admin/panos/${panoId}?status=1`, auth);
+    const body = (await res.json()) as { status: { tiling: string; hasOriginal: boolean } };
+    expect(body.status).toMatchObject({ tiling: 'failed', hasOriginal: false });
+  });
+
   it('a stale tile-failed marker (superseded by a newer upload) is pending, not failed', async () => {
     const panoId = 'summary-stale-failed-p1';
     await env.BUCKET.put(tileFailedKey(MY_SUB, panoId), JSON.stringify({ reason: 'dlq' }), {

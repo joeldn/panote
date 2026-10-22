@@ -4,6 +4,7 @@ import {
   InsightsOkSchema,
   InsightsUnavailableSchema,
   NotPublishedSchema,
+  SharingStoppedSchema,
   PANO_PATTERN,
   PanoConfigNotFoundSchema,
   PANO_DELETE_CONFLICTS,
@@ -140,6 +141,7 @@ export type PublishError =
         | 'conflict'
         | 'not-published'
         | 'not-found'
+        | 'sharing-stopped'
         | 'too-many-renames'
         | 'rate-limited';
     }
@@ -155,6 +157,7 @@ export function publishErrorOf(e: unknown): PublishError | null {
     if (is(SlugTakenSchema)) return { kind: 'slug-taken' };
     if (is(SlugLostSchema)) return { kind: 'slug-lost' };
     if (is(NotPublishedSchema)) return { kind: 'not-published' };
+    if (is(SharingStoppedSchema)) return { kind: 'sharing-stopped' };
     if (is(PublishConflictSchema)) return { kind: 'conflict' };
     if (is(TooManyRenamesSchema)) return { kind: 'too-many-renames' };
   }

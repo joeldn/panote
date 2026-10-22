@@ -65,8 +65,9 @@ export class TourPublisher extends DurableObject<Env> {
   }
 
   // Returns the keys to purge; the Worker purges them so this queue stays fast.
-  async unpublish(sub: string, tourId: string): Promise<string[]> {
+  // `stopSharing`: also keep the editor's next Save from publishing it again.
+  async unpublish(sub: string, tourId: string, stopSharing = false): Promise<string[]> {
     if (!(await this.owns(sub, tourId, true))) return [];
-    return this.serial(() => unpublish(this.env.BUCKET, sub, tourId));
+    return this.serial(() => unpublish(this.env.BUCKET, sub, tourId, { stopSharing }));
   }
 }
