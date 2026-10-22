@@ -142,11 +142,12 @@ describe('linkAccounts', () => {
     const log = vi.fn();
     const result = await linkAccounts({ user: github }, api, { management, log });
     expect(result).toBe('google-oauth2|111');
-    expect(management.usersByEmail).toHaveBeenCalledWith(EMAIL);
-    expect(management.link).toHaveBeenCalledWith('google-oauth2|111', {
-      provider: 'github',
-      user_id: '333',
-    });
+    expect(management.usersByEmail).toHaveBeenCalledWith(EMAIL, expect.any(AbortSignal));
+    expect(management.link).toHaveBeenCalledWith(
+      'google-oauth2|111',
+      { provider: 'github', user_id: '333' },
+      expect.any(AbortSignal),
+    );
     expect(api.authentication.setPrimaryUser).toHaveBeenCalledWith('google-oauth2|111');
     expect(log.mock.calls.flat().join(' ')).not.toContain(EMAIL);
   });
@@ -178,8 +179,18 @@ describe('linkAccounts', () => {
       const result = await linkAccounts({ user: emailUser }, api, { management, log: vi.fn() });
       expect(result).toBe('google-oauth2|111');
       expect(management.usersByEmail).toHaveBeenCalledTimes(2);
-      expect(management.link).toHaveBeenNthCalledWith(1, 'github|1', expect.anything());
-      expect(management.link).toHaveBeenNthCalledWith(2, 'google-oauth2|111', expect.anything());
+      expect(management.link).toHaveBeenNthCalledWith(
+        1,
+        'github|1',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(management.link).toHaveBeenNthCalledWith(
+        2,
+        'google-oauth2|111',
+        expect.anything(),
+        expect.anything(),
+      );
       expect(api.authentication.setPrimaryUser).toHaveBeenCalledWith('google-oauth2|111');
     },
   );
@@ -199,6 +210,107 @@ describe('linkAccounts', () => {
     await linkAccounts({ user: emailUser }, fakeApi(), { management, log: vi.fn() });
     expect(management.link).toHaveBeenCalledTimes(1);
     expect(management.usersByEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('has one 10 s deadline for the whole run', () => {
+    expect(action.DEADLINE_MS).toBe(10_000);
+  });
+
+  it('gives up at the overall deadline, even when each call is within its own timeout', async () => {
+    // A Management API that answers every call just under the 5 s per-call timeout, scaled
+    // down: per-call timeout 1000 ms, each call 60 ms, deadline 100 ms. Lookup, a stale link,
+    // lookup and link again would take 240 ms; the deadline stops it at 100.
+    const slow = <T>(value: () => T) =>
+      vi.fn(
+        (..._args: unknown[]) =>
+          new Promise<T>((resolve, reject) =>
+            setTimeout(() => {
+              try {
+                resolve(value());
+              } catch (e) {
+                reject(e as Error);
+              }
+            }, 60),
+          ),
+      );
+    const management = {
+      usersByEmail: slow(() => [google]),
+      link: slow((): void => {
+        throw new ManagementError('stale', 409);
+      }),
+    };
+    const api = fakeApi();
+    const log = vi.fn();
+    const started = Date.now();
+    const result = await linkAccounts({ user: emailUser }, api, {
+      management,
+      log,
+      deadlineMs: 100,
+    });
+    expect(result).toBeNull();
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(api.authentication.setPrimaryUser).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      '[link-accounts]',
+      'linking timed out after 100 ms, signing in unlinked',
+    );
+  });
+
+  it('ends at the deadline even when a step ignores the abort signal', async () => {
+    const management = fakeManagement([]);
+    management.usersByEmail.mockImplementation(() => new Promise(() => {}));
+    const log = vi.fn();
+    await expect(
+      linkAccounts({ user: emailUser }, fakeApi(), { management, log, deadlineMs: 30 }),
+    ).resolves.toBeNull();
+    expect(log.mock.calls[0]?.[1]).toMatch(/timed out/);
+  }, 1000);
+
+  it('skips the stale retry once the deadline has passed', async () => {
+    const management = fakeManagement([google]);
+    management.link.mockImplementation(
+      () =>
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new ManagementError('conflict', 409)), 40),
+        ),
+    );
+    await linkAccounts({ user: emailUser }, fakeApi(), {
+      management,
+      log: vi.fn(),
+      deadlineMs: 20,
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(management.usersByEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the deadline to every Management API call', async () => {
+    const management = fakeManagement([google]);
+    await linkAccounts({ user: emailUser }, fakeApi(), { management, log: vi.fn() });
+    const signal = management.usersByEmail.mock.calls[0]?.[1] as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(management.link.mock.calls[0]?.[2]).toBe(signal);
+  });
+
+  it('aborts in-flight Management API calls when the deadline passes', async () => {
+    let seen: AbortSignal | undefined;
+    const fetch = vi.fn(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise<never>((_, reject) => {
+          seen = init?.signal;
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    const management = managementClient({
+      domain: 'x.auth0.com',
+      clientId: 'c',
+      clientSecret: 's',
+      fetch,
+      timeoutMs: 5000,
+    });
+    const log = vi.fn();
+    await linkAccounts({ user: emailUser }, fakeApi(), { management, log, deadlineMs: 30 });
+    expect(seen?.aborted).toBe(true);
+    expect(log.mock.calls[0]?.[1]).toMatch(/timed out/);
   });
 
   it('does nothing for an unverified email, without even looking anyone up', async () => {
@@ -336,6 +448,13 @@ describe('managementClient', () => {
     const both = setup([google, google]);
     expect(await both.m.usersByEmail(EMAIL)).toEqual([google]);
     expect(both.fetch.mock.calls.filter(([u]) => u.includes('users-by-email'))).toHaveLength(1);
+  });
+
+  it('shares one token request between the two lookups', async () => {
+    const mixed = { ...github, email: 'Maya@Example.com' };
+    const { m, fetch } = setup([google, mixed]);
+    await m.usersByEmail('Maya@Example.com');
+    expect(fetch.mock.calls.filter(([u]) => u.endsWith('/oauth/token'))).toHaveLength(1);
   });
 
   it('puts a 5 s timeout on every call', async () => {

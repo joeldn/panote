@@ -37,8 +37,14 @@
  */
 const TRUSTED_PROVIDERS = Object.freeze(['email', 'google-oauth2', 'apple', 'github']);
 
-/** Every Management API and token call gives up after this, so a hung API can't fail a login. */
+/** Each Management API and token call gives up after this, so a hung API can't fail a login. */
 const TIMEOUT_MS = 5000;
+
+/**
+ * The whole run, retries included, gives up after this and lets the login go on unlinked.
+ * Auth0 stops an Action at about 20 s, which would fail the login itself.
+ */
+const DEADLINE_MS = 10_000;
 
 /**
  * @typedef {object} Identity
@@ -80,8 +86,8 @@ const TIMEOUT_MS = 5000;
 
 /**
  * @typedef {object} Management
- * @property {(email: string) => Promise<User[]>} usersByEmail
- * @property {(primaryUserId: string, secondary: { provider: string, user_id: string }) => Promise<void>} link
+ * @property {(email: string, signal?: AbortSignal) => Promise<User[]>} usersByEmail
+ * @property {(primaryUserId: string, secondary: { provider: string, user_id: string }, signal?: AbortSignal) => Promise<void>} link
  */
 
 /**
@@ -173,9 +179,17 @@ function managementClient({
 }) {
   const base = `https://${domain.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
 
-  const token = async () => {
-    const cached = cache?.get(TOKEN_CACHE_KEY)?.value;
-    if (cached) return cached;
+  // Each call's own timeout, combined with the caller's deadline when there is one.
+  const signalFor = (/** @type {AbortSignal | undefined} */ deadline) =>
+    deadline
+      ? AbortSignal.any([AbortSignal.timeout(timeoutMs), deadline])
+      : AbortSignal.timeout(timeoutMs);
+
+  /** @type {Promise<string> | null} */
+  let pendingToken = null;
+
+  /** @param {AbortSignal | undefined} deadline */
+  const fetchToken = async (deadline) => {
     const res = await fetch(`${base}/oauth/token`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -185,7 +199,7 @@ function managementClient({
         client_secret: clientSecret,
         audience: `${base}/api/v2/`,
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signalFor(deadline),
     });
     if (!res.ok)
       throw new ManagementError(`management token request failed: ${res.status}`, res.status);
@@ -198,23 +212,42 @@ function managementClient({
     return body.access_token;
   };
 
+  // One token request at a time, shared by calls made together (both email lookups).
+  /** @param {AbortSignal | undefined} deadline */
+  const token = (deadline) => {
+    const cached = cache?.get(TOKEN_CACHE_KEY)?.value;
+    if (cached) return Promise.resolve(cached);
+    if (!pendingToken) {
+      const p = fetchToken(deadline);
+      pendingToken = p;
+      p.catch(() => {
+        if (pendingToken === p) pendingToken = null;
+      });
+    }
+    return pendingToken;
+  };
+
   /**
    * Resolves to the response once it is ok; the caller reads the body only if it needs it.
    * A 401 means the cached token went bad (rotated secret, revoked grant): drop it and
    * try once more with a fresh one.
    *
-   * @param {string} path @param {{ method?: string, body?: unknown }} [init]
+   * @param {string} path
+   * @param {{ method?: string, body?: unknown, deadline?: AbortSignal | undefined }} [init]
+   * @returns {Promise<{ ok: boolean, status: number, json: () => Promise<unknown> }>}
    */
   const call = async (path, init = {}, retried = false) => {
     const method = init.method ?? 'GET';
+    const bearer = await token(init.deadline);
     const res = await fetch(`${base}/api/v2${path}`, {
       method,
-      headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
       ...(init.body !== undefined && { body: JSON.stringify(init.body) }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signalFor(init.deadline),
     });
-    if (res.status === 401 && !retried) {
+    if (res.status === 401 && !retried && !init.deadline?.aborted) {
       cache?.delete?.(TOKEN_CACHE_KEY);
+      pendingToken = null;
       return call(path, init, true);
     }
     if (!res.ok)
@@ -222,27 +255,29 @@ function managementClient({
     return res;
   };
 
-  /** @param {string} email */
-  const lookup = async (email) => {
-    const users = await (await call(`/users-by-email?email=${encodeURIComponent(email)}`)).json();
+  /** @param {string} email @param {AbortSignal | undefined} deadline */
+  const lookup = async (email, deadline) => {
+    const res = await call(`/users-by-email?email=${encodeURIComponent(email)}`, { deadline });
+    const users = await res.json();
     return Array.isArray(users) ? /** @type {User[]} */ (users) : [];
   };
 
   return {
     // users-by-email matches case-sensitively, and social connections keep the provider's
     // casing, so ask for the address as given and in lower case.
-    async usersByEmail(email) {
+    async usersByEmail(email, deadline) {
       const forms = [...new Set([email, email.toLowerCase()])];
       const byId = new Map();
-      for (const users of await Promise.all(forms.map(lookup))) {
+      for (const users of await Promise.all(forms.map((f) => lookup(f, deadline)))) {
         for (const u of users) if (!byId.has(u.user_id)) byId.set(u.user_id, u);
       }
       return [...byId.values()];
     },
-    async link(primaryUserId, secondary) {
+    async link(primaryUserId, secondary, deadline) {
       await call(`/users/${encodeURIComponent(primaryUserId)}/identities`, {
         method: 'POST',
         body: secondary,
+        deadline,
       });
     },
   };
@@ -258,10 +293,10 @@ const isStale = (/** @type {unknown} */ e) =>
  *
  * @param {PostLoginEvent} event
  * @param {PostLoginApi} api
- * @param {{ management: Management | null, log: (...args: unknown[]) => void }} deps
+ * @param {{ management: Management | null, log: (...args: unknown[]) => void, deadlineMs?: number }} deps
  * @returns {Promise<string | null>} the primary user id it linked into, if any
  */
-async function linkAccounts(event, api, { management, log }) {
+async function linkAccounts(event, api, { management, log, deadlineMs = DEADLINE_MS }) {
   const user = event.user;
   const email = user.email;
   // A refresh-token exchange already carries the user the login settled on.
@@ -277,24 +312,45 @@ async function linkAccounts(event, api, { management, log }) {
     return null;
   }
   const secondary = { provider: identity.provider, user_id: String(identity.user_id) };
-  try {
+  const deadline = AbortSignal.timeout(deadlineMs);
+  // Every call carries the deadline; the race also ends a step that ignores it.
+  /** @type {Promise<never>} */
+  const expired = new Promise((_, reject) => {
+    deadline.addEventListener('abort', () => reject(new Error('deadline')), { once: true });
+  });
+  expired.catch(() => {});
+
+  const run = async () => {
     for (let attempt = 0; ; attempt++) {
-      const primary = choosePrimary(user, await management.usersByEmail(email));
+      const primary = choosePrimary(user, await management.usersByEmail(email, deadline));
       if (!primary) return null;
       try {
-        await management.link(primary, secondary);
+        await management.link(primary, secondary, deadline);
       } catch (e) {
-        if (attempt === 0 && isStale(e)) continue;
+        if (attempt === 0 && isStale(e) && !deadline.aborted) continue;
         throw e;
       }
+      // Once linked, the current user no longer exists on its own: the login must go on as
+      // the primary, deadline or not. (A link aborted by the deadline that Auth0 still applied
+      // can't be told apart from one it never got; that login fails and the next one works.)
       api.authentication.setPrimaryUser(primary);
       // Ids only, never the email. Panote data stored under the secondary id (signed in
       // before it was linked) stays there: docs/deploy.md, "Account linking".
       log(LOG, `linked ${user.user_id} into ${primary}`);
       return primary;
     }
+  };
+
+  const work = run();
+  work.catch(() => {}); // after the deadline wins the race, a late failure must not go unhandled
+  try {
+    return await Promise.race([work, expired]);
   } catch (e) {
-    log(LOG, 'linking failed, signing in unlinked:', e instanceof Error ? e.message : String(e));
+    if (deadline.aborted) {
+      log(LOG, `linking timed out after ${deadlineMs} ms, signing in unlinked`);
+    } else {
+      log(LOG, 'linking failed, signing in unlinked:', e instanceof Error ? e.message : String(e));
+    }
     return null;
   }
 }
@@ -331,6 +387,7 @@ exports.onExecutePostLogin = async (event, api) => {
 };
 
 exports.TRUSTED_PROVIDERS = TRUSTED_PROVIDERS;
+exports.DEADLINE_MS = DEADLINE_MS;
 exports.ManagementError = ManagementError;
 exports.choosePrimary = choosePrimary;
 exports.linkAccounts = linkAccounts;

@@ -417,11 +417,14 @@ beside it). Why it links automatically, against Auth0's advice to re-authenticat
   signs in.
 - **Concurrent first logins.** A `400` or `409` from the link call means the picture went stale
   (another login linked or created a user a moment ago): it looks the users up once more and
-  retries once.
+  retries once, unless the deadline has passed.
 - **Never in the way.** It skips refresh-token exchanges and users that already have linked
   identities (merging two primaries is an operator job). Every Management API call has a 5 s
-  timeout, a `401` drops the cached M2M token and retries once with a fresh one, and any failure
-  logs `[link-accounts] linking failed` and lets the login go on unlinked.
+  timeout, the whole run (retries included) has one 10 s deadline, after which the login goes on
+  unlinked (Auth0 stops an Action at about 20 s, which would fail the login) and logs
+  `[link-accounts] linking timed out`. A `401` drops the cached M2M token and retries once with a
+  fresh one, and any other failure logs `[link-accounts] linking failed` and lets the login go on
+  unlinked.
 
 Who won't be joined: Microsoft, LinkedIn and Facebook sign-ins (above), an Apple user who chose
 *Hide My Email* (the private relay address matches nothing), and anyone whose provider doesn't
