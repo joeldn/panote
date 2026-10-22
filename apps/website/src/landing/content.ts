@@ -1,14 +1,16 @@
 // Landing copy (design README, screen 1). Free, not open source: no export/download promises.
 // Limits are real (copy-rule.test bans "unlimited"/"no limits"): state the numbers.
-import { MAX_HOTSPOTS } from '@internal/contracts';
+import { MAX_HOTSPOTS, MAX_TOURS_PER_OWNER } from '@internal/contracts';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS } from '@internal/web-kit';
 
-// Per-account quotas, kept in step by hand. panoramas and storageGb mirror
-// upload-api's MAX_PANOS_PER_OWNER and MAX_BYTES_PER_OWNER vars (feat/upload-limits):
-// server config, so the site can't import them. tours mirrors admin-api's tour cap
-// (feat/admin-write-limits), which adds MAX_TOURS_PER_OWNER to @internal/contracts;
-// import that here once it lands on main.
-export const ACCOUNT_LIMITS = { panoramas: 500, storageGb: 20, tours: 200 } as const;
+// Per-account quotas. panoramas and storageGb mirror upload-api's MAX_PANOS_PER_OWNER and
+// MAX_BYTES_PER_OWNER vars (services/upload-api/wrangler.jsonc, docs/deploy.md "Owner quotas"),
+// which are server config the site can't import, so keep them in step by hand.
+export const ACCOUNT_LIMITS = {
+  panoramas: 500,
+  storageGb: 20,
+  tours: MAX_TOURS_PER_OWNER,
+} as const;
 
 export const NAV_SECTIONS = [
   { id: 'features', label: 'Features' },
