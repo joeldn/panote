@@ -28,7 +28,7 @@ export function SiteFooter() {
         </div>
       </div>
       <div className="site-footer__bottom">
-        <span>© 2026 Panote · Free, unlimited, no watermark</span>
+        <span>© 2026 Panote · Free, full resolution, no watermark</span>
         <nav aria-label="Legal" className="site-footer__legal">
           <Link to="/privacy">Privacy</Link>
           <Link to="/terms">Terms</Link>
