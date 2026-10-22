@@ -235,9 +235,9 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
         delete doc.tourId;
         await api.createTour(doc);
       } catch (e) {
-        // The tour cap and the write rate limit say why; a retry wouldn't help the first.
+        // At the tour cap a retry can't help, so say why; anything else keeps the generic copy.
         setNotice(
-          isStatus(e, 403) || isStatus(e, 429)
+          isStatus(e, 403) && errorText(e) === 'tour limit reached'
             ? `Couldn’t duplicate “${tour.title}”. ${(e as Error).message}`
             : `Couldn’t duplicate “${tour.title}”. Try again.`,
         );

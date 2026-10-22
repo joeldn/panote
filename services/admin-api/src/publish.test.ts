@@ -25,12 +25,18 @@ import {
   SELF,
   waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { deleteTour } from './delete-tour.js';
 import worker from './index.js';
 import type { TourPublisher } from './publisher.js';
-import { DEFAULT_SLUG_ALIAS_DAYS, MAX_ALIASES, parseAliasDays, publishTour } from './publish.js';
+import {
+  DEFAULT_SLUG_ALIAS_DAYS,
+  MAX_ALIASES,
+  parseAliasDays,
+  publishTour,
+  renameSlug,
+} from './publish.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
@@ -38,6 +44,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Duration-bound: 21 renames through the DO take ~2-2.6s idle, 4.5-5.4s with the
 // CPU saturated, where the 5s default timed out (measured locally).
 const SLOW_TEST_MS = 30_000;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
@@ -905,6 +915,24 @@ describe('alias edge cases', () => {
     },
     SLOW_TEST_MS,
   );
+
+  it('aliases past SLUG_ALIAS_DAYS stop counting toward the cap before the sweep runs', async () => {
+    const tourId = await publishedTour('alias-aged', 'alias-aged-0');
+    for (let i = 1; i <= MAX_ALIASES; i += 1) {
+      expect((await putSlug(tourId, `alias-aged-${i}`)).status).toBe(200);
+    }
+    expect((await putSlug(tourId, 'alias-aged-next')).status).toBe(409);
+    // Called directly so the faked clock applies (the TourPublisher runs elsewhere).
+    // No cron has run: every expired alias is still in R2.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + (DEFAULT_SLUG_ALIAS_DAYS + 1) * DAY_MS);
+    const clock = { now: new Date(), aliasDays: DEFAULT_SLUG_ALIAS_DAYS };
+    const out = await renameSlug(env.BUCKET, MY_SUB, tourId, 'alias-aged-next', clock);
+    expect(out.status).toBe(200);
+    expect(await readSlug('alias-aged-0')).toMatchObject({ kind: 'redirect' });
+    const record = (await readJson<PublishRecord>(publishKey(MY_SUB, tourId)))!;
+    expect(record.aliases).toEqual([`alias-aged-${MAX_ALIASES}`]);
+  });
 
   it('a tour live at a slug reserved since it was claimed still republishes', async () => {
     const tourId = await publishedTour('alias-reserved', 'alias-reserved-x');

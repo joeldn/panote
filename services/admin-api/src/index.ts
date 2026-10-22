@@ -251,10 +251,9 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
   // 428 (no If-Match or If-None-Match) is checked before any state read, so it holds
   // regardless of whether a tombstone or the pano even exists. `If-None-Match: *` = create-only.
   const onlyIf = writeConditional(c.req.header('If-Match'), c.req.header('If-None-Match'));
-  const [tombstone, original, existing] = await Promise.all([
+  const [tombstone, original] = await Promise.all([
     c.env.BUCKET.head(deletingKey(sub, panoId)),
     c.env.BUCKET.head(originalKey(sub, panoId)),
-    c.env.BUCKET.head(configKey(sub, panoId)),
   ]);
   // A tombstone means an interrupted DELETE is still in flight for this
   // panoId - refuse to resurrect it out from under that delete.
@@ -262,9 +261,13 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
   // A config is only for a pano the caller uploaded: without an original under
   // their own prefix, only an existing config (a legacy config-only pano) may be
   // updated, never created, so a well-formed made-up panoId can't store anything.
-  if (!original && !existing) return c.json({ error: 'pano not found' }, 404);
-  // If-Match: * on a config-only pano still only updates the config just seen.
-  const guard = onlyIf ?? (!original && existing ? { etagMatches: existing.etag } : undefined);
+  let guard = onlyIf;
+  if (!original) {
+    const existing = await c.env.BUCKET.head(configKey(sub, panoId));
+    if (!existing) return c.json({ error: 'pano not found' }, 404);
+    // If-Match: * on a config-only pano still only updates the config just seen.
+    guard ??= { etagMatches: existing.etag };
+  }
   const res = await putJson(
     c.env.BUCKET,
     configKey(sub, panoId),

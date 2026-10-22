@@ -60,7 +60,6 @@ describe('checkSlug', () => {
       'support',
       'abuse',
       'security',
-      'google',
       'sign-in',
       'panote-team',
       'panotesupport',
@@ -70,7 +69,15 @@ describe('checkSlug', () => {
     ]) {
       expect(checkSlug(s)).toEqual({ ok: false, reason: 'reserved' });
     }
-    for (const s of ['signing-day', 'logins-and-logs', 'my-panote-tour', 'apple-orchard']) {
+    for (const s of [
+      'signing-day',
+      'logins-and-logs',
+      'my-panote-tour',
+      'apple',
+      'google',
+      'contact',
+      'register',
+    ]) {
       expect(checkSlug(s)).toEqual({ ok: true });
     }
   });

@@ -1299,7 +1299,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | Worker | Binding | Route | Key | Limit | namespace_id dev / production |
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
-| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator route | owner (Auth0 sub), checked after the JWT, before any R2 read | 120/min | `1301` / `2301` |
+| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator route | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
@@ -1315,8 +1315,9 @@ office or a carrier NAT shares one IP, which is why those limits are well above 
 sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
 the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
 `TourStats` still never see it (the privacy rule in `docs/wave6-plan.md` holds). `admin-api`'s
-120/min is one editor Save of a full tour in a burst (`MAX_TOUR_SCENES` = 100 configs, the tour,
-the publish); people editing by hand stay far below it.
+300/min lets two editor Saves of a full tour through in one minute (each is up to `MAX_TOUR_SCENES`
+= 100 configs, the tour and the publish); people editing by hand stay far below it. A Save cut off
+by a `429` keeps the refused documents unsaved, and pressing Save again sends just those.
 
 ### admin-api object caps
 
@@ -1330,10 +1331,12 @@ the publish); people editing by hand stay far below it.
 - **Slugs:** a tour holds at most `MAX_ALIASES` (5) redirect aliases. A rename, or a publish with a
   new slug, that would make a sixth answers `409 {"error":"too many renames"}` and claims nothing;
   it works again once the oldest alias expires (`SLUG_ALIAS_DAYS`). Moving back onto an alias and a
-  bare republish still work. Unpublish (and so tour delete) releases the tour's aliases as well as
-  its live slug. Brand, support and sign-in words are reserved (`RESERVED_SLUGS`, plus any slug
-  starting `panote` or led by `login`/`signin`); a tour already live at a word reserved later keeps
-  republishing at it.
+  bare republish still work. An alias past its expiry stops counting at once, before the daily
+  sweep deletes it. Unpublish (Stop sharing, takedown, and so tour delete) releases the tour's
+  aliases as well as its live slug: an old shared URL then stops redirecting and its slug is free
+  for anyone to claim, as the live slug already was. A short list of support and sign-in words is
+  reserved (`RESERVED_SLUGS`, plus any slug starting `panote` or led by `login`/`signin`); a tour
+  already live at a word reserved later keeps republishing at it.
 
 ### Likes
 

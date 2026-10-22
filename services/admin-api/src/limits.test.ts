@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import wrangler from '../wrangler.jsonc?raw';
 import worker, { WRITE_RATE_PERIOD_SECONDS } from './index.js';
+import { countTours } from './lists.js';
 
 const LIMITED_SUB = 'auth0|limited';
 const CAPPED_SUB = 'auth0|capped';
@@ -163,6 +164,45 @@ describe(`at most ${MAX_TOURS_PER_OWNER} tours per owner`, () => {
     });
     expect(del.status).toBe(204);
     expect((await create('Room again')).status).toBe(201);
+  });
+});
+
+describe('countTours', () => {
+  // A stub listing: pages of keys under the owner's tours/ prefix, each truncated
+  // but the last, so the cursor loop is what's under test.
+  const stubBucket = (pages: string[][]) => {
+    const list = vi.fn(async (opts: R2ListOptions) => {
+      const i = opts.cursor ? Number(opts.cursor) : 0;
+      const last = i === pages.length - 1;
+      return {
+        objects: (pages[i] ?? []).map((key) => ({ key })),
+        delimitedPrefixes: [],
+        ...(last ? { truncated: false } : { truncated: true, cursor: String(i + 1) }),
+      };
+    });
+    return { bucket: { list } as unknown as R2Bucket, list };
+  };
+  const prefix = userToursPrefix(CAPPED_SUB);
+
+  it('follows the cursor across truncated pages and counts only tour.json', async () => {
+    const { bucket, list } = stubBucket([
+      [`${prefix}a/tour.json`, `${prefix}a/publish.json`],
+      [`${prefix}b/publish.json`],
+      [`${prefix}c/tour.json`, `${prefix}d/tour.json`],
+    ]);
+    expect(await countTours(bucket, CAPPED_SUB, 10)).toBe(3);
+    expect(list).toHaveBeenCalledTimes(3);
+    expect(list.mock.calls.map(([o]) => o.cursor)).toEqual([undefined, '1', '2']);
+    expect(list.mock.calls.every(([o]) => o.prefix === prefix)).toBe(true);
+  });
+
+  it('stops listing once it reaches stopAt', async () => {
+    const { bucket, list } = stubBucket([
+      [`${prefix}a/tour.json`, `${prefix}b/tour.json`],
+      [`${prefix}c/tour.json`],
+    ]);
+    expect(await countTours(bucket, CAPPED_SUB, 2)).toBe(2);
+    expect(list).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -30,15 +30,12 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'cdn',
   'www',
   'panote',
-  // Brand, support and sign-in words a share link could impersonate.
+  // Support and sign-in lures a share link could impersonate. Kept short on
+  // purpose: a reserved word is gone for every user for good.
   'support',
   'abuse',
   'security',
-  'official',
-  'staff',
-  'contact',
   'account',
-  'accounts',
   'billing',
   'password',
   'verify',
@@ -46,11 +43,6 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'sign-in',
   'signup',
   'sign-up',
-  'register',
-  'google',
-  'apple',
-  'facebook',
-  'microsoft',
 ]);
 
 // Any slug starting with the brand name ("panote-team", "panotesupport").
