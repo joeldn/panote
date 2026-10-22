@@ -109,12 +109,15 @@ export function Notices({
   busy,
   onRepublish,
   onDiscardDraft,
+  saving,
 }: {
   notices: EditorNotice[];
   onDismiss: (id: string) => void;
   busy: boolean;
   onRepublish: () => void;
   onDiscardDraft: () => void;
+  /** A save is under way: discarding now would race it. */
+  saving: boolean;
 }) {
   return (
     <>
@@ -138,7 +141,7 @@ export function Notices({
             </Button>
           )}
           {n.action === 'discard-draft' && (
-            <Button variant="ghost" size="sm" onClick={onDiscardDraft}>
+            <Button variant="ghost" size="sm" onClick={onDiscardDraft} disabled={saving}>
               Discard
             </Button>
           )}

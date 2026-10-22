@@ -16,6 +16,20 @@ import { planSave } from './save.js';
 
 /** A draft older than this is dropped rather than restored. */
 export const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** How far ahead of this clock a draft's `savedAt` may be (clock skew) before it's dropped. */
+export const DRAFT_MAX_SKEW_MS = 5 * 60 * 1000;
+
+// Off from sign-out until the page goes: a pagehide autosave mustn't put back what the
+// sign-out sweep just removed.
+let writesStopped = false;
+/** Sign-out: no draft is written again in this page (until `resumeDraftWrites`). */
+export function stopDraftWrites(): void {
+  writesStopped = true;
+}
+/** The sign-out didn't go ahead: drafts may be written again. */
+export function resumeDraftWrites(): void {
+  writesStopped = false;
+}
 
 export type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -41,6 +55,7 @@ export function writeDraft(
 ): DraftWrite {
   const plan = planSave(docs);
   if (!plan.tour && plan.configs.length === 0) return 'clean';
+  if (writesStopped) return 'failed';
   const draft: EditorDraft = {
     v: 1,
     savedAt: now.toISOString(),
@@ -85,7 +100,9 @@ export function readDraft(
       throw new Error('bad draft');
     }
     const age = now.getTime() - Date.parse(d.savedAt);
-    if (!(age <= DRAFT_MAX_AGE_MS)) throw new Error('stale draft');
+    // Negated so an unparseable `savedAt` (age NaN) fails too. A draft from far in the
+    // future (a wrong clock) would otherwise never expire.
+    if (!(age <= DRAFT_MAX_AGE_MS && age >= -DRAFT_MAX_SKEW_MS)) throw new Error('stale draft');
     const tour = d.tour ?? null;
     if (tour && (typeof tour.etag !== 'string' || !TourDocSchema.safeParse(tour.doc).success)) {
       throw new Error('bad draft tour');

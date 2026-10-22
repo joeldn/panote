@@ -902,6 +902,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           busy={editor.publishing}
           onRepublish={() => void editor.republish()}
           onDiscardDraft={() => void editor.discardDraft()}
+          saving={editor.saving}
         />
       </div>
 

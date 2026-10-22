@@ -596,6 +596,37 @@ describe('useEditor draft autosave', () => {
     expect(storage.map.has(KEY)).toBe(false);
   });
 
+  it('Discard leaves alone a save that started while it fetched', async () => {
+    const storage = memoryStorage();
+    parkDraft(storage);
+    const { result, api } = await setup(storage);
+    const fetch = deferred<TourRes>();
+    api.getTourWithConfigs.mockImplementationOnce(() => fetch.promise);
+    const put = deferred<{ etag: string }>();
+    api.putTour.mockImplementationOnce(() => put.promise);
+    let discarding!: Promise<void>;
+    let saving!: Promise<void>;
+    act(() => {
+      discarding = result.current.discardDraft();
+      saving = result.current.save();
+    });
+    await act(async () => {
+      fetch.resolve(tourRes('t1', ['p1']));
+      await discarding;
+    });
+    // The pre-save copy didn't replace the edits being saved.
+    expect(result.current.docs?.tour.current.title).toBe('Draft title');
+    await act(async () => {
+      put.resolve({ etag: 't9' });
+      await saving;
+    });
+    expect(result.current.docs?.tour).toMatchObject({
+      etag: 't9',
+      current: { title: 'Draft title' },
+    });
+    expect(result.current.dirty).toEqual([]);
+  });
+
   it('leaving without saving drops the draft and autosave stops until the next edit', async () => {
     const storage = memoryStorage();
     const { result } = await setup(storage);

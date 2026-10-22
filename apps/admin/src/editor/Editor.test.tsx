@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin, USER } from '../__fixtures__/auth.js';
 import { FakeServer, viewerFactory, type FakeViewer } from '../__fixtures__/editor-server.js';
-import { draftKey } from './draft.js';
+import { draftKey, resumeDraftWrites } from './draft.js';
 import { StageFactoryContext } from './stage-factory.js';
 
 afterEach(cleanup);
@@ -14,6 +14,7 @@ let create: ReturnType<typeof viewerFactory>['create'];
 
 beforeEach(() => {
   localStorage.clear();
+  resumeDraftWrites();
   server = new FakeServer();
   server.setTour({
     tourId: 't1',
@@ -406,6 +407,21 @@ describe('editor: save', () => {
     expect(Object.keys(localStorage).filter((k) => k.startsWith('panote:editor-draft:'))).toEqual(
       [],
     );
+  });
+
+  it('signing out with unsaved edits leaves no draft behind, even after an autosave on the way out', async () => {
+    const auth = fakeAuth();
+    const { ui } = openTab('/app/t/t1', auth);
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'Unsaved');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem(DRAFT)).toContain('Unsaved');
+    fireEvent.click(ui.getByRole('button', { name: /^Account:/ }));
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Sign out' }));
+    await waitFor(() => expect(auth.signOut).toHaveBeenCalled());
+    expect(localStorage.getItem(DRAFT)).toBeNull();
+    window.dispatchEvent(new Event('pagehide'));
+    expect(localStorage.getItem(DRAFT)).toBeNull();
   });
 
   it("offers Delete account in the editor's account menu", async () => {

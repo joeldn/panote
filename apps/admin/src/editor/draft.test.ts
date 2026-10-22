@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   applyDraft,
   DRAFT_MAX_AGE_MS,
+  DRAFT_MAX_SKEW_MS,
   draftKey,
   readDraft,
   writeDraft,
@@ -113,6 +114,15 @@ describe('editor drafts', () => {
     expect(res.conflicts).toEqual([]);
     expect(res.restored).toEqual(['pano:a']);
     expect(res.docs.tour.etag).toBe('te-other');
+  });
+
+  it('drops a draft dated further ahead than clock skew allows, so it can expire', () => {
+    const now = new Date('2026-10-01T00:00:00Z');
+    writeDraft(localStorage, ME, edited(), new Date(now.getTime() + DRAFT_MAX_SKEW_MS));
+    expect(readDraft(localStorage, ME, 't1', now)).not.toBeNull();
+    writeDraft(localStorage, ME, edited(), new Date(now.getTime() + DRAFT_MAX_SKEW_MS + 1));
+    expect(readDraft(localStorage, ME, 't1', now)).toBeNull();
+    expect(localStorage.getItem(draftKey(ME, 't1'))).toBeNull();
   });
 
   it('drops a draft older than the age limit', () => {

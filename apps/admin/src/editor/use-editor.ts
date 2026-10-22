@@ -329,6 +329,8 @@ export function useEditor(
     const current = docsRef.current;
     if (!storage || !current || draftOffRef.current) return;
     if (dirtyKeys(current).length === 0) return;
+    // Two tabs on one tour share this key and the last write wins: both are this user's
+    // edits, and Save's ETag conflict check still guards the server copy.
     writeDraft(storage, user, current);
   }, [storage, user]);
   useEffect(() => {
@@ -652,6 +654,12 @@ export function useEditor(
     forgetDraft();
     try {
       const res = await api.getTourWithConfigs(tourId);
+      // A save started during the fetch wins: its result is what the editor now holds.
+      if (savingRef.current) {
+        draftOffRef.current = false;
+        writeNow();
+        return;
+      }
       if (res.status !== 'ok') throw new Error('This tour no longer exists.');
       // A sync still out would land on the fresh copy as if it were older: drop it.
       syncSeq.current++;
