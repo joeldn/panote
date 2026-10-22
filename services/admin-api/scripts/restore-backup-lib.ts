@@ -443,14 +443,18 @@ const describeScope = (scope: RestoreScope): string =>
       ? `everything of ${scope.sub}`
       : 'the whole bucket';
 
-/** The whole CLI run (restore-backup.ts only parses and wires it). */
-export async function runRestore(args: RestoreArgs, deps: RestoreDeps): Promise<void> {
+/**
+ * The whole CLI run (restore-backup.ts only parses and wires it). Resolves to the exit
+ * code: 1 if any key failed (an R2 error, or a request the route didn't answer), after
+ * listing each one; the batches that went through stay restored.
+ */
+export async function runRestore(args: RestoreArgs, deps: RestoreDeps): Promise<number> {
   const { store, log } = deps;
   const sets = await listBackupSets(store);
   if (args.mode === 'list') {
     if (sets.length === 0) log(`no backup sets in ${args.r2.bucket}`);
     for (const s of sets) log(describeSet(s));
-    return;
+    return 0;
   }
   const set = sets.find((s) => s.date === args.date);
   if (!set) throw new Error(`no backup set for ${args.date} (see --list)`);
@@ -473,26 +477,52 @@ export async function runRestore(args: RestoreArgs, deps: RestoreDeps): Promise<
     log(
       `DRY RUN: nothing written to ${args.r2.bucket}; pass --apply to restore ${send.length} key(s)`,
     );
-    return;
+    return 0;
   }
-  if (send.length === 0) return;
+  if (send.length === 0) return 0;
 
-  const total: OperatorRestoreOk = { restored: [], existing: [], missing: [], refused: [] };
+  const total: OperatorRestoreOk = {
+    restored: [],
+    existing: [],
+    missing: [],
+    refused: [],
+    failed: [],
+  };
   for (let i = 0; i < send.length; i += OPERATOR_RESTORE_MAX_KEYS) {
-    const out = await requestRestore(deps.fetch, args.api!, {
-      date: args.date,
-      keys: send.slice(i, i + OPERATOR_RESTORE_MAX_KEYS),
-      overwrite: args.overwrite,
-    });
-    for (const k of ['restored', 'existing', 'missing', 'refused'] as const)
+    const keys = send.slice(i, i + OPERATOR_RESTORE_MAX_KEYS);
+    let out: OperatorRestoreOk;
+    try {
+      out = await requestRestore(deps.fetch, args.api!, {
+        date: args.date,
+        keys,
+        overwrite: args.overwrite,
+      });
+    } catch (e) {
+      // The batch's outcome is unknown; carry on with the rest and report these as failed.
+      log(
+        `a request failed (${e instanceof Error ? e.message : String(e)}); its keys are listed below`,
+      );
+      total.failed.push(...keys);
+      continue;
+    }
+    for (const k of ['restored', 'existing', 'missing', 'refused', 'failed'] as const)
       total[k].push(...out[k]);
   }
   log(
-    `restored ${total.restored.length} key(s); ${total.existing.length} appeared since the plan and were left; ${total.missing.length} gone from the set; ${total.refused.length} refused (account marked for deletion)`,
+    `restored ${total.restored.length} key(s); ${total.existing.length} appeared since the plan and were left; ${total.missing.length} gone from the set; ${total.refused.length} refused (account marked for deletion, or no owner found); ${total.failed.length} failed`,
   );
+  for (const key of total.refused) log(`refused ${key}`);
+  for (const key of total.failed) log(`FAILED ${key}`);
   if (total.restored.some((k) => !k.startsWith('tours/') && !k.startsWith('panos/'))) {
     log(
       'restored share links and bundles are purged from the CDN; Explore catches up within a minute',
     );
   }
+  if (total.failed.length) {
+    log(
+      `${total.failed.length} key(s) failed; run the same command again (create-only keeps what came back)`,
+    );
+    return 1;
+  }
+  return 0;
 }

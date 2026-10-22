@@ -538,7 +538,7 @@ app.post(OPERATOR_RESTORE_PATH, async (c) => {
   purgeLater(c, { prefixes: [], files });
   // An audit line: counts only, keys carry the owner.
   console.warn(
-    `[restore] operator restore from ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused`,
+    `[restore] operator restore from ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused, ${out.failed.length} failed`,
   );
   return c.json(out);
 });

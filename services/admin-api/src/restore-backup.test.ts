@@ -294,6 +294,59 @@ describe('runRestore', () => {
   });
 });
 
+describe('runRestore failures', () => {
+  it('lists the keys that failed and exits 1, keeping the batches that went through', async () => {
+    for (let i = 0; i < 120; i++) await put(configKey(SUB, `bulk-${i}`), { i });
+    await runBackup(env.BUCKET, NOW);
+    await env.BUCKET.delete(Array.from({ length: 120 }, (_, i) => configKey(SUB, `bulk-${i}`)));
+    const { lines, deps: d } = deps();
+    let calls = 0;
+    // The first request goes through; the second gets a 500.
+    const failing = {
+      ...d,
+      fetch: (input: string, init: RequestInit) =>
+        ++calls === 1
+          ? SELF.fetch(input, init)
+          : Promise.resolve(new Response(null, { status: 500 })),
+    };
+
+    const code = await runRestore(restoreArgs({ kind: 'owner', sub: SUB }), failing);
+
+    expect(code).toBe(1);
+    expect(lines.filter((l) => l.startsWith('FAILED '))).toHaveLength(20);
+    expect(lines.join('\n')).toMatch(/restored 100 key\(s\);.* 20 failed/);
+    const restored = await Promise.all(
+      Array.from({ length: 120 }, (_, i) => has(configKey(SUB, `bulk-${i}`))),
+    );
+    expect(restored.filter(Boolean)).toHaveLength(100);
+  });
+
+  it('passes on the keys the route reports as failed', async () => {
+    await seedTour(SUB, 't1', 'p1', 'my-tour');
+    await runBackup(env.BUCKET, NOW);
+    await env.BUCKET.delete(tourKey(SUB, 't1'));
+    const { lines, deps: d } = deps();
+    const failing = {
+      ...d,
+      fetch: () =>
+        Promise.resolve(
+          Response.json({
+            restored: [],
+            existing: [],
+            missing: [],
+            refused: [],
+            failed: [tourKey(SUB, 't1')],
+          }),
+        ),
+    };
+
+    expect(await runRestore(restoreArgs({ kind: 'tour', tourId: 't1', sub: SUB }), failing)).toBe(
+      1,
+    );
+    expect(lines).toContain(`FAILED ${tourKey(SUB, 't1')}`);
+  });
+});
+
 describe('existingNow', () => {
   it('lists instead of a HEAD per key for a big plan', async () => {
     await put(tourKey(SUB, 't1'), {});

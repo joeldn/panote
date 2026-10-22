@@ -14,7 +14,7 @@ import { parseRestoreArgs, runRestore, USAGE } from './restore-backup-lib.ts';
 
 async function main(): Promise<void> {
   const args = parseRestoreArgs(process.argv.slice(2), process.env);
-  await runRestore(args, {
+  process.exitCode = await runRestore(args, {
     store: createR2S3Client({ ...args.r2, retries: 3 }),
     fetch: (input, init) => fetch(input, init),
     log: (line) => console.log(line),
