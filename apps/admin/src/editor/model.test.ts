@@ -256,6 +256,21 @@ describe('mergeAppendedScenes', () => {
     });
   });
 
+  it('keeps unsaved map placements and a new plan image while folding in an appended scene', () => {
+    const plan = { id: 'plan-1', type: 'image/webp' as const, width: 10, height: 10 };
+    const local = {
+      etag: 'e1',
+      base,
+      current: { ...base, plan, scenes: [{ panoId: 'a', mapX: 0.25, mapY: 0.5 }, { panoId: 'b' }] },
+    };
+    const tour = { ...base, scenes: [...base.scenes, { panoId: 'c' }] };
+    expect(mergeAppendedScenes(local, { etag: 'e2', tour })?.current).toEqual({
+      ...base,
+      plan,
+      scenes: [{ panoId: 'a', mapX: 0.25, mapY: 0.5 }, { panoId: 'b' }, { panoId: 'c' }],
+    });
+  });
+
   it('is null when the server tour changed in any other way', () => {
     const local = { etag: 'e1', base, current: base };
     const renamed = { ...base, title: 'Elsewhere', scenes: [...base.scenes, { panoId: 'c' }] };
