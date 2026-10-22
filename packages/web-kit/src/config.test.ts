@@ -33,15 +33,12 @@ describe('loadConfig', () => {
   it('shows the social providers in a fixed order, then email, whatever the env order', () => {
     const c = loadConfig({
       ...env,
-      VITE_AUTH0_CONNECTIONS:
-        'email,facebook,linkedin,windowslive,twitter,github,apple,google-oauth2,facebook',
+      VITE_AUTH0_CONNECTIONS: 'email,facebook,windowslive,twitter,apple,google-oauth2,facebook',
     });
     expect(c.auth0.connections).toEqual([
       'google-oauth2',
       'apple',
       'windowslive',
-      'github',
-      'linkedin',
       'facebook',
       'email',
     ]);
@@ -55,20 +52,25 @@ describe('loadConfig', () => {
       'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google', kind: 'social' },
       apple: { label: 'Apple', icon: 'fa-brands fa-apple', kind: 'social' },
       windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft', kind: 'social' },
-      github: { label: 'GitHub', icon: 'fa-brands fa-github', kind: 'social' },
-      linkedin: { label: 'LinkedIn', icon: 'fa-brands fa-linkedin-in', kind: 'social' },
       facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook', kind: 'social' },
       email: { label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' },
     });
   });
 
-  it('accepts email or a newer provider on its own', () => {
+  it('accepts email on its own', () => {
     expect(loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'email' }).auth0.connections).toEqual([
       'email',
     ]);
+  });
+
+  it('does not offer GitHub or LinkedIn sign-in', () => {
     expect(
-      loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'linkedin, github' }).auth0.connections,
-    ).toEqual(['github', 'linkedin']);
+      loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'google-oauth2,github,linkedin' }).auth0
+        .connections,
+    ).toEqual(['google-oauth2']);
+    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'linkedin, github' })).toThrow(
+      ConfigError,
+    );
   });
 
   it('rejects a connection list with no known connection (Twitter is not one)', () => {

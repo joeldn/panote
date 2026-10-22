@@ -305,22 +305,22 @@ rotation is on and the API `https://api.panote.dev` allows offline access.
   silent-auth iframe (`useRefreshTokensFallback: false`), so no `frame-src` entry is needed. The
   avatar is the user's initial, not the Google profile photo, so `img-src` stays as is.
 
-**More sign-in options.** The apps know seven connections (`KNOWN_CONNECTIONS` in
+**More sign-in options.** The apps know five connections (`KNOWN_CONNECTIONS` in
 `packages/web-kit/src/config.ts`). The social ones show in this order: Google (`google-oauth2`),
-Apple (`apple`), Microsoft (`windowslive`), GitHub (`github`), LinkedIn (`linkedin`), Facebook
-(`facebook`). Email (`email`, Auth0's passwordless email connection: a one-time code, no social
-account, no password) shows last, under an "or" divider. A button is shown only when its
-connection name is in `VITE_AUTH0_CONNECTIONS`, so today only Google shows. Turning one on is an
-account task, done once per Auth0 tenant (dev now, production when its tenant exists). Below,
-`<tenant>` is the tenant's domain (`panote-dev.au.auth0.com` for dev), and every social
-provider's redirect/return URL is `https://<tenant>/login/callback`.
+Apple (`apple`), Microsoft (`windowslive`), Facebook (`facebook`). GitHub, LinkedIn and Instagram
+are not offered (`docs/decisions.md`, "Account linking" row). Email (`email`, Auth0's passwordless
+email connection: a one-time code, no social account, no password) shows last, under an "or"
+divider. A button is shown only when its connection name is in `VITE_AUTH0_CONNECTIONS`, so today
+only Google shows. Turning one on is an account task, done once per Auth0 tenant (dev now,
+production when its tenant exists). Below, `<tenant>` is the tenant's domain
+(`panote-dev.au.auth0.com` for dev), and every social provider's redirect/return URL is
+`https://<tenant>/login/callback`.
 
 Cost: all of this fits Auth0's Free plan (social connections and passwordless email are both
 included). Apple is the only provider that costs money: Sign in with Apple needs the Apple
-Developer Program ($99/year). The Google, Microsoft, GitHub, LinkedIn and Facebook developer apps
-are free. Facebook works for the app's own admins and testers straight away, but before the public
-can use it Meta wants the app switched to *Live*, which can mean app review and business
-verification.
+Developer Program ($99/year). The Google, Microsoft and Facebook developer apps are free. Facebook
+works for the app's own admins and testers straight away, but before the public can use it Meta
+wants the app switched to *Live*, which can mean app review and business verification.
 
 1. **Create the provider's app.**
    - **Apple.** Needs a paid Apple Developer Program membership. In Certificates, Identifiers &
@@ -334,17 +334,6 @@ verification.
      accounts*, redirect URI (platform *Web*) `https://<tenant>/login/callback`. Copy the
      Application (client) ID and create a client secret under Certificates & secrets. Secrets
      expire (24 months at most): put the expiry in the calendar and rotate it in Auth0 before then.
-   - **GitHub.** Free. GitHub → Settings → Developer settings → OAuth Apps → New OAuth App
-     (create it under an organisation if one should own it): application name Panote, homepage URL
-     `https://panote.dev` (`https://panote.io` for production), authorization callback URL
-     `https://<tenant>/login/callback`. Copy the Client ID and generate a client secret. A GitHub
-     user's email may be private; Auth0 asks for the `user:email` scope (tick *Email address* on
-     the connection) so it still gets the verified primary address.
-   - **LinkedIn.** Free. In the LinkedIn Developer Portal create an app (it needs a LinkedIn
-     company page to belong to; a page made for Panote is enough), then on its Products tab add
-     *Sign In with LinkedIn using OpenID Connect*. On the Auth tab add the redirect URL
-     `https://<tenant>/login/callback` and copy the Client ID and Primary Client Secret. Only the
-     `openid`, `profile` and `email` scopes are needed.
    - **Facebook.** Free. In Meta for Developers, create an app (use case *Authenticate and request
      data from users with Facebook Login*), add *Facebook Login*, set Valid OAuth Redirect URIs to
      `https://<tenant>/login/callback`. Under App settings → Basic set the privacy policy URL
@@ -353,10 +342,10 @@ verification.
      App Secret, and switch the app to *Live* (see the review note above); only `public_profile`
      and `email` are needed.
 2. **Add the Auth0 connection.** Auth0 dashboard → Authentication → Social → Create Connection →
-   Apple / Microsoft Account / GitHub / LinkedIn / Facebook, and paste the credentials from step 1
+   Apple / Microsoft Account / Facebook, and paste the credentials from step 1
    (Apple: Services ID, Team ID, Key ID and the `.p8` contents; the others: client id and secret).
-   Request only basic profile and email. Check the connection's name is `apple`, `windowslive`,
-   `github`, `linkedin` or `facebook`: the apps send that exact name. Auth0 offers its own
+   Request only basic profile and email. Check the connection's name is `apple`, `windowslive` or
+   `facebook`: the apps send that exact name. Auth0 offers its own
    developer keys for some providers when the credential fields are left blank; they are for a
    quick try only (the consent screen names Auth0, not Panote, and they carry limits). Never leave
    a production connection on developer keys.
@@ -366,7 +355,7 @@ verification.
 4. **Show the button.** Add the connection name to `VITE_AUTH0_CONNECTIONS` in both
    `apps/website/.env.<env>` and `apps/admin/.env.<env>` for that environment (comma-separated;
    order doesn't matter, the apps sort them), e.g.
-   `VITE_AUTH0_CONNECTIONS=google-oauth2,apple,windowslive,github,linkedin,facebook,email`, and
+   `VITE_AUTH0_CONNECTIONS=google-oauth2,apple,windowslive,facebook,email`, and
    ship that as a PR. Do this last: a button for a connection the tenant doesn't have fails at
    Auth0's `/authorize`.
 
@@ -394,17 +383,16 @@ is sent (the apps don't ask for the address themselves), and no password is ever
    Email Routing records (see "Email" below). Send a test from the Email Provider page, then sign
    in by email end to end.
 
-**Account linking (one Panote account per verified email).** Signing in with Google, Apple,
-GitHub or an email code with the same verified address lands in the same Panote account. The
+**Account linking (one Panote account per verified email).** Signing in with Google, Apple
+or an email code with the same verified address lands in the same Panote account. The
 work is a post-login Action, kept as code in `packages/auth0-actions/src/link-accounts.cjs` (tests
 beside it). Why it links automatically, against Auth0's advice to re-authenticate first, is in
 `docs/decisions.md` ("Account linking").
 
 - **Trusted providers only.** `TRUSTED_PROVIDERS` in the Action is the one list: passwordless
-  `email` (the code proves the address), `google-oauth2`, `apple` and `github` (Auth0 passes on
-  GitHub's own verified flag, false for an unverified address). Both sides must qualify: the
+  `email` (the code proves the address), `google-oauth2` and `apple`. Both sides must qualify: the
   current login's identity, and each candidate through an identity from a trusted provider that
-  carries the same verified email. Microsoft (`windowslive`), LinkedIn and Facebook users sign in
+  carries the same verified email. Microsoft (`windowslive`) and Facebook users sign in
   normally but are never joined, in either direction, until those providers are reviewed; adding
   one is a code change to that list and a new paste of the Action.
 - **Who becomes the primary.** On each interactive login it looks up users with that email
@@ -427,7 +415,7 @@ beside it). Why it links automatically, against Auth0's advice to re-authenticat
   fresh one, and any other failure logs `[link-accounts] linking failed` and lets the login go on
   unlinked.
 
-Who won't be joined: Microsoft, LinkedIn and Facebook sign-ins (above), an Apple user who chose
+Who won't be joined: Microsoft and Facebook sign-ins (above), an Apple user who chose
 *Hide My Email* (the private relay address matches nothing), and anyone whose provider doesn't
 report the email as verified. They all still sign in, as their own account.
 
@@ -453,7 +441,7 @@ Setting it up, once per tenant (**Needs you**, all in the Auth0 dashboard):
 
 Nothing on the API side changes. Workers only check the JWT, and owner keys are
 `base64url(sub)` of whatever sub the token carries, so any sub prefix (`apple|…`,
-`windowslive|…`, `github|…`, `linkedin|…`, `facebook|…`, `email|…`) works, as do account deletion
+`windowslive|…`, `facebook|…`, `email|…`) works, as do account deletion
 and the `delete-account.ts --sub` CLI. After linking, the token's sub is always the primary's, so
 the R2 owner prefix of an existing account doesn't move. **Known gap:** a user who already had
 Panote data under their own sub before being linked into an older account (only possible for

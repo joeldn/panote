@@ -45,16 +45,16 @@ describe('SignInModal', () => {
     const options = [
       { id: 'email', label: 'email', icon: 'fa-solid fa-envelope', kind: 'email' as const },
       google,
-      { id: 'github', label: 'GitHub', icon: 'fa-brands fa-github', kind: 'social' as const },
-      { id: 'linkedin', label: 'LinkedIn', icon: 'fa-brands fa-linkedin-in' },
+      { id: 'apple', label: 'Apple', icon: 'fa-brands fa-apple', kind: 'social' as const },
+      { id: 'facebook', label: 'Facebook', icon: 'fa-brands fa-facebook' },
     ];
     const onSignIn = vi.fn(() => new Promise<void>(() => {}));
     render(<SignInModal open onClose={() => {}} options={options} onSignIn={onSignIn} />);
     const buttons = screen.getAllByRole('button', { name: /^Continue with / });
     expect(buttons.map((b) => b.textContent)).toEqual([
       'Continue with Google',
-      'Continue with GitHub',
-      'Continue with LinkedIn',
+      'Continue with Apple',
+      'Continue with Facebook',
       'Continue with email',
     ]);
     const emailBtn = buttons[3]!;

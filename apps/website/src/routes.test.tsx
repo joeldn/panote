@@ -110,12 +110,16 @@ describe('website routes', () => {
     const account = await screen.findByRole('heading', { name: 'Your account' });
     const text = (account.nextElementSibling?.textContent ?? '').replace(/\s+/g, ' ');
     expect(text).toContain(
-      'more than one of Google, Apple, GitHub or an email code using the same email address',
+      'more than one of Google, Apple or an email code using the same email address',
     );
     expect(text).toContain('they are joined into one Panote account');
-    expect(text).toContain(
-      'Signing in with Microsoft, LinkedIn or Facebook keeps a separate account.',
-    );
+    expect(text).toContain('Signing in with Microsoft or Facebook keeps a separate account.');
+  });
+
+  it('privacy names no sign-in provider the app does not offer', async () => {
+    renderAt('/privacy');
+    await screen.findByRole('heading', { name: 'Your account' });
+    expect(document.body.textContent).not.toMatch(/GitHub|LinkedIn/);
   });
 
   it('falls back to a 404 page', async () => {
