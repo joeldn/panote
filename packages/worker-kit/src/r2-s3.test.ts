@@ -67,6 +67,121 @@ describe('presignPut', () => {
   });
 });
 
+// An independent SigV4 query-presign verifier (not aws4fetch): rebuilds the
+// canonical request from the URL plus the headers a PUT would carry, and
+// reports whether the URL's signature covers them. Plain keys only (no
+// characters that need path encoding).
+const rfc3986 = (s: string): string =>
+  encodeURIComponent(s).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+const hex = (buf: ArrayBuffer): string =>
+  [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const hmac = async (key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayBuffer> => {
+  const k = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, [
+    'sign',
+  ]);
+  return crypto.subtle.sign('HMAC', k, new TextEncoder().encode(data));
+};
+const signatureCovers = async (
+  presigned: string,
+  method: string,
+  sent: Record<string, string>,
+): Promise<boolean> => {
+  const url = new URL(presigned);
+  const q = url.searchParams;
+  const signedHeaders = q.get('X-Amz-SignedHeaders')!.split(';');
+  const headers: Record<string, string> = { ...sent, host: url.host };
+  const query = [...q.entries()]
+    .filter(([k]) => k !== 'X-Amz-Signature')
+    .map(([k, v]) => [rfc3986(k), rfc3986(v)] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
+  const canonical = [
+    method,
+    url.pathname,
+    query,
+    signedHeaders.map((h) => `${h}:${headers[h] ?? ''}\n`).join(''),
+    signedHeaders.join(';'),
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+  const amzDate = q.get('X-Amz-Date')!;
+  const [, date, region, service] = q.get('X-Amz-Credential')!.split('/') as [
+    string,
+    string,
+    string,
+    string,
+  ];
+  const scope = `${date}/${region}/${service}/aws4_request`;
+  const toSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    scope,
+    hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical))),
+  ].join('\n');
+  let key: ArrayBuffer = await hmac(
+    new TextEncoder().encode(`AWS4${config.secretAccessKey}`),
+    date,
+  );
+  for (const part of [region, service, 'aws4_request']) key = await hmac(key, part);
+  return hex(await hmac(key, toSign)) === q.get('X-Amz-Signature');
+};
+
+describe('presignPut contentLength', () => {
+  const presign = (contentLength?: number) =>
+    createR2S3Client(config).presignPut('panos/p1/original', {
+      expiresInSeconds: 600,
+      headers: { 'content-type': 'image/png' },
+      contentLength,
+    });
+
+  it('signs content-length alongside content-type', async () => {
+    const url = await presign(1024);
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'content-length;content-type;host',
+    );
+  });
+
+  it('a PUT carrying the declared length and type matches the signature', async () => {
+    const url = await presign(1024);
+    await expect(
+      signatureCovers(url, 'PUT', { 'content-length': '1024', 'content-type': 'image/png' }),
+    ).resolves.toBe(true);
+  });
+
+  it('a PUT carrying any other length does not', async () => {
+    const url = await presign(1024);
+    for (const length of ['1025', '1023', '104857600']) {
+      await expect(
+        signatureCovers(url, 'PUT', { 'content-length': length, 'content-type': 'image/png' }),
+      ).resolves.toBe(false);
+    }
+    await expect(
+      signatureCovers(url, 'PUT', { 'content-length': '1024', 'content-type': 'image/jpeg' }),
+    ).resolves.toBe(false);
+  });
+
+  it('the verifier agrees with the content-type-only URL too', async () => {
+    const url = await presign();
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe('content-type;host');
+    await expect(signatureCovers(url, 'PUT', { 'content-type': 'image/png' })).resolves.toBe(true);
+  });
+
+  it('signs content-length on its own, without other headers', async () => {
+    const url = await createR2S3Client(config).presignPut('panos/p1/original', {
+      contentLength: 7,
+    });
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;host');
+    await expect(signatureCovers(url, 'PUT', { 'content-length': '7' })).resolves.toBe(true);
+  });
+
+  it.each([-1, 1.5, Number.NaN, 2 ** 53])('refuses a contentLength of %d', async (n) => {
+    await expect(presign(n)).rejects.toThrow(/contentLength/);
+  });
+});
+
 describe('put', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -396,9 +511,10 @@ describe('listObjects', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = createR2S3Client(config);
 
+    const lastModified = Date.parse('2026-01-01T00:00:00.000Z');
     expect(await client.listObjects('panos/o/')).toEqual([
-      { key: 'panos/o/p1/original', size: 1024 },
-      { key: 'panos/o/a&b/config.json', size: 12 },
+      { key: 'panos/o/p1/original', size: 1024, lastModified },
+      { key: 'panos/o/a&b/config.json', size: 12, lastModified },
     ]);
     const url = new URL(fetchMock.mock.calls[0]![0].url);
     expect(url.searchParams.get('list-type')).toBe('2');
@@ -414,13 +530,28 @@ describe('listObjects', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = createR2S3Client(config);
 
-    expect(await client.listObjects('')).toEqual([
+    expect((await client.listObjects('')).map(({ key, size }) => ({ key, size }))).toEqual([
       { key: 'a', size: 1 },
       { key: 'b', size: 2 },
     ]);
     expect(new URL(fetchMock.mock.calls[1]![0].url).searchParams.get('continuation-token')).toBe(
       'tok',
     );
+  });
+
+  it('reports a missing LastModified as NaN, never as a real time', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            '<ListBucketResult><IsTruncated>false</IsTruncated>' +
+              '<Contents><Key>k</Key><Size>3</Size></Contents></ListBucketResult>',
+          ),
+      ),
+    );
+    const [obj] = await createR2S3Client(config).listObjects('');
+    expect(obj?.lastModified).toBeNaN();
   });
 
   it('throws on a non-2xx response', async () => {
