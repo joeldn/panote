@@ -2129,6 +2129,19 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   abandoned before any config referenced it) stays until the owner deletes the pano. Sweeping them
   safely needs a scan of every owner's `panos/` prefix and a check that none of that owner's tours
   references the pano; that's a follow-up, not a daily job over the whole bucket.
+- **Tour languages need admin-api deployed before the admin SPA, and an open editor reloaded.**
+  The `languages`/`i18n` fields are optional and zod drops keys it doesn't know, so an admin-api
+  from before tour languages accepts a translated tour or pano and stores it without its
+  translations. An admin tab opened before the deploy does the same thing from the other side:
+  its bundle has the old schemas, so a Save from it strips `i18n`. Deploy `admin-api` first, then
+  the admin SPA, and expect editors open during the deploy to need a reload (a dev auto-deploy
+  ships both together, so this mostly matters for production).
+- **A pano's translations can outnumber one tour's languages.** A scene config is per pano and a
+  pano can be in several tours, so its `i18n` maps take up to `MAX_CONFIG_TRANSLATION_LANGUAGES`
+  (40) languages where a tour takes 10, and removing a language from a tour keeps the panos'
+  strings for it (other tours may use them). Publish only sends the tour's own languages, and
+  `MAX_SCENE_TRANSLATION_CHARS` bounds the size either way. Strings for a language no tour uses
+  any more stay in the config until the author clears them field by field.
 - **The DLQ alert email is throttled, not batched on a timer.** At most one email per queue per
   30 minutes; a burst sends the first email at once and counts the rest into the next one (see
   "Tiling failure marker and alerting"). If no failure follows the burst, the held count is never

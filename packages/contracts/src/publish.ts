@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
 import { PANO_PATTERN } from './keys.js';
+import { TourLanguagesSchema } from './languages.js';
 import {
   MAX_ID_LENGTH,
   SceneConfigSchema,
   TourSettingsSchema,
+  TourTranslationsSchema,
   type TourSettings,
 } from './schema.js';
 import { checkSlug } from './slug.js';
@@ -47,6 +49,11 @@ export const PublishedTourSchema = z.object({
   slug: z.string(),
   publishedAt: z.string(),
   settings: TourSettingsSchema,
+  // Optional: bundles published before tours had languages still parse, as one language.
+  // Scene and hotspot translations ride in each config; publish keeps only these languages'.
+  languages: TourLanguagesSchema.optional(),
+  // Held to the TourDoc rules: admin-api only publishes what that schema accepted.
+  i18n: TourTranslationsSchema.optional(),
   startPanoId: publicId(),
   scenes: z.array(
     z

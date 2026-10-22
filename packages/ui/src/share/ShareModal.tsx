@@ -1,3 +1,4 @@
+import { languageName } from '@internal/contracts';
 import { useId, useState, type ReactNode } from 'react';
 
 import { Button } from '../Button.js';
@@ -43,6 +44,8 @@ export interface ShareModalProps {
   onTabChange?: (tab: ShareTab) => void;
   /** The pano open in the editor, offered as "This pano only" on the Embed tab. */
   currentPano?: SharePano | null;
+  /** The tour's languages, default first: with more than one, the embed can pin one. */
+  languages?: readonly string[];
   /** Owner only. Saves a normalised, valid slug; a rejection's message shows inline. */
   onCommitSlug?: (slug: string) => Promise<void>;
   /** Owner only. A rejection's message shows under the options. */
@@ -310,13 +313,21 @@ function PrivacyTab({ visibility, onVisibilityChange, onStopSharing }: ShareModa
   );
 }
 
-function EmbedTab({ siteOrigin, slug, currentPano }: ShareModalProps & { slug: string }) {
+function EmbedTab({
+  siteOrigin,
+  slug,
+  currentPano,
+  languages = [],
+}: ShareModalProps & { slug: string }) {
   const [scope, setScope] = useState<EmbedScope>('tour');
   const [height, setHeight] = useState<EmbedHeight>(DEFAULT_EMBED_HEIGHT);
+  // '' is the visitor's own language (no ?lang=).
+  const [lang, setLang] = useState('');
   const [preview, setPreview] = useState(false);
   const [copied, copy] = useCopy();
+  const langId = useId();
   const pano = scope === 'pano' && currentPano ? currentPano : null;
-  const src = embedSrc(siteOrigin, slug, pano?.id);
+  const src = embedSrc(siteOrigin, slug, pano?.id, lang);
   const code = embedSnippet(src, height);
 
   const scopes: ReadonlyArray<{
@@ -373,6 +384,26 @@ function EmbedTab({ siteOrigin, slug, currentPano }: ShareModalProps & { slug: s
           </button>
         ))}
       </div>
+      {languages.length > 1 && (
+        <>
+          <label className="pn-share__section" htmlFor={langId}>
+            Language
+          </label>
+          <select
+            id={langId}
+            className="pn-share__lang"
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+          >
+            <option value="">The visitor’s language</option>
+            {languages.map((tag) => (
+              <option key={tag} value={tag} lang={tag}>
+                {languageName(tag)}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
       <div className="pn-share__code-head">
         <div className="pn-share__section">Embed code</div>
         <button type="button" className="pn-share__link-btn" onClick={() => void copy(code)}>

@@ -65,6 +65,7 @@ export { Compass } from './viewer/Compass.js';
 export { FloorLinks, type FloorLinksProps } from './viewer/FloorLinks.js';
 export { HotspotMarkers, type HotspotMarkersProps } from './viewer/HotspotMarkers.js';
 export { HotspotPanel, type HotspotPanelProps } from './viewer/HotspotPanel.js';
+export { LanguagePicker, type LanguagePickerProps } from './viewer/LanguagePicker.js';
 export { MediaEmbed, type MediaEmbedProps } from './viewer/MediaEmbed.js';
 export { SceneMap, type SceneMapEntry, type SceneMapProps } from './viewer/SceneMap.js';
 export type { ViewerHotspot, ViewerLinkArrow, ViewerMedia } from './viewer/types.js';

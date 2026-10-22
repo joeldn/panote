@@ -1,4 +1,6 @@
 import {
+  MAX_SCENE_TRANSLATION_CHARS,
+  sceneTranslationChars,
   SceneConfigSchema,
   TourDocSchema,
   type PublishFailureReason,
@@ -69,6 +71,9 @@ const firstIssue = (issues: { path: (string | number)[]; message: string }[]): s
   return i ? `${i.path.join('.') || 'document'}: ${i.message}` : 'invalid document';
 };
 
+/** Why a pano with too much translated text can't be saved, and what to do about it. */
+export const translationLimitMessage = `its translations are over the ${MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit for one pano. Shorten some, then save`;
+
 /**
  * PUT every planned document with its own If-Match (a missing config is create-only),
  * configs first, then the tour. Never throws: each document reports its own result.
@@ -78,6 +83,10 @@ export async function runSave(api: SaveApi, tourId: string, plan: SavePlan): Pro
   await Promise.all(
     plan.configs.map(async ({ panoId, config, etag }) => {
       const key = panoKey(panoId);
+      if (sceneTranslationChars(config) > MAX_SCENE_TRANSLATION_CHARS) {
+        out.failures[key] = { kind: 'invalid', message: translationLimitMessage };
+        return;
+      }
       const valid = SceneConfigSchema.safeParse(config);
       if (!valid.success) {
         out.failures[key] = { kind: 'invalid', message: firstIssue(valid.error.issues) };

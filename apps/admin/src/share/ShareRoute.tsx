@@ -1,4 +1,4 @@
-import type { TourPublishState } from '@internal/contracts';
+import { tourLanguageList, type TourPublishState } from '@internal/contracts';
 import { ShareModal, type SharePano, type ShareTab, type Visibility } from '@internal/ui';
 import { isAuthError, publishErrorOf, type PublishError } from '@internal/web-kit';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -22,6 +22,7 @@ interface Loaded {
   publish: Published | null;
   panos: SharePano[];
   startPanoId: string | undefined;
+  languages: string[];
 }
 
 type LoadState =
@@ -116,6 +117,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
             publish: publish ? { slug: publish.slug, visibility: publish.visibility } : null,
             panos,
             startPanoId: tour.startPanoId,
+            languages: tourLanguageList(tour.languages),
           },
         });
       },
@@ -233,6 +235,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
       slug={tour?.publish?.slug ?? null}
       visibility={tour?.publish?.visibility ?? 'unlisted'}
       currentPano={panos.find((p) => p.id === currentId) ?? null}
+      languages={tour?.languages ?? []}
       loading={state.status === 'loading'}
       error={state.status === 'error' ? state.message : undefined}
       notice={notice}

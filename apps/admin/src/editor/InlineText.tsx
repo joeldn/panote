@@ -9,29 +9,45 @@ export interface InlineTextProps {
   className?: string;
   /** Read-only for now (shown, not editable). */
   disabled?: boolean;
+  /**
+   * Shown while `value` is blank: a translation shows the default-language text. With
+   * one, a blank commit is allowed (it clears the translation).
+   */
+  placeholder?: string;
 }
 
-/** Click to edit; Enter or blur commits, Escape cancels. Blank input keeps the old value. */
-export function InlineText({ value, onCommit, label, className, disabled }: InlineTextProps) {
+/**
+ * Click to edit; Enter or blur commits, Escape cancels. Blank input keeps the old value,
+ * unless there is a placeholder to fall back on.
+ */
+export function InlineText({
+  value,
+  onCommit,
+  label,
+  className,
+  disabled,
+  placeholder,
+}: InlineTextProps) {
   const [draft, setDraft] = useState<string | null>(null);
 
   const commit = () => {
     if (draft === null) return;
     const next = draft.trim();
     setDraft(null);
-    if (next && next !== value) onCommit(next);
+    if ((next || placeholder !== undefined) && next !== value) onCommit(next);
   };
 
   if (draft === null) {
+    const shown = value || placeholder || '';
     return (
       <button
         type="button"
-        className={`ed-inline ${className ?? ''}`}
-        aria-label={disabled ? `${label}: ${value}` : `${label}: ${value}. Click to edit`}
+        className={`ed-inline ${value ? '' : 'ed-inline--placeholder '}${className ?? ''}`}
+        aria-label={disabled ? `${label}: ${shown}` : `${label}: ${shown}. Click to edit`}
         disabled={disabled}
         onClick={() => setDraft(value)}
       >
-        {value}
+        {shown}
       </button>
     );
   }
@@ -40,6 +56,7 @@ export function InlineText({ value, onCommit, label, className, disabled }: Inli
       className={`ed-inline ed-inline--editing ${className ?? ''}`}
       aria-label={label}
       value={draft}
+      {...(placeholder !== undefined && { placeholder })}
       maxLength={MAX_TITLE_LENGTH}
       autoFocus
       onChange={(e) => setDraft(e.target.value)}

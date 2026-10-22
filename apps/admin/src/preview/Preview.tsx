@@ -1,8 +1,13 @@
-import type { TourWithConfigsOk } from '@internal/contracts';
+import {
+  pickLanguage,
+  tourLanguageList,
+  translated,
+  type TourWithConfigsOk,
+} from '@internal/contracts';
 import { Chip, LogoMark, ShareModal, TourViewer } from '@internal/ui';
 import { isAuthError, tilesBaseUrl, toViewerTour } from '@internal/web-kit';
 import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 
 import './preview.css';
 
@@ -100,7 +105,12 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
   const config = useConfig();
   const createViewer = useContext(StageFactoryContext);
   const { tour: doc, configs, publish } = data;
-  const vt = useMemo(() => toViewerTour(doc, configs), [doc, configs]);
+  const [params, setParams] = useSearchParams();
+  // As visitors get it: ?lang= (the editor's Preview passes the language being edited),
+  // else the browser's languages, else the default.
+  const lang = pickLanguage(doc.languages, params.get('lang'), navigator.languages ?? []);
+  const vt = useMemo(() => toViewerTour(doc, configs, lang), [doc, configs, lang]);
+  const title = translated(doc.title, doc.i18n, lang, 'title');
   const [sharing, setSharing] = useState(false);
   // The scene whose tiles failed to load, e.g. one still processing.
   const [notReady, setNotReady] = useState<string | null>(null);
@@ -119,7 +129,10 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
   return (
     <TourViewer
       data={vt}
-      title={doc.title}
+      title={title}
+      lang={lang}
+      languages={tourLanguageList(doc.languages)}
+      onLanguageChange={(l) => setParams({ lang: l }, { replace: true })}
       baseUrl={tilesBaseUrl(config)}
       start={vt.tour.start}
       {...(createViewer && { createViewer })}
@@ -148,7 +161,7 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
         setNotReady(panoId);
       }}
     >
-      <title>{`${doc.title} · Preview · panote`}</title>
+      <title>{`${title} · Preview · panote`}</title>
       {notReady && (
         <p className="pv-note" role="status">
           This pano’s tiles aren’t ready yet. They appear once processing finishes.
@@ -160,7 +173,7 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
           onClose={() => setSharing(false)}
           variant="visitor"
           siteOrigin={config.siteOrigin}
-          title={doc.title}
+          title={title}
           slug={publish.slug}
           visibility={publish.visibility}
         />
