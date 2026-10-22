@@ -91,6 +91,10 @@ export const tourKey = (u: string, t: string): string =>
 // Private publish sidecar ({ slug, visibility, publishedAt }), never CDN-served.
 export const publishKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/publish.json`;
+// Private marker ({ stoppedAt }) left by the owner's "Stop sharing": the editor's
+// after-Save publish skips the tour while it exists; an explicit publish clears it.
+export const sharingStoppedKey = (u: string, t: string): string =>
+  `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/sharing-stopped.json`;
 // Account deletion marker: written first, so the delete is resumable and the
 // account read-only until it finishes. Owner-scoped like panos/ and tours/:
 // the CDN's WAF rule only lets tiles/, pub/ and slugs/ through.
@@ -102,6 +106,38 @@ export const accountDeletionKey = (u: string): string =>
 // writes or removes it; account deletion leaves it, so a disabled owner stays so.
 export const accountDisabledKey = (u: string): string =>
   `${ACCOUNTS_ROOT}${encodeId(u)}/disabled.json`;
+
+// Operator lookup: which owner holds a tour, written when admin-api creates or publishes
+// it, so the takedown script needn't scan every owner (it still does for older tours).
+// Private like accounts/: the CDN's WAF rule only lets tiles/, pub/ and slugs/ through,
+// and the body (TourOwnerRecord) carries the raw sub.
+export const TOUR_OWNERS_ROOT = 'tour-owners/';
+export const tourOwnerKey = (t: string): string =>
+  `${TOUR_OWNERS_ROOT}${assertValidId(t, 'tourId')}.json`;
+// Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
+// kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
+// public prefixes, and nothing in the Workers reads, lists or deletes it.
+export const QUARANTINE_ROOT = 'quarantine/';
+// One empty object per upload URL that upload-api issued, for the per-owner daily
+// upload limit: it counts URLs, so an upload that was deleted again, or a URL
+// never used, still counts. Owner-scoped, outside panos/ (admin-api lists that as
+// panos), and private: the CDN's WAF rule only lets tiles/, pub/ and slugs/
+// through. The name is the issue time in basic ISO 8601 (no `:`, which the S3 and
+// binding paths could spell differently) and the panoId.
+export const UPLOAD_LOG_ROOT = 'upload-log/';
+export const userUploadLogPrefix = (u: string): string => `${UPLOAD_LOG_ROOT}${encodeId(u)}/`;
+const UPLOAD_LOG_STAMP_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(\d{3})Z$/;
+export const uploadLogKey = (u: string, at: Date, p: string): string => {
+  const stamp = at.toISOString().replace(/[-:.]/g, '');
+  return `${userUploadLogPrefix(u)}${stamp}-${assertValidId(p, 'panoId')}`;
+};
+/** When an upload-log entry (the part after the owner prefix) was written, in epoch ms; NaN if malformed. */
+export const uploadLogTime = (name: string): number => {
+  const m = UPLOAD_LOG_STAMP_RE.exec(name.split('-', 1)[0] ?? '');
+  if (!m) return NaN;
+  const [, y, mo, d, h, mi, sec, ms] = m;
+  return Date.parse(`${y}-${mo}-${d}T${h}:${mi}:${sec}.${ms}Z`);
+};
 
 // Owner-free: base64url(sub) is reversible, so these must stay safe for a
 // public bucket - panoId alone (a server-generated UUID) is unique enough.
@@ -115,6 +151,15 @@ export const previewKey = (p: string, v: string): string =>
   `${tileVersionPrefix(p, v)}preview.webp`;
 // The link-preview image, same dir as preview.webp.
 export const ogKey = (p: string, v: string): string => `${tileVersionPrefix(p, v)}og.jpg`;
+
+// A tile version dir the tiler saw superseded by a manifest swap, waiting for
+// admin-api's daily sweep to delete it after a grace period. Private: the CDN's
+// WAF only lets tiles/, pub/ and slugs/ through, so the record may name the
+// owner-bearing original key.
+export const TILE_GC_ROOT = 'tile-gc/';
+export const tileGcPrefix = (p: string): string => `${TILE_GC_ROOT}${assertValidId(p, 'panoId')}/`;
+export const tileGcKey = (p: string, v: string): string =>
+  `${tileGcPrefix(p)}${assertValidId(v, 'version')}.json`;
 
 // Share links (plan 3.2): public and owner-free, same rule as tiles/ above.
 export const PUB_TOURS_ROOT = 'pub/tours/';

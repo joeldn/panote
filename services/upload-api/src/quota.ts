@@ -1,19 +1,32 @@
-import { userPanosPrefix } from '@internal/contracts';
+import {
+  uploadLogKey,
+  uploadLogTime,
+  userPanosPrefix,
+  userUploadLogPrefix,
+} from '@internal/contracts';
 import type { R2S3Client } from '@internal/worker-kit/r2-s3';
 
-// Per-owner storage quotas. Both vars are optional: unset (or empty) means
-// unlimited, and an unlimited owner costs no extra R2 request at all.
+// Per-owner quotas. Every var is optional: unset (or empty) means unlimited, and
+// an owner with no limit set costs no extra R2 request at all.
 export interface QuotaEnv {
   /** Most panos one owner may hold, counting the one about to be uploaded. */
   MAX_PANOS_PER_OWNER?: string | undefined;
   /** Most bytes of originals one owner may hold, counting the declared upload size. */
   MAX_BYTES_PER_OWNER?: string | undefined;
+  /** Most upload URLs one owner may get in a rolling 24 hours, counting this one. */
+  MAX_UPLOADS_PER_OWNER_PER_DAY?: string | undefined;
 }
 
 export interface QuotaLimits {
   maxPanos: number | null;
   maxBytes: number | null;
+  maxUploadsPerDay: number | null;
 }
+
+export const UPLOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Expired upload-log entries one request deletes at most, so a long-idle owner's
+// backlog can't run a request into the subrequest limit; the rest go next time.
+export const UPLOAD_LOG_PRUNE_MAX = 50;
 
 // A var that isn't a non-negative integer is a config mistake: fail closed
 // (no uploads) rather than silently lift the limit.
@@ -27,9 +40,11 @@ const parseLimit = (name: string, raw: string | undefined): number | null => {
 export const quotaLimits = (env: QuotaEnv): QuotaLimits => ({
   maxPanos: parseLimit('MAX_PANOS_PER_OWNER', env.MAX_PANOS_PER_OWNER),
   maxBytes: parseLimit('MAX_BYTES_PER_OWNER', env.MAX_BYTES_PER_OWNER),
+  maxUploadsPerDay: parseLimit('MAX_UPLOADS_PER_OWNER_PER_DAY', env.MAX_UPLOADS_PER_OWNER_PER_DAY),
 });
 
-export type QuotaRefusal = 'pano limit reached' | 'storage limit reached';
+export type QuotaRefusal =
+  'pano limit reached' | 'storage limit reached' | 'daily upload limit reached';
 
 export interface QuotaRequest {
   /** Declared size of the upload, in bytes. */
@@ -39,10 +54,13 @@ export interface QuotaRequest {
 }
 
 /**
- * The upload-URL issuing path's quota hook. Null when the upload fits (or no
- * limit is set), otherwise the reason it doesn't. Counts what is in the
+ * The storage half of the upload-URL quota hook: null when the upload fits (or
+ * neither limit is set), otherwise the reason it doesn't. Counts what is in the
  * owner's prefix now, so it is a soft cap: concurrent requests can each pass.
  * A pano with a delete tombstone (`deleting`) is on its way out and doesn't count.
+ *
+ * A replace adds no pano, so at the pano limit it is fine; an owner already over
+ * it (the limit was lowered under them) gets no replace either, as for storage.
  *
  * Known cost: with a limit set, every upload-URL request lists the owner's whole
  * panos/ prefix (one LIST per 1,000 objects, several objects per pano). Unset,
@@ -51,7 +69,7 @@ export interface QuotaRequest {
 export const checkQuota = async (
   r2: Pick<R2S3Client, 'listObjects'>,
   sub: string,
-  limits: QuotaLimits,
+  limits: Pick<QuotaLimits, 'maxPanos' | 'maxBytes'>,
   req: QuotaRequest,
 ): Promise<QuotaRefusal | null> => {
   if (limits.maxPanos === null && limits.maxBytes === null) return null;
@@ -73,11 +91,62 @@ export const checkQuota = async (
     panos += 1;
     if (panoId !== req.replacing) bytes += originalBytes.get(panoId) ?? 0;
   }
-  if (limits.maxPanos !== null && req.replacing === undefined && panos >= limits.maxPanos) {
-    return 'pano limit reached';
+  if (limits.maxPanos !== null) {
+    // A new pano must fit under the limit; a replace only must not be over it.
+    if (req.replacing === undefined ? panos >= limits.maxPanos : panos > limits.maxPanos) {
+      return 'pano limit reached';
+    }
   }
   if (limits.maxBytes !== null && bytes + req.size > limits.maxBytes) {
     return 'storage limit reached';
   }
   return null;
 };
+
+export interface DailyUploads {
+  /** Whether one more upload URL would take the owner past the limit. */
+  refused: boolean;
+  /** Entries older than the window (or malformed), to delete best-effort. */
+  expired: string[];
+}
+
+/**
+ * The daily half: counts the owner's upload-log entries (one per URL issued,
+ * see recordUpload) from the past 24 hours, in one listing of
+ * upload-log/<owner>/ (about one entry per URL issued in the window, plus any
+ * expired ones not yet pruned). It counts URLs, not stored originals, so an
+ * upload deleted again, a URL never used, and every replace (a new tiling job
+ * each) all still count. Soft like checkQuota: concurrent requests can each pass.
+ * Null limit: nothing listed.
+ */
+export const checkDailyUploads = async (
+  r2: Pick<R2S3Client, 'listObjects'>,
+  sub: string,
+  maxUploadsPerDay: number | null,
+  now: number,
+): Promise<DailyUploads> => {
+  if (maxUploadsPerDay === null) return { refused: false, expired: [] };
+  const prefix = userUploadLogPrefix(sub);
+  const since = now - UPLOAD_WINDOW_MS;
+  let recent = 0;
+  const expired: string[] = [];
+  for (const { key } of await r2.listObjects(prefix)) {
+    const at = uploadLogTime(key.slice(prefix.length));
+    // Only upload-api writes here, so a name it can't read is a stale format,
+    // not an upload to count.
+    if (Number.isNaN(at) || at < since) expired.push(key);
+    else recent += 1;
+  }
+  return { refused: recent + 1 > maxUploadsPerDay, expired };
+};
+
+/** Logs one issued upload URL for checkDailyUploads; written before the URL is returned. */
+export const recordUpload = (
+  r2: Pick<R2S3Client, 'put'>,
+  sub: string,
+  panoId: string,
+  now: number,
+): Promise<void> =>
+  r2.put(uploadLogKey(sub, new Date(now), panoId), '', {
+    contentType: 'application/octet-stream',
+  });

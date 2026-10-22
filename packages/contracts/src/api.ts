@@ -160,6 +160,9 @@ export type ToursListOk = z.infer<typeof ToursListOkSchema>;
 export const PublishRequestSchema = z.object({
   visibility: VisibilitySchema.optional(),
   slug: z.string().optional(),
+  // The editor's publish after a Save. Refused (409 'sharing stopped') once the
+  // owner stopped sharing; a publish without it (the share modal's) shares again.
+  afterSave: z.boolean().optional(),
 });
 export type PublishRequest = z.infer<typeof PublishRequestSchema>;
 
@@ -190,6 +193,11 @@ export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'rese
 // 409 when a concurrent publish, rename or visibility change got there first; retry.
 export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
 export const NotPublishedSchema = z.object({ error: z.literal('not published') });
+// 409 for a slug change while the tour already holds MAX_ALIASES (admin-api) redirect
+// aliases; it works again once the oldest expires (SLUG_ALIAS_DAYS).
+export const TooManyRenamesSchema = z.object({ error: z.literal('too many renames') });
+// An after-Save publish of a tour whose owner stopped sharing it: nothing was published.
+export const SharingStoppedSchema = z.object({ error: z.literal('sharing stopped') });
 
 export const SlugPutRequestSchema = z.object({ slug: z.string() });
 export const SlugPutOkSchema = z.object({
@@ -255,6 +263,17 @@ export const AccountDeletionRecordSchema = z.object({
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
 
+// The record at tileGcKey, overwritten by the tiler after every confirmed manifest
+// swap. `tilerVersion` is the TILER_OUTPUT_VERSION of the job that superseded it,
+// so the sweep can tell whether the current original would tile into this dir again.
+export const TileGcRecordSchema = z.object({
+  v: z.literal(1),
+  originalKey: z.string().min(1),
+  tilerVersion: z.number().int().nonnegative(),
+  supersededAt: z.string(),
+});
+export type TileGcRecord = z.infer<typeof TileGcRecordSchema>;
+
 // --- Operator takedown (abuse groundwork) ---
 
 // 403 from every owner write (and upload-url) while the operator has the account disabled.
@@ -268,6 +287,24 @@ export const AccountDisabledRecordSchema = z.object({
   reason: z.string().max(500).optional(),
 });
 export type AccountDisabledRecord = z.infer<typeof AccountDisabledRecordSchema>;
+
+// The pointer at tourOwnerKey: the owner of one tour, for the operator's takedown script.
+export const TourOwnerRecordSchema = z.object({ v: z.literal(1), sub: z.string().min(1) });
+export type TourOwnerRecord = z.infer<typeof TourOwnerRecordSchema>;
+
+// quarantine/<caseId>/case.json: what an operator quarantine (takedown.ts) copied, and whose.
+export const QuarantineCaseRecordSchema = z.object({
+  v: z.literal(1),
+  caseId: z.string(),
+  sub: z.string().min(1),
+  tourIds: z.array(z.string()),
+  // The original keys copied; each copy is at quarantine/<caseId>/<key>.
+  keys: z.array(z.string()),
+  firstAt: z.string(),
+  lastAt: z.string(),
+  reason: z.string().optional(),
+});
+export type QuarantineCaseRecord = z.infer<typeof QuarantineCaseRecordSchema>;
 
 // admin-api's operator-only takedown route, guarded by the OPERATOR_TOKEN secret
 // sent in OPERATOR_TOKEN_HEADER. `delete` is the owner's own tour delete (it

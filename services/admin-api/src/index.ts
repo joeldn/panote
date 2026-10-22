@@ -5,6 +5,7 @@ import {
   configKey,
   deletingKey,
   MAX_TOUR_SCENES,
+  MAX_TOURS_PER_OWNER,
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
   OperatorTakedownRequestSchema,
@@ -24,7 +25,7 @@ import {
   type TourDoc,
   type TourPublishState,
 } from '@internal/contracts';
-import { authenticate } from '@internal/worker-kit';
+import { authenticate, rateLimit } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
@@ -47,13 +48,15 @@ import {
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
-import { isAccountDisabled, isOperator, tourExists } from './operator.js';
+import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
+  countTours,
   listPanoSummaries,
   listTourSummaries,
   MAX_LIST_LIMIT,
@@ -133,15 +136,23 @@ const app = new Hono<AppEnv>();
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ACCOUNT_PATH = '/api/admin/account';
+// The WRITE_LIMITER binding's `simple.period` (wrangler.jsonc), sent as the
+// 429's Retry-After. The limit itself lives in wrangler.jsonc, per env.
+export const WRITE_RATE_PERIOD_SECONDS = 60;
 
-// Once an account is marked for deletion it is read-only: no write may recreate
-// what the delete is removing. The account route itself stays open for retries,
-// and for a disabled owner too: they may still delete their own account. The
-// operator route has no Auth0 user; its own secret guards it.
+// Every write is rate limited per owner, before any R2 read. Once an account is
+// marked for deletion it is read-only: no write may recreate what the delete is
+// removing. The account route itself stays open for retries, and for a disabled
+// owner too: they may still delete their own account. The operator route has no
+// Auth0 user; its own secret guards it.
 app.use('/api/admin/*', async (c, next) => {
-  if (!WRITE_METHODS.has(c.req.method) || c.req.path === ACCOUNT_PATH) return next();
+  if (!WRITE_METHODS.has(c.req.method)) return next();
   if (c.req.path === OPERATOR_TAKEDOWN_PATH) return next();
   const { sub: verified } = await authenticate(c.req.raw, c.env);
+  const limited = await rateLimit(c.env.WRITE_LIMITER, verified, WRITE_RATE_PERIOD_SECONDS);
+  if (limited) return limited;
+  c.set('sub', verified);
+  if (c.req.path === ACCOUNT_PATH) return next();
   const [deleted, disabled] = await Promise.all([
     isAccountDeleted(c.env.BUCKET, verified),
     isAccountDisabled(c.env.BUCKET, verified),
@@ -149,7 +160,6 @@ app.use('/api/admin/*', async (c, next) => {
   if (deleted) return c.json({ error: 'account deleted' }, 410);
   // Taken down by the operator (scripts/takedown.ts): reads only, like a deleted account.
   if (disabled) return c.json({ error: 'account disabled' }, 403);
-  c.set('sub', verified);
   return next();
 });
 
@@ -241,16 +251,28 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
   // 428 (no If-Match or If-None-Match) is checked before any state read, so it holds
   // regardless of whether a tombstone or the pano even exists. `If-None-Match: *` = create-only.
   const onlyIf = writeConditional(c.req.header('If-Match'), c.req.header('If-None-Match'));
+  const [tombstone, original] = await Promise.all([
+    c.env.BUCKET.head(deletingKey(sub, panoId)),
+    c.env.BUCKET.head(originalKey(sub, panoId)),
+  ]);
   // A tombstone means an interrupted DELETE is still in flight for this
   // panoId - refuse to resurrect it out from under that delete.
-  if (await c.env.BUCKET.head(deletingKey(sub, panoId))) {
-    return c.json({ error: 'pano is being deleted' }, 409);
+  if (tombstone) return c.json({ error: 'pano is being deleted' }, 409);
+  // A config is only for a pano the caller uploaded: without an original under
+  // their own prefix, only an existing config (a legacy config-only pano) may be
+  // updated, never created, so a well-formed made-up panoId can't store anything.
+  let guard = onlyIf;
+  if (!original) {
+    const existing = await c.env.BUCKET.head(configKey(sub, panoId));
+    if (!existing) return c.json({ error: 'pano not found' }, 404);
+    // If-Match: * on a config-only pano still only updates the config just seen.
+    guard ??= { etagMatches: existing.etag };
   }
   const res = await putJson(
     c.env.BUCKET,
     configKey(sub, panoId),
     parsed.data,
-    onlyIf,
+    guard,
     configCustomMetadata(parsed.data),
   );
   return res.ok ? c.json({ etag: res.etag }) : c.json({ error: 'conflict' }, 412);
@@ -282,6 +304,11 @@ app.post('/api/admin/tours', async (c) => {
     tourId,
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
+  // Same shape as upload-api's quota refusals. A soft cap: concurrent creates can
+  // each pass, which the write rate limit keeps small.
+  if ((await countTours(c.env.BUCKET, sub, MAX_TOURS_PER_OWNER)) >= MAX_TOURS_PER_OWNER) {
+    return c.json({ error: 'tour limit reached' }, 403);
+  }
   await putJson(
     c.env.BUCKET,
     tourKey(sub, tourId),
@@ -289,6 +316,7 @@ app.post('/api/admin/tours', async (c) => {
     { etagDoesNotMatch: '*' },
     tourCustomMetadata(parsed.data),
   );
+  await recordTourOwner(c.env.BUCKET, sub, tourId);
   return c.json({ tourId }, 201);
 });
 
@@ -393,6 +421,8 @@ app.post('/api/admin/tours/:tourId/publish', async (c) => {
   const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
   const out = await publisher(c.env, tourId).publish(sub, tourId, body.data);
+  // Tours created before the owner pointer existed get one when they're (re)published.
+  if (out.status < 300) await recordTourOwner(c.env.BUCKET, sub, tourId);
   return c.json(out.body, out.status);
 });
 
@@ -425,7 +455,8 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const files = await publisher(c.env, tourId).unpublish(sub, tourId);
+  // The owner's "Stop sharing": the editor's later Saves leave it offline.
+  const files = await publisher(c.env, tourId).unpublish(sub, tourId, true);
   purgeLater(c, { prefixes: [], files });
   return c.body(null, 204);
 });
@@ -473,7 +504,7 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   const purge =
     action === 'delete'
       ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
-      : { prefixes: [], files: await stub.unpublish(sub, tourId) };
+      : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
   purgeLater(c, purge);
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
   console.warn(`[takedown] operator ${action} of tour ${tourId} done`);
@@ -484,12 +515,15 @@ app.onError(errorHandler);
 
 export default {
   fetch: app.fetch,
-  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6), and
-  // finishes (or re-sweeps) every account marked for deletion.
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
+  // finishes (or re-sweeps) every account marked for deletion, and deletes tile
+  // versions a re-tile superseded more than a day ago (no purge: nothing
+  // references their URLs any more, and edge copies age out on their own).
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
     ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
     ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
+    ctx.waitUntil(sweepSupersededTiles(env.BUCKET, now));
   },
 } satisfies ExportedHandler<Env>;
 

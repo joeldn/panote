@@ -4,6 +4,7 @@ import {
   InsightsOkSchema,
   InsightsUnavailableSchema,
   NotPublishedSchema,
+  SharingStoppedSchema,
   PANO_PATTERN,
   PanoConfigNotFoundSchema,
   PANO_DELETE_CONFLICTS,
@@ -16,6 +17,7 @@ import {
   PublishUnprocessableSchema,
   SlugInvalidSchema,
   SlugLostSchema,
+  TooManyRenamesSchema,
   SlugPutOkSchema,
   SlugTakenSchema,
   TourNotFoundSchema,
@@ -132,7 +134,17 @@ export interface AdminApi {
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
 export type PublishError =
-  | { kind: 'slug-taken' | 'slug-lost' | 'conflict' | 'not-published' | 'not-found' }
+  | {
+      kind:
+        | 'slug-taken'
+        | 'slug-lost'
+        | 'conflict'
+        | 'not-published'
+        | 'not-found'
+        | 'sharing-stopped'
+        | 'too-many-renames'
+        | 'rate-limited';
+    }
   | { kind: 'slug-invalid'; reason: 'invalid' | 'reserved' }
   | { kind: 'unprocessable'; scenes: Array<{ panoId: string; reason: PublishFailureReason }> };
 
@@ -145,8 +157,12 @@ export function publishErrorOf(e: unknown): PublishError | null {
     if (is(SlugTakenSchema)) return { kind: 'slug-taken' };
     if (is(SlugLostSchema)) return { kind: 'slug-lost' };
     if (is(NotPublishedSchema)) return { kind: 'not-published' };
+    if (is(SharingStoppedSchema)) return { kind: 'sharing-stopped' };
     if (is(PublishConflictSchema)) return { kind: 'conflict' };
+    if (is(TooManyRenamesSchema)) return { kind: 'too-many-renames' };
   }
+  // admin-api's per-owner write rate limit.
+  if (e.status === 429) return { kind: 'rate-limited' };
   if (e.status === 400) {
     const invalid = SlugInvalidSchema.safeParse(e.body);
     if (invalid.success) {

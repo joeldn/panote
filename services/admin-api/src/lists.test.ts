@@ -110,6 +110,30 @@ describe('computeTilingStatus', () => {
     ).toBe('ready');
   });
 
+  it('is failed when an oversize marker is all that is left (tiler-consumer deleted the original)', () => {
+    expect(
+      computeTilingStatus({
+        hasManifest: false,
+        manifestVersion: undefined,
+        originalEtag: undefined,
+        tileFailedOriginalEtag: 'etag-a',
+        tileFailedReason: 'oversize',
+      }),
+    ).toBe('failed');
+  });
+
+  it('is none, not failed, for any other marker left without an original (e.g. mid-delete)', () => {
+    expect(
+      computeTilingStatus({
+        hasManifest: false,
+        manifestVersion: undefined,
+        originalEtag: undefined,
+        tileFailedOriginalEtag: 'etag-a',
+        tileFailedReason: 'dlq',
+      }),
+    ).toBe('none');
+  });
+
   it('is none when there is a manifest but no original at all (e.g. mid-delete)', () => {
     expect(
       computeTilingStatus({

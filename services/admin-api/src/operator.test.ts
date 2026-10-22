@@ -2,13 +2,16 @@ import {
   accountDeletionKey,
   accountDisabledKey,
   configKey,
+  manifestKey,
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
   originalKey,
   publishKey,
   pubTourKey,
+  sharingStoppedKey,
   storedSlugKey,
   tourKey,
+  tourOwnerKey,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
@@ -16,7 +19,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { sweepAccountDeletions } from './delete-account.js';
 import worker from './index.js';
-import { isOperator } from './operator.js';
+import { isOperator, recordTourOwner } from './operator.js';
 import { unpublish } from './publish.js';
 
 // Storage is shared between it() cases in this file, so each case uses its own
@@ -75,6 +78,8 @@ describe('POST /api/admin/operator/takedown', () => {
     expect(await has(publishKey(sub, s.tourId))).toBe(false);
     expect(await has(tourKey(sub, s.tourId))).toBe(true);
     expect(await has(originalKey(sub, s.panoId))).toBe(true);
+    // Like the owner's Stop sharing: the owner's next Save doesn't put it back.
+    expect(await has(sharingStoppedKey(sub, s.tourId))).toBe(true);
   });
 
   it('logs an audit line naming the action and the tour, never the owner', async () => {
@@ -276,5 +281,109 @@ describe('a disabled owner', () => {
     }
     expect(errors.flat().join(' ')).not.toContain('unreadable or misfiled');
     expect(await has(originalKey(sub, 'op-sweep-skip-p'))).toBe(true);
+  });
+});
+
+describe('the tour owner pointer (tourOwnerKey)', () => {
+  const pointer = async (tourId: string) => {
+    const obj = await env.BUCKET.get(tourOwnerKey(tourId));
+    return obj ? await obj.json() : null;
+  };
+
+  it('is written when a tour is created', async () => {
+    const who = 'ptr-create';
+    const r = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: bearer(who),
+      body: JSON.stringify({ title: 'T', scenes: [] }),
+    });
+    expect(r.status).toBe(201);
+    const { tourId } = (await r.json()) as { tourId: string };
+    expect(await pointer(tourId)).toEqual({ v: 1, sub: subOf(who) });
+  });
+
+  it('is written when an older tour without one is published, and not by a failed publish', async () => {
+    const who = 'ptr-publish';
+    const tourId = 'ptr-publish-tour';
+    const panoId = 'ptr-publish-pano';
+    await put(tourKey(subOf(who), tourId), { tourId, title: 'Legacy', scenes: [{ panoId }] });
+    await put(originalKey(subOf(who), panoId), 'bytes');
+    await put(configKey(subOf(who), panoId), { panoId, title: 'p', hotspots: [] });
+    await put(manifestKey(panoId), { pano: panoId });
+    const failed = await SELF.fetch(`https://x/api/admin/tours/${tourId}/publish`, {
+      method: 'POST',
+      headers: bearer('ptr-someone-else'),
+      body: '{}',
+    });
+    expect(failed.status).toBe(404);
+    expect(await pointer(tourId)).toBeNull();
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}/publish`, {
+      method: 'POST',
+      headers: bearer(who),
+      body: '{}',
+    });
+    expect(r.status).toBe(200);
+    expect(await pointer(tourId)).toEqual({ v: 1, sub: subOf(who) });
+  });
+
+  it('a failed pointer write only logs, without the owner, and never throws', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = {
+      put: async () => {
+        throw new Error(`R2 PUT tour-owners/x.json for ${subOf('ptr-fails')} -> 500`);
+      },
+    } as unknown as R2Bucket;
+    try {
+      await expect(recordTourOwner(failing, subOf('ptr-fails'), 'ptr-fails-tour')).resolves.toBe(
+        undefined,
+      );
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(error.mock.calls)).not.toContain('ptr-fails|');
+      expect(JSON.stringify(error.mock.calls)).not.toContain(subOf('ptr-fails'));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("goes with a publish-only tour's delete, but never another owner's pointer", async () => {
+    const who = 'ptr-pubonly';
+    const tourId = 'ptr-pubonly-tour';
+    await put(publishKey(subOf(who), tourId), {
+      slug: 'ptr-pubonly-live',
+      visibility: 'public',
+      publishedAt: '2026-10-01T00:00:00.000Z',
+    });
+    await put(tourOwnerKey(tourId), { v: 1, sub: subOf(who) });
+    const stranger = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: bearer('ptr-stranger'),
+    });
+    expect(stranger.status).toBe(204);
+    expect(await has(tourOwnerKey(tourId))).toBe(true);
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: bearer(who),
+    });
+    expect(r.status).toBe(204);
+    expect(await has(tourOwnerKey(tourId))).toBe(false);
+  });
+
+  it('goes with the tour on an operator delete and on an account delete', async () => {
+    const sub = subOf('ptr-del');
+    const s = await seedTour(sub, 'ptr-del');
+    await put(tourOwnerKey(s.tourId), { v: 1, sub });
+    expect((await takedown({ sub, tourId: s.tourId, action: 'delete' })).status).toBe(200);
+    expect(await has(tourOwnerKey(s.tourId))).toBe(false);
+
+    const who = 'ptr-account';
+    const t = await seedTour(subOf(who), who);
+    await put(tourOwnerKey(t.tourId), { v: 1, sub: subOf(who) });
+    const r = await SELF.fetch('https://x/api/admin/account', {
+      method: 'DELETE',
+      headers: { ...bearer(who), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: 'delete my account' }),
+    });
+    expect(r.status).toBe(200);
+    expect(await has(tourOwnerKey(t.tourId))).toBe(false);
   });
 });

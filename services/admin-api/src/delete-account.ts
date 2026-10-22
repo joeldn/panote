@@ -7,8 +7,10 @@ import {
   storedSlugKey,
   tilesPrefix,
   tourKey,
+  tourOwnerKey,
   userPanosPrefix,
   userToursPrefix,
+  userUploadLogPrefix,
   type AccountDeletionRecord,
 } from '@internal/contracts';
 import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
@@ -19,7 +21,7 @@ import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY } from './references.js';
 
 // How long a finished deletion's marker stays: the account stays read-only and
-// the daily sweep keeps catching late writes (a presigned upload lives 900s).
+// the daily sweep keeps catching late writes (a presigned upload lives 600s).
 // Matches the "sign-in record removed within 30 days" promise in the UI copy.
 export const ACCOUNT_MARKER_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -80,8 +82,8 @@ const markComplete = async (bucket: R2Bucket, sub: string, now: Date): Promise<v
   );
 };
 
-// Redirect aliases this tour still owns. unpublish only removes the live slug and
-// leaves aliases to expire; an account delete removes them now.
+// Redirect aliases this tour still owns. unpublish releases them too; this keeps
+// the account delete from depending on it for that.
 const deleteAliases = async (bucket: R2Bucket, sub: string, tourId: string): Promise<string[]> => {
   const stored = await readPublishRecord(bucket, sub, tourId);
   const removed: string[] = [];
@@ -141,6 +143,7 @@ const deleteOwnedTour = async (
     // While tour.json exists a retry lists this tour again, so stats go before it.
     await deps.clearStats(tourId);
     await bucket.delete(tourKey(sub, tourId));
+    await bucket.delete(tourOwnerKey(tourId));
     // As tour delete does: a publish queued behind the first unpublish still saw
     // tour.json and republished. Any publish after this sees no tour.json and
     // unpublishes itself (publish.ts commit).
@@ -152,8 +155,9 @@ const deleteOwnedTour = async (
 };
 
 /**
- * Deletes every tour (with its slug, aliases, public bundle and stats) and every
- * pano (original, config, tiles) the owner has. Idempotent: each tour's or pano's
+ * Deletes every tour (with its slug, aliases, public bundle and stats), every
+ * pano (original, config, tiles) the owner has, and then upload-api's log of
+ * the upload URLs it issued them (upload-log/<owner>/). Idempotent: each tour's or pano's
  * own key or prefix goes last, so after an interruption it still lists and a
  * rerun finishes it. Adds what to purge from the CDN to `purge` as it goes, so a
  * partial run's purge isn't lost. With a `budget`, stops after that many tours
@@ -184,7 +188,10 @@ export const deleteAccountData = async (
       purge.prefixes.push(tilesPrefix(panoId));
     }
   });
-  return panos.length === panoIds.length;
+  if (panos.length < panoIds.length) return false;
+  // Empty objects, at most about a day's worth: not counted against the budget.
+  await deletePrefix(bucket, userUploadLogPrefix(sub));
+  return true;
 };
 
 export type AccountDeleteResult = { status: 'deleted' | 'pending'; purge: CdnPurge };
@@ -212,7 +219,7 @@ export const deleteAccount = async (
 
 // One cheap LIST per prefix: whether anything is left (a late upload, say).
 const hasData = async (bucket: R2Bucket, sub: string): Promise<boolean> => {
-  for (const prefix of [userToursPrefix(sub), userPanosPrefix(sub)]) {
+  for (const prefix of [userToursPrefix(sub), userPanosPrefix(sub), userUploadLogPrefix(sub)]) {
     if ((await bucket.list({ prefix, limit: 1 })).objects.length > 0) return true;
   }
   return false;

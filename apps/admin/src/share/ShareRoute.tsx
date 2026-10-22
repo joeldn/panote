@@ -1,10 +1,16 @@
+import type { TourPublishState } from '@internal/contracts';
 import { ShareModal, type SharePano, type ShareTab, type Visibility } from '@internal/ui';
 import { isAuthError, publishErrorOf, type PublishError } from '@internal/web-kit';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router';
 
 import { useAdminApi } from '../admin-api.js';
 import { useConfig } from '../config-context.js';
+
+/** What the editor under this route passes down, so it follows sharing changed here. */
+export interface ShareOutletContext {
+  onSharingChange: (publish: TourPublishState | null) => void;
+}
 
 interface Published {
   slug: string;
@@ -50,9 +56,14 @@ function publishMessage(err: PublishError, panos: SharePano[]): string {
     case 'conflict':
       return 'This tour’s sharing changed somewhere else just now. Try again.';
     case 'not-published':
+    case 'sharing-stopped':
       return 'This tour isn’t live any more. Close and reopen Share to publish it again.';
     case 'not-found':
       return 'This tour no longer exists.';
+    case 'too-many-renames':
+      return 'This tour’s link has changed too many times recently. Try again later.';
+    case 'rate-limited':
+      return 'Too many requests. Wait a minute and try again.';
     case 'unprocessable': {
       if (err.scenes.length === 0) return 'Add a pano to this tour before publishing it.';
       const name = (id: string) => panos.find((p) => p.id === id)?.name ?? id;
@@ -61,6 +72,12 @@ function publishMessage(err: PublishError, panos: SharePano[]): string {
     }
   }
 }
+
+const stateOf = ({ slug, visibility, publishedAt }: TourPublishState): TourPublishState => ({
+  slug,
+  visibility,
+  publishedAt,
+});
 
 const loadError = (e: unknown): string =>
   isAuthError(e) ? 'Sign in again to share this tour.' : 'Couldn’t load this tour. Try again.';
@@ -75,6 +92,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [notice, setNotice] = useState<ReactNode>(null);
   const [slugRequired, setSlugRequired] = useState(false);
+  const editor = useOutletContext<ShareOutletContext | undefined>();
 
   useEffect(() => {
     let live = true;
@@ -148,6 +166,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
       } else {
         const res = await api.publishTour(tourId, { slug });
         setPublish({ slug: res.slug, visibility: res.visibility });
+        editor?.onSharingChange(stateOf(res));
         setSlugRequired(false);
         setNotice(null);
       }
@@ -173,6 +192,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
     try {
       const res = await api.publishTour(tourId);
       setPublish({ slug: res.slug, visibility: res.visibility });
+      editor?.onSharingChange(stateOf(res));
     } catch (e) {
       const err = publishErrorOf(e);
       if (err?.kind === 'slug-lost' || err?.kind === 'slug-taken') {
@@ -182,6 +202,18 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
       }
       throw asUserError(e);
     }
+  };
+
+  const onStopSharing = async () => {
+    try {
+      await api.unpublishTour(tourId);
+    } catch (e) {
+      throw asUserError(e);
+    }
+    setState((s) => (s.status === 'ready' ? { ...s, tour: { ...s.tour, publish: null } } : s));
+    setSlugRequired(false);
+    setNotice(null);
+    editor?.onSharingChange(null);
   };
 
   const requested = search.get('pano');
@@ -208,6 +240,7 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
       onCommitSlug={onCommitSlug}
       onVisibilityChange={onVisibilityChange}
       onPublish={onPublish}
+      onStopSharing={onStopSharing}
     />
   );
 }

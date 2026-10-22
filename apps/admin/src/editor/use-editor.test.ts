@@ -358,3 +358,108 @@ describe('useEditor autoRepublish', () => {
     expect(publishTour).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useEditor and a tour whose owner stopped sharing', () => {
+  const live = { slug: 's', visibility: 'unlisted' as const, publishedAt: 'x' };
+  const stopped = new ApiError(409, { error: 'sharing stopped' });
+
+  const setup = (publishTour: EditorApi['publishTour'], publish: typeof live | null = live) => {
+    const res = tourRes('t1', ['p1']);
+    const api = {
+      getTourWithConfigs: async () => ({ ...res, data: { ...res.data, publish } }),
+      putTour: async () => ({ etag: 't2' }),
+      publishTour,
+    } as unknown as EditorApi;
+    return renderHook(() => useEditor(api, 'tour-1', 'user-1', null));
+  };
+
+  it('Save asks for an after-Save publish, and a refusal leaves the tour offline', async () => {
+    const publishTour = vi.fn().mockRejectedValue(stopped);
+    const { result } = setup(publishTour);
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    expect(result.current.publish).toEqual(live);
+    act(() => result.current.dispatch({ type: 'tour/title', title: 'Renamed' }));
+    await act(() => result.current.save());
+
+    expect(publishTour).toHaveBeenCalledWith('tour-1', { afterSave: true });
+    expect(result.current.publish).toBeNull();
+    expect(result.current.dirty).toEqual([]);
+    // It was live as far as this editor knew: say why the link didn't update.
+    const notice = result.current.notices.find((n) => n.id === 'publish');
+    expect(notice?.text).toMatch(/Sharing is off/);
+    expect(notice?.tone).toBe('info');
+  });
+
+  it('says nothing when the editor already knew it was offline', async () => {
+    const publishTour = vi.fn().mockRejectedValue(stopped);
+    const { result } = setup(publishTour, null);
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    act(() => result.current.dispatch({ type: 'tour/title', title: 'Renamed' }));
+    await act(() => result.current.save());
+    expect(result.current.notices.find((n) => n.id === 'publish')).toBeUndefined();
+  });
+
+  it('follows the share modal: stopping and sharing again update the publish state', async () => {
+    const { result } = setup(vi.fn());
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    act(() => result.current.setShared(null));
+    expect(result.current.publish).toBeNull();
+    act(() => result.current.setShared({ ...live, slug: 'back' }));
+    expect(result.current.publish).toEqual({ ...live, slug: 'back' });
+  });
+});
+
+describe('useEditor save after a 429 partway', () => {
+  it('keeps the refused docs dirty, and Save again sends only those and completes', async () => {
+    const rateLimited = new ApiError(429, { error: 'rate limited' });
+    const putPanoConfig = vi
+      .fn()
+      .mockResolvedValueOnce({ etag: 'c-pano-1-v2' })
+      .mockRejectedValueOnce(rateLimited)
+      .mockResolvedValueOnce({ etag: 'c-pano-2-v2' });
+    const putTour = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimited)
+      .mockResolvedValueOnce({ etag: 't2' });
+    const publishTour = vi.fn(async () => ({
+      slug: 's',
+      visibility: 'unlisted',
+      publishedAt: 'x',
+    }));
+    const api = {
+      getTourWithConfigs: async () => tourRes('t1', ['pano-1', 'pano-2']),
+      putPanoConfig,
+      putTour,
+      publishTour,
+    } as unknown as EditorApi;
+
+    const { result } = renderHook(() => useEditor(api, 'tour-1', 'user-1', null));
+    await waitFor(() => expect(result.current.load.status).toBe('ready'));
+    act(() => {
+      result.current.dispatch({ type: 'scene/title', panoId: 'pano-1', title: 'One' });
+      result.current.dispatch({ type: 'scene/title', panoId: 'pano-2', title: 'Two' });
+      result.current.dispatch({ type: 'tour/title', title: 'Renamed' });
+    });
+    await act(() => result.current.save());
+    // pano-1 landed; pano-2 and the tour were refused and stay dirty. Nothing published.
+    expect(putPanoConfig).toHaveBeenCalledTimes(2);
+    expect(publishTour).not.toHaveBeenCalled();
+    expect(result.current.conflicts).toEqual([]);
+    expect([...result.current.dirty].sort()).toEqual(['pano:pano-2', 'tour'].sort());
+
+    await act(() => result.current.save());
+    expect(putPanoConfig).toHaveBeenCalledTimes(3);
+    expect(putPanoConfig).toHaveBeenLastCalledWith(
+      'pano-2',
+      expect.objectContaining({ title: 'Two' }),
+      'c-pano-2',
+    );
+    expect(putTour).toHaveBeenLastCalledWith(
+      'tour-1',
+      expect.objectContaining({ title: 'Renamed' }),
+      't1',
+    );
+    expect(result.current.dirty).toEqual([]);
+    expect(publishTour).toHaveBeenCalledTimes(1);
+  });
+});

@@ -27,6 +27,13 @@ export interface R2S3Client {
        * byte-for-byte (e.g. lowercase `image/png`, no `; charset=...`) or R2 403s.
        */
       headers?: Record<string, string> | undefined;
+      /**
+       * The body's exact byte length, signed as `content-length`. A browser sends
+       * Content-Length itself (a Blob's size), so the PUT must carry exactly this
+       * many bytes for the signature to match - if R2 enforces signed
+       * content-length on a presigned PUT, which is unverified (docs/deploy.md).
+       */
+      contentLength?: number | undefined;
     },
   ): Promise<string>;
   /** Raw GET. The caller checks `res.ok` and reads the body it wants. */
@@ -146,12 +153,24 @@ export const createR2S3Client = (config: R2S3Config): R2S3Client => {
     async presignPut(key, opts) {
       const expiresInSeconds = opts?.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRY_SECONDS;
       const endpoint = `${base}/${key}?X-Amz-Expires=${expiresInSeconds}`;
-      // allHeaders: aws4fetch excludes content-type from SignedHeaders by
-      // default (it assumes an unknown-at-sign-time streamed body).
+      const contentLength = opts?.contentLength;
+      if (
+        contentLength !== undefined &&
+        (!Number.isSafeInteger(contentLength) || contentLength < 0)
+      ) {
+        throw new Error('contentLength must be a non-negative integer');
+      }
+      const headers = {
+        ...opts?.headers,
+        ...(contentLength === undefined ? {} : { 'content-length': String(contentLength) }),
+      };
+      const pinned = Object.keys(headers).length > 0;
+      // allHeaders: aws4fetch excludes content-type and content-length from
+      // SignedHeaders by default (it assumes an unknown-at-sign-time streamed body).
       const signed = await aws.sign(endpoint, {
         method: 'PUT',
-        ...(opts?.headers ? { headers: opts.headers } : {}),
-        aws: { signQuery: true, allHeaders: Boolean(opts?.headers) },
+        ...(pinned ? { headers } : {}),
+        aws: { signQuery: true, allHeaders: pinned },
       });
       return signed.url;
     },

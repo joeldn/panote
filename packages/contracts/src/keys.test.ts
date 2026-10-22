@@ -2,12 +2,20 @@ import { describe, it, expect } from 'vitest';
 import {
   accountDeletionKey,
   accountDisabledKey,
+  QUARANTINE_ROOT,
+  tourOwnerKey,
+  uploadLogKey,
+  uploadLogTime,
+  userUploadLogPrefix,
   configKey,
   deletingKey,
   originalKey,
   manifestKey,
   previewKey,
   ogKey,
+  TILE_GC_ROOT,
+  tileGcKey,
+  tileGcPrefix,
   userPanosPrefix,
   tourKey,
   panoPrefix,
@@ -40,6 +48,12 @@ describe('keys', () => {
 
   it('builds an account deletion marker key under accounts/, owner encoded', () => {
     expect(accountDeletionKey('auth0|abc')).toBe(`accounts/${encodeId('auth0|abc')}/deletion.json`);
+  });
+
+  it('tourOwnerKey is owner-free and private (outside tiles/, pub/, slugs/)', () => {
+    expect(tourOwnerKey('tour-1')).toBe('tour-owners/tour-1.json');
+    expect(() => tourOwnerKey('a/b')).toThrow(/tourId must match/);
+    expect(QUARANTINE_ROOT).toBe('quarantine/');
   });
 
   it('accountDisabledKey sits next to the deletion marker, owner encoded', () => {
@@ -172,6 +186,18 @@ describe('keys', () => {
       expect(() => ogKey('a/b', 't1-abc123')).toThrow(/panoId must match/);
       expect(() => ogKey(panoId, 'v/1')).toThrow(/version must match/);
     });
+
+    it('tileGcKey sits outside tiles/, so the CDN never serves a record', () => {
+      expect(tileGcKey(panoId, 't1-abc123')).toBe(`tile-gc/${panoId}/t1-abc123.json`);
+      expect(tileGcKey(panoId, 't1-abc123').startsWith(TILES_ROOT)).toBe(false);
+      expect(tileGcKey(panoId, 't1-abc123').startsWith(TILE_GC_ROOT)).toBe(true);
+      expect(tileGcKey(panoId, 't1-abc123').startsWith(tileGcPrefix(panoId))).toBe(true);
+    });
+
+    it('tileGcKey throws on an invalid panoId or version', () => {
+      expect(() => tileGcKey('a/b', 't1-abc123')).toThrow(/panoId must match/);
+      expect(() => tileGcKey(panoId, 'v/1')).toThrow(/version must match/);
+    });
   });
 
   // The DLQ consumer only has the already-encoded owner segment, not the raw
@@ -248,5 +274,36 @@ describe('keys', () => {
         /panoId segment/,
       );
     });
+  });
+});
+
+describe('upload log keys', () => {
+  const at = new Date('2026-10-22T09:05:03.042Z');
+
+  it('sits under upload-log/<owner>/, outside panos/, owner encoded', () => {
+    expect(userUploadLogPrefix('auth0|abc')).toBe(`upload-log/${encodeId('auth0|abc')}/`);
+    expect(uploadLogKey('auth0|abc', at, 'p1')).toBe(
+      `upload-log/${encodeId('auth0|abc')}/20261022T090503042Z-p1`,
+    );
+  });
+
+  it('has no character the S3 and binding paths could spell differently', () => {
+    expect(uploadLogKey('auth0|abc', at, 'p1')).toMatch(/^[A-Za-z0-9_/-]+$/);
+  });
+
+  it('reads the issue time back from the name', () => {
+    const key = uploadLogKey('auth0|abc', at, 'a-uuid-like-id');
+    expect(uploadLogTime(key.slice(userUploadLogPrefix('auth0|abc').length))).toBe(at.getTime());
+  });
+
+  it.each(['', 'nonsense', '2026-10-22T09:05:03.042Z-p1', '20261022T0905Z-p1'])(
+    'a malformed name (%j) has no time',
+    (name) => {
+      expect(uploadLogTime(name)).toBeNaN();
+    },
+  );
+
+  it('refuses a panoId outside PANO_PATTERN', () => {
+    expect(() => uploadLogKey('auth0|abc', at, 'a/b')).toThrow();
   });
 });

@@ -326,6 +326,17 @@
   border: 0;
   background: var(--ink-09);
 }
+.pn-share__stop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pn-share__stop-text {
+  margin: 0;
+  font: 400 12.5px/1.45 var(--fbody);
+  color: var(--ink-55);
+}
 .pn-share__steps {
   display: flex;
   flex-direction: column;

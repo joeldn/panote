@@ -86,6 +86,26 @@ describe('createAuth', () => {
     await expect(auth.signIn({ connection: 'apple' })).rejects.toThrow(/not enabled/);
   });
 
+  it('exposes every configured provider, and signs in with any of them', async () => {
+    const client = fakeClient();
+    const auth = createAuth(
+      { ...config, connections: ['google-oauth2', 'apple', 'windowslive', 'facebook'] },
+      { redirectUri: CB, createClient: async () => client },
+    );
+    expect(auth.connections.map((c) => [c.id, c.label])).toEqual([
+      ['google-oauth2', 'Google'],
+      ['apple', 'Apple'],
+      ['windowslive', 'Microsoft'],
+      ['facebook', 'Facebook'],
+    ]);
+    await auth.signIn({ connection: 'windowslive' });
+    expect(client.loginWithRedirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorizationParams: { connection: 'windowslive', redirect_uri: CB },
+      }),
+    );
+  });
+
   it('handleCallback returns the stored path', async () => {
     const auth = createAuth(config, { redirectUri: CB, createClient: async () => fakeClient() });
     await expect(

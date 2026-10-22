@@ -1,3 +1,4 @@
+import { MAX_TOURS_PER_OWNER } from '@internal/contracts';
 import type { z } from 'zod';
 
 import { CONTACT_EMAIL } from '../contact.js';
@@ -56,6 +57,15 @@ function errorMessage(status: number, body: unknown): string {
     if (status === 403 && body.error === 'storage limit reached') {
       return 'This account has reached its storage limit.';
     }
+    if (status === 403 && body.error === 'daily upload limit reached') {
+      return 'This account has reached its daily upload limit. Try again later today or tomorrow.';
+    }
+    // admin-api's per-owner tour cap (MAX_TOURS_PER_OWNER).
+    if (status === 403 && body.error === 'tour limit reached') {
+      return `This account has reached its limit of ${MAX_TOURS_PER_OWNER} tours.`;
+    }
+    // admin-api refuses a config for a pano that was never uploaded.
+    if (status === 404 && body.error === 'pano not found') return 'This pano no longer exists.';
     if (status === 429) return 'Too many requests. Wait a minute and try again.';
     return `${status}: ${body.error}`;
   }

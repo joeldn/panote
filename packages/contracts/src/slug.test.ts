@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { pubTourKey, publishKey, slugKey, encodeId, SLUGS_ROOT, storedSlugKey } from './keys.js';
+import {
+  pubTourKey,
+  publishKey,
+  sharingStoppedKey,
+  slugKey,
+  encodeId,
+  SLUGS_ROOT,
+  storedSlugKey,
+} from './keys.js';
 import { PublishedTourSchema, SlugRecordSchema, SlugSchema } from './publish.js';
 import {
   checkSlug,
@@ -45,6 +53,33 @@ describe('checkSlug', () => {
       else expect(checkSlug(r).ok).toBe(false);
     }
     expect(checkSlug('admin')).toEqual({ ok: false, reason: 'reserved' });
+  });
+
+  it('reserves brand and sign-in look-alikes, but not ordinary words that share a start', () => {
+    for (const s of [
+      'support',
+      'abuse',
+      'security',
+      'sign-in',
+      'panote-team',
+      'panotesupport',
+      'login-help',
+      'log-in',
+      'signin-now',
+    ]) {
+      expect(checkSlug(s)).toEqual({ ok: false, reason: 'reserved' });
+    }
+    for (const s of [
+      'signing-day',
+      'logins-and-logs',
+      'my-panote-tour',
+      'apple',
+      'google',
+      'contact',
+      'register',
+    ]) {
+      expect(checkSlug(s)).toEqual({ ok: true });
+    }
   });
 
   it('SlugSchema reports the reason', () => {
@@ -93,6 +128,9 @@ describe('share-link keys', () => {
 
   it('builds the private publish sidecar under the encoded owner', () => {
     expect(publishKey('auth0|abc', 't1')).toBe(`tours/${encodeId('auth0|abc')}/t1/publish.json`);
+    expect(sharingStoppedKey('auth0|abc', 't1')).toBe(
+      `tours/${encodeId('auth0|abc')}/t1/sharing-stopped.json`,
+    );
   });
 
   it('builds a stored-slug key without re-validating, but refuses traversal', () => {

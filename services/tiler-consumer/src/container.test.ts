@@ -1,5 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { manifestKey, tileFailedKeyFromOriginalKey, tileVersionPrefix } from '@internal/contracts';
+import {
+  manifestKey,
+  tileFailedKeyFromOriginalKey,
+  tileGcKey,
+  tilesPrefix,
+  tileVersionPrefix,
+} from '@internal/contracts';
 
 /**
  * Exercises container.ts's actual `/tile` handler, not just the
@@ -26,6 +32,7 @@ const r2GetMock = vi.fn();
 const r2PutMock = vi.fn(async () => {});
 const r2HeadMock = vi.fn(async () => ({ ok: true, status: 200, etag: '"abc123"' }));
 const r2DeleteMock = vi.fn(async () => {});
+const r2ListPrefixesMock = vi.fn(async (_prefix: string) => [] as string[]);
 const mkdtempMock = vi.fn(async () => '/tmp/pano-test');
 const readdirMock = vi.fn(async () => [] as never[]);
 const readFileMock = vi.fn(async () => new Uint8Array());
@@ -61,6 +68,7 @@ vi.mock('@internal/worker-kit/r2-s3', () => ({
     put: r2PutMock,
     head: r2HeadMock,
     deleteObject: r2DeleteMock,
+    listPrefixes: r2ListPrefixesMock,
   }),
 }));
 
@@ -134,6 +142,8 @@ afterEach(() => {
   r2DeleteMock.mockResolvedValue(undefined);
   r2PutMock.mockReset();
   r2PutMock.mockResolvedValue(undefined);
+  r2ListPrefixesMock.mockReset();
+  r2ListPrefixesMock.mockResolvedValue([]);
   // A custom implementation from an ordering test must not leak into later
   // tests, which assume uploadDir is a plain no-op.
   uploadDirMock.mockReset();
@@ -594,6 +604,83 @@ describe('post-PUT re-check after a successful manifest write', () => {
     expect(res.status).toBe(500);
     expect(res.body).toContain('put boom');
     expect(r2HeadMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('superseded version dirs after a confirmed swap', () => {
+  const gcPuts = (): string[] =>
+    (r2PutMock.mock.calls as unknown as Array<[string]>)
+      .map(([k]) => k)
+      .filter((k) => k.startsWith('tile-gc/'));
+
+  it('records the older dirs for the sweep, never the new one, and deletes no tiles itself', async () => {
+    const panoId = 'p-gc-ok';
+    setupManifestWritten(panoId);
+    r2ListPrefixesMock.mockResolvedValue([
+      `${tilesPrefix(panoId)}t1-older/`,
+      `${tilesPrefix(panoId)}${version}/`,
+    ]);
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(200);
+    expect(r2ListPrefixesMock).toHaveBeenCalledWith(tilesPrefix(panoId));
+    expect(gcPuts()).toEqual([tileGcKey(panoId, 't1-older')]);
+    const [, body, opts] = (
+      r2PutMock.mock.calls as unknown as Array<[string, string, object]>
+    ).find(([k]) => k === tileGcKey(panoId, 't1-older'))!;
+    expect(JSON.parse(body)).toMatchObject({
+      originalKey: `panos/abc/${panoId}/original`,
+      tilerVersion: MOCK_TILER_OUTPUT_VERSION,
+    });
+    // An overwrite, so the record's time follows this swap.
+    expect(opts).not.toHaveProperty('ifNoneMatch');
+    // Only the marker clear: no tile is deleted on the swap itself.
+    expect(r2DeleteMock).toHaveBeenCalledTimes(1);
+    expect(r2DeleteMock).toHaveBeenCalledWith(
+      tileFailedKeyFromOriginalKey(`panos/abc/${panoId}/original`),
+    );
+  });
+
+  it('records nothing when the post-PUT HEAD finds a newer original (the job retries instead)', async () => {
+    const panoId = 'p-gc-superseded';
+    setupManifestWritten(panoId);
+    r2ListPrefixesMock.mockResolvedValue([`${tilesPrefix(panoId)}t1-older/`]);
+    r2HeadMock
+      .mockResolvedValueOnce({ ok: true, status: 200, etag: '"abc123"' })
+      .mockResolvedValueOnce({ ok: true, status: 200, etag: '"newer"' });
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(500);
+    expect(r2ListPrefixesMock).not.toHaveBeenCalled();
+    expect(gcPuts()).toEqual([]);
+  });
+
+  it('records nothing when the pre-swap HEAD finds a newer original (no swap happened)', async () => {
+    const panoId = 'p-gc-preswap';
+    setupManifestWritten(panoId);
+    r2HeadMock.mockResolvedValue({ ok: true, status: 200, etag: '"newer"' });
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(200);
+    expect(r2ListPrefixesMock).not.toHaveBeenCalled();
+  });
+
+  it('still 200s, logging without the owner, when recording fails', async () => {
+    const panoId = 'p-gc-fails';
+    const key = `panos/${OWNER}/${panoId}/original`;
+    setupManifestWritten(panoId);
+    r2ListPrefixesMock.mockRejectedValue(new Error(`R2 LIST ${key} -> 500`));
+    const spies = spyOnAllConsole();
+
+    const res = await postTile(JSON.stringify({ key }));
+
+    expect(res.status).toBe(200);
+    const logged = loggedText(spies);
+    expect(logged).toContain(`failed to record superseded versions pano=${panoId}`);
+    expect(logged).not.toContain(OWNER);
   });
 });
 

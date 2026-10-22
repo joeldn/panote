@@ -165,6 +165,7 @@ export const BRAND_ICONS = [
   'facebook-f',
   'google',
   'linkedin-in',
+  'microsoft',
   'whatsapp',
   'x-twitter',
 ] as const;

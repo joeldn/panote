@@ -6,7 +6,7 @@ import {
   tileFailedKeyFromOriginalKey,
 } from '@internal/contracts';
 import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
-import { writeFailureMarker } from './failure-marker.js';
+import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
 
 describe('writeFailureMarker', () => {
   it('writes { reason, at, originalEtag } at the sibling tile-failed key when the original exists', async () => {
@@ -414,5 +414,46 @@ describe('writeFailureMarker', () => {
       expect(text).toContain('pano=<unparsed-key>');
       expect(text).not.toContain(OWNER);
     });
+  });
+});
+
+describe('deleteOversizedOriginal', () => {
+  it('deletes the original when it is unchanged and the pano has no manifest', async () => {
+    const key = 'panos/u1/oversize-del/original';
+    await env.BUCKET.put(key, 'x');
+    const head = await env.BUCKET.head(key);
+    expect(await deleteOversizedOriginal(env.BUCKET, key, `"${head!.etag}"`)).toBe('deleted');
+    expect(await env.BUCKET.head(key)).toBeNull();
+  });
+
+  it('keeps it when the pano already has a manifest', async () => {
+    const key = 'panos/u1/oversize-live/original';
+    await env.BUCKET.put(key, 'x');
+    await env.BUCKET.put(manifestKey('oversize-live'), '{}');
+    const head = await env.BUCKET.head(key);
+    expect(await deleteOversizedOriginal(env.BUCKET, key, head!.etag)).toBe('kept-live-pano');
+    expect(await env.BUCKET.head(key)).not.toBeNull();
+  });
+
+  it.each([
+    ['the etag changed', 'some-other-etag'],
+    ['the event carried no etag', undefined],
+  ])('skips when %s', async (_label, etag) => {
+    const key = 'panos/u1/oversize-skip/original';
+    await env.BUCKET.put(key, 'x');
+    expect(await deleteOversizedOriginal(env.BUCKET, key, etag)).toBe('skipped');
+    expect(await env.BUCKET.head(key)).not.toBeNull();
+  });
+
+  it('reports a failed R2 call without throwing', async () => {
+    const bucket = {
+      head: async () => {
+        throw new Error('R2 down');
+      },
+    } as unknown as R2Bucket;
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await deleteOversizedOriginal(bucket, 'panos/u1/oversize-err/original', 'e')).toBe(
+      'failed',
+    );
   });
 });
