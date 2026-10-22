@@ -211,4 +211,54 @@ export const exploreTourKey = (t: string): string =>
 export const exploreHiddenKey = (t: string): string =>
   `${EXPLORE_ROOT}hidden/${assertValidId(t, 'tourId')}.json`;
 
+// Nightly backup (admin-api's backup.ts): a private copy of every JSON document that
+// defines user content, under backup/<YYYY-MM-DD>/<its original key>, kept 30 days. Outside
+// the WAF's public prefixes (only tiles/, pub/ and slugs/ pass), and nothing but the backup
+// run and the operator restore route reads or writes it: account deletion, takedown and
+// the sweeps never list it, so a backup holds deleted data until its set is pruned.
+export const BACKUP_ROOT = 'backup/';
+export const BACKUP_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const assertBackupDate = (date: string): string => {
+  if (!BACKUP_DATE_PATTERN.test(date)) {
+    throw new Error(`backup date must be YYYY-MM-DD (got ${JSON.stringify(date)})`);
+  }
+  return date;
+};
+/** One day's set: backup/<YYYY-MM-DD>/. */
+export const backupSetPrefix = (date: string): string => `${BACKUP_ROOT}${assertBackupDate(date)}/`;
+/** Where `key` is copied in a day's set. */
+export const backupKey = (date: string, key: string): string => `${backupSetPrefix(date)}${key}`;
+// Written once a day's set holds every source object; a set without it is partial.
+// Never collides with a copy: every copied key has a root directory (tours/, panos/, ...).
+export const backupCompleteKey = (date: string): string => `${backupSetPrefix(date)}complete.json`;
+// The set being written and where it got to, so a run that stops resumes next run.
+export const BACKUP_PROGRESS_KEY = `${BACKUP_ROOT}progress.json`;
+
+/**
+ * What the backup copies: every key under `prefix` that `match` accepts. The JSON the app
+ * can't rebuild: tours and their publish records, each pano's config, the public bundles
+ * and share links, the tour-owner index, Explore, and the account markers. Not originals
+ * or tiles (large; tiles and manifests are rebuilt from originals by a re-tile), nor the
+ * derived or operational prefixes (tile-gc/, upload-log/, quarantine/, ops/).
+ */
+export const BACKUP_SOURCES: readonly { prefix: string; match: RegExp }[] = [
+  { prefix: ACCOUNTS_ROOT, match: /^accounts\/[^/]+\/(deletion|disabled)\.json$/ },
+  { prefix: EXPLORE_ROOT, match: /^explore\/(index|tours|hidden)\/[^/]+\.json$/ },
+  { prefix: 'panos/', match: /^panos\/[^/]+\/[^/]+\/config\.json$/ },
+  { prefix: 'pub/', match: /^pub\/.+\.json$/ },
+  { prefix: SLUGS_ROOT, match: /^slugs\/[^/]+\.json$/ },
+  { prefix: TOUR_OWNERS_ROOT, match: /^tour-owners\/[^/]+\.json$/ },
+  { prefix: 'tours/', match: /^tours\/[^/]+\/[^/]+\/[^/]+\.json$/ },
+];
+/** True for a key the backup copies. */
+export const isBackedUpKey = (key: string): boolean =>
+  BACKUP_SOURCES.some((s) => key.startsWith(s.prefix) && s.match.test(key));
+/**
+ * True for a backed-up key the operator restore may write back. Never the account markers:
+ * a restored deletion marker would delete the account again, a disabled one block it, and
+ * both are the operator's own call (delete-account.ts, takedown.ts).
+ */
+export const isRestorableKey = (key: string): boolean =>
+  isBackedUpKey(key) && !key.startsWith(ACCOUNTS_ROOT);
+
 export { PANO_PATTERN };
