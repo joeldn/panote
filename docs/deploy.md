@@ -672,8 +672,11 @@ for production.
 After a pano delete (tiles swept), a tour delete, or an unpublish, `admin-api` calls
 `POST /zones/<CDN_ZONE_ID>/purge_cache` from `ctx.waitUntil`, so the `204` never waits on it.
 A pano delete purges by prefix (`cdn.panote.dev/tiles/<panoId>/`); a tour delete batches every
-pano it removed into one prefix request (100 max each); unpublish purges `pub/tours/<tourId>.json`
-and the removed `slugs/<slug>.json` by URL. It's best-effort: a non-2xx, a network error or the 5s
+pano it removed into one prefix request (100 max each), and purges the tour's floor-plan images
+(`pub/plans/<tourId>/<planId>.<ext>`) by URL; unpublish purges `pub/tours/<tourId>.json`
+and the removed `slugs/<slug>.json` by URL. A tour save that leaves a plan image unused (replaced
+or removed, and no longer on the share link) deletes and purges it by URL too, once it is an hour
+old. It's best-effort: a non-2xx, a network error or the 5s
 timeout is logged (`cdn purge failed …`, status and Cloudflare error codes only) and nothing is
 retried. With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs
 `cdn purge skipped` and does nothing. Free plan limits are per account: 5 prefix requests/min,
@@ -1585,8 +1588,9 @@ Two ways to stop abuse, usually together:
   (`{ sub, tourId, action: "unpublish" | "delete" | "hide" | "unhide" }`, header `X-Operator-Token`) runs exactly what
   the owner's own unpublish or tour delete runs, through the tour's `TourPublisher`, with the CDN
   purge. `unpublish` removes the share link, bundle and slug and keeps the tour and panos (their
-  tiles under `tiles/<panoId>/` stay reachable by anyone who has the URL); `delete` also deletes the
-  tour and every pano no other tour of that owner uses, tiles included, purged from the CDN. Both
+  tiles under `tiles/<panoId>/` and the tour's floor-plan image under `pub/plans/<tourId>/` stay
+  reachable by anyone who has the URL); `delete` also deletes the tour, its floor-plan images and
+  every pano no other tour of that owner uses, tiles included, purged from the CDN. Both
   also take the tour off Explore, and so does every script mode built on them (`--quarantine`,
   `--all-tours`, `--close-account`'s sweep). `hide` only takes it off Explore and keeps it off
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is
@@ -1604,7 +1608,8 @@ Two ways to stop abuse, usually together:
 `services/admin-api/scripts/takedown.ts` does both, and on top of them:
 
 - **`--quarantine <caseId>`** keeps a private copy before anything is removed: the tour's
-  `tour.json` and `publish.json`, its public bundle, its slug records, and the original and
+  `tour.json` and `publish.json`, its public bundle, its slug records, the floor-plan image the
+  tour or its bundle names, and the original and
   `config.json` of every scene in the tour or its bundle, each copied byte for byte (content type
   kept, create-only so a rerun keeps the first copy) to `quarantine/<caseId>/<its key>`, plus
   `quarantine/<caseId>/case.json` (`{ caseId, sub, tourIds, keys, firstAt, lastAt, reason? }`).
