@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { json, manifest } from '../__fixtures__/helpers.js';
 import { ApiError, ApiSchemaError } from './http.js';
-import { createPublicApi, fetchManifest, refreshManifestCache } from './public.js';
+import { createPublicApi, exploreCoverUrl, fetchManifest, refreshManifestCache } from './public.js';
 
 describe('refreshManifestCache', () => {
   it('re-fetches the manifest with cache: reload and reads the whole body', async () => {
@@ -77,5 +77,55 @@ describe('createPublicApi', () => {
     const api = createPublicApi({ fetch });
     await expect(api.getStats('t1')).rejects.toBeInstanceOf(ApiSchemaError);
     await expect(api.getStats('a/b')).rejects.toThrow(TypeError);
+  });
+});
+
+describe('explore', () => {
+  const card = {
+    tourId: 't1',
+    slug: 'my-tour',
+    title: 'My tour',
+    sceneCount: 3,
+    cover: { panoId: 'p1', version: 't1-abc', image: 'og' as const },
+    publishedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+  };
+
+  it('GETs /api/explore, then the next page by cursor, and validates the page', async () => {
+    const fetch = vi.fn(async (_u: string, _i?: RequestInit) =>
+      json({ tours: [card], cursor: '8299999999999-t1' }),
+    );
+    const api = createPublicApi({ fetch, baseUrl: 'https://api.test/' });
+    const ac = new AbortController();
+    await expect(api.explore(null, { signal: ac.signal })).resolves.toEqual({
+      tours: [card],
+      cursor: '8299999999999-t1',
+    });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://api.test/api/explore');
+    expect(fetch.mock.calls[0]?.[1]?.signal).toBe(ac.signal);
+    await api.explore('8299999999999-t1');
+    expect(fetch.mock.calls[1]?.[0]).toBe('https://api.test/api/explore?cursor=8299999999999-t1');
+  });
+
+  it('refuses a malformed cursor before fetching, and a page that breaks the contract', async () => {
+    const fetch = vi.fn(async () => json({ tours: [{ ...card, sceneCount: -1 }], cursor: null }));
+    const api = createPublicApi({ fetch });
+    await expect(api.explore('../x')).rejects.toThrow(TypeError);
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(api.explore()).rejects.toBeInstanceOf(ApiSchemaError);
+  });
+
+  it('throws ApiError on a non-2xx, so a 429 reads as one', async () => {
+    const fetch = vi.fn(async () => json({ error: 'rate limited' }, 429));
+    await expect(createPublicApi({ fetch }).explore()).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('builds the cover URL from the CDN tiles root', () => {
+    expect(exploreCoverUrl('https://cdn.test/tiles/', card.cover)).toBe(
+      'https://cdn.test/tiles/p1/t1-abc/og.jpg',
+    );
+    expect(exploreCoverUrl('https://cdn.test/tiles/', { ...card.cover, image: 'preview' })).toBe(
+      'https://cdn.test/tiles/p1/t1-abc/preview.webp',
+    );
   });
 });
