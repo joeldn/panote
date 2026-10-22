@@ -1,17 +1,22 @@
 import { z } from 'zod';
 
 /**
- * Sign-in connections the UI knows how to render. Only connections listed in
- * `VITE_AUTH0_CONNECTIONS` *and* here are shown (Wave 6: Google only, Q2).
+ * Sign-in connections the UI knows how to render, keyed by Auth0 connection
+ * name, in the order the buttons appear. Only connections listed in
+ * `VITE_AUTH0_CONNECTIONS` *and* here are shown; each one must also exist and
+ * be enabled for the SPA in the Auth0 tenant (docs/deploy.md, "Auth0").
  */
 export const KNOWN_CONNECTIONS = {
   'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google' },
   apple: { label: 'Apple', icon: 'fa-brands fa-apple' },
+  windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft' },
   facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook' },
 } as const;
 export type ConnectionId = keyof typeof KNOWN_CONNECTIONS;
 
 const isKnownConnection = (c: string): c is ConnectionId => Object.hasOwn(KNOWN_CONNECTIONS, c);
+
+const CONNECTION_ORDER = Object.keys(KNOWN_CONNECTIONS) as ConnectionId[];
 
 // A placeholder value (`YOUR_…`) is allowed to parse so a production build
 // with no tenant yet still boots; `auth0.configured` is then false.
@@ -107,7 +112,8 @@ export function loadConfig(env: Record<string, unknown>): AppConfig {
       domain: e.VITE_AUTH0_DOMAIN,
       clientId: e.VITE_AUTH0_CLIENT_ID,
       audience: e.VITE_AUTH0_AUDIENCE,
-      connections: [...new Set(e.VITE_AUTH0_CONNECTIONS)],
+      // The env names which connections are on; KNOWN_CONNECTIONS fixes their order.
+      connections: CONNECTION_ORDER.filter((c) => e.VITE_AUTH0_CONNECTIONS.includes(c)),
       configured: !auth0Values.some((v) => PLACEHOLDER.test(v)),
     },
     showcaseSlug: e.VITE_SHOWCASE_SLUG,

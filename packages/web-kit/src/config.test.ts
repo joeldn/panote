@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ConfigError, loadConfig, tilesBaseUrl } from './config.js';
+import { ConfigError, KNOWN_CONNECTIONS, loadConfig, tilesBaseUrl } from './config.js';
 
 const env = {
   VITE_SITE_ORIGIN: 'https://panote.dev/',
@@ -28,6 +28,30 @@ describe('loadConfig', () => {
       VITE_AUTH0_CONNECTIONS: 'google-oauth2, github,apple,google-oauth2',
     });
     expect(c.auth0.connections).toEqual(['google-oauth2', 'apple']);
+  });
+
+  it('shows Google, Apple, Microsoft and Facebook in that order, whatever the env order', () => {
+    const c = loadConfig({
+      ...env,
+      VITE_AUTH0_CONNECTIONS: 'facebook,windowslive,github,apple,google-oauth2,facebook',
+    });
+    expect(c.auth0.connections).toEqual(['google-oauth2', 'apple', 'windowslive', 'facebook']);
+    expect(
+      loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'facebook, windowslive' }).auth0.connections,
+    ).toEqual(['windowslive', 'facebook']);
+  });
+
+  it('labels each known connection by its provider, with a Font Awesome brand icon', () => {
+    expect(KNOWN_CONNECTIONS).toEqual({
+      'google-oauth2': { label: 'Google', icon: 'fa-brands fa-google' },
+      apple: { label: 'Apple', icon: 'fa-brands fa-apple' },
+      windowslive: { label: 'Microsoft', icon: 'fa-brands fa-microsoft' },
+      facebook: { label: 'Facebook', icon: 'fa-brands fa-facebook' },
+    });
+  });
+
+  it('rejects a connection list with no known connection (GitHub is not one)', () => {
+    expect(() => loadConfig({ ...env, VITE_AUTH0_CONNECTIONS: 'github' })).toThrow(ConfigError);
   });
 
   it('flags YOUR_ placeholders as not configured', () => {
