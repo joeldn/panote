@@ -3,7 +3,14 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { ApiError } from '@internal/web-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { useEditor, type EditorApi } from './use-editor.js';
+import { DRAFT_MAX_AGE_MS, draftKey, writeDraft } from './draft.js';
+import { editorReducer, fromServer } from './model.js';
+import {
+  AUTOSAVE_DELAY_MS,
+  useEditor,
+  type EditorApi,
+  type EditorController,
+} from './use-editor.js';
 
 type TourRes = { status: 'ok'; data: TourWithConfigsOk };
 
@@ -461,5 +468,219 @@ describe('useEditor save after a 429 partway', () => {
     );
     expect(result.current.dirty).toEqual([]);
     expect(publishTour).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useEditor draft autosave', () => {
+  const USER = 'user-1';
+  const KEY = draftKey(USER, 'tour-1');
+
+  const memoryStorage = () => {
+    const map = new Map<string, string>();
+    return {
+      map,
+      getItem: vi.fn((k: string) => map.get(k) ?? null),
+      setItem: vi.fn((k: string, v: string) => void map.set(k, v)),
+      removeItem: vi.fn((k: string) => void map.delete(k)),
+    };
+  };
+  type MemoryStorage = ReturnType<typeof memoryStorage>;
+
+  const stored = (storage: MemoryStorage) => {
+    const raw = storage.map.get(KEY);
+    return raw ? (JSON.parse(raw) as { tour: { etag: string; doc: { title: string } } }) : null;
+  };
+
+  /** A draft of a renamed tour, taken against tour ETag `etag`. */
+  const parkDraft = (storage: MemoryStorage, etag = 't1', savedAt = new Date()) => {
+    const docs = editorReducer(fromServer(tourRes(etag, ['p1']).data), {
+      type: 'tour/title',
+      title: 'Draft title',
+    })!;
+    writeDraft(storage, USER, docs, savedAt);
+  };
+
+  const setup = async (storage: MemoryStorage, serverEtag = 't1') => {
+    const api = {
+      getTourWithConfigs: vi.fn(async () => tourRes(serverEtag, ['p1'])),
+      putTour: vi.fn(async () => ({ etag: 't9' })),
+      publishTour: vi.fn(async () => ({ slug: 's', visibility: 'unlisted', publishedAt: 'x' })),
+    };
+    const hook = renderHook(() => useEditor(api as unknown as EditorApi, 'tour-1', USER, storage));
+    await waitFor(() => expect(hook.result.current.load.status).toBe('ready'));
+    return { ...hook, api };
+  };
+
+  const rename = (r: { current: EditorController }, title: string) =>
+    act(() => r.current.dispatch({ type: 'tour/title', title }));
+
+  const setVisibility = (state: DocumentVisibilityState) =>
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setVisibility('visible');
+  });
+
+  it('writes the draft once, a second after the last edit', async () => {
+    const storage = memoryStorage();
+    const { result } = await setup(storage);
+    vi.useFakeTimers();
+    rename(result, 'One');
+    act(() => vi.advanceTimersByTime(AUTOSAVE_DELAY_MS - 100));
+    rename(result, 'Two');
+    act(() => vi.advanceTimersByTime(AUTOSAVE_DELAY_MS - 100));
+    expect(storage.setItem).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(100));
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+    expect(stored(storage)?.tour).toMatchObject({ etag: 't1', doc: { title: 'Two' } });
+  });
+
+  it('writes at once when the page is hidden or unloaded', async () => {
+    const storage = memoryStorage();
+    const { result } = await setup(storage);
+    rename(result, 'Hidden');
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(stored(storage)?.tour.doc.title).toBe('Hidden');
+
+    rename(result, 'Gone');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(stored(storage)?.tour.doc.title).toBe('Gone');
+  });
+
+  it('writes nothing while there are no unsaved edits', async () => {
+    const storage = memoryStorage();
+    await setup(storage);
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pagehide'));
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('restores a stored draft on load, says so, and keeps it stored until saved', async () => {
+    const storage = memoryStorage();
+    parkDraft(storage);
+    const { result } = await setup(storage);
+    expect(result.current.docs?.tour.current.title).toBe('Draft title');
+    expect(result.current.dirty).toEqual(['tour']);
+    expect(result.current.conflicts).toEqual([]);
+    expect(result.current.notices).toContainEqual(
+      expect.objectContaining({
+        id: 'draft',
+        action: 'discard-draft',
+        text: 'Restored your unsaved changes. Save to keep them.',
+      }),
+    );
+    expect(stored(storage)?.tour.doc.title).toBe('Draft title');
+  });
+
+  it('clears the draft after a successful save', async () => {
+    const storage = memoryStorage();
+    const { result, api } = await setup(storage);
+    rename(result, 'Saved title');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(stored(storage)).not.toBeNull();
+    await act(() => result.current.save());
+    expect(api.putTour).toHaveBeenCalled();
+    expect(storage.map.has(KEY)).toBe(false);
+  });
+
+  it('Discard drops the restored edits, reloads the saved tour and clears the draft', async () => {
+    const storage = memoryStorage();
+    parkDraft(storage);
+    const { result, api } = await setup(storage);
+    await act(() => result.current.discardDraft());
+    expect(api.getTourWithConfigs).toHaveBeenCalledTimes(2);
+    expect(result.current.docs?.tour.current.title).toBe('Town hall');
+    expect(result.current.dirty).toEqual([]);
+    expect(result.current.notices.find((n) => n.id === 'draft')).toBeUndefined();
+    expect(storage.map.has(KEY)).toBe(false);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(storage.map.has(KEY)).toBe(false);
+  });
+
+  it('Discard leaves alone a save that started while it fetched', async () => {
+    const storage = memoryStorage();
+    parkDraft(storage);
+    const { result, api } = await setup(storage);
+    const fetch = deferred<TourRes>();
+    api.getTourWithConfigs.mockImplementationOnce(() => fetch.promise);
+    const put = deferred<{ etag: string }>();
+    api.putTour.mockImplementationOnce(() => put.promise);
+    let discarding!: Promise<void>;
+    let saving!: Promise<void>;
+    act(() => {
+      discarding = result.current.discardDraft();
+      saving = result.current.save();
+    });
+    await act(async () => {
+      fetch.resolve(tourRes('t1', ['p1']));
+      await discarding;
+    });
+    // The pre-save copy didn't replace the edits being saved.
+    expect(result.current.docs?.tour.current.title).toBe('Draft title');
+    await act(async () => {
+      put.resolve({ etag: 't9' });
+      await saving;
+    });
+    expect(result.current.docs?.tour).toMatchObject({
+      etag: 't9',
+      current: { title: 'Draft title' },
+    });
+    expect(result.current.dirty).toEqual([]);
+  });
+
+  it('leaving without saving drops the draft and autosave stops until the next edit', async () => {
+    const storage = memoryStorage();
+    const { result } = await setup(storage);
+    rename(result, 'Abandoned');
+    window.dispatchEvent(new Event('pagehide'));
+    act(() => result.current.forgetDraft());
+    expect(storage.map.has(KEY)).toBe(false);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(storage.map.has(KEY)).toBe(false);
+    rename(result, 'Back again');
+    window.dispatchEvent(new Event('pagehide'));
+    expect(stored(storage)?.tour.doc.title).toBe('Back again');
+  });
+
+  it('drops a draft older than a week instead of restoring it', async () => {
+    const storage = memoryStorage();
+    parkDraft(storage, 't1', new Date(Date.now() - DRAFT_MAX_AGE_MS - 60_000));
+    const { result } = await setup(storage);
+    expect(result.current.docs?.tour.current.title).toBe('Town hall');
+    expect(result.current.notices).toEqual([]);
+    expect(storage.map.has(KEY)).toBe(false);
+  });
+
+  it('opens the conflict banner when the server copy changed since the draft', async () => {
+    const storage = memoryStorage();
+    parkDraft(storage, 't1');
+    const { result } = await setup(storage, 't2');
+    expect(result.current.docs?.tour.current.title).toBe('Draft title');
+    expect(result.current.conflicts).toEqual(['tour']);
+    const notice = result.current.notices.find((n) => n.id === 'draft');
+    expect(notice?.text).toBe(
+      'Restored your unsaved changes. This tour also changed elsewhere, so choose Reload or Overwrite above.',
+    );
+    // Save is blocked until the banner's Reload or Overwrite: nothing is overwritten.
+    await act(() => result.current.save());
+    expect(result.current.saving).toBe(false);
+    expect(result.current.dirty).toEqual(['tour']);
+  });
+
+  it('keeps editing when storage refuses every write', async () => {
+    const storage = memoryStorage();
+    storage.setItem.mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    const { result } = await setup(storage);
+    vi.useFakeTimers();
+    rename(result, 'Still editing');
+    act(() => vi.advanceTimersByTime(AUTOSAVE_DELAY_MS));
+    window.dispatchEvent(new Event('pagehide'));
+    expect(storage.setItem).toHaveBeenCalled();
+    expect(result.current.docs?.tour.current.title).toBe('Still editing');
   });
 });

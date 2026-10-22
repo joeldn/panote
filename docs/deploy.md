@@ -1508,12 +1508,21 @@ by a `429` keeps the refused documents unsaved, and pressing Save again sends ju
 `POST /api/tours/:id/like` now refuses (`400 {"error":"invalid X-Client-Id"}`) an anonymous
 `X-Client-Id` that isn't a lowercase v4 UUID (`CLIENT_ID_PATTERN` in `@internal/contracts`; the
 website mints `crypto.randomUUID()` and replaces a stored id that doesn't match). A signed-in like
-still dedupes by sub and ignores the header. It answers `404 {"error":"tour not found"}`, and
-creates no Durable Object or key, unless the tour's public bundle `pub/tours/<tourId>.json` exists:
-`public-api` has a read-only `BUCKET` binding to `pano-content(-dev)` for that one `HEAD`. Inside
-`TourStats`, one tour keeps at most `MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a
-new liker is neither counted nor stored, so storage per tour is bounded. Views and stats reads
-don't check the bundle (a view stores one counter per tourId); the per-IP limit is their brake.
+still dedupes by sub and ignores the header. Inside `TourStats`, one tour keeps at most
+`MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a new liker is neither counted nor
+stored, so storage per tour is bounded.
+
+Likes, views (`POST .../view`) and Insights events (`POST .../events`) only count for a published
+tour. Each answers `404 {"error":"tour not found"}`, and creates no Durable Object state and writes
+no Analytics Engine point, unless the tour's public bundle `pub/tours/<tourId>.json` exists:
+`public-api` has a read-only `BUCKET` binding to `pano-content(-dev)` for that `HEAD`. A yes is
+cached in the isolate for 30 s (`PUBLISHED_CACHE_MS`, `src/published.ts`, at most 1,000 tours), so
+a busy tour costs about one `HEAD` (an R2 Class B operation) per isolate per 30 s, and after an
+unpublish or a takedown its views, events and likes can still count for up to 30 s. A no is never
+cached: an unknown id costs a `HEAD` per request, braked by the per-IP limit, and a tour counts as
+soon as it is published. The website's view and events beacons ignore the `404`. Stats reads
+(`GET .../stats`) don't check the bundle: a read stores nothing (an unknown id reads zeros), and the
+admin dashboard reads the view counts of unpublished tours too.
 
 ### Owner quotas
 

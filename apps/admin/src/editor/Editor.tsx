@@ -902,6 +902,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           onDismiss={editor.dismiss}
           busy={editor.publishing}
           onRepublish={() => void editor.republish()}
+          onDiscardDraft={() => void editor.discardDraft()}
+          saving={editor.saving}
         />
       </div>
 
@@ -962,7 +964,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         body="Your unsaved changes to this tour will be lost."
         confirmLabel="Leave"
         cancelLabel="Stay"
-        onConfirm={() => blocker.proceed?.()}
+        onConfirm={() => {
+          editor.forgetDraft();
+          blocker.proceed?.();
+        }}
         onCancel={() => blocker.reset?.()}
       />
       {libraryOpen && (
