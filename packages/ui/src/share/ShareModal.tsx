@@ -429,7 +429,7 @@ function EmbedTab({
           title="Embed preview"
           src={src}
           height={height}
-          allow="fullscreen; xr-spatial-tracking"
+          allow="fullscreen"
           loading="lazy"
         />
       )}
