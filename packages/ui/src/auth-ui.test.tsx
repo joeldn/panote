@@ -64,7 +64,10 @@ describe('SignInModal', () => {
     expect(divider?.textContent).toBe('or');
     expect(divider!.compareDocumentPosition(buttons[2]!)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
     expect(divider!.compareDocumentPosition(emailBtn)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(screen.getByText('We’ll email you a one-time code.')).toBeTruthy();
+    const hint = screen.getByText('We’ll email you a one-time code.');
+    expect(hint.id).not.toBe('');
+    expect(emailBtn.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(buttons[0]!.hasAttribute('aria-describedby')).toBe(false);
     fireEvent.click(emailBtn);
     expect(onSignIn).toHaveBeenCalledWith('email');
     expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);

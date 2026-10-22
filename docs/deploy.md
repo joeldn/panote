@@ -393,24 +393,39 @@ is sent (the apps don't ask for the address themselves), and no password is ever
    Email Routing records (see "Email" below). Send a test from the Email Provider page, then sign
    in by email end to end.
 
-**Account linking (one Panote account per verified email).** Signing in with Google, with an
-email code, or with any other provider that confirms the same address lands in the same Panote
-account. The work is a post-login Action, kept as code in
-`packages/auth0-actions/src/link-accounts.cjs` (tests beside it). On each interactive login with
-a verified email it looks up the other Auth0 users with that email (Management API
-`users-by-email`), keeps those whose email is also verified and who are not blocked, and picks the
-oldest (`created_at`, then `user_id`) as the primary. If the primary is someone else, it links the
-current user into it (`POST /api/v2/users/{primary}/identities`) and calls
-`api.authentication.setPrimaryUser(primary)`, so the token's `sub` is the primary's. If the
-current user is the oldest it does nothing: a newer duplicate is linked the next time that one
-signs in. It skips refresh-token exchanges, users that already have linked identities (merging two
-primaries is an operator job), and any login whose email isn't verified, since linking on an
-unverified address would hand someone else's account to whoever claimed it. If anything fails it
-logs `[link-accounts] linking failed` and the login goes on unlinked; it never blocks a sign-in.
+**Account linking (one Panote account per verified email).** Signing in with Google, Apple,
+GitHub or an email code with the same verified address lands in the same Panote account. The
+work is a post-login Action, kept as code in `packages/auth0-actions/src/link-accounts.cjs` (tests
+beside it). Why it links automatically, against Auth0's advice to re-authenticate first, is in
+`docs/decisions.md` ("Account linking").
 
-Who won't be joined: an Apple user who chose *Hide My Email* (the private relay address matches
-nothing), and a Facebook user whose email Facebook doesn't report as verified. Both still sign in,
-as their own account.
+- **Trusted providers only.** `TRUSTED_PROVIDERS` in the Action is the one list: passwordless
+  `email` (the code proves the address), `google-oauth2`, `apple` and `github` (Auth0 passes on
+  GitHub's own verified flag, false for an unverified address). Both sides must qualify: the
+  current login's identity, and each candidate through an identity from a trusted provider that
+  carries the same verified email. Microsoft (`windowslive`), LinkedIn and Facebook users sign in
+  normally but are never joined, in either direction, until those providers are reviewed; adding
+  one is a code change to that list and a new paste of the Action.
+- **Who becomes the primary.** On each interactive login it looks up users with that email
+  (Management API `users-by-email`, asked for the address as given and in lower case, because the
+  lookup is case-sensitive and social connections keep the provider's casing), drops blocked users
+  and those without a qualifying identity, and picks the oldest (`created_at`, then `user_id`).
+  If that is someone else it links the current user into it
+  (`POST /api/v2/users/{primary}/identities`) and, once that call succeeds, calls
+  `api.authentication.setPrimaryUser(primary)`, so the token's `sub` is the primary's. If the
+  current user is the oldest it does nothing: a newer duplicate is linked the next time that one
+  signs in.
+- **Concurrent first logins.** A `400` or `409` from the link call means the picture went stale
+  (another login linked or created a user a moment ago): it looks the users up once more and
+  retries once.
+- **Never in the way.** It skips refresh-token exchanges and users that already have linked
+  identities (merging two primaries is an operator job). Every Management API call has a 5 s
+  timeout, a `401` drops the cached M2M token and retries once with a fresh one, and any failure
+  logs `[link-accounts] linking failed` and lets the login go on unlinked.
+
+Who won't be joined: Microsoft, LinkedIn and Facebook sign-ins (above), an Apple user who chose
+*Hide My Email* (the private relay address matches nothing), and anyone whose provider doesn't
+report the email as verified. They all still sign in, as their own account.
 
 Setting it up, once per tenant (**Needs you**, all in the Auth0 dashboard):
 

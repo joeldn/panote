@@ -7,7 +7,14 @@ import type * as Action from './link-accounts.cjs';
 // The Action is CommonJS on purpose (it is pasted into Auth0 as it is), so load it that way.
 const load = createRequire(import.meta.url);
 const action = load('./link-accounts.cjs') as typeof Action;
-const { choosePrimary, linkAccounts, managementClient, managementFromSecrets } = action;
+const {
+  ManagementError,
+  TRUSTED_PROVIDERS,
+  choosePrimary,
+  linkAccounts,
+  managementClient,
+  managementFromSecrets,
+} = action;
 
 type User = Parameters<typeof choosePrimary>[0];
 type Management = NonNullable<Parameters<typeof linkAccounts>[2]['management']>;
@@ -26,23 +33,31 @@ const user = (user_id: string, created_at: string, extra: Partial<User> = {}): U
   };
 };
 
-const google = user('google-oauth2|111', '2026-01-01T00:00:00.000Z');
-const emailUser = user('email|222', '2026-03-01T00:00:00.000Z');
-const github = user('github|333', '2026-05-01T00:00:00.000Z', {
-  identities: [{ provider: 'github', user_id: 333 }],
-});
-
 const without = (u: User, key: 'email' | 'email_verified' | 'created_at'): User => {
   const copy = { ...u };
   delete copy[key];
   return copy;
 };
 
+const google = user('google-oauth2|111', '2026-01-01T00:00:00.000Z');
+const emailUser = user('email|222', '2026-03-01T00:00:00.000Z');
+const github = user('github|333', '2026-05-01T00:00:00.000Z', {
+  identities: [{ provider: 'github', user_id: 333 }],
+});
+
 const fakeApi = () => ({ authentication: { setPrimaryUser: vi.fn() } });
 
-const fakeManagement = (found: User[]): Management & { link: ReturnType<typeof vi.fn> } => ({
+const fakeManagement = (
+  found: User[],
+): Management & { link: ReturnType<typeof vi.fn>; usersByEmail: ReturnType<typeof vi.fn> } => ({
   usersByEmail: vi.fn(async () => found),
   link: vi.fn(async () => {}),
+});
+
+describe('TRUSTED_PROVIDERS', () => {
+  it('trusts passwordless email, Google, Apple and GitHub only', () => {
+    expect([...TRUSTED_PROVIDERS].sort()).toEqual(['apple', 'email', 'github', 'google-oauth2']);
+  });
 });
 
 describe('choosePrimary', () => {
@@ -59,8 +74,8 @@ describe('choosePrimary', () => {
     const others = [
       { ...google, email_verified: false },
       { ...user('apple|9', '2025-01-01T00:00:00.000Z'), blocked: true },
-      user('windowslive|8', '2025-02-01T00:00:00.000Z', { email: 'someone@else.example' }),
-      without(user('facebook|7', '2025-03-01T00:00:00.000Z'), 'email_verified'),
+      user('google-oauth2|8', '2025-02-01T00:00:00.000Z', { email: 'someone@else.example' }),
+      without(user('github|7', '2025-03-01T00:00:00.000Z'), 'email_verified'),
     ];
     expect(choosePrimary(emailUser, others)).toBeNull();
   });
@@ -70,6 +85,39 @@ describe('choosePrimary', () => {
     expect(choosePrimary(without(github, 'email'), [google])).toBeNull();
   });
 
+  it.each(['windowslive', 'linkedin', 'facebook', 'auth0'])(
+    'never joins a %s sign-in, as the current user or as the primary',
+    (provider) => {
+      const untrusted = user(`${provider}|5`, '2025-01-01T00:00:00.000Z');
+      const newer = user(`${provider}|6`, '2027-01-01T00:00:00.000Z');
+      expect(choosePrimary(emailUser, [untrusted])).toBeNull();
+      expect(choosePrimary(newer, [google])).toBeNull();
+    },
+  );
+
+  it('counts a primary through a linked trusted identity carrying the verified email', () => {
+    // An old Microsoft user that later linked a Google identity with the same address.
+    const linked = user('windowslive|1', '2025-01-01T00:00:00.000Z', {
+      identities: [
+        { provider: 'windowslive', user_id: '1' },
+        {
+          provider: 'google-oauth2',
+          user_id: '9',
+          profileData: { email: EMAIL, email_verified: true },
+        },
+      ],
+    });
+    expect(choosePrimary(emailUser, [linked])).toBe('windowslive|1');
+    const unverifiedLink = {
+      ...linked,
+      identities: [
+        { provider: 'windowslive', user_id: '1' },
+        { provider: 'google-oauth2', user_id: '9', profileData: { email: EMAIL } },
+      ],
+    };
+    expect(choosePrimary(emailUser, [unverifiedLink])).toBeNull();
+  });
+
   it('matches the email case-insensitively', () => {
     expect(choosePrimary(emailUser, [{ ...google, email: 'Maya@Example.com ' }])).toBe(
       'google-oauth2|111',
@@ -77,10 +125,10 @@ describe('choosePrimary', () => {
   });
 
   it('is deterministic: same created_at breaks on user_id, a missing created_at sorts last', () => {
-    const a = user('linkedin|a', '2026-02-01T00:00:00.000Z');
+    const a = user('apple|a', '2026-02-01T00:00:00.000Z');
     const b = user('github|b', '2026-02-01T00:00:00.000Z');
-    expect(choosePrimary(a, [b])).toBe('github|b');
-    expect(choosePrimary(b, [a])).toBeNull();
+    expect(choosePrimary(b, [a])).toBe('apple|a');
+    expect(choosePrimary(a, [b])).toBeNull();
     const undated = without(user('apple|0', ''), 'created_at');
     expect(choosePrimary(undated, [github])).toBe('github|333');
     expect(choosePrimary(github, [undated])).toBeNull();
@@ -106,15 +154,51 @@ describe('linkAccounts', () => {
   it('sets the primary user only after the link succeeded', async () => {
     const api = fakeApi();
     const management = fakeManagement([google]);
-    management.link.mockRejectedValueOnce(new Error('management API POST failed: 400'));
+    management.link.mockRejectedValueOnce(new Error('network down'));
     const log = vi.fn();
     await expect(linkAccounts({ user: emailUser }, api, { management, log })).resolves.toBeNull();
     expect(api.authentication.setPrimaryUser).not.toHaveBeenCalled();
+    expect(management.link).toHaveBeenCalledTimes(1);
     expect(log).toHaveBeenCalledWith(
       '[link-accounts]',
       'linking failed, signing in unlinked:',
-      'management API POST failed: 400',
+      'network down',
     );
+  });
+
+  it.each([400, 409])(
+    'on a %i from the link call, looks again once and links into the fresh primary',
+    async (status) => {
+      const api = fakeApi();
+      // A concurrent first login: the first lookup saw a primary that was itself just linked away.
+      const gone = user('github|1', '2025-12-01T00:00:00.000Z');
+      const management = fakeManagement([]);
+      management.usersByEmail.mockResolvedValueOnce([gone, google]).mockResolvedValueOnce([google]);
+      management.link.mockRejectedValueOnce(new ManagementError('stale', status));
+      const result = await linkAccounts({ user: emailUser }, api, { management, log: vi.fn() });
+      expect(result).toBe('google-oauth2|111');
+      expect(management.usersByEmail).toHaveBeenCalledTimes(2);
+      expect(management.link).toHaveBeenNthCalledWith(1, 'github|1', expect.anything());
+      expect(management.link).toHaveBeenNthCalledWith(2, 'google-oauth2|111', expect.anything());
+      expect(api.authentication.setPrimaryUser).toHaveBeenCalledWith('google-oauth2|111');
+    },
+  );
+
+  it('retries a stale link only once', async () => {
+    const api = fakeApi();
+    const management = fakeManagement([google]);
+    management.link.mockRejectedValue(new ManagementError('conflict', 409));
+    expect(await linkAccounts({ user: emailUser }, api, { management, log: vi.fn() })).toBeNull();
+    expect(management.link).toHaveBeenCalledTimes(2);
+    expect(api.authentication.setPrimaryUser).not.toHaveBeenCalled();
+  });
+
+  it('does not retry other link failures', async () => {
+    const management = fakeManagement([google]);
+    management.link.mockRejectedValue(new ManagementError('forbidden', 403));
+    await linkAccounts({ user: emailUser }, fakeApi(), { management, log: vi.fn() });
+    expect(management.link).toHaveBeenCalledTimes(1);
+    expect(management.usersByEmail).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing for an unverified email, without even looking anyone up', async () => {
@@ -124,6 +208,13 @@ describe('linkAccounts', () => {
     expect(await linkAccounts(event, api, { management, log: vi.fn() })).toBeNull();
     expect(management.usersByEmail).not.toHaveBeenCalled();
     expect(api.authentication.setPrimaryUser).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an untrusted provider, without looking anyone up', async () => {
+    const management = fakeManagement([google]);
+    const event = { user: user('facebook|5', '2026-06-01T00:00:00.000Z') };
+    expect(await linkAccounts(event, fakeApi(), { management, log: vi.fn() })).toBeNull();
+    expect(management.usersByEmail).not.toHaveBeenCalled();
   });
 
   it('does nothing on a refresh-token exchange', async () => {
@@ -165,23 +256,34 @@ describe('linkAccounts', () => {
 });
 
 describe('managementClient', () => {
-  const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
+  type Init = {
+    method?: string;
+    body?: string;
+    headers?: Record<string, string>;
+    signal?: unknown;
+  };
+  const res = (body: unknown, status = 200) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  });
 
-  const setup = () => {
+  const setup = (users: User[] = [google]) => {
     const store = new Map<string, { value: string; expires_at?: number }>();
     const cache = {
       get: (k: string) => store.get(k),
       set: (k: string, value: string, o?: { expires_at?: number }) => {
         store.set(k, { value, ...o });
       },
+      delete: (k: string) => store.delete(k),
     };
-    const fetch = vi.fn(async (url: string) =>
-      url.endsWith('/oauth/token')
-        ? ok({ access_token: 'tok', expires_in: 86400 })
-        : url.includes('/users-by-email')
-          ? ok([google])
-          : ok({}),
-    );
+    // Like Auth0's users-by-email: an exact, case-sensitive match on the stored address.
+    const fetch = vi.fn(async (url: string, _init?: Init) => {
+      if (url.endsWith('/oauth/token')) return res({ access_token: 'tok', expires_in: 86400 });
+      const q = new URL(url).searchParams.get('email');
+      if (q !== null) return res(users.filter((u) => u.email === q));
+      return res({}, 201);
+    });
     const m = managementClient({
       domain: 'https://panote-dev.au.auth0.com/',
       clientId: 'cid',
@@ -195,13 +297,12 @@ describe('managementClient', () => {
 
   it('gets an M2M token for the tenant Management API and reuses it from the cache', async () => {
     const { m, fetch, store } = setup();
-    expect(await m.usersByEmail('maya+tours@example.com')).toEqual([google]);
+    expect(await m.usersByEmail(EMAIL)).toEqual([google]);
     await m.usersByEmail(EMAIL);
     const tokenCalls = fetch.mock.calls.filter(([url]) => url.endsWith('/oauth/token'));
     expect(tokenCalls).toHaveLength(1);
     expect(tokenCalls[0]?.[0]).toBe('https://panote-dev.au.auth0.com/oauth/token');
-    const init = (tokenCalls[0] as unknown[])[1] as { body: string };
-    expect(JSON.parse(init.body)).toEqual({
+    expect(JSON.parse(tokenCalls[0]?.[1]?.body ?? '')).toEqual({
       grant_type: 'client_credentials',
       client_id: 'cid',
       client_secret: 'secret',
@@ -209,7 +310,7 @@ describe('managementClient', () => {
     });
     expect(store.get('mgmt-token')).toEqual({ value: 'tok', expires_at: 1_000 + 86340 * 1000 });
     expect(fetch).toHaveBeenCalledWith(
-      'https://panote-dev.au.auth0.com/api/v2/users-by-email?email=maya%2Btours%40example.com',
+      'https://panote-dev.au.auth0.com/api/v2/users-by-email?email=maya%40example.com',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({ authorization: 'Bearer tok' }),
@@ -217,9 +318,72 @@ describe('managementClient', () => {
     );
   });
 
-  it('links by POSTing the secondary identity to the primary', async () => {
+  it('finds users stored in either case: the address as given and in lower case, de-duplicated', async () => {
+    const mixed = { ...github, email: 'Maya@Example.com' };
+    const { m, fetch } = setup([google, mixed]);
+    expect((await m.usersByEmail('Maya@Example.com')).map((u) => u.user_id).sort()).toEqual([
+      'github|333',
+      'google-oauth2|111',
+    ]);
+    const lookups = fetch.mock.calls
+      .map(([url]) => url)
+      .filter((u) => u.includes('users-by-email'));
+    expect(lookups).toEqual([
+      'https://panote-dev.au.auth0.com/api/v2/users-by-email?email=Maya%40Example.com',
+      'https://panote-dev.au.auth0.com/api/v2/users-by-email?email=maya%40example.com',
+    ]);
+    // Both forms finding the same user returns it once; an address already in lower case is asked once.
+    const both = setup([google, google]);
+    expect(await both.m.usersByEmail(EMAIL)).toEqual([google]);
+    expect(both.fetch.mock.calls.filter(([u]) => u.includes('users-by-email'))).toHaveLength(1);
+  });
+
+  it('puts a 5 s timeout on every call', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
     const { m, fetch } = setup();
+    await m.usersByEmail(EMAIL);
     await m.link('google-oauth2|111', { provider: 'email', user_id: '222' });
+    expect(fetch.mock.calls.length).toBe(3);
+    for (const [, init] of fetch.mock.calls) expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(timeout.mock.calls).toEqual([[5000], [5000], [5000]]);
+    timeout.mockRestore();
+  });
+
+  it('gives up on a hung API instead of hanging the login', async () => {
+    const fetch = vi.fn(
+      (_url: string, init?: Init) =>
+        new Promise<never>((_, reject) => {
+          (init?.signal as AbortSignal).addEventListener('abort', () =>
+            reject(new Error('aborted')),
+          );
+        }),
+    );
+    const m = managementClient({
+      domain: 'x.auth0.com',
+      clientId: 'c',
+      clientSecret: 's',
+      fetch,
+      timeoutMs: 20,
+    });
+    await expect(m.usersByEmail(EMAIL)).rejects.toThrow('aborted');
+  });
+
+  it('links by POSTing the secondary identity, without needing a response body', async () => {
+    const { m, fetch } = setup();
+    fetch.mockImplementation(async (url: string) =>
+      url.endsWith('/oauth/token')
+        ? res({ access_token: 'tok', expires_in: 86400 })
+        : {
+            ok: true,
+            status: 201,
+            json: async () => {
+              throw new SyntaxError('no body');
+            },
+          },
+    );
+    await expect(
+      m.link('google-oauth2|111', { provider: 'email', user_id: '222' }),
+    ).resolves.toBeUndefined();
     expect(fetch).toHaveBeenLastCalledWith(
       'https://panote-dev.au.auth0.com/api/v2/users/google-oauth2%7C111/identities',
       expect.objectContaining({
@@ -229,10 +393,30 @@ describe('managementClient', () => {
     );
   });
 
-  it('throws on a failed call', async () => {
-    const fetch = vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) }));
+  it('on a 401, drops the cached token and tries once more with a fresh one', async () => {
+    const { m, fetch, store } = setup();
+    store.set('mgmt-token', { value: 'stale' });
+    let tokens = 0;
+    fetch.mockImplementation(async (url: string, init?: Init) => {
+      if (url.endsWith('/oauth/token'))
+        return res({ access_token: `fresh${++tokens}`, expires_in: 86400 });
+      return init?.headers?.authorization === 'Bearer stale' ? res({}, 401) : res([google]);
+    });
+    expect(await m.usersByEmail(EMAIL)).toEqual([google]);
+    expect(store.get('mgmt-token')?.value).toBe('fresh1');
+
+    fetch.mockImplementation(async (url: string) =>
+      url.endsWith('/oauth/token') ? res({ access_token: 'x', expires_in: 86400 }) : res({}, 401),
+    );
+    await expect(m.usersByEmail(EMAIL)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('throws a ManagementError with the status on a failed call', async () => {
+    const fetch = vi.fn(async () => res({}, 403));
     const m = managementClient({ domain: 'x.auth0.com', clientId: 'c', clientSecret: 's', fetch });
-    await expect(m.usersByEmail(EMAIL)).rejects.toThrow('management token request failed: 403');
+    const err = await m.usersByEmail(EMAIL).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ManagementError);
+    expect(err).toMatchObject({ status: 403, message: 'management token request failed: 403' });
   });
 
   it('is built from the Action secrets, or not at all when one is missing', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 
 import { LogoMark } from './Logo.js';
 import { Modal } from './Modal.js';
@@ -73,11 +73,14 @@ export function SignInModal({
   const social = options.filter((o) => o.kind !== 'email');
   const email = options.filter((o) => o.kind === 'email');
 
-  const button = (o: SignInOption, className: string) => (
+  const hintId = useId();
+
+  const button = (o: SignInOption, className: string, describedBy?: string) => (
     <button
       key={o.id}
       type="button"
       className={className}
+      aria-describedby={describedBy}
       disabled={pending !== null}
       aria-busy={pending === o.id || undefined}
       onClick={() => void start(o.id)}
@@ -132,8 +135,10 @@ export function SignInModal({
                     or
                   </p>
                 )}
-                {email.map((o) => button(o, 'pn-signin__option pn-signin__option--email'))}
-                <p className="pn-signin__hint">We’ll email you a one-time code.</p>
+                {email.map((o) => button(o, 'pn-signin__option pn-signin__option--email', hintId))}
+                <p id={hintId} className="pn-signin__hint">
+                  We’ll email you a one-time code.
+                </p>
               </>
             )}
           </div>

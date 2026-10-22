@@ -13,21 +13,39 @@
  *   MGMT_CLIENT_ID       that M2M application's client id
  *   MGMT_CLIENT_SECRET   that M2M application's client secret
  *
- * On every interactive login with a verified email, it looks up the other Auth0 users with
- * the same email. Of the current user and the others whose email is also verified and who
- * are not blocked, the oldest (created_at, then user_id) is the primary. When that is someone
- * else, the current user is linked into it and the login continues as the primary, so the
- * issued token's `sub` is the primary's and every Panote key stays under it.
+ * On every interactive login through a trusted provider (TRUSTED_PROVIDERS) with a verified
+ * email, it looks up the other Auth0 users with that email. Of the current user and the
+ * others that hold a trusted identity with that same verified email and are not blocked, the
+ * oldest (created_at, then user_id) is the primary. When that is someone else, the current
+ * user is linked into it and the login continues as the primary, so the issued token's `sub`
+ * is the primary's and every Panote key stays under it.
  *
- * It never links on an unverified email (anyone can claim an address at some providers), and
- * it never blocks a login: if anything fails, the user signs in unlinked and it is logged.
+ * Linking is automatic, without asking the user to sign in to the other account first; the
+ * owner chose that (docs/decisions.md, "Account linking"). The provider allowlist is what
+ * keeps it safe. It never blocks a login: if anything fails, the user signs in unlinked and
+ * it is logged.
  */
+
+/**
+ * Providers whose `email_verified: true` we trust to mean the person controls that address,
+ * on both sides of a link. Anything else signs in normally but is never joined.
+ * - email: Auth0 passwordless, the one-time code itself proves the address.
+ * - google-oauth2, apple: the provider verifies the address it reports.
+ * - github: Auth0 passes on GitHub's verified flag (false for an unverified address).
+ * Left out until reviewed: windowslive (Microsoft has a history of unverified email claims),
+ * linkedin, facebook.
+ */
+const TRUSTED_PROVIDERS = Object.freeze(['email', 'google-oauth2', 'apple', 'github']);
+
+/** Every Management API and token call gives up after this, so a hung API can't fail a login. */
+const TIMEOUT_MS = 5000;
 
 /**
  * @typedef {object} Identity
  * @property {string} provider
  * @property {string | number} user_id
  * @property {string} [connection]
+ * @property {{ email?: string, email_verified?: boolean }} [profileData]
  */
 
 /**
@@ -51,6 +69,7 @@
  * @typedef {object} ActionCache
  * @property {(key: string) => { value: string } | undefined} get
  * @property {(key: string, value: string, options?: { expires_at?: number }) => unknown} set
+ * @property {(key: string) => unknown} [delete]
  */
 
 /**
@@ -66,15 +85,44 @@
  */
 
 /**
- * @typedef {(input: string, init?: { method?: string, headers?: Record<string, string>, body?: string }) =>
+ * @typedef {(input: string, init?: { method?: string, headers?: Record<string, string>, body?: string, signal?: AbortSignal }) =>
  *   Promise<{ ok: boolean, status: number, json: () => Promise<unknown> }>} Fetch
  */
+
+/** A failed Management API call, with its HTTP status. */
+class ManagementError extends Error {
+  /** @param {string} message @param {number} status */
+  constructor(message, status) {
+    super(message);
+    this.name = 'ManagementError';
+    this.status = status;
+  }
+}
 
 const LOG = '[link-accounts]';
 const TOKEN_CACHE_KEY = 'mgmt-token';
 
 const sameEmail = (/** @type {string | undefined} */ a, /** @type {string} */ b) =>
   typeof a === 'string' && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+const isTrusted = (/** @type {string} */ provider) => TRUSTED_PROVIDERS.includes(provider);
+
+/**
+ * Whether `u` holds an identity from a trusted provider that carries `email`, verified. The
+ * user's own identity (the one its user_id is made of) carries the root email; a linked
+ * identity carries its own in profileData.
+ *
+ * @param {User} u
+ * @param {string} email
+ */
+function hasTrustedIdentity(u, email) {
+  return (u.identities ?? []).some((id) => {
+    if (!isTrusted(id.provider)) return false;
+    const own = `${id.provider}|${id.user_id}` === u.user_id;
+    const claim = own ? u : id.profileData;
+    return claim?.email_verified === true && sameEmail(claim.email, email);
+  });
+}
 
 // A missing or unparsable created_at sorts last, so it never wins over a known one.
 const createdAt = (/** @type {User} */ u) => {
@@ -83,9 +131,9 @@ const createdAt = (/** @type {User} */ u) => {
 };
 
 /**
- * The user the current login should become, or null to leave it as it is. Only users
- * with the same verified email who are not blocked take part; the oldest wins, ties broken
- * by user_id, so every login picks the same primary.
+ * The user the current login should become, or null to leave it as it is. Only users that
+ * hold a trusted identity with the same verified email and are not blocked take part; the
+ * oldest wins, ties broken by user_id, so every login picks the same primary.
  *
  * @param {User} current
  * @param {User[]} found
@@ -93,15 +141,11 @@ const createdAt = (/** @type {User} */ u) => {
  */
 function choosePrimary(current, found) {
   const email = current.email;
-  if (!email || current.email_verified !== true) return null;
+  if (!email || !hasTrustedIdentity(current, email)) return null;
   const candidates = [
     current,
     ...found.filter(
-      (u) =>
-        u.user_id !== current.user_id &&
-        u.email_verified === true &&
-        u.blocked !== true &&
-        sameEmail(u.email, email),
+      (u) => u.user_id !== current.user_id && u.blocked !== true && hasTrustedIdentity(u, email),
     ),
   ];
   candidates.sort(
@@ -115,10 +159,18 @@ function choosePrimary(current, found) {
 /**
  * Management API calls over `fetch`, with the M2M token kept in the Action cache.
  *
- * @param {{ domain: string, clientId: string, clientSecret: string, fetch: Fetch, cache?: ActionCache | undefined, now?: () => number }} options
+ * @param {{ domain: string, clientId: string, clientSecret: string, fetch: Fetch, cache?: ActionCache | undefined, now?: () => number, timeoutMs?: number }} options
  * @returns {Management}
  */
-function managementClient({ domain, clientId, clientSecret, fetch, cache, now = Date.now }) {
+function managementClient({
+  domain,
+  clientId,
+  clientSecret,
+  fetch,
+  cache,
+  now = Date.now,
+  timeoutMs = TIMEOUT_MS,
+}) {
   const base = `https://${domain.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
 
   const token = async () => {
@@ -133,8 +185,10 @@ function managementClient({ domain, clientId, clientSecret, fetch, cache, now = 
         client_secret: clientSecret,
         audience: `${base}/api/v2/`,
       }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) throw new Error(`management token request failed: ${res.status}`);
+    if (!res.ok)
+      throw new ManagementError(`management token request failed: ${res.status}`, res.status);
     const body = /** @type {{ access_token?: unknown, expires_in?: unknown }} */ (await res.json());
     if (typeof body.access_token !== 'string') throw new Error('management token missing');
     const ttl = typeof body.expires_in === 'number' ? body.expires_in : 0;
@@ -144,21 +198,46 @@ function managementClient({ domain, clientId, clientSecret, fetch, cache, now = 
     return body.access_token;
   };
 
-  /** @param {string} path @param {{ method?: string, body?: unknown }} [init] */
-  const call = async (path, init = {}) => {
+  /**
+   * Resolves to the response once it is ok; the caller reads the body only if it needs it.
+   * A 401 means the cached token went bad (rotated secret, revoked grant): drop it and
+   * try once more with a fresh one.
+   *
+   * @param {string} path @param {{ method?: string, body?: unknown }} [init]
+   */
+  const call = async (path, init = {}, retried = false) => {
+    const method = init.method ?? 'GET';
     const res = await fetch(`${base}/api/v2${path}`, {
-      method: init.method ?? 'GET',
+      method,
       headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
       ...(init.body !== undefined && { body: JSON.stringify(init.body) }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) throw new Error(`management API ${init.method ?? 'GET'} failed: ${res.status}`);
-    return res.json();
+    if (res.status === 401 && !retried) {
+      cache?.delete?.(TOKEN_CACHE_KEY);
+      return call(path, init, true);
+    }
+    if (!res.ok)
+      throw new ManagementError(`management API ${method} failed: ${res.status}`, res.status);
+    return res;
+  };
+
+  /** @param {string} email */
+  const lookup = async (email) => {
+    const users = await (await call(`/users-by-email?email=${encodeURIComponent(email)}`)).json();
+    return Array.isArray(users) ? /** @type {User[]} */ (users) : [];
   };
 
   return {
+    // users-by-email matches case-sensitively, and social connections keep the provider's
+    // casing, so ask for the address as given and in lower case.
     async usersByEmail(email) {
-      const users = await call(`/users-by-email?email=${encodeURIComponent(email)}`);
-      return Array.isArray(users) ? /** @type {User[]} */ (users) : [];
+      const forms = [...new Set([email, email.toLowerCase()])];
+      const byId = new Map();
+      for (const users of await Promise.all(forms.map(lookup))) {
+        for (const u of users) if (!byId.has(u.user_id)) byId.set(u.user_id, u);
+      }
+      return [...byId.values()];
     },
     async link(primaryUserId, secondary) {
       await call(`/users/${encodeURIComponent(primaryUserId)}/identities`, {
@@ -168,6 +247,11 @@ function managementClient({ domain, clientId, clientSecret, fetch, cache, now = 
     },
   };
 }
+
+// 400/409 from the link call: most likely another first login with the same email linked or
+// created a user a moment ago, so the picture is stale. Look again once.
+const isStale = (/** @type {unknown} */ e) =>
+  e instanceof ManagementError && (e.status === 400 || e.status === 409);
 
 /**
  * The Action's work, with the Management API and the log passed in (tests use fakes).
@@ -179,30 +263,36 @@ function managementClient({ domain, clientId, clientSecret, fetch, cache, now = 
  */
 async function linkAccounts(event, api, { management, log }) {
   const user = event.user;
+  const email = user.email;
   // A refresh-token exchange already carries the user the login settled on.
   if (event.transaction?.protocol === 'oauth2-refresh-token') return null;
-  if (!user.email || user.email_verified !== true) return null;
   // Only a user with a single identity is linked into another. One that already has
   // linked identities is a primary itself; merging two primaries is left to the operator.
   const identities = user.identities ?? [];
   const identity = identities[0];
   if (identities.length !== 1 || !identity) return null;
+  if (!email || !hasTrustedIdentity(user, email)) return null;
   if (!management) {
     log(LOG, 'not configured: set AUTH0_DOMAIN, MGMT_CLIENT_ID and MGMT_CLIENT_SECRET');
     return null;
   }
+  const secondary = { provider: identity.provider, user_id: String(identity.user_id) };
   try {
-    const primary = choosePrimary(user, await management.usersByEmail(user.email));
-    if (!primary) return null;
-    await management.link(primary, {
-      provider: identity.provider,
-      user_id: String(identity.user_id),
-    });
-    api.authentication.setPrimaryUser(primary);
-    // Ids only, never the email. Panote data stored under the secondary id (signed in
-    // before it was linked) stays there: docs/deploy.md, "Account linking".
-    log(LOG, `linked ${user.user_id} into ${primary}`);
-    return primary;
+    for (let attempt = 0; ; attempt++) {
+      const primary = choosePrimary(user, await management.usersByEmail(email));
+      if (!primary) return null;
+      try {
+        await management.link(primary, secondary);
+      } catch (e) {
+        if (attempt === 0 && isStale(e)) continue;
+        throw e;
+      }
+      api.authentication.setPrimaryUser(primary);
+      // Ids only, never the email. Panote data stored under the secondary id (signed in
+      // before it was linked) stays there: docs/deploy.md, "Account linking".
+      log(LOG, `linked ${user.user_id} into ${primary}`);
+      return primary;
+    }
   } catch (e) {
     log(LOG, 'linking failed, signing in unlinked:', e instanceof Error ? e.message : String(e));
     return null;
@@ -240,6 +330,8 @@ exports.onExecutePostLogin = async (event, api) => {
   await linkAccounts(event, api, { management: managementFromSecrets(event, api), log });
 };
 
+exports.TRUSTED_PROVIDERS = TRUSTED_PROVIDERS;
+exports.ManagementError = ManagementError;
 exports.choosePrimary = choosePrimary;
 exports.linkAccounts = linkAccounts;
 exports.managementClient = managementClient;

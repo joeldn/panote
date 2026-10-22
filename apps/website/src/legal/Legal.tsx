@@ -42,10 +42,11 @@ export function Privacy() {
         or Facebook, or with your email address and a one-time code we email to it (whichever the
         sign-in screen offers). Sign-in is handled by Auth0, which passes us an account id and,
         where the provider shares them, your name, email address and profile picture. We use these
-        to sign you in, show who is signed in, and link your tours to you. If you sign in in more
-        than one of these ways with the same email address, and each one has confirmed that address
-        is yours, they are joined into one Panote account. Your browser keeps the sign-in session in
-        local storage so you stay signed in between visits.
+        to sign you in, show who is signed in, and link your tours to you. If you sign in with more
+        than one of Google, Apple, GitHub or an email code using the same email address, and each
+        has confirmed that address is yours, they are joined into one Panote account. Signing in
+        with Microsoft, LinkedIn or Facebook keeps a separate account. Your browser keeps the
+        sign-in session in local storage so you stay signed in between visits.
       </p>
 
       <h2>What you upload</h2>

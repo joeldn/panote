@@ -7,9 +7,9 @@ import { describe, expect, it } from 'vitest';
 
 // Copy rule (docs/design/NOTES.md): free, not open source; no export/download promises.
 const BANNED = /open[\s-]*source|\bmit\b|github|export|download/i;
-// GitHub as a sign-in provider names an account you sign in with, not where code lives, so the
-// provider list (always in this order, from KNOWN_CONNECTIONS) is the one place it may appear.
-const SIGN_IN_PROVIDERS = /Microsoft, GitHub,\s+LinkedIn/g;
+// GitHub as a sign-in provider names an account you sign in with, not where code lives, so a
+// list of sign-in providers (GitHub right after another provider) is the one place it may appear.
+const SIGN_IN_PROVIDERS = /(?:Google|Apple|Microsoft|LinkedIn|Facebook),\s+GitHub(?=,|\s+or\b)/g;
 const isBanned = (text: string) => BANNED.test(text.replace(SIGN_IN_PROVIDERS, ''));
 const SRC = new URL('.', import.meta.url).pathname;
 
@@ -54,6 +54,8 @@ describe('copy rule', () => {
   it('lets GitHub appear only in the sign-in provider list', () => {
     expect(isBanned('Google, Apple, Microsoft, GitHub, LinkedIn or Facebook')).toBe(false);
     expect(isBanned('Microsoft, GitHub,\n        LinkedIn')).toBe(false);
+    expect(isBanned('Google, Apple, GitHub or an email code')).toBe(false);
+    expect(isBanned('Apple, GitHub and our source')).toBe(true);
     expect(isBanned('Microsoft, GitHub, LinkedIn. Source on GitHub')).toBe(true);
     expect(isBanned('Continue with GitHub')).toBe(true);
   });
