@@ -470,6 +470,92 @@ describe('tour description in the published bundle', () => {
   });
 });
 
+describe('tour languages in the published bundle', () => {
+  const bundleOf = async (tourId: string) =>
+    PublishedTourSchema.parse(await readJson(pubTourKey(tourId)));
+
+  it("carries the tour's languages and only their translations", async () => {
+    const panoId = 'i18n-pub-p1';
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'bytes');
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ pano: panoId }));
+    const config = {
+      title: 'Hall',
+      // `it` was added by another tour sharing this pano: not this tour's to publish.
+      i18n: { de: { title: 'Halle' }, it: { title: 'Sala' } },
+      hotspots: [
+        {
+          id: 'p1',
+          type: 'info',
+          yaw: 0,
+          pitch: 0,
+          title: 'Door',
+          body: 'Old door',
+          i18n: { de: { title: 'Tür', body: 'Alte Tür' }, it: { title: 'Porta' } },
+        },
+      ],
+    };
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...bearer('me'), 'If-Match': '*' },
+      body: JSON.stringify(config),
+    });
+    expect(put.status).toBe(200);
+    const r = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: bearer('me'),
+      body: JSON.stringify({
+        title: 'Old Town',
+        scenes: [{ panoId }],
+        languages: { default: 'en', others: ['de'] },
+        i18n: { de: { title: 'Altstadt' }, fr: { title: 'Vieille ville' } },
+      }),
+    });
+    expect(r.status).toBe(201);
+    const { tourId } = (await r.json()) as { tourId: string };
+    expect((await publish(tourId)).status).toBe(200);
+
+    const bundle = await bundleOf(tourId);
+    expect(bundle.languages).toEqual({ default: 'en', others: ['de'] });
+    expect(bundle.i18n).toEqual({ de: { title: 'Altstadt' } });
+    const scene = bundle.scenes[0]!.config;
+    expect(scene.i18n).toEqual({ de: { title: 'Halle' } });
+    expect(scene.hotspots[0]!.i18n).toEqual({ de: { title: 'Tür', body: 'Alte Tür' } });
+  });
+
+  it('a tour without languages publishes no translations at all', async () => {
+    const panoId = 'i18n-none-p1';
+    await env.BUCKET.put(originalKey(MY_SUB, panoId), 'bytes');
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ pano: panoId }));
+    const put = await SELF.fetch(`https://x/api/admin/panos/${panoId}/config`, {
+      method: 'PUT',
+      headers: { ...bearer('me'), 'If-Match': '*' },
+      body: JSON.stringify({ title: 'Hall', i18n: { de: { title: 'Halle' } }, hotspots: [] }),
+    });
+    expect(put.status).toBe(200);
+    const tourId = await createTour('No Languages', [panoId]);
+    expect((await publish(tourId)).status).toBe(200);
+    const bundle = await bundleOf(tourId);
+    expect(bundle).not.toHaveProperty('languages');
+    expect(bundle).not.toHaveProperty('i18n');
+    expect(bundle.scenes[0]!.config).not.toHaveProperty('i18n');
+  });
+
+  it('400s a tour with a malformed or repeated language', async () => {
+    for (const languages of [
+      { default: 'english', others: [] },
+      { default: 'en', others: ['de', 'de'] },
+      { default: 'en', others: ['en'] },
+    ]) {
+      const r = await SELF.fetch('https://x/api/admin/tours', {
+        method: 'POST',
+        headers: bearer('me'),
+        body: JSON.stringify({ title: 'Bad Languages', languages }),
+      });
+      expect(r.status).toBe(400);
+    }
+  });
+});
+
 describe('PATCH /api/admin/tours/:tourId/visibility', () => {
   it('updates the bundle and publish.json; 409 when unpublished', async () => {
     const tourId = await publishedTour('vis-patch', 'vis-patch-slug');
