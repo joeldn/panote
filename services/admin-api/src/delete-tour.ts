@@ -1,4 +1,4 @@
-import { tilesPrefix, tourKey, tourOwnerKey, type TourDoc } from '@internal/contracts';
+import { sharingStoppedKey, tilesPrefix, tourKey, tourOwnerKey, type TourDoc } from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
@@ -37,6 +37,8 @@ export const deleteTour = async (
 ): Promise<CdnPurge> => {
   // Unpublish first so a deleted tour never stays public, even on a partial delete.
   const files = await unpublishTour();
+  // Any publish this lets through is caught by the second unpublish (or 404s on no tour.json).
+  await bucket.delete(sharingStoppedKey(sub, tourId));
   const prefixes: string[] = [];
   const result = (): CdnPurge => mergePurges({ prefixes, files });
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.

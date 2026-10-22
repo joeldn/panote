@@ -8,6 +8,7 @@ import {
   originalKey,
   publishKey,
   pubTourKey,
+  sharingStoppedKey,
   storedSlugKey,
   tourKey,
   tourOwnerKey,
@@ -77,6 +78,8 @@ describe('POST /api/admin/operator/takedown', () => {
     expect(await has(publishKey(sub, s.tourId))).toBe(false);
     expect(await has(tourKey(sub, s.tourId))).toBe(true);
     expect(await has(originalKey(sub, s.panoId))).toBe(true);
+    // Like the owner's Stop sharing: the owner's next Save doesn't put it back.
+    expect(await has(sharingStoppedKey(sub, s.tourId))).toBe(true);
   });
 
   it('logs an audit line naming the action and the tour, never the owner', async () => {

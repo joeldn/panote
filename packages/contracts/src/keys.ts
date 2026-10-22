@@ -91,6 +91,10 @@ export const tourKey = (u: string, t: string): string =>
 // Private publish sidecar ({ slug, visibility, publishedAt }), never CDN-served.
 export const publishKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/publish.json`;
+// Private marker ({ stoppedAt }) left by the owner's "Stop sharing": the editor's
+// after-Save publish skips the tour while it exists; an explicit publish clears it.
+export const sharingStoppedKey = (u: string, t: string): string =>
+  `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/sharing-stopped.json`;
 // Account deletion marker: written first, so the delete is resumable and the
 // account read-only until it finishes. Owner-scoped like panos/ and tours/:
 // the CDN's WAF rule only lets tiles/, pub/ and slugs/ through.

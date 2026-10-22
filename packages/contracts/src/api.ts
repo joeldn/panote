@@ -160,6 +160,9 @@ export type ToursListOk = z.infer<typeof ToursListOkSchema>;
 export const PublishRequestSchema = z.object({
   visibility: VisibilitySchema.optional(),
   slug: z.string().optional(),
+  // The editor's publish after a Save. Refused (409 'sharing stopped') once the
+  // owner stopped sharing; a publish without it (the share modal's) shares again.
+  afterSave: z.boolean().optional(),
 });
 export type PublishRequest = z.infer<typeof PublishRequestSchema>;
 
@@ -190,6 +193,8 @@ export const SlugInvalidSchema = z.object({ error: z.enum(['invalid slug', 'rese
 // 409 when a concurrent publish, rename or visibility change got there first; retry.
 export const PublishConflictSchema = z.object({ error: z.literal('conflict') });
 export const NotPublishedSchema = z.object({ error: z.literal('not published') });
+// An after-Save publish of a tour whose owner stopped sharing it: nothing was published.
+export const SharingStoppedSchema = z.object({ error: z.literal('sharing stopped') });
 
 export const SlugPutRequestSchema = z.object({ slug: z.string() });
 export const SlugPutOkSchema = z.object({

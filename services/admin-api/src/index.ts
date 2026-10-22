@@ -428,7 +428,8 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const files = await publisher(c.env, tourId).unpublish(sub, tourId);
+  // The owner's "Stop sharing": the editor's later Saves leave it offline.
+  const files = await publisher(c.env, tourId).unpublish(sub, tourId, true);
   purgeLater(c, { prefixes: [], files });
   return c.body(null, 204);
 });
@@ -476,7 +477,7 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   const purge =
     action === 'delete'
       ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
-      : { prefixes: [], files: await stub.unpublish(sub, tourId) };
+      : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
   purgeLater(c, purge);
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
   console.warn(`[takedown] operator ${action} of tour ${tourId} done`);
