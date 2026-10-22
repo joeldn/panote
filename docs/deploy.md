@@ -303,6 +303,55 @@ rotation is on and the API `https://api.panote.dev` allows offline access.
   silent-auth iframe (`useRefreshTokensFallback: false`), so no `frame-src` entry is needed. The
   avatar is the user's initial, not the Google profile photo, so `img-src` stays as is.
 
+**More sign-in providers (Apple, Microsoft, Facebook).** The apps know four connections
+(`KNOWN_CONNECTIONS` in `packages/web-kit/src/config.ts`), shown in this order: Google
+(`google-oauth2`), Apple (`apple`), Microsoft (`windowslive`), Facebook (`facebook`). A button is
+shown only when its connection name is in `VITE_AUTH0_CONNECTIONS`, so today only Google shows.
+Turning one on is an account task, done once per Auth0 tenant (dev now, production when its tenant
+exists). Below, `<tenant>` is the tenant's domain (`panote-dev.au.auth0.com` for dev), and every
+provider's redirect/return URL is `https://<tenant>/login/callback`.
+
+1. **Create the provider's app.**
+   - **Apple.** Needs a paid Apple Developer Program membership. In Certificates, Identifiers &
+     Profiles: register an App ID with *Sign in with Apple*, then a *Services ID* (this is the
+     client id Auth0 asks for), enable *Sign in with Apple* on it with domain `<tenant>` and return
+     URL `https://<tenant>/login/callback`. Create a *Key* with *Sign in with Apple* and download its
+     `.p8` (once only). Note the Team ID and Key ID. Apple sends the user's name only on their first
+     sign-in, and the email may be a private relay address; the apps already cope with neither.
+   - **Microsoft.** In the Microsoft Entra admin center → App registrations → New registration:
+     supported account types *Accounts in any organizational directory and personal Microsoft
+     accounts*, redirect URI (platform *Web*) `https://<tenant>/login/callback`. Copy the
+     Application (client) ID and create a client secret under Certificates & secrets. Secrets
+     expire (24 months at most): put the expiry in the calendar and rotate it in Auth0 before then.
+   - **Facebook.** In Meta for Developers, create an app (use case *Authenticate and request data
+     from users with Facebook Login*), add *Facebook Login*, set Valid OAuth Redirect URIs to
+     `https://<tenant>/login/callback`. Under App settings → Basic set the privacy policy URL
+     (`https://panote.dev/privacy`, `https://panote.io/privacy` for production) and the user data
+     deletion instructions URL (the same page: it explains Delete account). Copy the App ID and
+     App Secret, and switch the app to *Live*; only `public_profile` and `email` are needed.
+2. **Add the Auth0 connection.** Auth0 dashboard → Authentication → Social → Create Connection →
+   Apple / Microsoft Account / Facebook, and paste the credentials from step 1 (Apple: Services ID,
+   Team ID, Key ID and the `.p8` contents; Microsoft: client id and secret; Facebook: App ID and
+   secret). Request only basic profile and email. Check the connection's name is `apple`,
+   `windowslive` or `facebook`: the apps send that exact name. Auth0 offers its own developer keys
+   for some providers when the credential fields are left blank; they are for a quick try only
+   (the consent screen names Auth0, not Panote, and they carry limits). Never leave a production
+   connection on developer keys.
+3. **Enable it for the SPA.** On the connection's Applications tab, turn on the tenant's SPA
+   application (the one whose client id is `VITE_AUTH0_CLIENT_ID`). Use the connection's *Try*
+   button to check a sign-in reaches the callback.
+4. **Show the button.** Add the connection name to `VITE_AUTH0_CONNECTIONS` in both
+   `apps/website/.env.<env>` and `apps/admin/.env.<env>` for that environment (comma-separated;
+   order doesn't matter, the apps sort them), e.g.
+   `VITE_AUTH0_CONNECTIONS=google-oauth2,apple,windowslive,facebook`, and ship that as a PR. Do
+   this last: a button for a connection the tenant doesn't have fails at Auth0's `/authorize`.
+
+Nothing on the API side changes. Workers only check the JWT, and owner keys are
+`base64url(sub)`, so any sub prefix (`apple|…`, `windowslive|…`, `facebook|…`) works, as do
+account deletion and the `delete-account.ts --sub` CLI. One Auth0 user per provider: someone who
+signs in with Google once and Apple once has two separate Panote accounts unless the tenant links
+them.
+
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
 Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
 `http://localhost:5174/`. Both proxy `/api` to `https://panote.dev`, so the APIs stay
