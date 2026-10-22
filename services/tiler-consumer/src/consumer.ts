@@ -3,6 +3,7 @@ import { containerEnvVars } from './container-env.js';
 import { deriveUploadTarget, errorText, panoIdForLog, redactOwner } from './upload-prefix.js';
 import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
 import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
+import { runHealthCheck } from './health.js';
 
 export class Tiler extends Container<Env> {
   override defaultPort = 8080;
@@ -142,5 +143,10 @@ export default {
       return;
     }
     await handleUploadsBatch(batch, env);
+  },
+  // Every 5 minutes: probes the site and APIs, checks admin-api's daily cron and CDN
+  // purges, and emails when something goes down or comes back (src/health.ts).
+  scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(runHealthCheck(env, controller.scheduledTime));
   },
 };

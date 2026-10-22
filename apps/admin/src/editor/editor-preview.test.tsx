@@ -185,6 +185,9 @@ describe('editor: an upload in this tab', () => {
     expect(
       within(card).getByRole('heading', { name: 'We couldn’t process this image' }),
     ).toBeTruthy();
+    // Says what happened without blaming the image's shape: the tiler takes any ratio.
+    expect(card.textContent).toContain('We hit an error processing “Town hall”.');
+    expect(card.textContent).not.toMatch(/equirectangular/i);
     expect(within(sceneRow('Town hall')).getByText('Couldn’t process')).toBeTruthy();
     expect(within(card).getByRole('link', { name: 'Replace image' }).getAttribute('href')).toBe(
       '/app/new?tour=tour-1&replace=pano-1',

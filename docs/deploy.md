@@ -21,9 +21,9 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ alert email, see below) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ alert recipient, optional — unset means no email) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
 are `false` in both `dev` and `production`: from the first dev deploy
@@ -647,7 +647,7 @@ pnpm --filter @service/tiler-consumer exec wrangler secret put ALERT_EMAIL_TO --
 ```
 
 `ALERT_EMAIL_TO` is the recipient of the DLQ alert email (see "Tiling failure marker and alerting"
-below). It's a secret only to keep the owner's personal address out of the repo; it must be
+below) and of the health check's alerts (see "Monitoring and alerts"). It's a secret only to keep the owner's personal address out of the repo; it must be
 byte-identical to a verified Email Routing destination address on the account — a Gmail `+tag`
 variant counts as a *different* address, and a mismatch makes `send()` fail with
 `E_RECIPIENT_NOT_ALLOWED`, since `panote.io` isn't onboarded to Email Sending and only verified
@@ -657,8 +657,8 @@ works.
 Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
 for tour insights (see "Insights (unit B5)" below), the optional `CF_PURGE_TOKEN` (see "CDN
-purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" below; unset, the
-operator route answers `404`). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
+purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" and "Backups" below;
+unset, the operator routes answer `404`). `wrangler deploy --env <env> --secrets-file <file>` is the alternative to
 interactive `secret put` if scripting this. **Status: set for dev, outstanding for production** —
 `R2_ACCESS_KEY_ID`/`R2_SECRET_ACCESS_KEY` are set on `upload-api` and `tiler-consumer`'s dev
 environments; production has neither yet. `CF_ANALYTICS_TOKEN` and `CF_PURGE_TOKEN` are set on
@@ -1264,7 +1264,7 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
 
 1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
-   under `/api/admin/*`, except the account route itself and the operator route) and `upload-api`'s
+   under `/api/admin/*`, except the account route itself and the operator routes) and `upload-api`'s
    `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing
    closed), so nothing can recreate what the delete is removing. Reads still answer, with whatever
    is left. `accounts/` is owner-scoped like `panos/` and `tours/`: the CDN's WAF rule (above)
@@ -1347,6 +1347,9 @@ name.
   daily alias sweep removes them when they expire.
 - **Copies already in a browser cache**, and edge copies if the purge isn't configured (see
   "Deleted panos").
+- **The nightly backup's copies** of the account's tours, configs and markers (see "Backups"),
+  for up to 31 days: the delete never touches `backup/`, and each dated set goes when it ages
+  out. The privacy policy states this.
 
 ### Operator: the account-delete script
 
@@ -1381,6 +1384,141 @@ trailing whitespace is refused. The next daily sweep (03:17 UTC) then does the w
 
 For a deletion requested by email: `--sub` to mark it, `--status` the next day, then delete the
 Auth0 user as above and reply to the request.
+
+---
+
+## Backups
+
+There is one bucket per environment and R2 keeps no versions, so a bug or a bad script that
+deletes a prefix would otherwise be final. `admin-api` copies the small JSON documents that
+define user content to a private, dated prefix in the **same** bucket every day
+(`services/admin-api/src/backup.ts`).
+
+**What's in a set.** `BACKUP_SOURCES` in `@internal/contracts` (`keys.ts`): every `tours/<owner>/<tourId>/*.json`
+(`tour.json`, `publish.json`, `sharing-stopped.json`), each pano's `panos/<owner>/<panoId>/config.json`,
+`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, and the
+account markers `accounts/<owner>/{deletion,disabled}.json`. Not in it: originals (large, and the
+only copy of the photo, so a lost original is still lost), tiles and manifests (rebuilt from the
+original by a re-tile, "Re-tiling" above), and the derived or operational prefixes `tile-gc/`,
+`upload-log/`, `quarantine/` and `ops/`. Each copy keeps the object's content type, cache control
+and custom metadata (titles, visibility, an alias's expiry), since the app reads those.
+
+**Layout.** `backup/<YYYY-MM-DD>/<original key>`, with `backup/<YYYY-MM-DD>/complete.json`
+(`{ v, date, startedAt, completedAt, objects, bytes, failed, skipped, runs }`) once the set is
+whole, and `backup/progress.json` while one is being written. A set without `complete.json` is
+partial. `backup/` is private: the CDN's WAF rule only lets `/tiles/`, `/pub/` and `/slugs/`
+through (fail-closed), and the post-provision check lists `backup/x`. Nothing but the backup run
+and the operator restore route reads or writes it: account deletion, takedown, the tour and pano
+deletes and the daily sweeps only ever delete their own prefixes (a test runs all of them over a
+backed-up account and checks every copy is still there). So **a backup holds deleted data**,
+including a deleted account's, until its set ages out, at most 31 days.
+
+**Schedule and retention.** Its own Cron Trigger, `*/15 * * * *` (`BACKUP_CRON`, in both env
+blocks of `wrangler.jsonc` beside the daily `17 3 * * *`), so it gets an invocation, and a
+subrequest budget, of its own. The first run after 00:00 UTC starts that day's set. Each run makes
+at most `BACKUP_RUN_BUDGET` (900) R2 operations, records how far it got in `progress.json`, and
+the next run carries on from there; a set that runs past midnight is finished before the next
+day's starts, so sets are never left half-done by the calendar. Once a day's set is complete, a
+run costs one GET and one HEAD. A run saves its progress every 100 objects and after every
+listing page, so one that dies part way loses little, and it holds a lease (`lockedUntil` in
+`progress.json`, taken with a conditional PUT) while it writes: a run that finds a live lease does
+nothing, and a lease (20 minutes) outlasts any run, as Cloudflare stops a Cron Trigger invocation
+after 15 minutes.
+The run that completes a set deletes every set more than `BACKUP_RETENTION_DAYS` (30) days older
+than today, but never the newest **good** set (complete, no failed copy, at least one object),
+however old, and nothing at all if there is no good set; a prune cut short by the budget finishes
+after the next set. A copy that fails is counted (`failed`), left
+out and tried again in the next day's set; an object over 8 MiB is counted as `skipped` and never
+copied (nothing the app writes is close).
+
+**Logs** (`admin-api` observability), each starting `[backup]`, never with a key (the owner segment
+is reversible): `set <date>: N object(s) copied this run, M so far; the next run carries on` while
+a set is being written, `set <date> complete: …` when it's whole (an error, not a warning, if any
+object failed or was skipped), and `set <date> is still being written; the backup is falling
+behind` when a set is more than a day old: that is the signal for the scaling step below.
+
+**Limits and when to move it.** A copy is a GET and a PUT (2 operations); listing is one per
+1,000 keys under a source prefix (all of `panos/` is listed, originals included, to find the
+configs); the lease is one per run, and a progress write one per 100 objects or page. So a run
+copies about 440 objects, and at 96 runs a day the backup keeps up with roughly **40,000 backed-up objects** in all. One account at today's
+caps (500 panos, 200 tours, each published with a slug and up to 5 aliases, on Explore) is about
+500 configs + 400 tour records + 2,000 public keys, about 3,000 objects or 6,000 operations: 7
+runs. A typical account is a few dozen objects. Past ~40,000 objects (the "falling behind" log, or
+a `complete.json` whose `runs` passes 90), move the copy off the cron: have the cron enqueue one
+message per source page on a Queue, or start a Workflow with a step per page, so each batch gets
+its own invocation and budget. Raising `BACKUP_RUN_BUDGET` is the stopgap, as long as it stays
+under the Workers per-invocation subrequest limit for the account's plan (check the current
+figure in Cloudflare's Workers limits docs first); CPU is not the constraint (copying JSON is
+milliseconds).
+
+**Cost.** Per set, one Class A operation (the PUT) and one Class B (the GET) per object, plus
+the listing; storage is 31 copies of the JSON. Pre-launch that is well inside R2's free tier.
+At 40,000 objects it is about 1.2 million Class A operations a month (about $1 past the free
+million, shared with everything else) and 31 × the JSON's total size in storage.
+
+### Restoring
+
+`services/admin-api/scripts/restore-backup.ts` restores one tour, one owner, or everything, from
+a chosen day's set. It plans over the R2 S3 API (the same `R2_*` variables as the other operator
+scripts) and writes through `admin-api`'s operator route `POST /api/admin/operator/restore`
+(`OPERATOR_TOKEN`, the takedown route's secret), because only the native binding puts an object's
+custom metadata back exactly. Like the others it is a dry run unless `--apply`, and a bucket that
+doesn't end in `-dev` has to be named again with `--allow-bucket`.
+
+```bash
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+export OPERATOR_TOKEN=...   # only for --apply
+cd services/admin-api
+# The sets there are, and whether each is complete
+node scripts/restore-backup.ts --list
+# One tour (its owner is found in the set; --sub <auth0 user id> to name it)
+node scripts/restore-backup.ts --date 2026-10-21 --tour <tourId>
+node scripts/restore-backup.ts --date 2026-10-21 --tour <tourId> --apply
+# Everything one owner had, by Auth0 user id
+node scripts/restore-backup.ts --date 2026-10-21 --sub 'google-oauth2|1234' --apply
+# The whole bucket: after an incident, from the last set before it
+node scripts/restore-backup.ts --date 2026-10-21 --all --apply
+```
+
+- A tour is its `tours/<owner>/<tourId>/` records, the configs of the panos its tour and bundle
+  show, its bundle, its owner pointer, its Explore pointer, entry and hidden marker, and the share
+  links its backed-up publish record names that point at it. An owner is every tour and config
+  under their prefix, with those tours' public keys.
+- **Create-only by default**: a key that exists now is left as it is and only missing keys come
+  back. `--overwrite` replaces existing keys with the backed-up copy too (an owner's edits since
+  that day are lost). The dry run lists every key as `restore`, `replace` or `keep (exists)`.
+- **It brings back whatever was deleted after that date**, deliberate deletes and takedowns
+  included, so use the narrowest scope that covers the damage, and read the dry run of an
+  `--all` before applying it.
+- It refuses an owner whose account is marked for deletion now (the daily sweep would delete the
+  restore again); `--all` leaves such owners out, with their tours' public keys. The route checks
+  each key too: a public, share-link, Explore or owner-pointer key is matched to its owner through
+  the tour's `tour-owners/` pointer (the set's, or else the live one), and refused if that owner is
+  marked for deletion or can't be found (a tour older than the pointers: its owner re-publishing
+  writes them again). Remove the marker first only if the deletion itself was the mistake. The
+  account markers are never restored; `takedown.ts --disable-owner` blocks an owner again if the
+  set shows they were disabled.
+- A key whose write fails (an R2 error, or a request that got no answer) is listed as `FAILED` and
+  the script exits 1; the rest are restored. Run the same command again: create-only keeps what
+  already came back.
+- Restored bundles and share links are purged from the CDN (as an unpublish is), and Explore
+  re-checks each entry, so a restored tour shows up within a minute. The writes bypass the tour's
+  `TourPublisher`, so don't restore a tour its owner is editing at that moment.
+- It doesn't bring back originals or tiles. If the originals are still there but tiles or
+  manifests are gone, re-tile them ("Re-tiling"); a config whose original is gone shows as a
+  missing pano in the editor.
+
+**TODO (Joel): a second copy outside this bucket.** These backups live in the same bucket, under
+the same account and the same API tokens, so they protect only against mistakes in code and
+scripts: a bug or a bad run that deletes or overwrites content. They do **not** protect against
+the bucket being deleted, a leaked R2 or account token (anyone who can delete `tours/` can delete
+`backup/`), or losing the Cloudflare account. When that matters, add a second bucket, ideally in a
+separate Cloudflare account with its own tokens (or another provider), and copy each completed set
+there: a bucket binding to it in `admin-api` (repeated under both env blocks, and only after the
+bucket exists, or the deploy fails), or a scheduled copy over the S3 API with that account's own
+token. A bucket lock (retention) rule on the second bucket would also stop its copies being
+deleted early, by anyone. The separation of credentials is what protects them; the same-bucket
+sets stay as the quick path for everyday mistakes.
 
 ---
 
@@ -1463,7 +1601,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | Worker | Binding | Route | Key | Limit | namespace_id dev / production |
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
-| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator route | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
+| `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator routes (takedown, restore) | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
@@ -1508,12 +1646,21 @@ by a `429` keeps the refused documents unsaved, and pressing Save again sends ju
 `POST /api/tours/:id/like` now refuses (`400 {"error":"invalid X-Client-Id"}`) an anonymous
 `X-Client-Id` that isn't a lowercase v4 UUID (`CLIENT_ID_PATTERN` in `@internal/contracts`; the
 website mints `crypto.randomUUID()` and replaces a stored id that doesn't match). A signed-in like
-still dedupes by sub and ignores the header. It answers `404 {"error":"tour not found"}`, and
-creates no Durable Object or key, unless the tour's public bundle `pub/tours/<tourId>.json` exists:
-`public-api` has a read-only `BUCKET` binding to `pano-content(-dev)` for that one `HEAD`. Inside
-`TourStats`, one tour keeps at most `MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a
-new liker is neither counted nor stored, so storage per tour is bounded. Views and stats reads
-don't check the bundle (a view stores one counter per tourId); the per-IP limit is their brake.
+still dedupes by sub and ignores the header. Inside `TourStats`, one tour keeps at most
+`MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a new liker is neither counted nor
+stored, so storage per tour is bounded.
+
+Likes, views (`POST .../view`) and Insights events (`POST .../events`) only count for a published
+tour. Each answers `404 {"error":"tour not found"}`, and creates no Durable Object state and writes
+no Analytics Engine point, unless the tour's public bundle `pub/tours/<tourId>.json` exists:
+`public-api` has a read-only `BUCKET` binding to `pano-content(-dev)` for that `HEAD`. A yes is
+cached in the isolate for 30 s (`PUBLISHED_CACHE_MS`, `src/published.ts`, at most 1,000 tours), so
+a busy tour costs about one `HEAD` (an R2 Class B operation) per isolate per 30 s, and after an
+unpublish or a takedown its views, events and likes can still count for up to 30 s. A no is never
+cached: an unknown id costs a `HEAD` per request, braked by the per-IP limit, and a tour counts as
+soon as it is published. The website's view and events beacons ignore the `404`. Stats reads
+(`GET .../stats`) don't check the bundle: a read stores nothing (an unknown id reads zeros), and the
+admin dashboard reads the view counts of unpublished tours too.
 
 ### Owner quotas
 
@@ -1911,6 +2058,126 @@ the US Copyright Office.
 
 ---
 
+## Monitoring and alerts
+
+What alerts, and how. Until this existed the only alert was the DLQ email above; a Worker
+answering `5xx`, a failed daily cron or a failed CDN purge only showed up in the logs.
+
+### Health check (every 5 minutes)
+
+`tiler-consumer` has a Cron Trigger, `*/5 * * * *`, that runs `runHealthCheck`
+(`services/tiler-consumer/src/health.ts`). It lives there, not in a new Worker or in `admin-api`,
+because `tiler-consumer` already has the `ALERT_EMAIL` binding, the `ALERT_EMAIL_TO` secret and a
+sender on `panote.io`, the only domain with Email Routing: nothing new has to be set up for it
+to email, on dev or production. It also keeps it out of `admin-api`'s cron, which another job
+uses.
+
+**Checks** (`src/health-probes.ts`):
+
+| Check | How | Up when |
+|---|---|---|
+| `website /`, `website /explore` | `WEBSITE` service binding | `200` HTML |
+| `website tour page` (only with `HEALTH_TOUR_SLUG` set) | `WEBSITE`, `/s/<slug>` | `200` HTML with the tour's boot data (`id="pn-boot"`), so the slug and bundle were read from R2 |
+| `admin app /app/` | `ADMIN_APP` | `200` HTML |
+| `public-api /api/explore` | `PUBLIC_API` | `200` JSON with a `tours` array |
+| `admin-api /api/admin/panos`, `upload-api /api/upload-url` | `ADMIN_API`, `UPLOAD_API`, no token | `401`: the Worker ran and refused, it didn't `5xx` |
+| `public URL /` (only with `HEALTH_PUBLIC_PROBES` `true`; off by default) | global `fetch` of `HEALTH_SITE_ORIGIN`, redirects not followed | `200` HTML, **or a redirect to `*.cloudflareaccess.com`** |
+| `public URL /api/explore` (same) | global `fetch` | `200` JSON with `tours`. An Access redirect here is down: it means the `/api/*` bypass app is gone |
+| `admin-api daily cron` | reads `ops/cron/admin-api-daily.json` | the last run had no task throw and the last clean run is under 26 h old |
+| `cdn purge` | reads `ops/cdn-purge/last-failure.json` | no purge failed in the last hour |
+
+Each probe has a 10 s timeout. Requests carry `user-agent: panote-health-check` and no token.
+
+**Cloudflare Access on dev.** `panote.dev`'s pages are behind Access (Cloudflare Access (dev
+only), above), so a public probe of a page gets a `302` to the login. The probes therefore go
+through **service bindings**, straight into each Worker: that proves the Worker's code runs and
+answers, and never meets Access or a route.
+
+**Public URL probes: off by default** (`HEALTH_PUBLIC_PROBES` `false` in both env blocks). With
+it `true`, two more probes fetch `HEALTH_SITE_ORIGIN` the way a visitor does, to catch a broken
+route or Access setup, and count the Access login redirect as up for a page (production has no
+Access, so there it's a plain `200`). They are off because a Worker's `fetch` to another
+Worker's route on the same account has historically failed (error 1042 and same-zone requests
+going to the origin instead), which would mean a false DOWN email after every deploy; the
+service-binding probes already cover the Workers, and the external monitor (TODO below) covers
+the public path. To try them: set `HEALTH_PUBLIC_PROBES` to `"true"` in the `dev` block of
+`services/tiler-consumer/wrangler.jsonc`, run `pnpm --filter @service/tiler-consumer run types`
+(it should report no change) and merge; then watch the logs for `[health] check failed check=public URL`
+over the next 15 minutes. If those lines appear while the service-binding checks pass, set it
+back to `"false"`; a DOWN email for them may already have gone out.
+
+**When it emails.** A check is down after **2 failures in a row** (`FAILURES_TO_ALERT`) and up
+again after one pass. An email goes out whenever the set of down checks differs from what the
+last email said, at most **one per 30 minutes** (`ALERT_THROTTLE_MS`, shared with the DLQ alert,
+separate window): subject `[panote] <host> DOWN (N): <checks>` with each check's status, or
+`[panote] <host> recovered: all checks pass`. A flap that ends where the last email left it, inside
+the window, sends nothing; one that doesn't is sent when the window closes, as things stand then.
+A failed send is retried on the next run. With `ALERT_EMAIL_TO` unset it logs
+`[health] skip alert` and sends nothing, like the DLQ alert. There is no reminder while something
+stays down.
+
+**State** is one small object, `ops/health/state.json` in the content bucket
+(`{ failures, announced, lastSentAt, cronMissingSince }`), written only when it changes. Like the
+DLQ throttle it sits under `ops/`, which the CDN never serves. If it can't be read the check
+starts from scratch, which can mean one email too many, never none.
+
+**Logs.** Every failing check, every run: `[health] check failed check=<name> detail=<status>`.
+Also `[health] alert sent`, `[health] alert throttled`, `[health] failed to send alert: code=…`.
+Details are statuses and error names only.
+
+**Vars** (both env blocks of `services/tiler-consumer/wrangler.jsonc`):
+`HEALTH_SITE_ORIGIN` (`https://panote.dev` / `https://panote.io`), `HEALTH_TOUR_SLUG` (empty: no
+tour page probe; set it to a published Unlisted or Public tour that should stay up) and
+`HEALTH_PUBLIC_PROBES` (`false`, see above). After changing one, run
+`pnpm --filter @service/tiler-consumer run types` and commit any `env.d.ts` change (a value
+change alone leaves it as it is; CI checks for drift).
+
+### Daily cron and CDN purge failures
+
+- **Daily cron.** `admin-api`'s `scheduled` handler runs its tasks (`slug-aliases`,
+  `account-deletions` with its CDN purge, `tile-gc`) through `runDailyCron`
+  (`services/admin-api/src/cron-status.ts`). Each task that throws logs
+  `[cron] daily task failed task=<name> error=<error name>`, and every run writes
+  `ops/cron/admin-api-daily.json`: `{ lastRunAt, lastOkAt, failed }`, where `lastOkAt` only moves
+  on a run with no task failed. The health check fails `admin-api daily cron` when the last run
+  failed or the last clean run is over 26 h old (the cron stopped). A failed run keeps the check
+  failing until the next daily run comes back clean, so even a one-off failure means a DOWN email
+  and the recovery email about a day later; the alert says so ("clears after the next successful
+  daily run"). On
+  a bucket with no status yet, it waits 26 h from the first time it saw that before failing. A
+  task's per-item failures that it logs and carries on from (one account, one tile version) don't
+  count: only a task that throws.
+- **CDN purge.** A failed purge already logs `cdn purge failed (…)`. It now also overwrites
+  `ops/cdn-purge/last-failure.json` (`{ at, detail }`, the same status and error codes as the log
+  line), from both request handlers and the cron. The `cdn purge` check fails for an hour after
+  the latest one, so a failure emails (twice-in-a-row rule: from about 5 minutes after) and
+  recovers on its own. A burst of deletes past the Free plan's 5 prefix purges a minute (`429`)
+  alerts too, since those tiles do stay cached until their TTL. A skipped purge (token or zone id
+  not configured, production today) records nothing.
+
+### Not covered
+
+- **A Cloudflare-wide outage.** Every check runs inside Cloudflare; if Cloudflare, or Workers
+  Cron Triggers, are down, nothing runs and nothing emails.
+- `5xx` on routes nothing probes (an editor save, a like). Those show in Workers Logs and the
+  error reports (Error reporting), not here.
+- The tiler container and the upload queue: dead letters still alert through the DLQ email.
+- `cdn.panote.dev`/`cdn.panote.io` themselves (R2 custom domain), unless the tour page probe is set.
+
+**TODO (Joel): add an external uptime monitor.** Set up a free monitor from any external uptime
+service (one that checks from outside Cloudflare) on `https://panote.io/` and
+`https://panote.io/api/explore` once production is up, alerting to the same inbox. It's the only
+thing that sees a Cloudflare-wide outage or a DNS problem with `panote.io`. Not for `panote.dev`:
+Access would make its pages look down. Nothing has been signed up for.
+
+**Status: code only, not deployed.** After the next dev deploy: check `tiler-consumer`'s logs for
+`[health]` lines (none expected while everything passes), and after the next 03:17 UTC run, for
+`ops/cron/admin-api-daily.json` in `pano-content-dev`. To see an alert end to end, set
+`HEALTH_TOUR_SLUG` on dev to a slug that doesn't exist and deploy: the tour page check fails, and
+an email arrives about 10 minutes later; set it back and the recovery follows within 30 minutes.
+
+---
+
 ## Insights (unit B5)
 
 `public-api` writes one Workers Analytics Engine data point per viewer event (`view`, `scene`,
@@ -2061,7 +2328,7 @@ the account has the resources the config names.
    `wrangler r2 bucket domain add pano-content --domain cdn.panote.io --zone-id <panote.io zone id>`).
    Only once step 4's rule is enabled.
    Verify, straight away, while the bucket is still empty:
-   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/` and
+   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/backup/x`, `/` and
      `/tiles/../panos/x` (that one with `curl --path-as-is`, or curl collapses the `..` itself):
      all `403`.
    - `curl -sI https://cdn.panote.io/tiles/x`: `404` from R2, not `403`.
@@ -2139,8 +2406,10 @@ the account has the resources the config names.
     `workflow_dispatch`, environment `production`, from `main`, and approve it. The four Worker
     jobs and two app jobs run in parallel; `admin-api` binds `public-api`'s `TourStats` across
     scripts, so if `admin-api` fails on this first run because `panote-public-api` doesn't exist
-    yet, re-run that one job once `public-api` is in. The `smoke-test` job then checks the public
-    URLs (below).
+    yet, re-run that one job once `public-api` is in. Likewise `tiler-consumer` has service
+    bindings to the other five production Workers (Monitoring and alerts): if its job fails
+    because one of them doesn't exist yet, re-run it once they are all in. The `smoke-test` job
+    then checks the public URLs (below).
     Verify: every job green, `smoke-test` included.
     **Status: outstanding.**
 
@@ -2151,6 +2420,14 @@ the account has the resources the config names.
     `tiler-consumer`'s logs show the marker skipped (the key doesn't exist).
     **Status: outstanding.**
 
+14. **Health check.** Set `HEALTH_TOUR_SLUG` in the `production` block of
+    `services/tiler-consumer/wrangler.jsonc` to a published tour's slug, and check the Worker's
+    logs for `[health] check failed` (Monitoring and alerts). Set up the external uptime monitor
+    for `panote.io` (same section, the TODO at the end).
+    Verify: no `[health] check failed` line ten minutes after the deploy; the first daily cron
+    after it writes `ops/cron/admin-api-daily.json`.
+    **Status: outstanding.**
+
 ### Post-provision verification
 
 Run after step 12, before telling anyone the site exists. The first group is what `deploy.yml`'s
@@ -2158,7 +2435,7 @@ Run after step 12, before telling anyone the site exists. The first group is wha
 
 ```bash
 # Private prefixes stay private (step 4): every line 403
-for p in panos/x tours/x accounts/x ops/x explore/index/x '' tiles/../panos/x; do
+for p in panos/x tours/x accounts/x ops/x explore/index/x backup/x '' tiles/../panos/x; do
   curl -sI --path-as-is -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
 # Public prefixes pass through to R2: 404 for a key that doesn't exist, not 403
 curl -sI -o /dev/null -w '%{http_code}\n' https://cdn.panote.io/tiles/x/manifest.json

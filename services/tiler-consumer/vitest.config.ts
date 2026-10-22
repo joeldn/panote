@@ -16,6 +16,15 @@ export default defineWorkerTestConfig({
         R2_ACCESS_KEY_ID: 'test-access-key-id',
         R2_SECRET_ACCESS_KEY: 'test-secret-access-key',
       },
+      // The health check's service bindings name other Workers, which don't exist
+      // here and stop workerd from starting. Stand-ins that answer 503; the health
+      // tests pass their own fakes.
+      serviceBindings: Object.fromEntries(
+        ['WEBSITE', 'ADMIN_APP', 'PUBLIC_API', 'ADMIN_API', 'UPLOAD_API'].map((name) => [
+          name,
+          () => new Response('no such Worker in tests', { status: 503 }),
+        ]),
+      ),
     },
   },
 });

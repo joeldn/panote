@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CDN_PURGE_FAILURE_KEY } from '@internal/contracts';
+import { env } from 'cloudflare:test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mergePurges, purgeCdn, type PurgeEnv } from './purge.js';
 
@@ -126,6 +128,63 @@ describe('purgeCdn', () => {
       purgeCdn(CONFIGURED, { prefixes: ['tiles/p1/'], files: [] }, { fetch: hung, timeoutMs: 20 }),
     ).resolves.toBeUndefined();
     expect(allLogged(spies)).toContain('TimeoutError');
+  });
+});
+
+describe('purgeCdn failure marker', () => {
+  const WITH_BUCKET: PurgeEnv = { ...CONFIGURED, BUCKET: env.BUCKET };
+  const marker = async () =>
+    (await (await env.BUCKET.get(CDN_PURGE_FAILURE_KEY))?.json()) as
+      { at: string; detail: string } | undefined;
+  beforeEach(() => env.BUCKET.delete(CDN_PURGE_FAILURE_KEY));
+
+  it('records the last failure for the health check, status and error codes only', async () => {
+    logSpies();
+    const f = recordingFetch(async () =>
+      Response.json({ errors: [{ code: 1015, message: 'rate limited' }] }, { status: 429 }),
+    );
+    const before = Date.now();
+    await purgeCdn(WITH_BUCKET, { prefixes: ['tiles/p1/'], files: [] }, { fetch: f.fn });
+    const m = await marker();
+    expect(m?.detail).toBe('prefixes, 1: HTTP 429: 1015 rate limited');
+    expect(Date.parse(m?.at ?? '')).toBeGreaterThanOrEqual(before);
+    expect(JSON.stringify(m)).not.toContain(TOKEN);
+  });
+
+  it('records nothing when every request goes through', async () => {
+    await purgeCdn(
+      WITH_BUCKET,
+      { prefixes: ['tiles/p1/'], files: ['a.json'] },
+      { fetch: recordingFetch().fn },
+    );
+    expect(await marker()).toBeUndefined();
+  });
+
+  it('records nothing when the purge is skipped as unconfigured', async () => {
+    logSpies();
+    const f = recordingFetch(async () => new Response('', { status: 500 }));
+    await purgeCdn(
+      { ...WITH_BUCKET, CF_PURGE_TOKEN: undefined },
+      { prefixes: ['tiles/p1/'], files: [] },
+      { fetch: f.fn },
+    );
+    expect(f.calls).toHaveLength(0);
+    expect(await marker()).toBeUndefined();
+  });
+
+  it('still never throws when the marker cannot be written', async () => {
+    const spies = logSpies();
+    const broken = {
+      put: () => Promise.reject(new Error('r2 down')),
+    } as unknown as R2Bucket;
+    await expect(
+      purgeCdn(
+        { ...CONFIGURED, BUCKET: broken },
+        { prefixes: ['tiles/p1/'], files: [] },
+        { fetch: recordingFetch(async () => new Response('', { status: 500 })).fn },
+      ),
+    ).resolves.toBeUndefined();
+    expect(allLogged(spies)).toContain('cdn purge failure not recorded: Error');
   });
 });
 

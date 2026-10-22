@@ -27,6 +27,21 @@ import {
   tileFailedKey,
   tileFailedKeyFromOriginalKey,
   panoIdFromOriginalKey,
+  BACKUP_PROGRESS_KEY,
+  BACKUP_ROOT,
+  BACKUP_SOURCES,
+  backupCompleteKey,
+  backupKey,
+  backupSetPrefix,
+  exploreEntryKey,
+  exploreHiddenKey,
+  exploreTourKey,
+  isBackedUpKey,
+  isRestorableKey,
+  publishKey,
+  pubTourKey,
+  sharingStoppedKey,
+  slugKey,
 } from './keys.js';
 
 describe('keys', () => {
@@ -325,5 +340,63 @@ describe('upload log keys', () => {
 
   it('refuses a panoId outside PANO_PATTERN', () => {
     expect(() => uploadLogKey('auth0|abc', at, 'a/b')).toThrow();
+  });
+});
+
+describe('backup keys', () => {
+  const sub = 'google-oauth2|111';
+  it('puts a copy under its dated set, beside the set marker', () => {
+    expect(backupKey('2026-10-22', tourKey(sub, 't1'))).toBe(
+      `backup/2026-10-22/tours/${encodeId(sub)}/t1/tour.json`,
+    );
+    expect(backupCompleteKey('2026-10-22')).toBe('backup/2026-10-22/complete.json');
+    expect(() => backupSetPrefix('2026-10-22/../x')).toThrow(/YYYY-MM-DD/);
+  });
+
+  it.each([
+    tourKey(sub, 't1'),
+    publishKey(sub, 't1'),
+    sharingStoppedKey(sub, 't1'),
+    configKey(sub, 'p1'),
+    pubTourKey('t1'),
+    slugKey('my-tour'),
+    tourOwnerKey('t1'),
+    exploreEntryKey(1_700_000_000_000, 't1'),
+    exploreTourKey('t1'),
+    exploreHiddenKey('t1'),
+    accountDeletionKey(sub),
+    accountDisabledKey(sub),
+  ])('backs up %s', (key) => {
+    expect(isBackedUpKey(key)).toBe(true);
+  });
+
+  it.each([
+    originalKey(sub, 'p1'),
+    deletingKey(sub, 'p1'),
+    tileFailedKey(sub, 'p1'),
+    manifestKey('p1'),
+    previewKey('p1', 'v1'),
+    tileGcKey('p1', 'v1'),
+    uploadLogKey(sub, new Date(0), 'p1'),
+    `${QUARANTINE_ROOT}case-1/${tourKey(sub, 't1')}`,
+    'ops/dlq-alert/q.json',
+    backupKey('2026-10-22', tourKey(sub, 't1')),
+    BACKUP_PROGRESS_KEY,
+  ])('leaves %s out', (key) => {
+    expect(isBackedUpKey(key)).toBe(false);
+  });
+
+  it('never restores the account markers', () => {
+    expect(isRestorableKey(accountDeletionKey(sub))).toBe(false);
+    expect(isRestorableKey(accountDisabledKey(sub))).toBe(false);
+    expect(isRestorableKey(tourKey(sub, 't1'))).toBe(true);
+  });
+
+  it('lists each source prefix once, every match inside its prefix', () => {
+    const prefixes = BACKUP_SOURCES.map((s) => s.prefix);
+    expect(new Set(prefixes).size).toBe(prefixes.length);
+    expect(prefixes.some((p) => p.startsWith(BACKUP_ROOT) || BACKUP_ROOT.startsWith(p))).toBe(
+      false,
+    );
   });
 });

@@ -1,5 +1,7 @@
 // Best-effort Cloudflare cache purge for cdn.<host> (plan 3.5, B6). Paths are R2
 // keys, which map 1:1 onto the CDN custom domain's URL paths.
+import { CDN_PURGE_FAILURE_KEY, type CdnPurgeFailure } from '@internal/contracts';
+
 export type CdnPurge = { prefixes: string[]; files: string[] };
 
 export const NO_PURGE: CdnPurge = { prefixes: [], files: [] };
@@ -13,6 +15,9 @@ export type PurgeEnv = {
   CF_PURGE_TOKEN?: string | undefined;
   CDN_ZONE_ID: string;
   CDN_HOST: string;
+  // Where a failure is recorded for tiler-consumer's health check (docs/deploy.md,
+  // "Monitoring and alerts"). Without it a failure is only logged.
+  BUCKET?: R2Bucket;
 };
 
 type PurgeOptions = { fetch?: typeof fetch; timeoutMs?: number };
@@ -40,13 +45,15 @@ const describeFailure = async (res: Response): Promise<string> => {
   return `HTTP ${res.status}${errors.length ? `: ${errors.join('; ')}` : ''}`;
 };
 
+// Returns what failed (the same text the log line has), or null when it went through.
 const send = async (
   env: PurgeEnv,
   kind: 'prefixes' | 'files',
   values: string[],
   opts: PurgeOptions,
-): Promise<void> => {
+): Promise<string | null> => {
   const doFetch = opts.fetch ?? fetch;
+  let reason: string;
   try {
     const res = await doFetch(
       `https://api.cloudflare.com/client/v4/zones/${env.CDN_ZONE_ID}/purge_cache`,
@@ -60,12 +67,24 @@ const send = async (
         signal: AbortSignal.timeout(opts.timeoutMs ?? TIMEOUT_MS),
       },
     );
-    if (!res.ok) {
-      console.error(`cdn purge failed (${kind}, ${values.length}): ${await describeFailure(res)}`);
-    }
+    if (res.ok) return null;
+    reason = await describeFailure(res);
   } catch (e) {
-    const reason = e instanceof Error ? e.name : 'unknown error';
-    console.error(`cdn purge failed (${kind}, ${values.length}): ${reason}`);
+    reason = e instanceof Error ? e.name : 'unknown error';
+  }
+  console.error(`cdn purge failed (${kind}, ${values.length}): ${reason}`);
+  return `${kind}, ${values.length}: ${reason}`;
+};
+
+// Overwrites the one failure marker; nothing reads it back here, so no race to lose.
+const recordFailure = async (bucket: R2Bucket, detail: string): Promise<void> => {
+  const body: CdnPurgeFailure = { at: new Date().toISOString(), detail };
+  try {
+    await bucket.put(CDN_PURGE_FAILURE_KEY, JSON.stringify(body), {
+      httpMetadata: { contentType: 'application/json' },
+    });
+  } catch (e) {
+    console.error(`cdn purge failure not recorded: ${e instanceof Error ? e.name : 'unknown'}`);
   }
 };
 
@@ -84,6 +103,9 @@ export const purgeCdn = async (
   // Prefixes take no scheme; single-file purges take the full URL.
   const prefixes = purge.prefixes.map((p) => `${env.CDN_HOST}/${p}`);
   const files = purge.files.map((f) => `https://${env.CDN_HOST}/${f}`);
-  for (const batch of chunks(prefixes)) await send(env, 'prefixes', batch, opts);
-  for (const batch of chunks(files)) await send(env, 'files', batch, opts);
+  let failed: string | null = null;
+  for (const batch of chunks(prefixes))
+    failed = (await send(env, 'prefixes', batch, opts)) ?? failed;
+  for (const batch of chunks(files)) failed = (await send(env, 'files', batch, opts)) ?? failed;
+  if (failed !== null && env.BUCKET) await recordFailure(env.BUCKET, failed);
 };

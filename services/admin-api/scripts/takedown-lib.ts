@@ -31,7 +31,12 @@ import {
 } from '@internal/contracts';
 import { R2PreconditionFailedError, type R2S3Client } from '@internal/worker-kit/r2-s3';
 
-import { r2ConfigFromEnv, requestAccountDeletion, type R2Config } from './delete-account-lib.ts';
+import {
+  operatorApiFromEnv,
+  r2ConfigFromEnv,
+  requestAccountDeletion,
+  type R2Config,
+} from './delete-account-lib.ts';
 
 export type OwnerAction = 'disable' | 'enable';
 /** What happens to the tour(s): the operator route's two actions, or copy-then-delete. */
@@ -107,12 +112,6 @@ const CASE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const OWNER_FLAGS: Record<string, OwnerAction> = {
   '--disable-owner': 'disable',
   '--enable-owner': 'enable',
-};
-
-// Where admin-api answers for each bucket, unless ADMIN_API_ORIGIN says otherwise.
-const DEFAULT_ORIGINS: Record<string, string> = {
-  'pano-content-dev': 'https://panote.dev',
-  'pano-content': 'https://panote.io',
 };
 
 export function parseTakedownArgs(
@@ -205,26 +204,7 @@ export function parseTakedownArgs(
     throw new Error('--reason is over 500 characters');
 
   const r2 = r2ConfigFromEnv(env, values['--allow-bucket']);
-  let api: TakedownArgs['api'];
-  if (tourAction) {
-    const token = env.OPERATOR_TOKEN;
-    if (!token) throw new Error('missing env OPERATOR_TOKEN (admin-api secret of the same name)');
-    const fallback = DEFAULT_ORIGINS[r2.bucket];
-    const origin = env.ADMIN_API_ORIGIN || fallback;
-    if (!origin)
-      throw new Error(`no default admin-api origin for ${r2.bucket}; set ADMIN_API_ORIGIN`);
-    if (!/^https:\/\/[^/]+$/.test(origin)) {
-      throw new Error('ADMIN_API_ORIGIN must be an https origin with no path');
-    }
-    // An override must not quietly point one env's bucket at another env's admin-api
-    // (a dev bucket at panote.io, say): anything but the default is named twice too.
-    if (origin !== fallback && values['--allow-bucket'] !== r2.bucket) {
-      throw new Error(
-        `ADMIN_API_ORIGIN ${origin} isn't the default for ${r2.bucket}; pass --allow-bucket ${r2.bucket} to use it`,
-      );
-    }
-    api = { origin, token };
-  }
+  const api = tourAction ? operatorApiFromEnv(env, r2.bucket, values['--allow-bucket']) : undefined;
   return {
     slug,
     tourId,

@@ -19,7 +19,7 @@
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read)
       // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
-      // enables the operator takedown route, docs/deploy.md "Takedown").
+      // enables the operator takedown and restore routes, docs/deploy.md "Takedown", "Backups").
       // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
@@ -56,8 +56,10 @@
         "CDN_ZONE_ID": "2196d8dead0322ad69307711fc72b5d3",
         "CDN_HOST": "cdn.panote.dev",
       },
-      // Daily sweep that releases expired slug aliases.
-      "triggers": { "crons": ["17 3 * * *"] },
+      // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
+      // the backup, which runs every 15 minutes until the day's set is complete
+      // (BACKUP_CRON in src/backup.ts; docs/deploy.md, Backups).
+      "triggers": { "crons": ["17 3 * * *", "*/15 * * * *"] },
     },
     "production": {
       // production is unprovisioned, see docs/deploy.md
@@ -68,7 +70,7 @@
       "observability": { "enabled": true },
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env production (Account Analytics: Read)
       // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
-      // enables the operator takedown route, docs/deploy.md "Takedown").
+      // enables the operator takedown and restore routes, docs/deploy.md "Takedown", "Backups").
       // R2 goes through the native binding, not the S3 API.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       // Serializes publish/slug/visibility changes per tour (one instance per tourId).
@@ -103,8 +105,10 @@
         "CDN_ZONE_ID": "YOUR_PANOTE_IO_ZONE_ID",
         "CDN_HOST": "cdn.panote.io",
       },
-      // Daily sweep that releases expired slug aliases.
-      "triggers": { "crons": ["17 3 * * *"] },
+      // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
+      // the backup, which runs every 15 minutes until the day's set is complete
+      // (BACKUP_CRON in src/backup.ts; docs/deploy.md, Backups).
+      "triggers": { "crons": ["17 3 * * *", "*/15 * * * *"] },
     },
   },
 }

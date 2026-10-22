@@ -9,21 +9,14 @@ import type * as OgModule from './og.js';
 import type * as RemapModule from './remap.js';
 
 // build.ts hardcodes `channels: 3` on the RgbImage it builds from sharp's raw
-// decode of opts.src, on the assumption that removeAlpha() + raw() always
-// yields 3-channel RGB. Empirically, with the sharp version this repo pins
-// (0.34.2), that assumption holds by default: .raw() normalizes any decoded
-// image -- grayscale, CMYK, with or without alpha -- to sRGB, so no real
-// source file reaches build.ts with info.channels !== 3. (Verified directly:
-// a genuine 1-channel grayscale JPEG built with ImageMagick still decodes to
-// 3 channels through `sharp(src).removeAlpha().raw().toBuffer()`.)
-//
-// The guard added in build.ts is defence-in-depth against that assumption
-// ever becoming false (a sharp upgrade, an unusual input this wasn't tested
-// against, etc.) -- remap.ts's bilinear sampler uses a fixed stride of 3 and
-// would otherwise silently read out of bounds and write mostly-black tiles
-// with no error. Since no real fixture can trigger it today, this test
-// mocks sharp's decode to return an off-spec channel count and asserts
-// build() fails loudly instead of proceeding.
+// decode of opts.src. It asks for that explicitly (toColourspace('srgb') +
+// removeAlpha()), and build-inputs.test.ts runs real greyscale, CMYK and
+// 16-bit sources through it. The channel guard in build.ts is defence in
+// depth against that ever being false (a sharp upgrade, an unusual input):
+// remap.ts's bilinear sampler uses a fixed stride of 3 and would otherwise
+// silently read out of bounds and write mostly-black tiles with no error.
+// No real fixture can trigger it, so this test mocks sharp's decode to
+// return an off-spec channel count and asserts build() fails loudly.
 const toBuffer = vi.fn();
 const metadata = vi.fn();
 // Shared across every sharp()/resize()/toFile() call, so a test can tell the
@@ -31,10 +24,16 @@ const metadata = vi.fn();
 const resizeCalls: unknown[][] = [];
 const toFileCalls: string[] = [];
 const sharpCalls: unknown[][] = [];
+const extendCalls: unknown[][] = [];
 
 function chainable(): Record<string, unknown> {
   const self: Record<string, unknown> = {
     removeAlpha: () => self,
+    toColourspace: () => self,
+    extend: (...args: unknown[]) => {
+      extendCalls.push(args);
+      return self;
+    },
     raw: () => self,
     resize: (...args: unknown[]) => {
       resizeCalls.push(args);
@@ -113,6 +112,8 @@ describe('build', () => {
     resizeCalls.length = 0;
     toFileCalls.length = 0;
     sharpCalls.length = 0;
+    extendCalls.length = 0;
+    toBuffer.mockReset();
     renderFace.mockClear();
     equirectSampler.mockClear();
   });
@@ -177,20 +178,25 @@ describe('build', () => {
       ).rejects.toThrow(/tileSize/);
     });
 
-    it('rejects an explicit maxSize that would push faceSize above the derived cap', async () => {
-      // computeFaceSize's own default caps at 16384, but a caller can still
-      // pass an explicit maxSize above that -- assertPyramidBounds is what
-      // makes that unable to produce an out-of-bounds pyramid.
-      // width chosen so computeFaceSize(width, 512, 32768) lands exactly on
-      // 32768 (width / 4 = 32768 -> width = 131072); height kept small so
-      // width * height stays under the MAX_INPUT_PIXELS decode cap and this
-      // test exercises assertPyramidBounds's faceSize check specifically,
-      // not the separate pixel-cap check.
+    it('sizes the pyramid from the padded decode, so a very wide strip stays in bounds', async () => {
+      // 131072 x 1024 would ask for 32768px faces, over MAX_FACE_SIZE. It is a
+      // 128:1 strip, so it is padded to 2:1 and downscaled to fit the decode
+      // cap (equirect.ts), which takes the faces back under the bound: an
+      // explicit maxSize can't push a real source past assertPyramidBounds
+      // any more (pyramid.test.ts checks the bound itself).
       const outDir = await tmp();
       metadata.mockResolvedValue({ width: 131_072, height: 1024 });
+      // Left to fail the decode: only what build() asked sharp for matters here.
+      toBuffer.mockRejectedValue(new Error('decode stopped by test'));
       await expect(
         build({ src: 'fake-source.png', outDir, pano: 'ok-pano', maxSize: 32768 }),
-      ).rejects.toThrow(/faceSize/);
+      ).rejects.toThrow('decode stopped by test');
+      const [w, h] = resizeCalls[0] as [number, number];
+      expect(w).toBeLessThan(131_072);
+      expect(h).toBe(Math.round((1024 * w) / 131_072));
+      const [ext] = extendCalls[0] as [{ top: number; bottom: number }];
+      expect(w * (h + ext.top + ext.bottom)).toBeLessThanOrEqual(150_000_000);
+      expect(h + ext.top + ext.bottom).toBe(Math.round(w / 2));
     });
 
     it('rejects the exact gap the old validator left: tileSize 128 reaching faceSize 16384 at maxLevel 7', async () => {
@@ -371,6 +377,35 @@ describe('build', () => {
       expect(manifest.tilerVersion).toBeUndefined();
       expect(manifest.preview).toBe(true);
       expect(manifest.og).toBe(true);
+    });
+  });
+
+  describe('partial panoramas', () => {
+    it('pads a 4:1 strip to 2:1 before the faces, preview and og.jpg are cut from it', async () => {
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ width: 2048, height: 512 });
+      toBuffer.mockResolvedValue({
+        data: Buffer.alloc(2048 * 1024 * 3),
+        info: { width: 2048, height: 1024, channels: 3 },
+      });
+      const manifest = await build({ src: 'fake-source.png', outDir, pano: 'strip', maxSize: 512 });
+      expect(extendCalls).toEqual([[{ top: 256, bottom: 256, background: { r: 0, g: 0, b: 0 } }]]);
+      // Not downscaled: the strip fits the cap once padded.
+      expect(resizeCalls.some(([w, h]) => w === 2048 && h === 512)).toBe(false);
+      const [ogSource] = equirectSampler.mock.calls[0] as [{ width: number; height: number }];
+      expect([ogSource.width, ogSource.height]).toEqual([2048, 1024]);
+      expect(manifest).toMatchObject({ faceSize: 512, preview: true, og: true });
+    });
+
+    it('does not pad a 2:1 source', async () => {
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ width: 2048, height: 1024 });
+      toBuffer.mockResolvedValue({
+        data: Buffer.alloc(2048 * 1024 * 3),
+        info: { width: 2048, height: 1024, channels: 3 },
+      });
+      await build({ src: 'fake-source.png', outDir, pano: 'full', maxSize: 512 });
+      expect(extendCalls).toEqual([]);
     });
   });
 
