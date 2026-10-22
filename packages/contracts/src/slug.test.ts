@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { pubTourKey, publishKey, slugKey, encodeId, SLUGS_ROOT, storedSlugKey } from './keys.js';
+import {
+  pubTourKey,
+  publishKey,
+  sharingStoppedKey,
+  slugKey,
+  encodeId,
+  SLUGS_ROOT,
+  storedSlugKey,
+} from './keys.js';
 import { PublishedTourSchema, SlugRecordSchema, SlugSchema } from './publish.js';
 import {
   checkSlug,
@@ -93,6 +101,9 @@ describe('share-link keys', () => {
 
   it('builds the private publish sidecar under the encoded owner', () => {
     expect(publishKey('auth0|abc', 't1')).toBe(`tours/${encodeId('auth0|abc')}/t1/publish.json`);
+    expect(sharingStoppedKey('auth0|abc', 't1')).toBe(
+      `tours/${encodeId('auth0|abc')}/t1/sharing-stopped.json`,
+    );
   });
 
   it('builds a stored-slug key without re-validating, but refuses traversal', () => {

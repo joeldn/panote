@@ -4,6 +4,7 @@ import {
   InsightsOkSchema,
   InsightsUnavailableSchema,
   NotPublishedSchema,
+  SharingStoppedSchema,
   PANO_PATTERN,
   PanoConfigNotFoundSchema,
   PANO_DELETE_CONFLICTS,
@@ -132,7 +133,10 @@ export interface AdminApi {
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
 export type PublishError =
-  | { kind: 'slug-taken' | 'slug-lost' | 'conflict' | 'not-published' | 'not-found' }
+  | {
+      kind:
+        'slug-taken' | 'slug-lost' | 'conflict' | 'not-published' | 'not-found' | 'sharing-stopped';
+    }
   | { kind: 'slug-invalid'; reason: 'invalid' | 'reserved' }
   | { kind: 'unprocessable'; scenes: Array<{ panoId: string; reason: PublishFailureReason }> };
 
@@ -145,6 +149,7 @@ export function publishErrorOf(e: unknown): PublishError | null {
     if (is(SlugTakenSchema)) return { kind: 'slug-taken' };
     if (is(SlugLostSchema)) return { kind: 'slug-lost' };
     if (is(NotPublishedSchema)) return { kind: 'not-published' };
+    if (is(SharingStoppedSchema)) return { kind: 'sharing-stopped' };
     if (is(PublishConflictSchema)) return { kind: 'conflict' };
   }
   if (e.status === 400) {
