@@ -1078,3 +1078,40 @@ describe('routing through the assets router', () => {
     expect(res.headers.get('Location')).toBe('/s/new-name?pano=p1');
   });
 });
+
+describe('the explore page', () => {
+  it("swaps the landing's title and preview text for /explore's own, keeping the image", async () => {
+    const res = await call('/explore');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('ETag')).toBeNull();
+    const html = await res.text();
+    expect(html).toContain('<title>Explore 360° tours · panote</title>');
+    expect(html).toContain('<meta name="description" content="Public 360° tours on panote');
+    expect(html).toContain('<meta property="og:title" content="Explore 360° tours · panote" />');
+    expect(html).toContain(`<meta property="og:url" content="${ORIGIN}/explore"></head>`);
+    expect(html).toContain(`<meta property="og:image" content="${ORIGIN}/og.jpg" />`);
+    expect(html.match(/<title>/g)).toHaveLength(1);
+    expect(html.match(/name="description"/g)).toHaveLength(1);
+  });
+
+  it('leaves anything but /explore itself, and a non-HTML answer, alone', async () => {
+    expect(await (await call('/explore/deeper')).text()).toBe(PAGE);
+    const res = await call('/explore', undefined, {
+      ASSETS: { fetch: async () => new Response('gone', { status: 404 }) } as unknown as Fetcher,
+    });
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe('gone');
+  });
+
+  it('tags it noindex off production, like the tour pages', async () => {
+    const res = await call('/explore', undefined, { INDEXABLE: 'false' });
+    expect(res.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('runs the script first for /explore, on the built index.html', async () => {
+    const html = await (await SELF.fetch(`${ORIGIN}/explore`)).text();
+    expect(html).toContain('<script type="module"');
+    expect(html).toContain('<title>Explore 360° tours · panote</title>');
+    expect(html).not.toContain('Host 360° panorama tours');
+  });
+});

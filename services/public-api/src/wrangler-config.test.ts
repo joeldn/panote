@@ -17,6 +17,7 @@ describe('wrangler.jsonc ratelimits', () => {
     expect(limiters.map((l) => l.name).sort()).toEqual([
       'ERRORS_LIMITER',
       'EVENTS_LIMITER',
+      'EXPLORE_LIMITER',
       'LIKE_LIMITER',
       'VIEW_LIMITER',
     ]);

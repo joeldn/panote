@@ -163,7 +163,7 @@ Unpublish deletes the slug (only if it's a live pointer to this tour — a `redi
   - This pulls one small piece of the otherwise-optional **W3** ("website Worker script") forward into Wave 6, since D1's assets-only Worker with no `main` can't return a 308 on its own. The rest of W3 (404s for unmatched `/api/*`, OG tags) is unaffected and stays deferred/optional.
 - A 404 at any step (slug not found, or a redirect whose target is itself missing) shows the "This tour isn't available" placeholder. That's also the embed placeholder the design asks for (design README:162).
 - `?pano=` limits the embed to one scene with no nav links (design README:130).
-- `visibility: 'unlisted'` adds `<meta name="robots" content="noindex">`. There is no discovery surface yet, so today that is the only difference between the two.
+- `visibility: 'unlisted'` adds `<meta name="robots" content="noindex">`. Public tours are also listed on the website's `/explore` (see the Explore index row in `docs/decisions.md` and Explore in `docs/deploy.md`); Unlisted ones never are.
 - Caching: `.json` isn't edge-cached on the CDN (`docs/deploy.md:612-615`), and `putJson` sets `max-age=30` (`r2-binding.ts:29`). An unpublish is therefore effective within about 30s with no purge needed. No cache rule gets added for `/pub/` or `/slugs/`. The website Worker's own 308s are uncached, so a redirect target can be corrected without waiting out an edge cache.
 
 ### 3.3 Insights: Workers Analytics Engine (unit B5)

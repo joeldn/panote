@@ -28,6 +28,8 @@ import {
 } from '@internal/contracts';
 import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 
+import { removeFromExplore, syncExploreQuietly } from './explore.js';
+
 export const DEFAULT_SLUG_ALIAS_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SCENE_CHECK_CONCURRENCY = 8;
@@ -313,12 +315,17 @@ const commit = async (
   );
   if (!wrote.ok) return { ok: false, status: 409 };
   const expiries = await applyAliases(bucket, tourId, c.plan, c.record.slug, c.freshExpiresAt);
-  await putJson(bucket, pubTourKey(tourId), c.bundle);
+  // The metadata lets public-api's Explore check a listed tour with a HEAD.
+  await putJson(bucket, pubTourKey(tourId), c.bundle, undefined, {
+    visibility: c.bundle.visibility,
+    slug: c.bundle.slug,
+  });
   // A tour deleted meanwhile (the delete itself isn't serialized) must not stay public.
   if (!(await bucket.head(tourKey(sub, tourId)))) {
     await unpublish(bucket, sub, tourId);
     return { ok: false, status: 404 };
   }
+  await syncExploreQuietly(bucket, c.bundle, new Date());
   return { ok: true, expiries };
 };
 
@@ -525,6 +532,8 @@ export const unpublish = async (
     for (const key of released) if (key) removed.push(key);
   }
   await bucket.delete(pubTourKey(tourId));
+  // Not best-effort: an error leaves publish.json, so a retry still finds the tour.
+  await removeFromExplore(bucket, tourId);
   await bucket.delete(publishKey(sub, tourId));
   return [pubTourKey(tourId), ...removed];
 };

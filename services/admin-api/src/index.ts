@@ -501,6 +501,14 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
     return c.json({ error: 'tour not found' }, 404);
   }
   const stub = publisher(c.env, tourId);
+  if (action === 'hide' || action === 'unhide') {
+    // Explore only: the share link, bundle and slug stay as they are, so nothing to purge.
+    if (!(await stub.setExploreHidden(sub, tourId, action === 'hide'))) {
+      return c.json({ error: 'tour not found' }, 404);
+    }
+    console.warn(`[takedown] operator ${action} of tour ${tourId} on Explore done`);
+    return c.json({ action, purged: 0 });
+  }
   const purge =
     action === 'delete'
       ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))

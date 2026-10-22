@@ -92,6 +92,16 @@ describe('parseTakedownArgs', () => {
     });
   });
 
+  it.each([
+    ['--hide-from-explore', 'hide'],
+    ['--show-on-explore', 'unhide'],
+  ])('%s is a tour action through the operator route', (flag, action) => {
+    expect(parseTakedownArgs(['--slug', 'a', flag], ENV)).toMatchObject({
+      tourAction: action,
+      api: { origin: 'https://panote.dev', token: 'op-token' },
+    });
+  });
+
   it('picks admin-api by bucket, and ADMIN_API_ORIGIN overrides it', () => {
     const prod = { ...ENV, R2_BUCKET: 'pano-content' };
     const argv = ['--slug', 'x', '--unpublish', '--allow-bucket', 'pano-content'];
@@ -107,6 +117,8 @@ describe('parseTakedownArgs', () => {
     [['--slug', 'a', '--unpublish', '--delete'], /exclusive/],
     [['--sub', SUB, '--disable-owner', '--enable-owner'], /exclusive/],
     [['--sub', SUB, '--unpublish'], /needs --slug or --tour/],
+    [['--slug', 'a', '--unpublish', '--hide-from-explore'], /exclusive/],
+    [['--sub', SUB, '--hide-from-explore'], /--hide-from-explore needs --slug or --tour/],
     [['--tour', 'a/b'], /--tour must match/],
     [['--slug', 'Not A Slug'], /not a valid slug/],
     [['--sub', SUB, '--reason', 'x'], /--reason goes with --disable-owner/],
@@ -684,6 +696,20 @@ describe('runTakedown', () => {
     };
     return { ...m, events, fetchFn, lines, deps };
   };
+
+  it('--hide-from-explore asks the route to hide each tour and copies nothing', async () => {
+    const t = seed();
+    t.fetchFn.mockImplementation(async () => Response.json({ action: 'hide', purged: 0 }));
+    await runTakedown(parseTakedownArgs(['--slug', 'live', '--hide-from-explore'], ENV), t.deps);
+    expect(t.fetchFn).toHaveBeenCalledOnce();
+    expect(JSON.parse(t.fetchFn.mock.calls[0]![1].body as string)).toEqual({
+      sub: SUB,
+      tourId: 'tour-1',
+      action: 'hide',
+    });
+    expect(t.events.filter((e) => e.startsWith('put '))).toEqual([]);
+    expect(t.lines).toContain('tour tour-1 hidden from Explore; 0 CDN purge target(s) queued');
+  });
 
   it('never asks for a delete when a copy fails', async () => {
     const t = seed();

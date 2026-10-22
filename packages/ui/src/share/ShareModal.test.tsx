@@ -187,6 +187,15 @@ describe('ShareModal', () => {
       expect(props.onVisibilityChange).toHaveBeenCalledTimes(1);
     });
 
+    it('says what each option means now that Explore exists', () => {
+      renderModal({ tab: 'privacy' });
+      const radios = within(screen.getByRole('radiogroup')).getAllByRole('radio');
+      expect(radios.map((r) => r.querySelector('.pn-share__option-desc')?.textContent)).toEqual([
+        'Listed on Explore and can appear in search.',
+        'Only people with the link.',
+      ]);
+    });
+
     it('shows a failed change inline', async () => {
       renderModal({
         tab: 'privacy',

@@ -309,9 +309,10 @@ export type QuarantineCaseRecord = z.infer<typeof QuarantineCaseRecordSchema>;
 // admin-api's operator-only takedown route, guarded by the OPERATOR_TOKEN secret
 // sent in OPERATOR_TOKEN_HEADER. `delete` is the owner's own tour delete (it
 // unpublishes first); `unpublish` only takes the share link, bundle and slug down.
+// `hide` keeps the tour off Explore while it stays live by link; `unhide` undoes it.
 export const OPERATOR_TAKEDOWN_PATH = '/api/admin/operator/takedown';
 export const OPERATOR_TOKEN_HEADER = 'X-Operator-Token';
-export const OPERATOR_TAKEDOWN_ACTIONS = ['unpublish', 'delete'] as const;
+export const OPERATOR_TAKEDOWN_ACTIONS = ['unpublish', 'delete', 'hide', 'unhide'] as const;
 export type OperatorTakedownAction = (typeof OPERATOR_TAKEDOWN_ACTIONS)[number];
 export const OperatorTakedownRequestSchema = z.object({
   sub: z.string().min(1),

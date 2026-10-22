@@ -1,5 +1,15 @@
-import { ManifestSchema, PANO_PATTERN, type Manifest, type ViewBeacon } from '@internal/contracts';
-import { manifestUrl } from '@panote/core';
+import {
+  EXPLORE_CURSOR_PATTERN,
+  EXPLORE_PATH,
+  ExplorePageSchema,
+  ManifestSchema,
+  PANO_PATTERN,
+  type ExploreCover,
+  type ExplorePage,
+  type Manifest,
+  type ViewBeacon,
+} from '@internal/contracts';
+import { manifestUrl, ogImageUrl, previewUrl } from '@panote/core';
 import { z } from 'zod';
 
 import { ApiError, parseWith, readJson, type FetchLike } from './http.js';
@@ -24,6 +34,8 @@ export interface PublicApi {
   /** `view` (first shown pano, page vs embed) feeds Insights; omitting it still counts. */
   recordView(tourId: string, view?: ViewBeacon): Promise<TourStats>;
   like(tourId: string): Promise<TourStats>;
+  /** One page of Explore, newest first; pass the previous page's `cursor` for the next. */
+  explore(cursor?: string | null, opts?: { signal?: AbortSignal }): Promise<ExplorePage>;
 }
 
 const tourPath = (tourId: string, rest: string): string => {
@@ -43,7 +55,23 @@ export function createPublicApi(opts: PublicApiOptions = {}): PublicApi {
     return parseWith(TourStatsSchema, url, body);
   }
 
+  async function explore(
+    cursor?: string | null,
+    { signal }: { signal?: AbortSignal } = {},
+  ): Promise<ExplorePage> {
+    if (cursor != null && !EXPLORE_CURSOR_PATTERN.test(cursor)) {
+      throw new TypeError(`cursor must match ${EXPLORE_CURSOR_PATTERN}`);
+    }
+    const query = cursor != null ? `?${new URLSearchParams({ cursor }).toString()}` : '';
+    const url = `${base}${EXPLORE_PATH}${query}`;
+    const res = await doFetch(url, signal ? { method: 'GET', signal } : { method: 'GET' });
+    const body = await readJson(res);
+    if (!res.ok) throw new ApiError(res.status, body);
+    return parseWith(ExplorePageSchema, url, body);
+  }
+
   return {
+    explore,
     getStats: async (tourId) => call(tourPath(tourId, 'stats'), { method: 'GET' }),
     recordView: async (tourId, view) =>
       call(
@@ -106,3 +134,9 @@ export async function refreshManifestCache(
   // Read it fully: a cancelled body may never be committed to the cache.
   await res.arrayBuffer();
 }
+
+/** An Explore card's image on the CDN: the start scene's og.jpg or equirect preview. */
+export const exploreCoverUrl = (tilesBase: string, cover: ExploreCover): string =>
+  cover.image === 'og'
+    ? ogImageUrl(tilesBase, cover.panoId, cover.version)
+    : previewUrl(tilesBase, cover.panoId, cover.version);
