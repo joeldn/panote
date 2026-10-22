@@ -58,6 +58,27 @@ describe('runDailyCron', () => {
     });
   });
 
+  it('treats a task that throws synchronously like any other failure', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let otherRan = false;
+    const failed = await runDailyCron(env.BUCKET, DAY1, {
+      sync: () => {
+        throw new RangeError('before any promise');
+      },
+      other: async () => {
+        otherRan = true;
+      },
+    });
+    expect(failed).toEqual(['sync']);
+    expect(otherRan).toBe(true);
+    expect(error).toHaveBeenCalledWith('[cron] daily task failed task=sync error=RangeError');
+    expect(await status()).toEqual({
+      lastRunAt: DAY1.toISOString(),
+      lastOkAt: null,
+      failed: ['sync'],
+    });
+  });
+
   it('has no last OK when the first run fails', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await runDailyCron(env.BUCKET, DAY1, { a: () => Promise.reject(new Error('x')) });

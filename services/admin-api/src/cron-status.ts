@@ -30,7 +30,8 @@ export const runDailyCron = async (
   tasks: CronTasks,
 ): Promise<string[]> => {
   const names = Object.keys(tasks);
-  const results = await Promise.allSettled(names.map((name) => tasks[name]!()));
+  // async, so a task that throws before returning a promise is a rejection like any other.
+  const results = await Promise.allSettled(names.map(async (name) => tasks[name]!()));
   const failed: string[] = [];
   results.forEach((result, i) => {
     if (result.status === 'fulfilled') return;
