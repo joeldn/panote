@@ -1,7 +1,11 @@
 import { readImageSize, type ImageSize } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 
-/** How far from 2:1 a photo can be before the creator is told. Stitchers are often a few px off. */
+/**
+ * How far from 2:1 a photo can be before the creator is told. Stitchers are often a few
+ * px off. Must match ASPECT_TOLERANCE in packages/tiler/src/equirect.ts: past it, the
+ * tiler pads a wider photo.
+ */
 const TOLERANCE = 0.02;
 
 export const WIDE_NOTE =

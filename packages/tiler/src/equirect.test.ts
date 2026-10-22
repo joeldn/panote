@@ -34,12 +34,23 @@ describe('planEquirect', () => {
   });
 
   it('puts an odd leftover row below the content', () => {
-    const plan = planEquirect(1000, 497);
-    expect(plan).toMatchObject({ width: 1000, height: 500, top: 1, contentHeight: 497 });
+    const plan = planEquirect(1000, 333);
+    expect(plan).toMatchObject({ width: 1000, height: 500, top: 83, contentHeight: 333 });
   });
 
-  it('pads a source a row short of 2:1 by that row only', () => {
-    expect(planEquirect(4000, 1999)).toMatchObject({ height: 2000, top: 0, contentHeight: 1999 });
+  it('leaves a source within 2% of 2:1 as it is', () => {
+    expect(planEquirect(4001, 2000)).toEqual({
+      width: 4001,
+      height: 2000,
+      top: 0,
+      contentHeight: 2000,
+      scaled: false,
+    });
+    expect(planEquirect(4080, 2000).height).toBe(2000);
+  });
+
+  it('pads a source just past the 2% tolerance', () => {
+    expect(planEquirect(4082, 2000)).toMatchObject({ height: 2041, top: 20, contentHeight: 2000 });
   });
 
   it('downscales a strip whose padded size would go over the pixel cap', () => {
