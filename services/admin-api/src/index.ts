@@ -52,6 +52,7 @@ import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './op
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
+import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
 import {
@@ -527,11 +528,17 @@ export default {
   // finishes (or re-sweeps) every account marked for deletion, and deletes tile
   // versions a re-tile superseded more than a day ago (no purge: nothing
   // references their URLs any more, and edge copies age out on their own).
+  // runDailyCron logs each task that throws and records the run for the health check.
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
-    ctx.waitUntil(sweepExpiredAliases(env.BUCKET, now));
-    ctx.waitUntil(sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)));
-    ctx.waitUntil(sweepSupersededTiles(env.BUCKET, now));
+    ctx.waitUntil(
+      runDailyCron(env.BUCKET, now, {
+        'slug-aliases': () => sweepExpiredAliases(env.BUCKET, now),
+        'account-deletions': () =>
+          sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)),
+        'tile-gc': () => sweepSupersededTiles(env.BUCKET, now),
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;
 

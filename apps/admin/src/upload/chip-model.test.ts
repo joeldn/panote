@@ -141,6 +141,17 @@ describe('chipModel', () => {
     expect(actions(active(f, { hasFile: false }))).toEqual(['repick']);
   });
 
+  it('failed at tiling does not blame the image’s shape or format', () => {
+    // The tiler takes any ratio and colour space; the limits it has are checked
+    // before the upload. A tiling failure is the tiler erroring on every attempt.
+    const f = { phase: 'failed', panoId: 'p1', stage: 'tiling', message: 'm' } as UploadState;
+    const note = chipModel(active(f))?.note;
+    expect(note).toBe(
+      'We hit an error processing it. Try again. If it fails again, save the photo as a JPG and upload that.',
+    );
+    expect(note).not.toMatch(/equirectangular/i);
+  });
+
   it('failed at auth asks to sign in, saying whether the photo already landed', () => {
     const before = { phase: 'failed', panoId: null, stage: 'auth', message: 'm' } as UploadState;
     expect(chipModel(active(before))?.note).toBe('Sign in again to finish uploading it.');

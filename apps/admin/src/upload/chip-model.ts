@@ -18,6 +18,8 @@ export interface ActiveUpload {
   fileName: string;
   /** False after a sign-in redirect: retrying the upload needs the file picked again. */
   hasFile: boolean;
+  /** The picked file, while the job holds it (the chip reads its size for the aspect note). */
+  file?: Blob | null;
   target: Exclude<UploadTarget, { kind: 'new-tour' }>;
   machine: UploadState;
   /** Set once the PUT completed, so a retry re-uploads over the same pano. */
@@ -89,6 +91,9 @@ const failed = (title: string, note: string, actions: ChipModel['actions']): Chi
 });
 
 const SIGNED_OUT = 'You’ve been signed out';
+
+const TILING_FAILED_NOTE =
+  'We hit an error processing it. Try again. If it fails again, save the photo as a JPG and upload that.';
 
 /** The rest of a batch that a limit or a sign-in stopped: it has to be picked again. */
 const skippedNote = (a: ActiveUpload, when: string | null): string => {
@@ -186,11 +191,11 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
             [{ id: 'sign-in', label: 'Sign in' }],
           );
         case 'tiling':
-          return failed(
-            'We couldn’t process this image',
-            'Make sure it’s an equirectangular JPG, PNG or WebP, then try again.',
-            [reupload(a)],
-          );
+          // The status route only says `failed`. Size and pixel limits are checked
+          // before the upload (validateUploadImage), and the tiler takes any ratio
+          // and colour space, so what's left is the tiler's own failure marker
+          // `dlq`: it errored on every attempt. Don't guess at the image's shape.
+          return failed('We couldn’t process this image', TILING_FAILED_NOTE, [reupload(a)]);
         case 'upload':
           return failed(
             'Upload failed',

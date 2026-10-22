@@ -1,9 +1,12 @@
 import { createPortal } from 'react-dom';
 
+import { useAspectNote } from './aspect-note.js';
 import type { ChipActionId, ChipModel } from './chip-model.js';
 
 export interface UploadChipProps {
   model: ChipModel;
+  /** The picked photo, when there is one: a photo that isn't 2:1 gets a note while it uploads and tiles. */
+  file?: Blob | null | undefined;
   onAction(id: ChipActionId): void;
   onDismiss(): void;
 }
@@ -19,7 +22,9 @@ function Indicator({ tone }: { tone: ChipModel['tone'] }) {
 }
 
 /** The fixed bottom-right upload/processing chip (design screens 10–12, plus failed/timed-out). */
-export function UploadChip({ model, onAction, onDismiss }: UploadChipProps) {
+export function UploadChip({ model, file, onAction, onDismiss }: UploadChipProps) {
+  const aspect = useAspectNote(file);
+  const showAspect = aspect !== null && (model.tone === 'upload' || model.tone === 'processing');
   const chip = (
     <section className={`up-chip up-chip--${model.tone}`} aria-label="Upload status">
       <div className="up-chip__head">
@@ -61,6 +66,12 @@ export function UploadChip({ model, onAction, onDismiss }: UploadChipProps) {
       )}
       <p className="up-chip__note">{model.note}</p>
       {model.queue && <p className="up-chip__queue">{model.queue}</p>}
+      {showAspect && (
+        <p className="up-chip__aspect" role="note">
+          <i className="fa-solid fa-circle-info" aria-hidden="true" />
+          {aspect}
+        </p>
+      )}
       {model.actions.length > 0 && (
         <div className="up-chip__actions">
           {model.actions.map((a) => (
