@@ -1,10 +1,13 @@
 // Landing copy (design README, screen 1). Free, not open source: no export/download promises.
 // Limits are real (copy-rule.test bans "unlimited"/"no limits"): state the numbers.
 import { MAX_HOTSPOTS } from '@internal/contracts';
-import { MAX_UPLOAD_BYTES } from '@internal/web-kit';
+import { MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS } from '@internal/web-kit';
 
-// Per-account quotas. The server enforces these from its own config
-// (upload-api / admin-api vars), which the site can't import: keep them in step.
+// Per-account quotas, kept in step by hand. panoramas and storageGb mirror
+// upload-api's MAX_PANOS_PER_OWNER and MAX_BYTES_PER_OWNER vars (feat/upload-limits):
+// server config, so the site can't import them. tours mirrors admin-api's tour cap
+// (feat/admin-write-limits), which adds MAX_TOURS_PER_OWNER to @internal/contracts;
+// import that here once it lands on main.
 export const ACCOUNT_LIMITS = { panoramas: 500, storageGb: 20, tours: 200 } as const;
 
 export const NAV_SECTIONS = [
@@ -157,7 +160,7 @@ export const FAQS = [
   },
   {
     q: 'Are there resolution limits?',
-    a: 'No. We tile your panorama at full resolution, so visitors zoom into the real detail you captured.',
+    a: `We never downscale. Panoramas up to ${MAX_UPLOAD_PIXELS / 1e6} megapixels are tiled at full resolution, so visitors zoom into the real detail you captured.`,
   },
   {
     q: 'Will you watermark my tours?',
