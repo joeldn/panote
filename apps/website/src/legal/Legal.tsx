@@ -117,10 +117,10 @@ export function Privacy() {
 
       <h2>Backups</h2>
       <p>
-        Every night we back up tour details and account settings to the same private storage as the
-        rest of Panote, and keep each backup for 30 days. They are only used to recover from a fault
-        and are never shown publicly. So a tour or account you delete can remain in these private
-        backups for up to 30 days before it is gone.
+        Every day we back up tour details and account settings to the same private storage as the
+        rest of Panote, and keep each backup for about a month. They are only used to recover from a
+        fault and are never shown publicly. So a tour or account you delete can remain in these
+        private backups for up to 31 days before it is gone.
       </p>
 
       <h2>Who helps us run Panote</h2>
@@ -159,7 +159,7 @@ export function Privacy() {
       <ul>
         <li>Your account, tours and panoramas: until you delete them, or we close the account.</li>
         <li>Your sign-in record: up to 30 days after you delete your account.</li>
-        <li>Backups: 30 days.</li>
+        <li>Backups: up to 31 days.</li>
         <li>
           Visit counts and likes: until the account that owns the tour is deleted. The anonymous
           visit records behind them: about three months.
