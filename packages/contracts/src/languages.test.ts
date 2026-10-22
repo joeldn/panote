@@ -17,6 +17,7 @@ import {
 } from './localize.js';
 import { PublishedTourSchema } from './publish.js';
 import {
+  MAX_CONFIG_TRANSLATION_LANGUAGES,
   MAX_SCENE_TRANSLATION_CHARS,
   MAX_TITLE_LENGTH,
   SceneConfigSchema,
@@ -79,6 +80,27 @@ describe('pickLanguage', () => {
     expect(pickLanguage(undefined, 'de', ['de'])).toBeNull();
   });
 
+  it('serves Chinese by script, whatever order the tour lists them in', () => {
+    for (const tour of [
+      ['en', 'zh-Hans', 'zh-Hant'],
+      ['en', 'zh-Hant', 'zh-Hans'],
+    ]) {
+      expect(matchLanguage(tour, 'zh-Hant-TW')).toBe('zh-Hant');
+      expect(matchLanguage(tour, 'zh-TW')).toBe('zh-Hant');
+      expect(matchLanguage(tour, 'zh-HK')).toBe('zh-Hant');
+      expect(matchLanguage(tour, 'zh-CN')).toBe('zh-Hans');
+      expect(matchLanguage(tour, 'zh')).toBe('zh-Hans');
+    }
+  });
+
+  it('cuts a tag back one subtag at a time before matching by script', () => {
+    expect(matchLanguage(['en', 'sr-Latn', 'sr-Cyrl'], 'sr-Latn-RS')).toBe('sr-Latn');
+    // Serbian is written in Cyrillic unless it says otherwise.
+    expect(matchLanguage(['en', 'sr-Latn', 'sr-Cyrl'], 'sr')).toBe('sr-Cyrl');
+    expect(matchLanguage(['en', 'sr-Latn'], 'sr')).toBe('sr-Latn');
+    expect(matchLanguage(['en', 'pt-BR', 'pt'], 'pt-PT')).toBe('pt');
+  });
+
   it('matchLanguage finds nothing for an empty or unknown tag', () => {
     expect(matchLanguage(['en'], '')).toBeNull();
     expect(matchLanguage(['en', 'de'], 'fr-FR')).toBeNull();
@@ -126,8 +148,14 @@ describe('translations in the schemas', () => {
     expect(withI18n({ German: { title: 'Halle' } })).toBe(false);
     expect(withI18n({ de: { title: '' } })).toBe(false);
     expect(withI18n({ de: { title: 'x'.repeat(MAX_TITLE_LENGTH + 1) } })).toBe(false);
+    // A pano shared by tours with different languages can hold more than one tour's.
+    const shared = Object.fromEntries(COMMON_LANGUAGES.map((l) => [l.tag, { title: 'x' }]));
+    expect(withI18n(shared)).toBe(true);
     const tooMany = Object.fromEntries(
-      COMMON_LANGUAGES.slice(0, MAX_TOUR_LANGUAGES).map((l) => [l.tag, { title: 'x' }]),
+      [...Array(MAX_CONFIG_TRANSLATION_LANGUAGES + 1).keys()].map((i) => [
+        `x${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))}`,
+        { title: 'x' },
+      ]),
     );
     expect(withI18n(tooMany)).toBe(false);
   });
@@ -219,6 +247,28 @@ describe('localizing', () => {
     expect(de.scenes[0]!.config.title).toBe('Halle');
     expect(de.scenes[0]!.config.hotspots[0]).toMatchObject({ title: 'Door', body: 'Alte Tür' });
     expect(localizePublishedTour(pub, 'en')).toBe(pub);
+  });
+
+  it("holds a bundle's translations to the TourDoc rules", () => {
+    const base = {
+      v: 1,
+      tourId: 't1',
+      title: 'Old Town',
+      visibility: 'unlisted',
+      slug: 'old-town',
+      publishedAt: '2026-01-01T00:00:00.000Z',
+      settings: { controls: 'bottom', showMap: true, showCompass: true, autoRotate: false },
+      startPanoId: 'p1',
+      scenes: [],
+    };
+    const ok = (i18n: unknown) => PublishedTourSchema.safeParse({ ...base, i18n }).success;
+    expect(ok({ de: { title: 'Altstadt' } })).toBe(true);
+    expect(ok({ German: { title: 'Altstadt' } })).toBe(false);
+    expect(ok({ de: { title: 'x'.repeat(MAX_TITLE_LENGTH + 1) } })).toBe(false);
+    const tooMany = Object.fromEntries(
+      COMMON_LANGUAGES.slice(0, MAX_TOUR_LANGUAGES).map((l) => [l.tag, { title: 'x' }]),
+    );
+    expect(ok(tooMany)).toBe(false);
   });
 
   it('a bundle published before languages parses and localizes to itself', () => {

@@ -113,19 +113,40 @@ export function languageName(tag: string): string {
 
 const primary = (tag: string): string => tag.split('-')[0]!.toLowerCase();
 
+/** A tag's likely script (`zh-TW` → Hant, `sr` → Cyrl), or null when Intl can't tell. */
+function scriptOf(tag: string): string | null {
+  try {
+    return new Intl.Locale(tag).maximize().script ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The tour language that serves a wanted tag: an exact match (ignoring case), else one
- * with the same primary subtag, preferring the bare language (`pt-PT` → `pt` over `pt-BR`).
+ * The tour language that serves a wanted tag. In order: an exact match (ignoring case);
+ * the wanted tag cut back one subtag at a time (`zh-Hant-TW` → `zh-Hant`); a language
+ * with the same primary subtag written in the same script (`zh-TW` → `zh-Hant`, `zh-CN`
+ * → `zh-Hans`, `sr` → `sr-Cyrl`), the bare language first (`pt-PT` → `pt` over `pt-BR`);
+ * then the bare language; then any language with the same primary subtag.
  */
 export function matchLanguage(available: readonly string[], wanted: string): string | null {
   const want = wanted.trim().replace(/_/g, '-').toLowerCase();
   if (!want) return null;
-  const exact = available.find((a) => a.toLowerCase() === want);
-  if (exact) return exact;
-  const p = primary(want);
-  return (
-    available.find((a) => a.toLowerCase() === p) ?? available.find((a) => primary(a) === p) ?? null
-  );
+  const find = (tag: string) => available.find((a) => a.toLowerCase() === tag);
+  const parts = want.split('-');
+  for (let n = parts.length; n >= 2; n--) {
+    const hit = find(parts.slice(0, n).join('-'));
+    if (hit) return hit;
+  }
+  const p = parts[0]!;
+  const same = available.filter((a) => primary(a) === p);
+  const script = scriptOf(want);
+  if (script) {
+    const scripted = same.filter((a) => scriptOf(a) === script);
+    const hit = scripted.find((a) => a.toLowerCase() === p) ?? scripted[0];
+    if (hit) return hit;
+  }
+  return find(p) ?? same[0] ?? null;
 }
 
 /**
