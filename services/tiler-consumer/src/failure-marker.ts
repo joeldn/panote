@@ -121,3 +121,43 @@ export const writeFailureMarker = async (
   }
   return 'written';
 };
+
+export type OversizeOutcome = 'deleted' | 'kept-live-pano' | 'skipped' | 'failed';
+
+/**
+ * Deletes an oversized original once its tile-failed marker is written, so a
+ * file that can never tile doesn't sit in R2. Only the original goes: the marker
+ * stays, so the owner sees the failed state (admin-api's status reads a marker
+ * with no original as failed).
+ *
+ * Kept when the pano already has a manifest (an oversized replace): its old
+ * tiles are still live, and the original is the ownership proof admin-api needs
+ * to show the pano and later sweep those tiles. Skipped when the original
+ * changed or went since the event, so a newer upload is never deleted.
+ */
+export const deleteOversizedOriginal = async (
+  bucket: R2Bucket,
+  originalNotificationKey: string,
+  expectedEtag: string | undefined,
+): Promise<OversizeOutcome> => {
+  const pano = panoIdForLog(originalNotificationKey);
+  try {
+    // Only called after a written marker, so the key already parsed once.
+    const panoId = panoIdFromOriginalKey(originalNotificationKey);
+    if (await bucket.head(manifestKey(panoId))) {
+      console.warn(`keeping oversized original pano=${pano}: the pano has live tiles`);
+      return 'kept-live-pano';
+    }
+    const head = await bucket.head(originalNotificationKey);
+    if (!head || expectedEtag === undefined || bareEtag(head.etag) !== bareEtag(expectedEtag)) {
+      console.warn(`skip deleting oversized original pano=${pano}: it changed or is gone`);
+      return 'skipped';
+    }
+    await bucket.delete(originalNotificationKey);
+    console.warn(`deleted oversized original pano=${pano}`);
+    return 'deleted';
+  } catch (e) {
+    console.error(`failed to delete oversized original pano=${pano}: ${errorText(e)}`);
+    return 'failed';
+  }
+};

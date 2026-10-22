@@ -22,8 +22,11 @@ export const computeTilingStatus = (params: {
   manifestVersion: string | undefined;
   originalEtag: string | undefined;
   tileFailedOriginalEtag: string | undefined;
+  /** The marker's customMetadata.reason, when there is one. */
+  tileFailedReason?: string | undefined;
 }): TilingStatus => {
-  const { hasManifest, manifestVersion, originalEtag, tileFailedOriginalEtag } = params;
+  const { hasManifest, manifestVersion, originalEtag, tileFailedOriginalEtag, tileFailedReason } =
+    params;
   const capturedEtag = manifestVersion
     ? TILE_VERSION_ETAG_RE.exec(manifestVersion)?.[1]
     : undefined;
@@ -36,6 +39,9 @@ export const computeTilingStatus = (params: {
     return 'failed';
   }
   if (originalEtag !== undefined) return 'pending';
+  // tiler-consumer deletes an oversized original once its marker is written,
+  // so that marker alone still reads as failed rather than as no upload at all.
+  if (tileFailedReason === 'oversize') return 'failed';
   return 'none';
 };
 
@@ -190,6 +196,7 @@ export const summarizePano = async (
     manifestVersion: manifestBody?.version,
     originalEtag: originalObj?.etag,
     tileFailedOriginalEtag: tileFailedObj?.customMetadata?.originalEtag,
+    tileFailedReason: tileFailedObj?.customMetadata?.reason,
   });
 
   const title = await resolvePanoTitle(configObj?.customMetadata, async () =>
