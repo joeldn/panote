@@ -76,6 +76,16 @@ describe('the account page', () => {
     expect(fetch.mock.calls.some(([u]) => String(u).includes('cursor=c2'))).toBe(true);
   });
 
+  it('shows the account ID and a support email with it filled in', async () => {
+    renderAdmin('/app/account', { fetch: server() });
+    const help = within(await screen.findByRole('region', { name: 'Help' }));
+    expect(help.getByText('google-oauth2|1')).toBeTruthy();
+    const href = help.getByRole('link', { name: 'Contact support' }).getAttribute('href')!;
+    expect(href.startsWith('mailto:hello@panote.io?')).toBe(true);
+    const body = new URLSearchParams(href.slice(href.indexOf('?') + 1)).get('body');
+    expect(body).toBe('Account ID: google-oauth2|1\r\n\r\nWhat happened:\r\n');
+  });
+
   it('says the email is not verified when the token has none', async () => {
     renderAdmin('/app/account', {
       fetch: server({

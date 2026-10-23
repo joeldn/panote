@@ -2453,6 +2453,14 @@ bound them indirectly; superseded tile versions are deleted by the daily
 are written by the container after the URL is issued), so they aren't counted. Configs, tours and
 bundles are small JSON capped by `admin-api`'s own limits.
 
+### Support email
+
+The admin app's account menu and Account page (`/app/account`, "Help") have a **Contact support**
+link: a `mailto:hello@panote.io` whose body starts with `Account ID: <Auth0 user id>`, the same id
+the page shows. Panote stores no emails, so that line is how you find the account a message is
+about; it is the `--sub` every operator script takes. A message without it (written from the
+website footer, say) needs the user's tour link, or a search by email in the Auth0 dashboard.
+
 ### Report link
 
 The visitor viewer (`/s/<slug>`, not the embed) has a **Report** chip at the end of the tour bar

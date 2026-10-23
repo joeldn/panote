@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { useAuthEnv } from '../auth-context.js';
 import type { Session } from '../session.js';
 import { DeleteAccountModal } from './DeleteAccount.js';
+import { supportHref } from './support.js';
 import {
   DELETE_ACCOUNT_PARAM,
   DELETE_ACCOUNT_RESUME,
@@ -44,6 +45,11 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
         items={[
           { label: 'Account', icon: 'fa-solid fa-user', onSelect: () => void navigate('/account') },
           { label: 'Home page', icon: 'fa-solid fa-house', href: `${origins.website}/` },
+          {
+            label: 'Contact support',
+            icon: 'fa-solid fa-envelope',
+            href: supportHref(session.user.sub),
+          },
           {
             label: 'Delete account',
             icon: 'fa-solid fa-trash-can',

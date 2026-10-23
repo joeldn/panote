@@ -101,3 +101,8 @@
 .acct__bar-fill--full {
   background: var(--accent);
 }
+
+.acct__id {
+  font: 400 13px/1.4 var(--fmono);
+  user-select: all;
+}
