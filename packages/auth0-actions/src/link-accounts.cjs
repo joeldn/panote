@@ -32,6 +32,9 @@
  *   mint a "just signed in" token.
  * - LINKED_SUBS_CLAIM: the user ids of the identities linked into this user, so account
  *   deletion also removes Panote data made under one of them before it was linked.
+ * - EMAIL_CLAIM: the user's address, lower case, only when a TRUSTED_PROVIDERS identity
+ *   verified it (the same test linking uses). Tour invites are accepted against it. Set on
+ *   refreshes too: unlike a sign-in time, an address doesn't go stale with the session.
  */
 
 /**
@@ -47,6 +50,7 @@ const TRUSTED_PROVIDERS = Object.freeze(['email', 'google-oauth2', 'apple']);
 /** Custom access-token claims; Auth0 drops any claim not namespaced with a URL. */
 const AUTH_TIME_CLAIM = 'https://panote.io/auth_time';
 const LINKED_SUBS_CLAIM = 'https://panote.io/linked_subs';
+const EMAIL_CLAIM = 'https://panote.io/email';
 /** admin-api reads no more than this many linked subs (MAX_LINKED_SUBS in contracts). */
 const MAX_LINKED_SUBS = 10;
 
@@ -208,6 +212,19 @@ function authTimeOf(event) {
     if (t > latest) latest = t;
   }
   return Number.isFinite(latest) ? Math.floor(latest / 1000) : undefined;
+}
+
+/**
+ * The user's address, lower case, when a trusted identity on the account verified it;
+ * otherwise undefined (an untrusted provider, an unverified or missing address).
+ *
+ * @param {User} u
+ * @returns {string | undefined}
+ */
+function verifiedEmailOf(u) {
+  const email = u.email;
+  if (typeof email !== 'string' || !email.includes('@')) return undefined;
+  return hasTrustedIdentity(u, email) ? email.trim().toLowerCase() : undefined;
 }
 
 /**
@@ -444,11 +461,16 @@ exports.onExecutePostLogin = async (event, api) => {
   if (!linkedInto) api.accessToken?.setCustomClaim(LINKED_SUBS_CLAIM, linkedSubsOf(event.user));
   const authTime = authTimeOf(event);
   if (authTime !== undefined) api.accessToken?.setCustomClaim(AUTH_TIME_CLAIM, authTime);
+  // A linked login's address is the primary's too: linking needs the same verified email.
+  const email = verifiedEmailOf(event.user);
+  if (email !== undefined) api.accessToken?.setCustomClaim(EMAIL_CLAIM, email);
 };
 
 exports.TRUSTED_PROVIDERS = TRUSTED_PROVIDERS;
 exports.AUTH_TIME_CLAIM = AUTH_TIME_CLAIM;
 exports.LINKED_SUBS_CLAIM = LINKED_SUBS_CLAIM;
+exports.EMAIL_CLAIM = EMAIL_CLAIM;
+exports.verifiedEmailOf = verifiedEmailOf;
 exports.MAX_LINKED_SUBS = MAX_LINKED_SUBS;
 exports.authTimeOf = authTimeOf;
 exports.linkedSubsOf = linkedSubsOf;

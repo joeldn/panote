@@ -409,14 +409,19 @@ beside it). Why it links automatically, against Auth0's advice to re-authenticat
 - **Concurrent first logins.** A `400` or `409` from the link call means the picture went stale
   (another login linked or created a user a moment ago): it looks the users up once more and
   retries once, unless the deadline has passed.
-- **Token claims.** On every login and token refresh it also sets two custom claims on the access
+- **Token claims.** On every login and token refresh it also sets three custom claims on the access
   token (names in `packages/contracts/src/jwt.ts`, which `admin-api` reads):
   `https://panote.io/auth_time`, the latest of the session's authentication method timestamps in
   epoch seconds (not
   on a refresh-token exchange; account delete wants a recent one, see "Account deletion"), and
   `https://panote.io/linked_subs`, the user ids of the identities linked into the user (at most
-  10; on the login that links, the primary's plus the one just linked). These need neither the
-  Management API nor its secrets, so they work even while linking itself isn't configured.
+  10; on the login that links, the primary's plus the one just linked), and
+  `https://panote.io/email`, the user's address in lower case, set only when an identity from
+  `TRUSTED_PROVIDERS` verified it (the same test linking uses; refreshes included), so a
+  Microsoft-only or Facebook-only account has none. Tour invites are accepted against it. These
+  need neither the Management API nor its secrets, so they work even while linking itself isn't
+  configured. The APIs drop a missing or malformed claim rather than refuse the token, so the
+  Workers can deploy before the Action does.
 - **Never in the way.** It skips refresh-token exchanges and users that already have linked
   identities (merging two primaries is an operator job). Every Management API call has a 5 s
   timeout, the whole run (retries included) has one 10 s deadline, after which the login goes on
