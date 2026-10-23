@@ -88,8 +88,8 @@ export function loadCacheRules(file: string, zone: string, infraDir = INFRA_DIR)
     ]);
     const { ref, description, expression, action, enabled } = rule;
     if (typeof ref !== 'string' || !ref) throw new Error(`${where}: needs a ref`);
-    if (typeof expression !== 'string' || !expression.includes(host)) {
-      throw new Error(`${where}: expression must match ${host}`);
+    if (typeof expression !== 'string' || !onlyTargets(expression, `cdn.${zone}`)) {
+      throw new Error(`${where}: expression must match ${host} and no other host`);
     }
     if (action !== 'set_cache_settings') throw new Error(`${where}: action ${String(action)}`);
     const params = rule.action_parameters;
@@ -108,6 +108,18 @@ export function loadCacheRules(file: string, zone: string, infraDir = INFRA_DIR)
     if (typeof description === 'string') out.description = description;
     return out;
   });
+}
+
+/**
+ * True when the expression names a host at least once and every mention is
+ * `http.host eq "<host>"`. A rule from the other environment's file names the
+ * other CDN, so it fails even when it also names this one (or adds `or true`
+ * to it); `in`, `contains` or `matches` on the host fail too.
+ */
+function onlyTargets(expression: string, host: string): boolean {
+  const literals = [...expression.matchAll(/http\.host eq "([^"]*)"/g)].map((match) => match[1]);
+  const mentions = expression.match(/http\.host\b/g)?.length ?? 0;
+  return literals.length > 0 && literals.length === mentions && literals.every((l) => l === host);
 }
 
 function edgeTtl(where: string, value: unknown) {

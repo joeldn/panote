@@ -51,6 +51,17 @@ describe('loadCacheRules', () => {
   });
 
   it.each([
+    ['names no host', '(starts_with(http.request.uri.path, "/tiles/"))'],
+    ['also names the dev CDN', '(http.host eq "cdn.panote.io" or http.host eq "cdn.panote.dev")'],
+    ['is the dev CDN or true', '(http.host eq "cdn.panote.dev" or true)'],
+    ['matches the host another way', '(http.host eq "cdn.panote.io" or http.host contains "dev")'],
+  ])('refuses a production rule that %s', (_, expression) => {
+    expect(() => cacheRules({ rules: [{ ...RULE, expression }] }, 'panote.io')).toThrow(
+      /must match http.host eq "cdn.panote.io" and no other host/,
+    );
+  });
+
+  it.each([
     ['no rules array', { rules: {} }, /no rules array/],
     ['an unknown top-level key', { rules: [], zoneId: 'x' }, /unsupported key\(s\) zoneId/],
     ['a rule that is not an object', { rules: [1] }, /not an object/],

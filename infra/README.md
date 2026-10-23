@@ -173,8 +173,8 @@ After the import, these and only these are expected:
 - **create** the four resources above;
 - **create** `rate-limit-rules` if the zone had no rate-limiting rule yet;
 - **update** the imported rulesets where the dashboard's rules differ from the code: refs and
-  descriptions (dashboard rules carry generated ones), rules the code adds (the CDN query-string
-  block, the CDN nosniff/CSP headers, `panote-json-edge-cache` if it was never applied), and
+  descriptions (dashboard rules carry generated ones), rules the code adds that aren't live yet (the CDN
+  nosniff/CSP headers, `panote-json-edge-cache` if it was never applied), and
   `tiles-404-short-ttl`, the dashboard cache rule, replaced by the same-purpose
   `panote-tiles-404-no-store` that production uses.
 
@@ -232,8 +232,16 @@ notice while any is missing:
 - `PULUMI_CONFIG_PASSPHRASE`;
 - `CLOUDFLARE_API_TOKEN`: the read token from step 3, never the bootstrap one.
 
-The preview runs the pull request's code with these secrets. Only use it on a repo where only you
-push branches; a fork's pull request gets no secrets.
+`pulumi preview` runs the pull request's own program with these secrets: anyone who can push a
+branch could change that program to read them. The workflow keeps them off the install and build
+steps, but that doesn't change this, so before adding the secrets (manual, once):
+
+- give the `infra-preview` environment **required reviewers** (Settings → Environments →
+  `infra-preview`), or a deployment-branch rule, so a run only gets them once approved;
+- make `CLOUDFLARE_API_TOKEN` the read token, never one that can edit;
+- scope the R2 key to `panote-pulumi-state` only.
+
+A fork's pull request gets no secrets.
 
 ## Changing things
 
@@ -241,6 +249,11 @@ push branches; a fork's pull request gets no secrets.
   `pulumi preview --stack dev --diff`, then `up`. Same for production.
 - Tests (`pnpm --filter @internal/infra test`) run the program against Pulumi's mocks and pin the
   rule expressions, HSTS, retention and names.
+- `error: the stack is currently locked`: a run was killed before releasing its lock in the state
+  bucket. Check nothing else is running, then `pulumi cancel --stack <stack>` and retry. *(unverified
+  against R2)*
+- HSTS is zone-wide with `includeSubdomains` (6 months): any future subdomain served over plain
+  HTTP would be unreachable in browsers that saw it. Mail is unaffected (HSTS is HTTP only).
 - A change made in the dashboard is drift: `pulumi preview --refresh` shows it, and the next `up`
   undoes it. Make the change in code instead.
 - Fallback when Pulumi can't be used: the wrangler commands and dashboard steps in docs/deploy.md

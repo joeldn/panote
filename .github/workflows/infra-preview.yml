@@ -10,6 +10,12 @@ name: Infra preview
 # merge before the state bucket exists. A fork's pull request gets no secrets
 # and takes the same path.
 #
+# `pulumi preview` runs the pull request's own program with these secrets, so
+# the environment must have required reviewers (or a deployment-branch rule),
+# the Cloudflare token must be read-only and the R2 key scoped to the state
+# bucket (infra/README.md, CI preview). They are set only on the two steps
+# below that need them, never on install or build.
+#
 #   PULUMI_BACKEND_URL        s3://panote-pulumi-state?endpoint=...  (the CLI reads this)
 #   AWS_ACCESS_KEY_ID         R2 token for the state bucket (Object Read & Write:
 #   AWS_SECRET_ACCESS_KEY     preview takes the stack's lock)
@@ -22,9 +28,11 @@ on:
       - 'infra/**'
       - '.github/workflows/infra-preview.yml'
 
+# Never cancelled: a preview killed mid-run can leave the stack's lock in the
+# state bucket (`pulumi cancel` clears it, infra/README.md).
 concurrency:
   group: infra-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -52,15 +60,16 @@ jobs:
       fail-fast: false
       matrix:
         stack: [dev, production]
-    env:
-      PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
+      # Only tests that each secret is set; nothing else runs here.
       - name: Check for the secrets
         id: secrets
+        env:
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           missing=()
           for name in PULUMI_BACKEND_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY PULUMI_CONFIG_PASSPHRASE CLOUDFLARE_API_TOKEN; do
@@ -100,6 +109,11 @@ jobs:
         working-directory: infra/pulumi
         env:
           STACK: ${{ matrix.stack }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           # Fails here on bad backend credentials, before the stack check.
           stacks=$(pulumi stack ls --json --non-interactive)
