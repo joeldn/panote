@@ -2202,8 +2202,12 @@ the US Copyright Office.
   (`{ lastSentAt, held }`): no new resource, `ops/` is outside the CDN WAF rule's three public
   prefixes and the R2 notification's `panos/` prefix, and the DLQ consumer's `max_concurrency: 1`
   keeps its read-then-write from racing. If the state can't be read the email goes out anyway.
-  Failures held back by the throttle are only emailed when a later batch arrives after the window:
-  there is no timer that flushes them on its own. This uses the structured `send({ to, from, subject, text })`
+  Failures held back by the throttle no longer wait for a later batch: the Worker's 5-minute cron
+  (the health check's) also runs `flushHeldDlqAlerts`, which emails `[panote] tiling failed
+  permanently (N earlier) - <queue>` once a queue's window is over with failures still held, and
+  resets the count (one `GET` per DLQ name when nothing is held; nothing at all while email isn't
+  configured). A send that fails keeps the count for the next run. The DLQ consumer and the cron
+  can both touch the state at once; at worst one failure is counted once too often or too few. This uses the structured `send({ to, from, subject, text })`
   API ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)).
   Chosen over a Tail Worker (needs log-string matching) and over Workers Observability / Cloudflare
   Notifications (no alert type for this, per current docs). **This is code and config only — it

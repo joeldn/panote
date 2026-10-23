@@ -11,7 +11,7 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ALERT_THROTTLE_MS } from './alert.js';
+import { ALERT_THROTTLE_MS, alertThrottleKey } from './alert.js';
 import worker from './consumer.js';
 import {
   checkCron,
@@ -330,5 +330,24 @@ describe('runHealthCheck', () => {
     );
     await waitOnExecutionContext(ctx);
     expect((await state())?.failures['website /']).toBe(1);
+  });
+
+  it('emails dead-lettered failures the DLQ throttle held, from the Cron Trigger', async () => {
+    const queue = 'pano-uploads-dlq-dev';
+    await env.BUCKET.put(
+      alertThrottleKey(queue),
+      JSON.stringify({ lastSentAt: T0 - ALERT_THROTTLE_MS, held: 2 }),
+    );
+    const ctx = createExecutionContext();
+    worker.scheduled(
+      createScheduledController({ scheduledTime: T0, cron: '*/5 * * * *' }),
+      testEnv(),
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    await env.BUCKET.delete(alertThrottleKey(queue));
+    expect(sent.map((m) => m.subject)).toEqual([
+      `[panote] tiling failed permanently (2 earlier) - ${queue}`,
+    ]);
   });
 });

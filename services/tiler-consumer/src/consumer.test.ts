@@ -1,7 +1,7 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { manifestKey, tileFailedKeyFromOriginalKey } from '@internal/contracts';
-import { ALERT_THROTTLE_MS, alertThrottleKey } from './alert.js';
+import { ALERT_THROTTLE_MS, alertThrottleKey, flushHeldDlqAlerts } from './alert.js';
 import worker from './consumer.js';
 
 // Owner segment for the log-hygiene tests. Distinctive, so a substring
@@ -1063,6 +1063,48 @@ describe('DLQ alert throttle', () => {
     expect(result.explicitAcks).toEqual(['thr-read-b']);
     expect(errorSpy).toHaveBeenCalledWith(`DLQ alert throttle unreadable for ${QUEUE}: Error`);
     expect(errorSpy).toHaveBeenCalledWith(`DLQ alert throttle not saved for ${QUEUE}: Error`);
+  });
+
+  it('emails what it held once the window is over, without waiting for another batch', async () => {
+    const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    const e = withAlert(send);
+    await runAt(T0, e, 'flush-a');
+    await runAt(T0 + 60_000, e, 'flush-b', 'flush-c');
+    expect(send).toHaveBeenCalledTimes(1);
+
+    await flushHeldDlqAlerts(e, T0 + ALERT_THROTTLE_MS - 1, [QUEUE]);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    await flushHeldDlqAlerts(e, T0 + ALERT_THROTTLE_MS, [QUEUE, 'pano-uploads-dlq']);
+    expect(send).toHaveBeenCalledTimes(2);
+    const [held] = send.mock.calls[1]!;
+    expect(held.subject).toBe(`[panote] tiling failed permanently (2 earlier) - ${QUEUE}`);
+    expect(held.text).toContain(`dead-lettered since ${new Date(T0).toISOString()}`);
+    expect(await state()).toEqual({ lastSentAt: T0 + ALERT_THROTTLE_MS, held: 0 });
+
+    // Nothing held now: the next run sends nothing.
+    await flushHeldDlqAlerts(e, T0 + 2 * ALERT_THROTTLE_MS, [QUEUE]);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('flushes nothing without email configured, and keeps the count when the send fails', async () => {
+    await env.BUCKET.put(alertThrottleKey(QUEUE), JSON.stringify({ lastSentAt: T0, held: 2 }));
+    const later = T0 + ALERT_THROTTLE_MS;
+    const unconfigured = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    await flushHeldDlqAlerts(
+      { ...withAlert(unconfigured), ALERT_EMAIL_TO: undefined } as unknown as typeof env,
+      later,
+      [QUEUE],
+    );
+    expect(unconfigured).not.toHaveBeenCalled();
+
+    const failing = vi.fn(async (_m: Sent) => {
+      throw new Error('nope');
+    });
+    await flushHeldDlqAlerts(withAlert(failing), later, [QUEUE]);
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(await state()).toEqual({ lastSentAt: T0, held: 2 });
+    expect(errorSpy).toHaveBeenCalledWith(`DLQ held alert for ${QUEUE} failed: Error`);
   });
 
   it('treats a lastSentAt in the future as an expired window', async () => {
