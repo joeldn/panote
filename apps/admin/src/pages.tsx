@@ -17,4 +17,5 @@ export { InsightsRoute as InsightsModal } from './insights/InsightsRoute.js';
 export { PeopleRoute as PeopleModal } from './people/PeopleRoute.js';
 export { InviteRoute as Invite } from './people/InviteRoute.js';
 export { AccountRoute as Account } from './account/AccountRoute.js';
+export { OpsRoute as Ops, OpsOverview } from './ops/OpsRoute.js';
 export const NotFound = () => <Placeholder title="Page not found" />;

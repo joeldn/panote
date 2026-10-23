@@ -8,6 +8,8 @@ import {
   InsightsModal,
   Invite,
   NotFound,
+  Ops,
+  OpsOverview,
   PeopleModal,
   Preview,
   ShareModal,
@@ -36,6 +38,8 @@ export const routes: RouteObject[] = [
           },
           { path: 'panos/unused', element: <UnusedPanos /> },
           { path: 'account', element: <Account /> },
+          // The operator area (ops/sections.ts lists its sections).
+          { path: 'ops', element: <Ops />, children: [{ index: true, element: <OpsOverview /> }] },
           // An editor invite's link: /app/invite#<token>.
           { path: 'invite', element: <Invite /> },
           { path: '*', element: <NotFound /> },

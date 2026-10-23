@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `OPERATOR_SUB_SHA256` (who may open the operator pages, see Operator pages), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | `UPLOAD_CEILING` — Durable Object, class `UploadCeiling` (one instance, the global daily upload ceiling, see Owner quotas; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); otherwise none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
@@ -2962,6 +2962,30 @@ Access would make its pages look down. Nothing has been signed up for.
 `ops/cron/admin-api-daily.json` in `pano-content-dev`. To see an alert end to end, set
 `HEALTH_TOUR_SLUG` on dev to a slug that doesn't exist and deploy: the tour page check fails, and
 an email arrives about 10 minutes later; set it back and the recovery follows within 30 minutes.
+
+---
+
+## Operator pages
+
+`/app/ops` in the admin app is the operator area: metrics and, later, support tools. It is for
+signed-in Auth0 users listed in `admin-api`'s `OPERATOR_SUB_SHA256` var (both env blocks of
+`services/admin-api/wrangler.jsonc`): the hex SHA-256 of each operator's Auth0 user id,
+comma-separated. Empty, the default, means nobody. Everyone else gets `404 {"error":"not found"}`
+from every `/api/admin/ops` route (`requireOperator` in `src/ops-gate.ts`) and "Page not found" at
+`/app/ops`; `GET /api/admin/account` says `operator: true` only for a listed user, and the
+account page (`/app/account`) links to Operations from that. These routes are separate from the
+token-guarded `/api/admin/operator/*` routes the scripts call.
+
+The list holds hashes so the repo never names anyone's Auth0 user. Adding an operator
+(**Needs you**): find the user id (Auth0 dashboard → User Management → Users → the user →
+`user_id`, e.g. `google-oauth2|1234`; for a linked account, the primary one), then
+
+```bash
+printf %s 'google-oauth2|1234' | sha256sum
+```
+
+and add the 64-hex hash to `OPERATOR_SUB_SHA256` for that env, in a PR. It takes effect on the
+next deploy. Removing one is the same edit the other way.
 
 ---
 

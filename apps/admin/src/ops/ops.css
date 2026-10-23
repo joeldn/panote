@@ -1,0 +1,31 @@
+/* The operator area at /app/ops (no design screen; follows the dashboard's type). */
+.ops__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 8px 0 28px;
+  border-bottom: 1px solid var(--ink-13);
+}
+
+.ops__tab {
+  padding: 10px 0;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font: 500 14px var(--fbody);
+  color: var(--ink-62);
+  text-decoration: none;
+}
+
+.ops__tab:hover {
+  color: var(--ink);
+}
+
+.ops__tab--active {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+}
+
+.ops__empty {
+  font: 400 15px/1.45 var(--fbody);
+  color: var(--ink-55);
+}

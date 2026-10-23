@@ -106,3 +106,8 @@
   font: 400 13px/1.4 var(--fmono);
   user-select: all;
 }
+
+.acct__link {
+  font: 500 15px var(--fbody);
+  color: var(--accent);
+}

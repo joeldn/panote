@@ -44,6 +44,10 @@ export default defineWorkerTestConfig({
         // Every test account is minutes old: no new-account hold, except where a test asks
         // for one (account-age.test.ts, and publish.test.ts through its clock).
         NEW_ACCOUNT_HOLD_DAYS: '0',
+        // The operator pages' allow-list (ops-gate.ts): the SHA-256 of 'auth0|operator', in
+        // capitals and next to junk, to show both are tolerated.
+        OPERATOR_SUB_SHA256:
+          'not-a-hash, 9B411D3D5389F38A637A3C2A5D1B32AD931294B2BA105AE7F7D277C29CE6301E',
       },
       // Every test reads and writes as the same few subs, far past the real limits:
       // lift them here. The 429 path is tested with a stubbed limiter instead.
