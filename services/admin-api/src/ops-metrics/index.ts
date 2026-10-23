@@ -109,6 +109,7 @@ export const opsMetricsRoute = async (
     c.env.INSIGHTS_LIMITER,
     c.get('sub') ?? 'operator',
     WRITE_RATE_PERIOD_SECONDS,
+    { sink: c.env.OPS_EVENTS, service: 'admin-api', limiter: 'INSIGHTS_LIMITER' },
   );
   if (limited) return limited;
   const range = parseRange(c.req.query('range'));
