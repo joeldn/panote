@@ -131,7 +131,11 @@ describe('Dashboard', () => {
       await waitFor(() =>
         expect(writeText).toHaveBeenCalledWith('https://panote.dev/s/st-lawrence'),
       );
-      expect(await actions.findByText('Copied ✓')).toBeTruthy();
+      const said = await actions.findByText('Copied ✓');
+      // Its own live region, not text inside the labelled button.
+      expect(said.getAttribute('role')).toBe('status');
+      expect(said.closest('button')).toBeNull();
+      expect(said.parentElement?.className).toBe('dash-card__actions');
 
       const insights = actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' });
       expect(insights.getAttribute('href')).toBe('/app/insights/t1');

@@ -185,10 +185,13 @@ export function TourCard({
                 onClick={() => void copy(live)}
               >
                 <i className={COPY_ICON[copied]} aria-hidden="true" />
-                <span className="dash-card__sr" role="status">
-                  {copied === 'idle' ? '' : COPY_TITLE[copied]}
-                </span>
               </button>
+            )}
+            {/* Beside the button, not in it: its aria-label would hide what this says. */}
+            {live && (
+              <span className="dash-card__sr" role="status">
+                {copied === 'idle' ? '' : COPY_TITLE[copied]}
+              </span>
             )}
             <Link
               className="dash-card__action"

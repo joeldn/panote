@@ -305,6 +305,7 @@
   cursor: pointer;
 }
 
+/* Clipped to nothing; .dash-card__actions (position: relative) holds it. */
 .dash-card__sr {
   position: absolute;
   width: 1px;
