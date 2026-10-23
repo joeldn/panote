@@ -108,8 +108,12 @@ describe('Unused panos', () => {
     expect(within(row('Untitled pano')).getByTestId('thumb-fallback')).toBeTruthy();
     expect(row('Untitled pano').textContent).toContain('Still processing');
 
-    const url = new URL(String(calls('GET /api/admin/panos')[0]![0]), 'https://panote.test');
-    expect(url.searchParams.get('include')).toBe('references');
+    // The dashboard's own list first, then the one that knows which panos are used.
+    const include = calls('GET /api/admin/panos').map((c) =>
+      new URL(String(c[0]), 'https://panote.test').searchParams.get('include'),
+    );
+    expect(include[0]).toBeNull();
+    expect(include).toContain('references');
   });
 
   it('flips a face-tile thumbnail back the right way round, and leaves a preview alone', async () => {

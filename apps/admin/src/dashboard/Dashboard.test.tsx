@@ -76,6 +76,9 @@ const lists = (
 });
 
 const card = (title: string) => screen.getByRole('link', { name: title }).closest('article')!;
+/** The dashboard's own pano loads, not the later one that asks which are unused. */
+const mainPanoLoads = (calls: (key: string) => unknown[][]) =>
+  calls('GET /api/admin/panos').filter(([input]) => !String(input).includes('include='));
 const totals = () => document.querySelector('.dash__totals')?.textContent;
 
 /** Opens a card's "⋯" menu and returns it. */
@@ -118,7 +121,9 @@ describe('Dashboard', () => {
         ),
       );
       renderAdmin('/app/', { fetch });
-      const filters = await screen.findByRole('group', { name: 'Show' });
+      // The unused count comes in after the rest.
+      await screen.findByRole('button', { name: 'Unused panos 1' });
+      const filters = screen.getByRole('group', { name: 'Show' });
       const chips = within(filters).getAllByRole('button');
       expect(chips.map((c) => c.textContent)).toEqual([
         'Your tours 1',
@@ -190,26 +195,60 @@ describe('Dashboard', () => {
       expect(calls('GET /api/admin/shared-tours')).toHaveLength(2);
     });
 
-    it('lists unused panos from the dashboard’s own pano request', async () => {
-      const { fetch, calls } = server(
-        lists(
-          [tour()],
-          [
-            pano({ referenced: true }),
-            pano({ panoId: 'p2', title: 'Old porch', referenced: false }),
-          ],
-        ),
-      );
+    it('asks which panos are unused only after the tours show, then adds the chip', async () => {
+      let release: () => void = () => {};
+      const panos = [
+        pano({ referenced: true }),
+        pano({ panoId: 'p2', title: 'Old porch', referenced: false }),
+      ];
+      const body = () => json({ panoIds: ['p1', 'p2'], panos, cursor: null });
+      const { fetch, calls } = server({
+        ...lists([tour()], panos, [shared()]),
+        'GET /api/admin/panos': (url) =>
+          url.searchParams.get('include') === 'references'
+            ? new Promise<Response>((resolve) => {
+                release = () => resolve(body());
+              })
+            : body(),
+      });
       renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const include = (i: number) =>
+        new URL(
+          String(calls('GET /api/admin/panos')[i]![0]),
+          'https://panote.test',
+        ).searchParams.get('include');
+      // The first load doesn't wait on reading every tour.
+      expect(include(0)).toBeNull();
+      await screen.findByRole('button', { name: 'Shared with you 1' });
+      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      expect(include(1)).toBe('references');
+      expect(screen.queryByRole('button', { name: /Unused panos/ })).toBeNull();
+
+      release();
       fireEvent.click(await screen.findByRole('button', { name: 'Unused panos 1' }));
       expect(await screen.findByText('Old porch')).toBeTruthy();
       expect(screen.queryByText('Nave')).toBeNull();
       expect(screen.queryByRole('link', { name: 'St Lawrence Jewry' })).toBeNull();
-      const panoCalls = calls('GET /api/admin/panos');
-      expect(panoCalls).toHaveLength(1);
-      expect(
-        new URL(String(panoCalls[0]![0]), 'https://panote.test').searchParams.get('include'),
-      ).toBe('references');
+      // The view reuses that answer.
+      expect(calls('GET /api/admin/panos')).toHaveLength(2);
+    });
+
+    it('leaves the unused chip out when that request fails', async () => {
+      const panos = [pano({ panoId: 'p2', title: 'Old porch', referenced: false })];
+      const { fetch, calls } = server({
+        ...lists([tour()], panos, [shared()]),
+        'GET /api/admin/panos': (url) =>
+          url.searchParams.get('include') === 'references'
+            ? json({ error: 'boom' }, 500)
+            : json({ panoIds: ['p2'], panos, cursor: null }),
+      });
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('button', { name: 'Shared with you 1' });
+      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      await Promise.resolve();
+      expect(screen.queryByRole('button', { name: /Unused panos/ })).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
     });
 
     it('keeps the chip in use after its list empties, so there is a way back', async () => {
@@ -485,7 +524,7 @@ describe('Dashboard', () => {
       // Deleting a tour refreshes the pano list, which still reports the tombstone.
       pickFromMenu('St Lawrence Jewry', 'Delete');
       fireEvent.click(screen.getByRole('button', { name: 'Delete tour' }));
-      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      await waitFor(() => expect(mainPanoLoads(calls)).toHaveLength(2));
       expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1);
     });
 
@@ -499,7 +538,7 @@ describe('Dashboard', () => {
       cleanup();
       renderAdmin('/app/', { fetch });
       await screen.findByRole('link', { name: 'St Lawrence Jewry' });
-      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      await waitFor(() => expect(mainPanoLoads(calls)).toHaveLength(2));
       expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1);
     });
 

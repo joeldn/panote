@@ -17,7 +17,6 @@ import { formatCount, plural } from './format.js';
 import { TourCard } from './TourCard.js';
 import { UnusedPanos } from './UnusedPanos.js';
 import { useDashboard, type Dashboard as DashboardData } from './use-dashboard.js';
-import { unusedPanos } from './use-unused-panos.js';
 
 /** What the dashboard lists, from `?view=`: the owner's tours unless it says otherwise. */
 type View = 'yours' | 'shared' | 'unused';
@@ -188,10 +187,6 @@ export function Dashboard() {
   const [confirm, setConfirm] = useState<TourSummary | null>(null);
   const inFlight = useRef<Promise<void> | null>(null);
   const tilesBase = tilesBaseUrl(config);
-  const unused = useMemo(
-    () => (dash.panos ? unusedPanos(dash.panos.values()) : null),
-    [dash.panos],
-  );
   const viewSearch = view === 'yours' ? '' : `?view=${view}`;
 
   const pick = (v: View) => setSearch(v === 'yours' ? {} : { view: v }, { replace: true });
@@ -246,11 +241,19 @@ export function Dashboard() {
       );
     }
   } else if (view === 'unused') {
-    list = unused ? (
-      <UnusedPanos panos={unused} tilesBase={tilesBase} now={now} deletePano={dash.deletePano} />
-    ) : (
-      <Retry text="Couldn’t load your panos." onRetry={dash.reload} />
-    );
+    if (dash.unused.status === 'loading') list = loading('Loading your panos…');
+    else if (!dash.unused.panos) {
+      list = <Retry text="Couldn’t load your panos." onRetry={dash.reloadUnused} />;
+    } else {
+      list = (
+        <UnusedPanos
+          panos={dash.unused.panos}
+          tilesBase={tilesBase}
+          now={now}
+          deletePano={dash.deletePano}
+        />
+      );
+    }
   } else if (dash.tours.length === 0) {
     list = <Empty />;
   } else {
@@ -292,7 +295,7 @@ export function Dashboard() {
           counts={{
             yours: dash.tours.length,
             shared: dash.shared.tours?.length ?? null,
-            unused: unused?.length ?? null,
+            unused: dash.unused.panos?.length ?? null,
           }}
           onPick={pick}
         />
