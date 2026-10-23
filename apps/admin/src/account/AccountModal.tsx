@@ -216,7 +216,7 @@ function AccountBody({ session, onClose, onDelete }: Omit<AccountModalProps, 'op
         )}
       </div>
 
-      <footer className="acct__foot">
+      <div className="acct__foot">
         <button type="button" className="acct__delete" onClick={onDelete}>
           Delete account
         </button>
@@ -226,7 +226,7 @@ function AccountBody({ session, onClose, onDelete }: Omit<AccountModalProps, 'op
         <Button size="sm" variant="ghost" onClick={() => void session.signOut()}>
           Sign out
         </Button>
-      </footer>
+      </div>
     </>
   );
 }

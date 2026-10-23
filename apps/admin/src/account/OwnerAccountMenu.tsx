@@ -1,6 +1,6 @@
 import { AccountMenu, type AccountMenuItem } from '@internal/ui';
 import { useEffect, useState } from 'react';
-import { useMatch, useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useMatch, useNavigate, useSearchParams } from 'react-router';
 
 import { isOperator } from '../ops/operator.js';
 import type { Session } from '../session.js';
@@ -23,7 +23,15 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
   const [params, setParams] = useSearchParams();
   // /app/account: an old link (or bookmark) opens the window over the dashboard.
   const onAccountPath = useMatch('/account') !== null;
-  const [accountOpen, setAccountOpen] = useState(false);
+  // The page the window was opened over: going to another page (Back, Operations) closes it.
+  const { pathname } = useLocation();
+  const [openOver, setOpenOver] = useState<string | null>(null);
+  const [lastPath, setLastPath] = useState(pathname);
+  if (lastPath !== pathname) {
+    setLastPath(pathname);
+    setOpenOver(null);
+  }
+  const accountOpen = openOver === pathname;
   const [operator, setOperator] = useState(false);
   const resuming = params.get(DELETE_ACCOUNT_PARAM) === DELETE_ACCOUNT_RESUME;
   const [deleting, setDeleting] = useState(resuming);
@@ -47,12 +55,14 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
   }, [resuming, setParams]);
 
   const closeAccount = () => {
-    setAccountOpen(false);
+    setOpenOver(null);
     if (onAccountPath) void navigate('/', { replace: true });
+    // The menu item it was opened from has gone: back to the avatar that opened the menu.
+    setTimeout(() => document.querySelector<HTMLElement>('.pn-account__avatar')?.focus(), 0);
   };
 
   const items: AccountMenuItem[] = [
-    { label: 'Account…', icon: 'fa-solid fa-user', onSelect: () => setAccountOpen(true) },
+    { label: 'Account…', icon: 'fa-solid fa-user', onSelect: () => setOpenOver(pathname) },
   ];
   if (operator) {
     items.push({

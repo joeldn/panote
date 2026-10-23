@@ -188,3 +188,10 @@
 .acct__delete:focus-visible {
   color: var(--accent);
 }
+
+/* A phone: one meter a row, so each keeps its number and bar readable. */
+@media (max-width: 400px) {
+  .acct__meters {
+    grid-template-columns: 1fr;
+  }
+}

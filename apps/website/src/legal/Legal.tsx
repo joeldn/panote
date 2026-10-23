@@ -86,12 +86,12 @@ export function Privacy() {
 
       <h2>Deleting</h2>
       <p>
-        You can delete tours, panoramas or your whole account (account menu, Delete account) at any
-        time. Private backups and the originals of deleted photos are kept for up to 31 days in case
-        of mistakes, and your sign-in record is removed within 30 days. Unpublishing stops a tour’s
-        link working, but people who already viewed it may still load its images until you delete
-        them. If content is taken down after a report, a private copy and the report may be kept as
-        long as the law requires.
+        You can delete tours, panoramas or your whole account (account menu, Account, Delete
+        account) at any time. Private backups and the originals of deleted photos are kept for up to
+        31 days in case of mistakes, and your sign-in record is removed within 30 days. Unpublishing
+        stops a tour’s link working, but people who already viewed it may still load its images
+        until you delete them. If content is taken down after a report, a private copy and the
+        report may be kept as long as the law requires.
       </p>
 
       <h2>Your rights</h2>

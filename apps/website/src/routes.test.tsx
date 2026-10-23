@@ -45,7 +45,7 @@ describe('website routes', () => {
     expect(page).toContain('used for about a minute to limit abuse');
     expect(page).toContain('deleted within 30 days');
     expect(page).toContain('may set cookies under its own policy');
-    expect(page).toContain('account menu, Delete account');
+    expect(page).toContain('account menu, Account, Delete account');
     expect(page).toContain('up to 31 days');
     expect(page).toContain('people who already viewed it may still load its images');
     expect(page).toContain('Once your account is a week old, a public tour can appear in search');

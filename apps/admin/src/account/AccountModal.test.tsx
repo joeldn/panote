@@ -1,4 +1,12 @@
-import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { FetchLike } from '@internal/web-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -104,6 +112,22 @@ describe('the account window', () => {
     fireEvent.click(dialog.getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('dialog', { name: 'Account' })).toBeNull();
     expect(router.state.location.pathname).toBe('/app/');
+  });
+
+  it('closes when another page takes over, and hands focus back to the avatar', async () => {
+    const { router } = renderAdmin('/app/', { fetch: server() });
+    await openAccount();
+    // Back or forward to another page under the same bar: the window stays with its page.
+    await act(() => router.navigate('/panos/unused'));
+    expect(screen.queryByRole('dialog', { name: 'Account' })).toBeNull();
+    await act(() => router.navigate('/'));
+    expect(screen.queryByRole('dialog', { name: 'Account' })).toBeNull();
+
+    const dialog = await openAccount();
+    fireEvent.click(dialog.getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Account: /),
+    );
   });
 
   it('opens over the editor, keeping its unsaved edits and its address', async () => {

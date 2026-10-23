@@ -1463,8 +1463,8 @@ the caller's own owner-scoped prefix either way.
 
 ## Account deletion
 
-An owner deletes their own account from the admin app's account menu ("Delete account", on the
-dashboard and in the editor, behind a typed confirmation). That calls `DELETE /api/admin/account`
+An owner deletes their own account from the admin app's Account window (account menu → Account…
+→ "Delete account", on the dashboard and in the editor, behind a typed confirmation). That calls `DELETE /api/admin/account`
 on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_CONFIRMATION` in
 `@internal/contracts`; any other body is a `400` and touches nothing). The code is
 `services/admin-api/src/delete-account.ts`.
@@ -2372,8 +2372,8 @@ log write that fails is a `502` with no URL, and a value that isn't a non-negati
 every upload (`500`), so a typo can't silently lift a limit. They are soft caps: concurrent
 requests can each pass, since each counts what is stored when it reads.
 
-**Usage read.** `GET /api/upload-url` (same route, so no new Worker route) answers the account
-page (`/app/account`) with what the caller holds and the three limits: `{panos, bytes,
+**Usage read.** `GET /api/upload-url` (same route, so no new Worker route) answers the Account
+window (account menu → Account…; `/app/account` opens it over the dashboard) with what the caller holds and the three limits: `{panos, bytes,
 uploadsToday, limits}`, counted as above from the caller's own prefixes, never a tour they edit.
 It lists `panos/<owner>/` and `upload-log/<owner>/` whatever the limits are, spends the same
 `UPLOAD_URL_LIMITER` budget, and `uploadsToday` stays 0 while the daily limit is unset (no log is
@@ -2501,9 +2501,8 @@ bundles are small JSON capped by `admin-api`'s own limits.
 
 ### Support email
 
-The admin app's account menu and Account page (`/app/account`, "Help") have a **Contact support**
-link: a `mailto:hello@panote.io` whose body starts with `Account ID: <Auth0 user id>`, the same id
-the page shows. Panote stores no emails, so that line is how you find the account a message is
+The admin app's Account window (account menu → Account…) has a **Contact support** link: a `mailto:hello@panote.io` whose body starts with `Account ID: <Auth0 user id>`, the same id
+the window shows. Panote stores no emails, so that line is how you find the account a message is
 about; it is the `--sub` that `delete-account.ts`, `restore-backup.ts` and `takedown.ts` take. A message without it (written from the
 website footer, say) needs the user's tour link, or a search by email in the Auth0 dashboard.
 
@@ -3019,7 +3018,7 @@ signed-in Auth0 users listed in `admin-api`'s `OPERATOR_SUB_SHA256` var (both en
 comma-separated. Empty, the default, means nobody. Every other signed-in user gets the same `404`
 from every `/api/admin/ops` route as from a route that doesn't exist (`requireOperator` in
 `src/ops-gate.ts`; signed out, it's the usual `401`), and "Page not found" at `/app/ops`; `GET /api/admin/account` says `operator: true` only for a listed user, and the
-account page (`/app/account`) links to Operations from that. These routes are separate from the
+account menu shows an Operations item from that (and the Account window links to it). These routes are separate from the
 token-guarded `/api/admin/operator/*` routes the scripts call.
 
 The list holds hashes so the repo never names anyone's Auth0 user. Adding an operator
