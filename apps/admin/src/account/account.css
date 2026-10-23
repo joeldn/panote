@@ -14,22 +14,6 @@
   color: var(--ink);
 }
 
-.delete-account__input {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--ink-13);
-  border-radius: var(--r-field);
-  outline: none;
-  background: transparent;
-  font: 400 13px var(--fmono);
-  color: var(--ink);
-}
-
-.delete-account__input:focus-visible {
-  border-color: var(--accent);
-}
-
 /* The account window (no design screen; follows the Insights and People modals). */
 .acct {
   padding: 20px 24px 6px;
@@ -54,17 +38,6 @@
   margin: 0;
   font: 400 13px/1.5 var(--fbody);
   color: var(--ink-62);
-}
-
-.acct__retry {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 12px;
-  border-radius: var(--r-row);
-  background: color-mix(in srgb, var(--accent) 8%, #fff);
-  font: 400 13px/1.5 var(--fbody);
 }
 
 .acct__facts {

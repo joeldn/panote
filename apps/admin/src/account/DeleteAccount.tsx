@@ -152,7 +152,7 @@ export function DeleteAccountModal({
           </label>
           <input
             id={inputId}
-            className="delete-account__input"
+            className="pn-input pn-input--mono"
             type="text"
             autoComplete="off"
             autoCapitalize="off"

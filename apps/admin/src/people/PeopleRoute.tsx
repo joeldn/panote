@@ -326,7 +326,7 @@ export function PeopleRoute() {
             <div className="ppl__invite-row">
               <input
                 id="ppl-email"
-                className="ppl__input"
+                className="pn-input pn-input--mono"
                 type="email"
                 autoComplete="off"
                 placeholder="name@example.com"
@@ -356,7 +356,7 @@ export function PeopleRoute() {
             </p>
             <div className="ppl__invite-row">
               <input
-                className="ppl__input"
+                className="pn-input pn-input--mono"
                 readOnly
                 aria-label="Invite link"
                 value={created.link}
@@ -392,43 +392,39 @@ export function PeopleRoute() {
                     : 'Editor'}
                 </span>
                 {owner && offeredTo?.id === m.id && (
-                  <button
-                    type="button"
-                    className="ppl__action"
+                  <Button
+                    variant="link"
                     aria-label={`Withdraw the offer to ${nameOf(m)}`}
                     onClick={() => void onWithdraw()}
                   >
                     Withdraw
-                  </button>
+                  </Button>
                 )}
                 {owner && offeredTo?.id !== m.id && (
-                  <button
-                    type="button"
-                    className="ppl__action"
+                  <Button
+                    variant="link"
                     aria-label={`Make ${nameOf(m)} the owner`}
                     onClick={() => setConfirming({ kind: 'offer', member: m })}
                   >
                     Make owner
-                  </button>
+                  </Button>
                 )}
                 {owner && (
-                  <button
-                    type="button"
-                    className="ppl__action"
+                  <Button
+                    variant="link"
                     aria-label={`Remove ${nameOf(m)}`}
                     onClick={() => setConfirming({ kind: 'remove', member: m })}
                   >
                     Remove
-                  </button>
+                  </Button>
                 )}
                 {m.you && (
-                  <button
-                    type="button"
-                    className="ppl__action"
+                  <Button
+                    variant="link"
                     onClick={() => setConfirming({ kind: 'leave', member: m })}
                   >
                     Leave
-                  </button>
+                  </Button>
                 )}
               </li>
             ))}
@@ -444,14 +440,13 @@ export function PeopleRoute() {
                 <li key={i.id} className="ppl__row">
                   <span className="ppl__who">{i.email}</span>
                   <span className="ppl__role">Until {formatDate(i.expiresAt)}</span>
-                  <button
-                    type="button"
-                    className="ppl__action"
+                  <Button
+                    variant="link"
                     aria-label={`Cancel the invite for ${i.email}`}
                     onClick={() => void onRevoke(i.id)}
                   >
                     Cancel
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>

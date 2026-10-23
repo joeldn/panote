@@ -41,6 +41,7 @@
   gap: 12px;
 }
 .ins__card {
+  min-width: 0;
   padding: 16px 16px 14px;
   background: #fff;
   border: 1px solid var(--ink-10);
@@ -53,6 +54,8 @@
   margin: 0;
   font: 400 30px/1.15 var(--fdisp);
   letter-spacing: -0.015em;
+  /* "Unavailable" in half a phone's width. */
+  overflow-wrap: anywhere;
 }
 .ins__caption {
   margin: 4px 0 0;
@@ -112,9 +115,15 @@
 .ins__pano-row {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
   gap: 12px;
   margin-bottom: 6px;
   font: 500 14px var(--fbody);
+}
+/* A long pano name wraps; the count keeps its line. */
+.ins__pano-row > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ins__track {
   height: 7px;
@@ -161,6 +170,11 @@
   gap: 2px;
   min-width: 0;
   font: 500 14px var(--fbody);
+  overflow-wrap: anywhere;
+}
+/* The pano under a point's name may wrap, unlike the counts. */
+.ins__point-name .ins__meta {
+  white-space: normal;
 }
 
 .ins__unavailable {
@@ -186,7 +200,10 @@
   .ins__cards {
     gap: 8px;
   }
+  .ins__card {
+    padding: 13px 12px 11px;
+  }
   .ins__value {
-    font-size: 24px;
+    font-size: 20px;
   }
 }

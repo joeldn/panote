@@ -5,7 +5,7 @@ import {
   MAX_TOUR_LANGUAGES,
   type TourLanguages,
 } from '@internal/contracts';
-import { Button } from '@internal/ui';
+import { Button, IconButton } from '@internal/ui';
 import { useEffect, useId, useRef, useState } from 'react';
 
 // When a tour has never set a language, its text is taken to be in English until the
@@ -95,7 +95,7 @@ export function LanguageMenu({
         </label>
         <select
           id={`${id}-default`}
-          className="ed-input"
+          className="pn-input"
           value={current.default}
           onChange={(e) => onChange({ ...current, default: e.target.value })}
         >
@@ -127,14 +127,12 @@ export function LanguageMenu({
               {tag === current.default && <span className="ed-langs__badge">Default</span>}
             </button>
             {tag !== current.default && (
-              <button
-                type="button"
+              <IconButton
                 className="ed-langs__remove"
-                aria-label={`Remove ${languageName(tag)}`}
+                icon="fa-solid fa-xmark"
+                label={`Remove ${languageName(tag)}`}
                 onClick={() => onRemove(tag)}
-              >
-                <i className="fa-solid fa-xmark" aria-hidden="true" />
-              </button>
+              />
             )}
           </li>
         ))}
@@ -149,7 +147,7 @@ export function LanguageMenu({
           <div className="ed-langs__add-row">
             <select
               id={`${id}-add`}
-              className="ed-input"
+              className="pn-input"
               value={pick}
               onChange={(e) => {
                 setPick(e.target.value);
@@ -174,7 +172,7 @@ export function LanguageMenu({
               </label>
               <input
                 id={`${id}-tag`}
-                className="ed-input"
+                className="pn-input"
                 value={typed}
                 placeholder="Language code, e.g. cy or es-419"
                 aria-invalid={error ? true : undefined}

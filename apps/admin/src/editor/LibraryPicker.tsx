@@ -1,4 +1,4 @@
-import { Button, Modal, ModalHeader, useModalTitleId } from '@internal/ui';
+import { Button, Modal, ModalHeader, Notice, useModalTitleId } from '@internal/ui';
 import { tilesBaseUrl } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 
@@ -105,27 +105,31 @@ export function LibraryPicker({ tourId, tourPanoIds, full, onClose, onAdded }: L
     );
   } else if (status === 'error') {
     body = (
-      <div className="ed-lib__alert" role="alert">
-        <span>Couldn’t load your panos.</span>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            setStatus('loading');
-            setReloadKey((k) => k + 1);
-          }}
-        >
-          Try again
-        </Button>
-      </div>
+      <Notice
+        tone="warn"
+        actions={
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setStatus('loading');
+              setReloadKey((k) => k + 1);
+            }}
+          >
+            Try again
+          </Button>
+        }
+      >
+        Couldn’t load your panos.
+      </Notice>
     );
   } else {
     body = (
       <>
         {full && library.addable > 0 && (
-          <p className="ed-lib__alert" role="note">
+          <Notice tone="warn" role="note">
             {TOUR_FULL_MESSAGE}
-          </p>
+          </Notice>
         )}
         {library.entries.length === 0 ? (
           <p className="ed-lib__note">
@@ -194,11 +198,7 @@ export function LibraryPicker({ tourId, tourPanoIds, full, onClose, onAdded }: L
         closeDisabled={adding !== null}
       />
       <div className="ed-lib">
-        {error && (
-          <p className="ed-lib__alert" role="alert">
-            {error}
-          </p>
-        )}
+        {error && <Notice tone="error">{error}</Notice>}
         {body}
       </div>
     </Modal>

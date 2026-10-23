@@ -73,7 +73,7 @@ export function SettingsPopover({
         </label>
         <textarea
           id={`${id}-description`}
-          className="ed-input ed-textarea"
+          className="pn-input"
           value={text}
           {...(translating && { placeholder: translating.placeholder })}
           maxLength={MAX_TOUR_DESCRIPTION_LENGTH}

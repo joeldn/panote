@@ -19,3 +19,77 @@
   color: var(--chip-text);
   font-size: 13px;
 }
+
+.pv-badge,
+.pv-back {
+  position: relative;
+}
+
+.pv-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pv-back > i {
+  font-size: 12px;
+  color: var(--ink-55);
+}
+
+/* With no compass in the top right corner, the bar may use it. */
+.pv-tour:not(:has(.pn-tour__compass)) .pn-stage__overlay > .pn-tourbar {
+  right: calc(18px + env(safe-area-inset-right, 0px));
+}
+
+/*
+ * A phone: the badge keeps its eye (and a dot while there are unsaved edits) and Back its
+ * arrow; their words stay for screen readers. The pano's name keeps the rest of the row.
+ */
+@media (max-width: 480px) {
+  .pv-tour .pn-tourbar {
+    gap: 8px;
+  }
+
+  .pv-badge {
+    padding: 8px 9px;
+  }
+
+  .pv-badge__text,
+  .pv-back__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .pv-badge--unsaved::after {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* The language picker, when there is one, gives up its globe and some width. */
+  .pv-tour .pn-tourbar .pn-lang {
+    padding: 0 10px;
+  }
+
+  .pv-tour .pn-tourbar .pn-lang > i {
+    display: none;
+  }
+
+  .pv-tour .pn-tourbar .pn-lang__select {
+    max-width: 5.5em;
+  }
+
+  .pv-back {
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    box-sizing: border-box;
+    padding: 0;
+  }
+}
