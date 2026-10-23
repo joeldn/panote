@@ -958,6 +958,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           onRepublish={() => void editor.republish()}
           onDiscardDraft={() => void editor.discardDraft()}
           saving={editor.saving}
+          failed={Object.keys(editor.failures).length > 0}
         />
       </div>
 
