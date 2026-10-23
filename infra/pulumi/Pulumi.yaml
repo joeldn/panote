@@ -1,0 +1,11 @@
+# One project, two stacks (Pulumi.dev.yaml, Pulumi.production.yaml). The
+# program is the compiled dist/index.js (package.json "main"): run
+# `pnpm --filter @internal/infra build` before any pulumi command.
+# Setup and the import of dev: infra/README.md.
+name: panote-infra
+description: panote's Cloudflare account - R2, queues, zone rulesets and settings (Workers are deployed by wrangler)
+runtime:
+  name: nodejs
+  options:
+    typescript: false
+    packagemanager: pnpm

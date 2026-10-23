@@ -28,6 +28,7 @@ Objects, Queues, and Containers. No servers to run.
 | `packages/typescript-config` | `@internal/*` | Shared `tsconfig` base |
 | `packages/eslint-config` | `@internal/*` | Shared ESLint flat config |
 | `packages/vitest-config` | `@internal/*` | Shared Vitest config |
+| `infra/pulumi` | `@internal/*` | Pulumi program for the Cloudflare account: R2, queues, zone rules and settings (see `infra/README.md`) |
 
 See `docs/decisions.md` for why the repo is shaped this way.
 
@@ -51,6 +52,7 @@ pnpm format
 
 - `docs/STANDARDS.md` — conventions: package manager, dependency pinning, TypeScript, linting, testing, git commits, Cloudflare/Wrangler gotchas
 - `docs/decisions.md` — architectural decisions and their rationale
+- `infra/README.md` — infrastructure: what manages what, and the install steps for the Pulumi program (state backend, tokens, importing dev, creating production)
 - `docs/deploy.md` — provisioning and deploy runbook: what deploys where, one-time setup, first dev deploy checklist, production status
 - `docs/design/NOTES.md` — how to read the UI design handoff bundle against the current code
 - `CLAUDE.md` — standing guidance for AI coding agents working in this repo

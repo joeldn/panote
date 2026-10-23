@@ -2,6 +2,7 @@ packages:
   - 'apps/*'
   - 'services/*'
   - 'packages/*'
+  - 'infra/pulumi'
 
 # ---------------------------------------------------------------------------
 # Version catalog.
@@ -37,6 +38,13 @@ catalog:
   hono: 4.13.1
   aws4fetch: 1.0.20
   '@cloudflare/containers': 0.3.7
+
+  # --- Infrastructure (infra/pulumi) ---
+  # The Pulumi CLI that runs the program is installed separately, at the same
+  # version as @pulumi/pulumi (infra/README.md). @pulumi/cloudflare 6.x is
+  # bridged from the Terraform provider v5.
+  '@pulumi/pulumi': 3.268.0
+  '@pulumi/cloudflare': 6.22.0
 
   # --- Runtime libraries ---
   # zod is pinned at 3.x deliberately - see the port spec's zod 3-vs-4 analysis.
@@ -137,3 +145,6 @@ allowBuilds:
   workerd: true
   # Its postinstall only prints a message; never run it.
   browser-tabs-lock: false
+  # Pulled in by @pulumi/pulumi (via @grpc/proto-loader). Its postinstall only
+  # warns about version-scheme mismatches in the parent package; never run it.
+  protobufjs: false

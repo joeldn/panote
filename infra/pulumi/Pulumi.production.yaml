@@ -1,0 +1,13 @@
+# Non-secret settings for production (src/settings.ts). Same account as dev
+# (docs/STANDARDS.md, one Cloudflare account). Run `pulumi stack init
+# production` once and commit the encryptionsalt it adds here.
+config:
+  panote-infra:accountId: 12e2809e05de8a2bf20b815fd394ec9a
+  panote-infra:zone: panote.io
+  panote-infra:bucket: pano-content
+  panote-infra:uploadsQueue: pano-uploads
+  panote-infra:deadLetterQueue: pano-uploads-dlq
+  panote-infra:corsFile: cors.json
+  panote-infra:cacheRulesFile: cache-rules.production.json
+  panote-infra:noindexAllResponses: false
+  panote-infra:wwwRedirect: true

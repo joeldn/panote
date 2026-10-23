@@ -60,6 +60,8 @@ const config: UserConfig = {
         'deps',
         // docs/deploy.md (runbook and provisioning record)
         'deploy',
+        // infra/ (the Pulumi program, R2 CORS and cache-rule files)
+        'infra',
       ],
     ],
     // Changesets pastes long release notes into commit bodies; wrapping them
