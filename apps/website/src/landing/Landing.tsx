@@ -60,6 +60,8 @@ function Hero({
 }) {
   // No pano behind it (none set, or it failed): the headline moves up instead of sitting
   // at the foot of an empty screen. While the showcase loads, the hero keeps its height.
+  // Config is never pending here: main.tsx builds it synchronously from the build's env
+  // before the first render, so a missing tilesBase means no CDN, not "not yet".
   const still = showcase === null || !tilesBase;
   return (
     <section className={cx('landing-hero', still && 'landing-hero--static')}>
