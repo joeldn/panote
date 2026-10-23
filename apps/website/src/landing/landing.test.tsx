@@ -41,7 +41,7 @@ const signedIn = () =>
     getUser: vi.fn(async () => ({ name: 'Maya Larsson', email: 'maya@example.com' })),
   });
 
-const dropTarget = () => screen.getByRole('link', { name: /^Upload your first tour free/ });
+const dropTarget = () => screen.getByRole('link', { name: /^Upload a 360° photo free/ });
 
 // The Shell and its pages are lazy routes: load their modules once up front, so the first
 // test's queries don't time out on the module transform.
@@ -62,9 +62,9 @@ describe('landing', () => {
   it('says it is free and names no sign-in provider', async () => {
     renderSite('/');
     expect((await screen.findByRole('heading', { level: 1 })).textContent).toBe(
-      'Your 360° tours. Full resolution. Free.',
+      'Host 360° tours at full resolution. Free.',
     );
-    expect(dropTarget().textContent).toContain('free, sign in and go live in seconds');
+    expect(dropTarget().textContent).toContain('free, sign in and start building');
     // Which providers sign-in offers is per environment; landing copy must not name one.
     expect(document.body.textContent).not.toMatch(/sign in with Google/i);
     expect(screen.queryByText(/no sign-up/i)).toBeNull();
@@ -78,9 +78,9 @@ describe('landing', () => {
     await screen.findByRole('link', { name: 'Sign in' });
     const href = signInPath(RESUME);
     expect(dropTarget().getAttribute('href')).toBe(href);
-    expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(href);
+    expect(screen.getByRole('link', { name: 'Upload a photo' }).getAttribute('href')).toBe(href);
     expect(
-      screen.getByRole('link', { name: /Upload your first tour, free/ }).getAttribute('href'),
+      screen.getByRole('link', { name: 'Upload a 360° photo, free' }).getAttribute('href'),
     ).toBe(href);
 
     fireEvent.click(dropTarget());
@@ -124,18 +124,18 @@ describe('landing', () => {
     expect(stash).toHaveBeenCalledTimes(1);
   });
 
-  it('sends a signed-in upload straight to the admin app, as a new tour, not a first', async () => {
+  it('sends a signed-in upload straight to the admin app, without the sign-in pitch', async () => {
     renderSite('/', signedIn());
     await screen.findByRole('button', { name: 'Account: Maya Larsson' });
     const admin = `${LOCAL.admin}${RESUME}`;
-    const drop = screen.getByRole('link', { name: /^Upload a new tour free/ });
+    const drop = screen.getByRole('link', { name: /^Upload a 360° photo opens/ });
     expect(drop.getAttribute('href')).toBe(admin);
-    expect(drop.textContent).toContain('free, opens in your dashboard');
-    expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(admin);
-    expect(screen.getByRole('link', { name: 'Upload a new tour' }).getAttribute('href')).toBe(
+    expect(drop.textContent).toContain('Upload a 360° photo opens in your dashboard');
+    expect(screen.getByRole('link', { name: 'Upload a photo' }).getAttribute('href')).toBe(admin);
+    expect(screen.getByRole('link', { name: 'Upload a 360° photo' }).getAttribute('href')).toBe(
       admin,
     );
-    expect(screen.queryByText(/your first tour/)).toBeNull();
+    expect(screen.queryByText(/free, sign in/)).toBeNull();
   });
 
   it('links the section nav and keeps one FAQ answer open at a time', async () => {
@@ -158,12 +158,35 @@ describe('landing', () => {
     );
   });
 
+  it('states every account limit in the free answer, and makes no lasting promises', async () => {
+    renderSite('/');
+    const free = await screen.findByRole('button', { name: 'Is it really free?' });
+    const answer = document.getElementById(free.getAttribute('aria-controls')!)?.textContent;
+    for (const limit of [
+      '500 panoramas',
+      '200 tours',
+      '20 GB per account',
+      '50 uploads a day',
+      '100 scenes per tour',
+      '200 hotspots per scene',
+      '150 MB',
+    ])
+      expect(answer).toContain(limit);
+    // Tiling takes minutes, and the terms let the service change: neither "live in seconds"
+    // nor "for as long as you want".
+    expect(document.body.textContent).not.toMatch(
+      /in seconds|as long as you want|never downscale/i,
+    );
+    expect(screen.getByRole('button', { name: 'Who can see my tours?' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'What happens if Panote shuts down?' })).toBeTruthy();
+  });
+
   it('only shows the section nav on the landing', async () => {
     renderSite('/privacy');
     // Wait for the page itself, so the missing nav isn't just a page still loading.
     expect(await screen.findByRole('heading', { level: 1, name: 'Privacy' })).toBeTruthy();
     expect(screen.queryByRole('navigation', { name: 'Sections' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Upload a pano' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Upload a photo' })).toBeTruthy();
   });
 });
 
