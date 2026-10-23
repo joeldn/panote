@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 
 /** One entry: a route (`to`), a page in a new tab (`href`) or an action (`onSelect`). */
@@ -24,6 +24,8 @@ export function CardMenu({ label, items, busy = false }: CardMenuProps) {
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const menuId = useId();
+  // Opened with ArrowUp: start at the last item, as a menu button does.
+  const startAtEnd = useRef(false);
 
   const close = (refocus: boolean) => {
     setOpen(false);
@@ -32,15 +34,31 @@ export function CardMenu({ label, items, busy = false }: CardMenuProps) {
 
   useEffect(() => {
     if (!open) return;
-    menu.current
-      ?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')
-      ?.focus();
+    const all = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    (startAtEnd.current ? all[all.length - 1] : all[0])?.focus();
+    startAtEnd.current = false;
     const onDown = (e: PointerEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener('pointerdown', onDown);
     return () => document.removeEventListener('pointerdown', onDown);
   }, [open]);
+
+  // On the button, ArrowDown opens at the first item and ArrowUp at the last.
+  const onButtonKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    startAtEnd.current = e.key === 'ArrowUp';
+    setOpen(true);
+  };
+
+  // Focus that leaves for somewhere else closes it. A null target (a press on nothing
+  // focusable, or a browser that doesn't focus buttons on click) is left to the
+  // outside-press handler, so a click on an item still lands.
+  const onBlur = (e: FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget as Node | null;
+    if (open && to && !root.current?.contains(to)) setOpen(false);
+  };
 
   // Arrow keys walk the items, Home and End jump, Esc and Tab leave.
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -77,7 +95,7 @@ export function CardMenu({ label, items, busy = false }: CardMenuProps) {
     `dash-menu__item${item.danger ? ' dash-menu__item--danger' : ''}`;
 
   return (
-    <div ref={root} className="dash-menu">
+    <div ref={root} className="dash-menu" onBlur={onBlur}>
       <button
         ref={button}
         type="button"
@@ -88,6 +106,7 @@ export function CardMenu({ label, items, busy = false }: CardMenuProps) {
         aria-controls={open ? menuId : undefined}
         aria-busy={busy || undefined}
         onClick={() => setOpen((o) => !o)}
+        onKeyDown={onButtonKey}
       >
         <i
           className={busy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-ellipsis'}

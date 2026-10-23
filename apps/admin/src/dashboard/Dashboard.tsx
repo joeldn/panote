@@ -1,6 +1,7 @@
 import './dashboard.css';
 
 import type { TourSummary } from './types.js';
+import { MAX_TOURS_PER_OWNER } from '@internal/contracts';
 import { Button, ConfirmModal } from '@internal/ui';
 import { createPublicApi, tilesBaseUrl } from '@internal/web-kit';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
@@ -28,14 +29,23 @@ const VIEWS: Record<View, string> = {
 const viewOf = (param: string | null): View =>
   param === 'shared' || param === 'unused' ? param : 'yours';
 
-/** One mono line under the title: "4 tours · 20 panos · 18k views". */
+/** "4 tours", or "4 / 200 tours" once the limit is known. */
+const counted = (n: number, word: string, max: number | null | undefined): string =>
+  typeof max === 'number' ? `${n} / ${max} ${word}s` : plural(n, word);
+
+/**
+ * One mono line under the title: "4 / 200 tours · 20 / 500 panos · 18k views". Plain counts
+ * until the usage call answers, and for any limit that isn't set.
+ */
 function Totals({ dash }: { dash: DashboardData }) {
   // Only tours still listed, so a deleted tour's views drop out of the total.
   const known = dash.tours
     .map((t) => dash.views[t.tourId])
     .filter((v): v is number => typeof v === 'number');
-  const parts = [plural(dash.tours.length, 'tour')];
-  if (dash.panos) parts.push(plural(dash.panos.size, 'pano'));
+  const limits = dash.usage?.limits;
+  const parts = [counted(dash.tours.length, 'tour', dash.usage && MAX_TOURS_PER_OWNER)];
+  const panos = dash.panos?.size ?? dash.usage?.panos;
+  if (panos !== undefined) parts.push(counted(panos, 'pano', limits?.maxPanos));
   if (known.length) {
     const total = known.reduce((a, b) => a + b, 0);
     parts.push(`${formatCount(total)} view${total === 1 ? '' : 's'}`);
@@ -171,14 +181,14 @@ function greeting(dash: Pick<DashboardData, 'status' | 'tours'>, name?: string):
  * shared with this account and the panos no tour uses.
  */
 export function Dashboard() {
-  const { api, user } = useSession();
+  const { api, upload, user } = useSession();
   const env = useAuthEnv();
   const config = useConfig();
   const publicApi = useMemo(
     () => createPublicApi({ baseUrl: env.apiBase, ...(env.fetch && { fetch: env.fetch }) }),
     [env.apiBase, env.fetch],
   );
-  const dash = useDashboard(api, publicApi);
+  const dash = useDashboard(api, publicApi, upload);
   const uploads = useUploads();
   const [search, setSearch] = useSearchParams();
   const view = viewOf(search.get('view'));
@@ -282,10 +292,12 @@ export function Dashboard() {
     );
   }
 
+  // The shared list loads on its own, so it shows even when the owner's tours didn't load.
+  const ready = dash.status === 'ready';
   let body: ReactNode;
-  if (dash.status === 'loading') {
+  if (view !== 'shared' && dash.status === 'loading') {
     body = loading(view === 'unused' ? 'Loading your panos…' : 'Loading your tours…');
-  } else if (dash.status === 'error') {
+  } else if (view !== 'shared' && dash.status === 'error') {
     body = <Retry text="Couldn’t load your tours." onRetry={dash.reload} />;
   } else {
     body = (
@@ -293,14 +305,14 @@ export function Dashboard() {
         <Filters
           view={view}
           counts={{
-            yours: dash.tours.length,
+            yours: ready ? dash.tours.length : null,
             shared: dash.shared.tours?.length ?? null,
             unused: dash.unused.panos?.length ?? null,
           }}
           onPick={pick}
         />
-        <PendingDeletes dash={dash} />
-        {dash.notice && (
+        {ready && <PendingDeletes dash={dash} />}
+        {ready && dash.notice && (
           <div className="dash__banner dash__banner--warn" role="alert">
             <span>{dash.notice}</span>
             <Button size="sm" variant="ghost" onClick={dash.dismissNotice}>

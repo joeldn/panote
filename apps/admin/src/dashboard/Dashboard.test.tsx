@@ -1,4 +1,12 @@
-import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { FetchLike } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -177,6 +185,29 @@ describe('Dashboard', () => {
       expect(card('Harbour walk').textContent).not.toContain('Current');
     });
 
+    it('calls a shared tour with no title “Untitled tour”', async () => {
+      const { fetch } = server(lists([tour()], undefined, [shared({ title: '' })]));
+      renderAdmin('/app/?view=shared', { fetch });
+      const link = await screen.findByRole('link', { name: 'Untitled tour' });
+      expect(link.getAttribute('href')).toBe('/app/t/s1');
+      expect(
+        within(card('Untitled tour')).getByRole('button', { name: 'More for “Untitled tour”' }),
+      ).toBeTruthy();
+    });
+
+    it('still shows the shared tours when the owner’s own list fails', async () => {
+      const { fetch } = server({
+        ...lists([tour()], undefined, [shared()]),
+        'GET /api/admin/tours': () => json({ error: 'boom' }, 500),
+      });
+      renderAdmin('/app/?view=shared', { fetch });
+      expect(await screen.findByRole('link', { name: 'Harbour walk' })).toBeTruthy();
+      expect(screen.queryByText('Couldn’t load your tours.')).toBeNull();
+      // And the way back to the owner's tours, which says what went wrong.
+      fireEvent.click(screen.getByRole('button', { name: 'Your tours' }));
+      expect(await screen.findByText('Couldn’t load your tours.')).toBeTruthy();
+    });
+
     it('says when the shared tours didn’t load, and retries', async () => {
       let fail = true;
       const { fetch, calls } = server({
@@ -307,6 +338,52 @@ describe('Dashboard', () => {
     await waitFor(() => expect(totals()).toBe('2 tours · 1 pano · 4.4k views'));
   });
 
+  describe('limits in the totals line', () => {
+    const usage = (maxPanos: number | null) => ({
+      panos: 1,
+      bytes: 1024,
+      uploadsToday: 0,
+      limits: { maxPanos, maxBytes: null, maxUploadsPerDay: null },
+    });
+
+    it('adds them once the usage call answers, after the first paint', async () => {
+      let release: () => void = () => {};
+      const { fetch, calls } = server({
+        ...lists([tour()]),
+        'GET /api/upload-url': () =>
+          new Promise<Response>((resolve) => {
+            release = () => resolve(json(usage(500)));
+          }),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(totals()).toBe('1 tour · 1 pano · 4.4k views'));
+      expect(calls('GET /api/upload-url')).toHaveLength(1);
+      release();
+      await waitFor(() => expect(totals()).toBe('1 / 200 tours · 1 / 500 panos · 4.4k views'));
+      expect(totals()).not.toMatch(/unlimited/i);
+    });
+
+    it('leaves out a limit that isn’t set', async () => {
+      const { fetch } = server({
+        ...lists([tour()]),
+        'GET /api/upload-url': () => json(usage(null)),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(totals()).toBe('1 / 200 tours · 1 pano · 4.4k views'));
+    });
+
+    it('keeps the plain counts when the usage call fails', async () => {
+      const { fetch, calls } = server({
+        ...lists([tour()]),
+        'GET /api/upload-url': () => json({ error: 'boom' }, 500),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(calls('GET /api/upload-url')).toHaveLength(1));
+      await waitFor(() => expect(totals()).toBe('1 tour · 1 pano · 4.4k views'));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
+
   it('leaves the totals out until there is something to count', async () => {
     const { fetch } = server(lists([], []));
     renderAdmin('/app/', { fetch });
@@ -357,9 +434,11 @@ describe('Dashboard', () => {
     it('opens insights from the views count', async () => {
       const { fetch } = server(lists([tour()]));
       const { router } = renderAdmin('/app/', { fetch });
+      // Named for its tour: "4.4k views" alone says nothing in a list of links.
       const views = await within(await screen.findByRole('article')).findByRole('link', {
-        name: '4.4k views',
+        name: 'Insights for “St Lawrence Jewry”, 4.4k views',
       });
+      expect(views.textContent).toBe('4.4k views');
       expect(views.getAttribute('href')).toBe('/app/insights/t1');
       fireEvent.click(views);
       await waitFor(() => expect(router.state.location.pathname).toBe('/app/insights/t1'));
@@ -413,6 +492,37 @@ describe('Dashboard', () => {
       openMenu('St Lawrence Jewry');
       fireEvent.pointerDown(document.body);
       await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    });
+
+    it('opens from the keyboard with ArrowDown or ArrowUp', async () => {
+      const { fetch } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const button = within(card('St Lawrence Jewry')).getByRole('button', {
+        name: 'More for “St Lawrence Jewry”',
+      });
+      fireEvent.keyDown(button, { key: 'ArrowDown' });
+      const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+      await waitFor(() => expect(document.activeElement).toBe(items[0]));
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+      expect(screen.queryByRole('menu')).toBeNull();
+      fireEvent.keyDown(button, { key: 'ArrowUp' });
+      const again = within(screen.getByRole('menu')).getAllByRole('menuitem');
+      await waitFor(() => expect(document.activeElement).toBe(again[again.length - 1]));
+    });
+
+    it('closes when focus moves out of it', async () => {
+      const { fetch } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const menu = openMenu('St Lawrence Jewry');
+      const first = within(menu).getAllByRole('menuitem')[0]!;
+      await waitFor(() => expect(document.activeElement).toBe(first));
+      // Within the menu it stays open.
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(screen.getByRole('menu')).toBeTruthy();
+      act(() => screen.getByRole('link', { name: 'St Lawrence Jewry' }).focus());
+      expect(screen.queryByRole('menu')).toBeNull();
     });
   });
 
@@ -757,6 +867,23 @@ describe('Dashboard', () => {
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(screen.queryByRole('link', { name: 'St Lawrence Jewry' })).toBeNull();
     });
+  });
+
+  it('moves Current to an own tour opened from its card, but not to a shared one', async () => {
+    window.localStorage.setItem('panote.currentTour', 't2');
+    const { fetch } = server(
+      lists([tour(), tour({ tourId: 't2', title: 'Town Hall' })], undefined, [shared()]),
+    );
+    const { router } = renderAdmin('/app/?view=shared', { fetch });
+    fireEvent.click(await screen.findByRole('link', { name: 'Harbour walk' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/s1'));
+    expect(window.localStorage.getItem('panote.currentTour')).toBe('t2');
+    cleanup();
+
+    const again = renderAdmin('/app/', { fetch });
+    fireEvent.click(await screen.findByRole('link', { name: 'St Lawrence Jewry' }));
+    await waitFor(() => expect(again.router.state.location.pathname).toBe('/app/t/t1'));
+    expect(window.localStorage.getItem('panote.currentTour')).toBe('t1');
   });
 
   it('marks the last tour opened in the editor as Current', async () => {

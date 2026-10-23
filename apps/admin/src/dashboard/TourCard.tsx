@@ -112,6 +112,8 @@ export function TourCard({
   const live = tour.publish ? shareUrl(siteOrigin, tour.publish.slug) : null;
   const [duplicating, setDuplicating] = useState(false);
   const insightsTo = `/insights/${tour.tourId}${search}`;
+  // A shared tour's title can be empty; the old shared list said this.
+  const title = tour.title || 'Untitled tour';
 
   const viewsLabel =
     views === undefined
@@ -175,14 +177,19 @@ export function TourCard({
           <Link
             className="dash-card__link"
             to={`/t/${tour.tourId}`}
-            onClick={() => writeCurrentTour(tour.tourId)}
+            // "Current" marks the owner's own last tour; opening a shared one leaves it be.
+            {...(owner && { onClick: () => writeCurrentTour(tour.tourId) })}
           >
-            {tour.title}
+            {title}
           </Link>
         </h2>
         <p className="dash-card__meta">
           {plural(tour.sceneCount, 'pano')} ·{' '}
-          <Link className="dash-card__views" to={insightsTo}>
+          <Link
+            className="dash-card__views"
+            to={insightsTo}
+            aria-label={`Insights for “${title}”, ${viewsLabel}`}
+          >
             {viewsLabel}
           </Link>
         </p>
@@ -195,7 +202,7 @@ export function TourCard({
               <button
                 type="button"
                 className="dash-card__copy"
-                aria-label={`Copy link to “${tour.title}”`}
+                aria-label={`Copy link to “${title}”`}
                 title={copied === 'failed' ? COPY_SAID.failed : undefined}
                 onClick={() => void copy(live)}
               >
@@ -210,7 +217,7 @@ export function TourCard({
               </span>
             )}
             <CardMenu
-              label={`More for “${tour.title}”`}
+              label={`More for “${title}”`}
               items={items}
               busy={duplicating || visPending}
             />

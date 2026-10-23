@@ -1,4 +1,4 @@
-import type { PanoSummary, SharedTourSummary, TourSummary, Visibility } from './types.js';
+import type { PanoSummary, SharedTourSummary, TourSummary, Usage, Visibility } from './types.js';
 import {
   ApiError,
   isAuthError,
@@ -6,6 +6,7 @@ import {
   type AdminApi,
   type PublicApi,
   type TourDocInput,
+  type UploadApi,
 } from '@internal/web-kit';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -103,6 +104,8 @@ export interface Dashboard {
   /** Live panos by id (tombstoned ones excluded); null until loaded or if the list failed. */
   panos: ReadonlyMap<string, PanoSummary> | null;
   unused: UnusedPanos;
+  /** The upload limits and usage, asked for after the dashboard is up; null until then. */
+  usage: Usage | null;
   shared: SharedTours;
   /** Views per tour, own and shared: absent while loading, null when the stats call failed. */
   views: Readonly<Record<string, number | null>>;
@@ -127,12 +130,17 @@ export interface Dashboard {
   deletePano(pano: PanoSummary): Promise<void>;
 }
 
-export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
+export function useDashboard(
+  api: AdminApi,
+  publicApi: PublicApi,
+  upload: Pick<UploadApi, 'getUsage'>,
+): Dashboard {
   const [status, setStatus] = useState<LoadStatus>('loading');
   const [tours, setTours] = useState<TourSummary[]>([]);
   const [panos, setPanos] = useState<ReadonlyMap<string, PanoSummary> | null>(null);
   const [unused, setUnused] = useState<UnusedPanos>({ status: 'loading', panos: null });
   const [unusedKey, setUnusedKey] = useState(0);
+  const [usage, setUsage] = useState<Usage | null>(null);
   const [shared, setShared] = useState<SharedTours>({ status: 'loading', tours: null });
   const [sharedKey, setSharedKey] = useState(0);
   const [views, setViews] = useState<Record<string, number | null>>({});
@@ -200,6 +208,19 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
       live = false;
     };
   }, [api, ready, unusedKey]);
+
+  // The limits for the totals line, the same way: a failure just leaves them out.
+  useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    upload.getUsage().then(
+      (u) => live && setUsage(u),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [upload, ready]);
 
   useEffect(() => {
     let live = true;
@@ -355,6 +376,7 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
     tours,
     panos,
     unused,
+    usage,
     shared,
     views,
     resuming,
