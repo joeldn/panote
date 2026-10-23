@@ -23,6 +23,9 @@ import {
   REAUTH_REQUIRED_ERROR,
   SceneConfigSchema,
   signInOf,
+  TOUR_TRANSFERRING_ERROR,
+  type TransferFinishing,
+  TransferOfferRequestSchema,
   SlugPutRequestSchema,
   tilesPrefix,
   TourDocSchema,
@@ -75,6 +78,7 @@ import {
   createInvite,
   getMembers,
   isRefusal,
+  isTransferring,
   listSharedTours,
   recordMembership,
   removeMember,
@@ -89,6 +93,7 @@ import { sweepUnsavedPlans } from './plan-sweep.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
+import { cancelTransfer, offerTransfer, readTransfer, transfersToFinish } from './transfer.js';
 import { checkTileGcStatus, runBackupThenTileGc } from './tile-gc.js';
 import { deleteFromTrash, restoreFromTrash, sweepTrash } from './trash.js';
 import {
@@ -100,7 +105,7 @@ import {
   type CdnPurge,
 } from './purge.js';
 import { runDailyCron } from './cron-status.js';
-import { referencedPanoIds } from './references.js';
+import { dropSpentLoans, referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
@@ -586,8 +591,9 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   // Counts like a pano delete: it sweeps every pano only this tour used.
   const limited = await rateLimit(c.env.PANO_DELETE_LIMITER, sub, PANO_DELETE_RATE_PERIOD_SECONDS);
   if (limited) return limited;
-  const stub = publisher(c.env, tourId);
-  purgeLater(c, await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId)));
+  const purge = await publisher(c.env, tourId).deleteTour(sub, tourId);
+  if (!purge) return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  purgeLater(c, purge);
   return c.body(null, 204);
 });
 
@@ -635,6 +641,9 @@ app.put('/api/admin/tours/:tourId/slug', async (c) => {
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = slugError(body.data.slug);
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
+  if (await isTransferring(c.env.BUCKET, tourId)) {
+    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  }
   const out = await publisher(c.env, tourId).rename(sub, tourId, body.data.slug);
   return c.json(out.body, out.status);
 });
@@ -646,6 +655,9 @@ app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
   if (idError) return c.json({ error: idError }, 400);
   const body = VisibilityPatchRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
+  if (await isTransferring(c.env.BUCKET, tourId)) {
+    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  }
   const out = await publisher(c.env, tourId).setVisibility(sub, tourId, body.data.visibility);
   return c.json(out.body, out.status);
 });
@@ -655,6 +667,9 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
+  if (await isTransferring(c.env.BUCKET, tourId)) {
+    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  }
   // The owner's "Stop sharing": the editor's later Saves leave it offline.
   const files = await publisher(c.env, tourId).unpublish(sub, tourId, true);
   purgeLater(c, { prefixes: [], files });
@@ -683,7 +698,10 @@ app.post('/api/admin/tours/:tourId/invites', async (c) => {
   if (idError) return c.json({ error: idError }, 400);
   const body = InviteCreateRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: 'email must be an email address' }, 400);
-  const access = await tourAccessFor(c.env.BUCKET, auth.sub, tourId, { ownerOnly: true });
+  const access = await tourAccessFor(c.env.BUCKET, auth.sub, tourId, {
+    ownerOnly: true,
+    write: true,
+  });
   if (isRefusal(access)) return refuse(c, access);
   const out = await createInvite(
     c.env.BUCKET,
@@ -700,7 +718,10 @@ app.delete('/api/admin/tours/:tourId/invites/:inviteId', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { ownerOnly: true });
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, {
+    ownerOnly: true,
+    write: true,
+  });
   if (isRefusal(access)) return refuse(c, access);
   await revokeInvite(c.env.BUCKET, caller, tourId, c.req.param('inviteId'));
   return c.body(null, 204);
@@ -712,7 +733,7 @@ app.delete('/api/admin/tours/:tourId/members/:memberId', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const access = await tourAccessFor(c.env.BUCKET, caller, tourId);
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { write: true });
   if (isRefusal(access)) return refuse(c, access);
   const ok = await removeMember(c.env.BUCKET, access, caller, tourId, c.req.param('memberId'));
   return ok ? c.body(null, 204) : c.json({ error: 'owner only' }, 403);
@@ -731,6 +752,85 @@ app.post('/api/admin/invites/accept', async (c) => {
   return c.json(out.body, out.status);
 });
 
+// --- Changing a tour's owner (transfer.ts) ---
+
+// The owner offers the tour to one of its editors. Giving a tour away is as final as
+// deleting it, so it wants the same recent sign-in as account delete.
+app.post('/api/admin/tours/:tourId/transfer', async (c) => {
+  const auth = await authOf(c);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = TransferOfferRequestSchema.safeParse(await jsonBody(c.req.raw));
+  if (!body.success) return c.json({ error: 'memberId must be a member id' }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, auth.sub, tourId, {
+    ownerOnly: true,
+    write: true,
+  });
+  if (isRefusal(access)) return refuse(c, access);
+  if (requiresRecentAuth(c.env) && !isRecentAuth(auth.authTime, Date.now())) {
+    return c.json({ error: REAUTH_REQUIRED_ERROR }, 403);
+  }
+  const out = await offerTransfer(
+    c.env.BUCKET,
+    { sub: auth.sub, email: auth.email ?? null },
+    tourId,
+    body.data.memberId,
+    new Date(),
+  );
+  return c.json(out.body, out.status);
+});
+
+// The owner withdraws the offer, or the editor it was made to turns it down.
+app.delete('/api/admin/tours/:tourId/transfer', async (c) => {
+  const caller = await ownerOf(c);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { write: true });
+  if (isRefusal(access)) return refuse(c, access);
+  const ok = await cancelTransfer(c.env.BUCKET, access, caller, tourId);
+  return ok ? c.body(null, 204) : c.json({ error: 'not your offer' }, 403);
+});
+
+// The editor the offer names takes the tour over. Again after an interrupted run, it
+// finishes that run.
+app.post('/api/admin/tours/:tourId/transfer/accept', async (c) => {
+  const auth = await authOf(c);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const stub = publisher(c.env, tourId);
+  // A large tour can outrun one request (R2 calls, time). What it did stays done, so the
+  // caller hears it is still finishing, and accepting again (or the daily sweep) goes on.
+  const finishing = async (e: unknown) => {
+    const rec = await readTransfer(c.env.BUCKET, tourId);
+    if (rec?.to !== auth.sub) throw e;
+    console.error('transfer did not finish:', e instanceof Error ? e.name : 'unknown error');
+    return c.json({ tourId, finishing: true } satisfies TransferFinishing, 202);
+  };
+  const underWay = await readTransfer(c.env.BUCKET, tourId);
+  if (underWay) {
+    if (underWay.to !== auth.sub) return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+    try {
+      await stub.finishTransfer(tourId);
+    } catch (e) {
+      return finishing(e);
+    }
+    return c.json({ tourId });
+  }
+  const access = await tourAccessFor(c.env.BUCKET, auth.sub, tourId, { write: true });
+  if (isRefusal(access)) return refuse(c, access);
+  // Already theirs (an earlier accept finished): the same answer.
+  if (access.role === 'owner') return c.json({ tourId });
+  try {
+    const out = await stub.transfer(access.owner, auth.sub, auth.email ?? null, tourId);
+    return c.json(out.body, out.status);
+  } catch (e) {
+    return finishing(e);
+  }
+});
+
 app.get('/api/admin/shared-tours', async (c) => {
   const caller = await ownerOf(c);
   c.header('Cache-Control', NO_STORE);
@@ -742,6 +842,7 @@ app.get('/api/admin/shared-tours', async (c) => {
 const accountDeps = (env: Env): AccountDeps => ({
   bucket: env.BUCKET,
   unpublishTour: (sub, tourId) => publisher(env, tourId).unpublish(sub, tourId),
+  finishTransfer: (tourId) => publisher(env, tourId).finishTransfer(tourId),
   clearStats: async (tourId) => {
     // public-api's TourStats, one per tourId (see its stats.ts for the protocol).
     const res = await env.STATS.get(env.STATS.idFromName(tourId)).fetch('https://do/', {
@@ -761,6 +862,19 @@ app.get(ACCOUNT_PATH, async (c) => {
     signIns: [...new Set(signIns)],
   } satisfies AccountView);
 });
+
+// The daily sweep's part: finishes every transfer an interrupted request left (one that
+// fails again doesn't stop the rest), then drops the lent-panos records that protect nothing.
+const finishTransfers = async (env: Env): Promise<void> => {
+  for (const tourId of await transfersToFinish(env.BUCKET)) {
+    await publisher(env, tourId)
+      .finishTransfer(tourId)
+      .catch((e: unknown) => {
+        console.error('transfer sweep failed:', e instanceof Error ? e.name : 'unknown error');
+      });
+  }
+  await dropSpentLoans(env.BUCKET);
+};
 
 app.delete(ACCOUNT_PATH, async (c) => {
   const auth = c.get('auth') ?? (await authenticate(c.req.raw, c.env));
@@ -941,6 +1055,7 @@ export default {
         // finishing cleanly, so a failing sweep still shows in the daily status.
         'tile-gc': () => checkTileGcStatus(env.BUCKET, now),
         trash: () => sweepTrash(env.BUCKET, now),
+        transfers: () => finishTransfers(env),
         'plan-sweep': () =>
           sweepUnsavedPlans(env.BUCKET, now).then((r) =>
             purgeCdn(env, { prefixes: [], files: r.deleted }),

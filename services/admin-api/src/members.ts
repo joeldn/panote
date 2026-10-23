@@ -15,6 +15,8 @@ import {
   resolveTourAccess,
   tourKey,
   tourOwnerKey,
+  TOUR_TRANSFERRING_ERROR,
+  tourTransferKey,
   TourMembersSchema,
   uploadedForKey,
   TourOwnerRecordSchema,
@@ -30,6 +32,7 @@ import {
   type TourDoc,
   type TourOwnerRecord,
 } from '@internal/contracts';
+import { WorkerError } from '@internal/worker-kit';
 import { deletePrefix, getJson, putJson } from '@internal/worker-kit/r2-binding';
 
 import { isAccountDeleted } from './delete-account.js';
@@ -55,12 +58,17 @@ export const bindingStore = (bucket: R2Bucket): AccessStore => ({
   },
 });
 
-export type AccessRefusal = { status: 403 | 404; error: string };
+export type AccessRefusal = { status: 403 | 404 | 409; error: string };
+
+/** Whether `tourId` is changing owner (transfer.ts): every write to it waits until it is done. */
+export const isTransferring = async (bucket: R2Bucket, tourId: string): Promise<boolean> =>
+  !!(await bucket.head(tourTransferKey(tourId)));
 
 /**
  * The caller's access to `tourId`, or why not. An editor is refused while the owner's
  * account is being deleted (the tour is going), and refused writes while the operator has
- * the owner disabled, the same as the owner. `ownerOnly` refuses editors with a 403.
+ * the owner disabled, the same as the owner. `ownerOnly` refuses editors with a 403. Every
+ * write is refused (409) while the tour is changing owner.
  */
 export const tourAccessFor = async (
   bucket: R2Bucket,
@@ -68,8 +76,12 @@ export const tourAccessFor = async (
   tourId: string,
   opts: { write?: boolean; ownerOnly?: boolean } = {},
 ): Promise<TourAccess | AccessRefusal> => {
-  const access = await resolveTourAccess(bindingStore(bucket), caller, tourId);
+  const [access, transferring] = await Promise.all([
+    resolveTourAccess(bindingStore(bucket), caller, tourId),
+    opts.write ? isTransferring(bucket, tourId) : Promise.resolve(false),
+  ]);
   if (!access) return { status: 404, error: 'not found' };
+  if (transferring) return { status: 409, error: TOUR_TRANSFERRING_ERROR };
   if (access.role === 'owner') return access;
   if (opts.ownerOnly) return { status: 403, error: 'owner only' };
   const [deleted, disabled] = await Promise.all([
@@ -138,7 +150,7 @@ export const claimTourOwner = async (
   return (await putJson(bucket, tourOwnerKey(tourId), record, { etagMatches: got.etag })).ok;
 };
 
-const readMembers = async (
+export const readMembers = async (
   bucket: R2Bucket,
   owner: string,
   tourId: string,
@@ -158,7 +170,7 @@ type Change<T> = { members: TourMembers; result: T } | { refuse: T };
  * nobody and no invites still writes the (empty) file: R2 deletes aren't conditional, so a
  * delete could drop a write that raced it. The tour's delete removes the file.
  */
-const updateMembers = async <T>(
+export const updateMembers = async <T>(
   bucket: R2Bucket,
   owner: string,
   tourId: string,
@@ -191,6 +203,10 @@ export const membersView = (
   members: members.members.map(({ sub, ...rest }) => ({ ...rest, you: sub === caller })),
   invites:
     access.role === 'owner' ? members.invites.map(({ tokenHash: _hash, ...rest }) => rest) : [],
+  transfer:
+    members.transfer && Date.parse(members.transfer.expiresAt) > Date.now()
+      ? { memberId: members.transfer.memberId, expiresAt: members.transfer.expiresAt }
+      : null,
 });
 
 export const getMembers = async (
@@ -285,8 +301,14 @@ export const removeMember = async (
       const member = current.members.find((m) => m.id === memberId);
       if (!member) return { refuse: null };
       if (access.role !== 'owner' && member.sub !== caller) return { refuse: false };
+      // An offer of the tour to this editor goes with them.
+      const { transfer, ...rest } = current;
       return {
-        members: { ...current, members: current.members.filter((m) => m.id !== memberId) },
+        members: {
+          ...rest,
+          ...(transfer && transfer.memberId !== memberId && { transfer }),
+          members: current.members.filter((m) => m.id !== memberId),
+        },
         result: member,
       };
     },
@@ -333,6 +355,8 @@ export const acceptInvite = async (
     isAccountDisabled(bucket, owner),
   ]);
   if (!tour || ownerDeleted || ownerDisabled) return refused(404, 'invite not found');
+  // The new owner's members.json takes the invite over once the tour has changed hands.
+  if (await isTransferring(bucket, tourId)) throw new WorkerError(TOUR_TRANSFERRING_ERROR, 409);
   const tokenHash = await hashInviteSecret(secret);
 
   // The index cap is checked before the write; a race past it costs one extra entry.

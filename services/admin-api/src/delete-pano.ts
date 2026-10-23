@@ -41,7 +41,7 @@ export const deletePano = async (
   bucket: R2Bucket,
   sub: string,
   panoId: string,
-  options: DiscardOptions = { trash: true, now: new Date() },
+  options: DiscardOptions & { keepTiles?: boolean } = { trash: true, now: new Date() },
   tileKeys?: string[],
 ): Promise<DeletePanoResult> => {
   const [original, tombstone] = await Promise.all([
@@ -56,6 +56,12 @@ export const deletePano = async (
   }
   if (!tombstone) await bucket.put(deletingKey(sub, panoId), '');
   await discard(bucket, originalKey(sub, panoId), options);
+  // A pano lent to a tour the owner handed on (account deletion): its tiles serve that
+  // tour's live bundle until the new owner publishes again, so they stay.
+  if (options.keepTiles) {
+    await deletePrefix(bucket, panoPrefix(sub, panoId));
+    return { ok: true, tilesDeleted: false };
+  }
   // One sweep suffices: every tiler write precedes that job's own last HEAD
   // of the original, which 404s after this delete and self-cleans that job's writes.
   const tiles = tileKeys

@@ -464,7 +464,8 @@ describe('tour members', () => {
       new Response(null, { status: 204 }),
       new Response(null, { status: 204 }),
     );
-    await expect(api.getMembers('t1')).resolves.toEqual(members);
+    // A server without transfers reads as no offer.
+    await expect(api.getMembers('t1')).resolves.toEqual({ ...members, transfer: null });
     expect(call(0).url).toBe('https://panote.test/api/admin/tours/t1/members');
     await expect(api.createInvite('t1', 'ed@example.com')).resolves.toEqual({
       invite,
@@ -503,6 +504,36 @@ describe('tour members', () => {
     const { api, call } = setup(json({ tours: [] }));
     await expect(api.listSharedTours()).resolves.toEqual({ tours: [] });
     expect(call().url).toBe('https://panote.test/api/admin/shared-tours');
+  });
+
+  it('offers, withdraws and takes over a tour', async () => {
+    const transfer = { memberId: 'm1', expiresAt: '2026-10-30T00:00:00Z' };
+    const { api, call } = setup(
+      json({ transfer }, 201),
+      json({ error: 'reauthentication required' }, 403),
+      new Response(null, { status: 204 }),
+      json({ tourId: 't1' }),
+      json({ error: 'pano limit reached' }, 403),
+      json({ tourId: 't1', finishing: true }, 202),
+      json({ error: 'boom' }, 500),
+    );
+    await expect(api.offerTransfer('t1', 'm1')).resolves.toEqual({ transfer });
+    expect(call(0).url).toBe('https://panote.test/api/admin/tours/t1/transfer');
+    expect(JSON.parse(call(0).init.body as string)).toEqual({ memberId: 'm1' });
+    await expect(api.offerTransfer('t1', 'm1')).rejects.toBeInstanceOf(ReauthRequiredError);
+    await api.cancelTransfer('t1');
+    expect(call(2).init.method).toBe('DELETE');
+    await expect(api.acceptTransfer('t1')).resolves.toEqual({
+      status: 'ok',
+      data: { tourId: 't1' },
+    });
+    expect(call(3).url).toBe('https://panote.test/api/admin/tours/t1/transfer/accept');
+    await expect(api.acceptTransfer('t1')).resolves.toEqual({
+      status: 'refused',
+      refusal: { error: 'pano limit reached' },
+    });
+    await expect(api.acceptTransfer('t1')).resolves.toEqual({ status: 'finishing' });
+    await expect(api.acceptTransfer('t1')).rejects.toBeInstanceOf(ApiError);
   });
 
   it('reads the account', async () => {

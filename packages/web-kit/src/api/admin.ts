@@ -6,6 +6,9 @@ import {
   InviteAcceptOkSchema,
   InviteCreateOkSchema,
   InviteRefusedSchema,
+  TransferAcceptOkSchema,
+  TransferOfferOkSchema,
+  TransferRefusedSchema,
   MembersOkSchema,
   NotPublishedSchema,
   SharingStoppedSchema,
@@ -36,6 +39,9 @@ import {
   type InviteAcceptOk,
   type InviteCreateOk,
   type InviteRefused,
+  type TransferAcceptOk,
+  type TransferOfferOk,
+  type TransferRefused,
   type MembersOk,
   type PanoDeleteConflict,
   type PanosListOk,
@@ -117,6 +123,13 @@ export interface PanoScope {
 export type InviteAcceptResult =
   { status: 'ok'; data: InviteAcceptOk } | { status: 'refused'; refusal: InviteRefused };
 
+/** Taking over a tour: done, or why not (an offer gone, a limit of the new owner's). */
+export type TransferAcceptResult =
+  | { status: 'ok'; data: TransferAcceptOk }
+  | { status: 'refused'; refusal: TransferRefused }
+  /** Accepted, but a large tour is still moving: accept again to finish it. */
+  | { status: 'finishing' };
+
 export interface AdminApiOptions {
   getToken: TokenGetter;
   /** API origin; `''` (default) is same-origin. */
@@ -177,6 +190,15 @@ export interface AdminApi {
   listSharedTours(): Promise<SharedToursOk>;
   /** The signed-in user's email and sign-in methods, for the account page. */
   getAccount(): Promise<AccountView>;
+  /**
+   * Offers the tour to one of its editors, owner only. Needs a recent sign-in: throws
+   * ReauthRequiredError when the last one is too old, as deleteAccount does.
+   */
+  offerTransfer(tourId: string, memberId: string): Promise<TransferOfferOk>;
+  /** Withdraws the offer (owner), or turns it down (the editor it names). */
+  cancelTransfer(tourId: string): Promise<void>;
+  /** The editor the offer names takes the tour over. */
+  acceptTransfer(tourId: string): Promise<TransferAcceptResult>;
 }
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
@@ -423,6 +445,27 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
     },
     listSharedTours: async () => getJson('/api/admin/shared-tours', SharedToursOkSchema),
     getAccount: async () => getJson('/api/admin/account', AccountViewSchema),
+    offerTransfer: async (tourId, memberId) => {
+      const { res, url, body } = await send('POST', `${tourPath(tourId)}/transfer`, {
+        body: { memberId },
+      });
+      if (res.status === 403 && ReauthRequiredSchema.safeParse(body).success) {
+        throw new ReauthRequiredError(body);
+      }
+      if (!res.ok) throw new ApiError(res.status, body);
+      return parseWith(TransferOfferOkSchema, url, body);
+    },
+    cancelTransfer: async (tourId) => del(`${tourPath(tourId)}/transfer`),
+    acceptTransfer: async (tourId) => {
+      const { res, url, body } = await send('POST', `${tourPath(tourId)}/transfer/accept`);
+      if (!res.ok) {
+        const refused = TransferRefusedSchema.safeParse(body);
+        if (refused.success) return { status: 'refused', refusal: refused.data };
+        throw new ApiError(res.status, body);
+      }
+      if (res.status === 202) return { status: 'finishing' };
+      return { status: 'ok', data: parseWith(TransferAcceptOkSchema, url, body) };
+    },
     getInsights: async (tourId, days = DEFAULT_INSIGHTS_DAYS) => {
       const { res, url, body } = await send('GET', `${tourPath(tourId)}/insights?days=${days}`);
       if (res.status === 404) {

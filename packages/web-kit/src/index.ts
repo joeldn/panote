@@ -52,6 +52,7 @@ export {
   type GetResult,
   type InsightsResult,
   type InviteAcceptResult,
+  type TransferAcceptResult,
   type ListQuery,
   type PanoDeleteError,
   type PanoListQuery,

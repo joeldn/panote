@@ -93,6 +93,9 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     acceptInvite: fail,
     listSharedTours: fail,
     getAccount: fail,
+    offerTransfer: fail,
+    cancelTransfer: fail,
+    acceptTransfer: fail,
     ...overrides,
   };
 }
