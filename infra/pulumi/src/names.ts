@@ -66,6 +66,38 @@ export const RESOURCES = {
     name: 'auth0-post-login-actions',
     type: 'auth0:index/triggerActions:TriggerActions',
   },
+
+  // --- GitHub (src/github.ts): repository-wide, on one stack only ---
+  githubRepository: { name: 'github-repository', type: 'github:index/repository:Repository' },
+  githubWorkflowPermissions: {
+    name: 'github-workflow-permissions',
+    type: 'github:index/workflowRepositoryPermissions:WorkflowRepositoryPermissions',
+  },
+  githubMainProtection: {
+    name: 'github-main-protection',
+    type: 'github:index/branchProtectionV3:BranchProtectionV3',
+  },
+  githubAccountIdVariable: {
+    name: 'github-variable-cloudflare-account-id',
+    type: 'github:index/actionsVariable:ActionsVariable',
+  },
+  githubDevAutoDeployVariable: {
+    name: 'github-variable-dev-auto-deploy',
+    type: 'github:index/actionsVariable:ActionsVariable',
+  },
+  githubInfraPreviewEnvironment: {
+    name: 'github-environment-infra-preview',
+    type: 'github:index/repositoryEnvironment:RepositoryEnvironment',
+  },
+  // --- GitHub: each stack's own Environment (`dev`, `production`) ---
+  githubEnvironment: {
+    name: 'github-environment',
+    type: 'github:index/repositoryEnvironment:RepositoryEnvironment',
+  },
+  githubEnvironmentMainPolicy: {
+    name: 'github-environment-main-policy',
+    type: 'github:index/repositoryEnvironmentDeploymentPolicy:RepositoryEnvironmentDeploymentPolicy',
+  },
 } as const;
 
 export type ResourceKey = keyof typeof RESOURCES;

@@ -46,6 +46,9 @@ catalogs:
     '@pulumi/cloudflare':
       specifier: 6.22.0
       version: 6.22.0
+    '@pulumi/github':
+      specifier: 6.15.0
+      version: 6.15.0
     '@pulumi/pulumi':
       specifier: 3.268.0
       version: 3.268.0
@@ -344,6 +347,9 @@ importers:
       '@pulumi/cloudflare':
         specifier: 'catalog:'
         version: 6.22.0(supports-color@10.2.2)(typescript@6.0.3)
+      '@pulumi/github':
+        specifier: 'catalog:'
+        version: 6.15.0(supports-color@10.2.2)(typescript@6.0.3)
       '@pulumi/pulumi':
         specifier: 'catalog:'
         version: 3.268.0(supports-color@10.2.2)(typescript@6.0.3)
@@ -2165,6 +2171,9 @@ packages:
 
   '@pulumi/cloudflare@6.22.0':
     resolution: {integrity: sha512-ljJpS3vhIaTNzTvoNURkUfXnzDlBS0gx2nxvg84JmH6kuYoCmsLiQ1afOdhXly4+G/JIgYqjdxo2QNliVUWYDw==}
+
+  '@pulumi/github@6.15.0':
+    resolution: {integrity: sha512-U8ZxPQQcOrcTn8y8EZsWmXzMtbw0JnwWCVGmqxBZ/i2SpUlEGMYT9B+EFC/qTALZXkDf7cMiq6fZ3Gy1G23nyQ==}
 
   '@pulumi/pulumi@3.268.0':
     resolution: {integrity: sha512-VtTIr44eC78BX4cAeh2MEqJqVFu5/UfrmsxjLdH73YIPr5igPEo9JB4g5yqncTHcXNxbkxJXndMOEm1CkpJA5Q==}
@@ -5547,6 +5556,14 @@ snapshots:
       - typescript
 
   '@pulumi/cloudflare@6.22.0(supports-color@10.2.2)(typescript@6.0.3)':
+    dependencies:
+      '@pulumi/pulumi': 3.268.0(supports-color@10.2.2)(typescript@6.0.3)
+    transitivePeerDependencies:
+      - supports-color
+      - ts-node
+      - typescript
+
+  '@pulumi/github@6.15.0(supports-color@10.2.2)(typescript@6.0.3)':
     dependencies:
       '@pulumi/pulumi': 3.268.0(supports-color@10.2.2)(typescript@6.0.3)
     transitivePeerDependencies:

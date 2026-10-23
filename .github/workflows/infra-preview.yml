@@ -1,8 +1,8 @@
 name: Infra preview
 
 # `pulumi preview` of infra/pulumi for both stacks on a pull request that
-# touches it, so a reviewer sees what would change in the Cloudflare account
-# and the Auth0 tenants.
+# touches it, so a reviewer sees what would change in the Cloudflare account,
+# the Auth0 tenants and the GitHub repository's settings.
 # It never applies anything: there is no `pulumi up` in CI, Joel runs it by
 # hand (infra/README.md).
 #
@@ -17,7 +17,8 @@ name: Infra preview
 # the Cloudflare token must be read-only and the R2 key scoped to the state
 # bucket (infra/README.md, CI preview), and so must the Auth0 clients (no
 # write scope and no read:client_keys: a preview never reads a client's
-# secret from the tenant). The job still holds the passphrase, which decrypts
+# secret from the tenant), and so must the GitHub token (read permissions
+# only, this repository only). The job still holds the passphrase, which decrypts
 # every secret in the state, so a reviewer reads the infra/** and
 # packages/auth0-actions/src/** diff before approving. The secrets are set
 # only on the steps below that need them, never on install or build.
@@ -31,6 +32,10 @@ name: Infra preview
 #   AUTH0_CLIENT_SECRET_DEV,  (infra/README.md, step 11). Only a stack that names a
 #   ..._PRODUCTION            tenant (auth0:domain) needs its pair; without it that
 #                             stack's preview ends with a notice.
+#   INFRA_GITHUB_TOKEN        a read-only fine-grained token for joeldn/panote
+#                             (infra/README.md, step 17). Only a stack that names
+#                             the GitHub owner (github:owner) needs it; without it
+#                             that stack's preview ends with a notice.
 on:
   pull_request:
     branches: [main]
@@ -126,11 +131,29 @@ jobs:
             echo 'ready=false' >> "$GITHUB_OUTPUT"
           fi
 
-      - if: steps.auth0.outputs.ready == 'true'
+      # The same for a stack whose file names the GitHub owner: one read-only
+      # token serves both stacks, since there is one repository.
+      - name: Check for the GitHub token
+        id: github
+        if: steps.auth0.outputs.ready == 'true'
+        env:
+          STACK: ${{ matrix.stack }}
+          INFRA_GITHUB_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
+        run: |
+          if ! grep -qE '^\s+github:owner:' "infra/pulumi/Pulumi.$STACK.yaml"; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          elif [ -n "$INFRA_GITHUB_TOKEN" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Infra preview skipped for $STACK: the infra-preview environment has no INFRA_GITHUB_TOKEN (infra/README.md)."
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.github.outputs.ready == 'true'
         uses: ./.github/actions/setup
 
       - name: Install the Pulumi CLI
-        if: steps.auth0.outputs.ready == 'true'
+        if: steps.github.outputs.ready == 'true'
         run: |
           archive="pulumi-v${PULUMI_VERSION}-linux-x64.tar.gz"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
@@ -140,13 +163,13 @@ jobs:
           echo "$RUNNER_TEMP/pulumi" >> "$GITHUB_PATH"
 
       - name: Build the program
-        if: steps.auth0.outputs.ready == 'true'
+        if: steps.github.outputs.ready == 'true'
         run: pnpm --filter @internal/infra build
 
       # A stack that hasn't been created yet (production, today) is a notice,
       # not a failure.
       - name: pulumi preview
-        if: steps.auth0.outputs.ready == 'true'
+        if: steps.github.outputs.ready == 'true'
         working-directory: infra/pulumi
         env:
           STACK: ${{ matrix.stack }}
@@ -158,6 +181,8 @@ jobs:
           # The Auth0 provider reads these; the tenant is the stack's auth0:domain.
           AUTH0_CLIENT_ID: ${{ secrets[format('AUTH0_CLIENT_ID_{0}', matrix.auth0)] }}
           AUTH0_CLIENT_SECRET: ${{ secrets[format('AUTH0_CLIENT_SECRET_{0}', matrix.auth0)] }}
+          # The GitHub provider reads this; the repository is the stack's github:owner.
+          GITHUB_TOKEN: ${{ secrets.INFRA_GITHUB_TOKEN }}
         run: |
           # Fails here on bad backend credentials, before the stack check.
           stacks=$(pulumi stack ls --json --non-interactive)

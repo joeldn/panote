@@ -1,8 +1,8 @@
 # Infrastructure
 
 Everything panote runs on is in one Cloudflare account (dev on `panote.dev`, production on
-`panote.io`) and one Auth0 tenant per environment (dev `panote-dev.au.auth0.com`, production not
-made yet). Two tools manage them:
+`panote.io`), one Auth0 tenant per environment (dev `panote-dev.au.auth0.com`, production not
+made yet) and the GitHub repository `joeldn/panote`. Two tools manage them:
 
 | What | Where | Applied by |
 |---|---|---|
@@ -15,10 +15,12 @@ made yet). Two tools manage them:
 | Auth0: the SPA both apps sign in with, the API (`https://api.<zone>`), the `google-oauth2` connection and the apps it serves, the password database switched off, Attack Protection | `infra/pulumi` (`src/auth0.ts`) | `pulumi up` |
 | Auth0: the link-accounts M2M client and its Management API grant, the two post-login Actions, their secrets and their order in the Login flow | `infra/pulumi` (`src/auth0.ts`) | `pulumi up` |
 | The Actions' code (the single source, deployed as it is) | `packages/auth0-actions/src/*.cjs` | read by Pulumi |
+| GitHub: squash-only merges, Actions workflow permissions, `main`'s protection, the repository variables, the `dev`, `production` and `infra-preview` Environments (not their secrets) | `infra/pulumi` (`src/github.ts`) | `pulumi up` |
 | Workers, their routes, bindings, secrets | `services/*`, `apps/*` `wrangler.jsonc` | wrangler, `deploy.yml` |
 
-Not managed here yet: API tokens, billing usage alerts, GitHub settings, Cloudflare Access (dev),
-Email Routing (production). In Auth0: the tenants themselves and Pulumi's own clients in them
+Not managed here yet: API tokens, billing usage alerts, Cloudflare Access (dev), Email Routing
+(production). On GitHub: Actions secrets, `PRODUCTION_PROVISIONED` and the settings the GitHub
+section below leaves alone. In Auth0: the tenants themselves and Pulumi's own clients in them
 (step 11), any connection other than Google and the password database (Apple, Microsoft, Facebook
 and email codes don't exist on either tenant yet), the email provider, Universal Login branding.
 See [`docs/deploy.md`](../docs/deploy.md) for those.
@@ -478,6 +480,173 @@ This replaces Production runbook step 8 in docs/deploy.md.
    ```
 5. Runbook step 8's check (`.well-known/openid-configuration`), then step 10 with the two outputs.
 
+## GitHub
+
+`src/github.ts` declares the repository's settings once a stack file names the owner
+(`github:owner`, the provider's own key). Neither file names it yet, so until step 19 the program
+touches nothing on GitHub and needs no GitHub token; steps 1-16 run exactly as written.
+
+One repository, two stacks, so each setting has exactly one owner (the tests fail if both stacks
+declare the same thing):
+
+| Stack | Owns |
+|---|---|
+| `dev` (`githubRepositoryWide: true`) | the repository's merge settings (squash only, delete the branch on merge); Actions workflow permissions (read-only `GITHUB_TOKEN`, Actions can't approve pull requests); `main`'s protection (Gate and Coverage from GitHub Actions, no force push, no deletion); the repository variables `CLOUDFLARE_ACCOUNT_ID` (the stacks' `accountId`) and `DEV_AUTO_DEPLOY` (`devAutoDeploy`); the `infra-preview` Environment and its reviewer; the `dev` Environment (main only) |
+| `production` | the `production` Environment: main only, approved by `githubEnvironmentReviewer` |
+
+Dev owns the repository-wide part because it is the stack that exists and is imported now;
+production's stack only exists once production is provisioned (step 10), and the repository's
+settings govern dev's deploys as much as production's.
+
+Left alone on purpose (the program never declares them, so `up` never changes them):
+
+- The description, homepage, topics, visibility, issues, wiki, projects, discussions and security
+  settings (`LEFT_ALONE` in `src/github.ts`: an imported value is kept).
+- `PRODUCTION_PROVISIONED`: the switch Production runbook step 12 sets by hand once everything
+  before it is checked. It is a decision, not a setting.
+- **Every Actions secret**: `CLOUDFLARE_API_TOKEN` on `dev` and `production`, and everything in
+  `infra-preview` (below). GitHub never returns a secret's value, so an import can't read them;
+  to manage one, Pulumi would have to hold its value in stack config and would overwrite the live
+  one with whatever is there. None of them is something the program makes (the Cloudflare tokens
+  and Auth0's `pulumi-read` clients are made by hand; the SPA's client id is in the apps'
+  committed `.env` files, not a secret). And a secret in the stacks could be decrypted by any
+  `infra-preview` run. Set them in Settings → Secrets and variables → Actions, as before.
+
+Things that would lock Joel out, and why the code doesn't do them:
+
+- **No required review on `main`.** GitHub never lets the author approve his own pull request, so
+  with one maintainer every merge would need an admin override.
+- **Admins aren't held to `main`'s protection** (`enforceAdmins: false`), as today: a flaky
+  required check, or one broken by the change that fixes it, can still be merged past.
+- **`preventSelfReview: false`** on `production` and `infra-preview`: Joel starts those runs and
+  is their only reviewer; `true` would leave nobody who may approve them.
+- The repository resource is `protect`ed and `archiveOnDestroy`, and so are the Environments
+  (deleting one deletes its secrets): taking them out of the code fails the run instead.
+
+### 17. Pulumi's GitHub tokens (once)
+
+Two fine-grained personal access tokens (GitHub → Settings → Developer settings → Fine-grained
+tokens → Generate new token), resource owner `joeldn`, **Only select repositories** →
+`joeldn/panote`, an expiry:
+
+| Repository permission | `pulumi-panote` (`up`) | `pulumi-panote-read` (`import-file-github`, `import`, CI preview) |
+|---|---|---|
+| Administration | Read and write | Read-only |
+| Variables | Read and write | Read-only |
+| Actions | Read-only | Read-only |
+| Metadata | Read-only (always) | Read-only (always) |
+
+Administration covers the merge settings, workflow permissions, `main`'s protection, the
+Environments and their branch policies; Variables the repository variables. *(unverified)* This
+list follows each endpoint's documented permission. A refusal names what it wanted:
+`import-file-github` prints GitHub's `x-accepted-github-permissions` header (`the token needs
+...`); add it here.
+
+The provider reads the token from `GITHUB_TOKEN`; the owner always comes from the stack. Don't
+put the token in the stack (`github:token`): every `infra-preview` run can decrypt the stack's
+secrets.
+
+```bash
+export GITHUB_TOKEN=<pulumi-panote-read>
+```
+
+Keep `pulumi-panote` out of shells that don't need it, as with the bootstrap Cloudflare token.
+
+### 18. Config
+
+| Key | How | dev | production |
+|---|---|---|---|
+| `github:owner` | `Pulumi.<stack>.yaml` | `joeldn`, set in step 19 | `joeldn`, step 19 |
+| `panote-infra:githubRepository` | `Pulumi.<stack>.yaml` | `panote` | `panote` |
+| `panote-infra:githubRepositoryWide` | `Pulumi.<stack>.yaml` | `true` | unset |
+| `panote-infra:githubInfraPreviewReviewer` | `Pulumi.<stack>.yaml` | `joeldn` | unset |
+| `panote-infra:devAutoDeploy` | `Pulumi.<stack>.yaml` | `true` (`DEV_AUTO_DEPLOY`) | unset |
+| `panote-infra:githubEnvironmentReviewer` | `Pulumi.<stack>.yaml` | refused (it would hold every auto-deploy) | `joeldn`, required |
+
+All but `github:owner` are committed already. To pause dev's automatic deploys, set
+`devAutoDeploy: false` in a pull request and `up` dev.
+
+### 19. Import
+
+Everything on GitHub was set up by hand. `import-file-github` reads it (GETs only) and writes
+`infra/pulumi/import.github.<stack>.json`: the repository and its workflow permissions (always
+there), `main`'s protection if `main` is protected, the two variables, the `infra-preview`
+Environment (dev), and the stack's own Environment with its `main` branch policy. Whatever isn't
+there is listed as `create`.
+
+Dev:
+
+```bash
+cd infra/pulumi
+pulumi config set --stack dev github:owner joeldn     # commit Pulumi.dev.yaml with the PR below
+cd ../..
+export GITHUB_TOKEN=<pulumi-panote-read>
+pnpm --filter @internal/infra build
+pnpm --filter @internal/infra run import-file-github dev   # from the repo root; prints what it found
+cd infra/pulumi
+pulumi import --stack dev --file import.github.dev.json --generate-code=false --protect=false
+```
+
+Production, once its stack exists (step 10; if you do it then, run this after `stack init` and
+before that step's preview, so the `up` doesn't try to create an Environment that exists):
+
+```bash
+cd infra/pulumi
+pulumi config set --stack production github:owner joeldn
+cd ../..
+pnpm --filter @internal/infra run import-file-github production
+cd infra/pulumi
+pulumi import --stack production --file import.github.production.json --generate-code=false --protect=false
+```
+
+Commit each `github:owner` line in a pull request of its own (the tests check it names
+`joeldn/panote`). Until that merges, CI previews the stack without GitHub.
+
+### 20. Preview: what to expect
+
+```bash
+pulumi preview --stack dev --diff
+```
+
+These and only these, all **update** or **create**:
+
+- `github-repository`: `allowMergeCommit` and `allowRebaseMerge` to `false` (both were on when
+  this was written: squash only is the change), and `archiveOnDestroy: true`, which is Pulumi's own
+  flag and changes nothing on GitHub. None of the fields left alone ever shows;
+- `github-workflow-permissions`: only if Settings → Actions → General → Workflow permissions isn't
+  already *Read repository contents and packages permissions* with *Allow GitHub Actions to create
+  and approve pull requests* unticked;
+- `github-main-protection`: `strict` to `false` if *Require branches to be up to date* was on, and
+  away any required review, conversation resolution or signed-commit rule set by hand. This
+  resource writes the whole rule on every change, so settings it doesn't name (linear history,
+  lock branch) go back to off too, and force pushes and deletion stay blocked. To keep one of
+  them, add it to `src/github.ts` before `up`;
+- `github-environment-infra-preview`: **create** if no infra pull request has run yet, otherwise
+  the reviewer, if it had none;
+- `github-environment` (dev): the branch policy to *Selected branches*, if it was something else;
+  `github-environment-main-policy`: **create** if there was no `main` rule;
+- either Environment: `canAdminsBypass` back to `true` (GitHub's default), if it was turned off.
+
+A **replace** or **delete** of anything, or a variable whose value changes, means the code and
+GitHub disagree: stop and fix whichever is wrong. Production's preview shows at most its
+Environment's reviewer, branch policy and `main` rule.
+
+### 21. Up
+
+Nothing goes down while it runs.
+
+```bash
+export GITHUB_TOKEN=<pulumi-panote>
+pulumi up --stack dev --diff
+pulumi preview --stack dev --expect-no-changes
+pulumi stack export --stack dev --file <somewhere safe>/panote-dev-state.json
+```
+
+Then check: Settings → General → Pull Requests offers squash merging only and deletes head
+branches; Settings → Branches shows `main` requiring Gate and Coverage; the next pull request
+touching `infra/` waits for approval in `infra-preview`. Same for production once its stack has
+`github:owner`.
+
 ## CI preview
 
 `.github/workflows/infra-preview.yml` runs `pulumi preview` for both stacks on a pull request that
@@ -490,16 +659,20 @@ notice while any is missing:
 - `CLOUDFLARE_API_TOKEN`: the read token from step 3, never the bootstrap one;
 - `AUTH0_CLIENT_ID_DEV`, `AUTH0_CLIENT_SECRET_DEV` (and `..._PRODUCTION` once that tenant
   exists): each tenant's `pulumi-read` client from step 11. A stack whose file names a tenant
-  previews only with its pair; without it, that stack's job ends with a notice.
+  previews only with its pair; without it, that stack's job ends with a notice;
+- `INFRA_GITHUB_TOKEN`: `pulumi-panote-read` from step 17 (never `pulumi-panote`). A stack whose
+  file names `github:owner` previews only with it; without it, that stack's job ends with a
+  notice. It is a secret of this Environment, set by hand like the rest.
 
 `pulumi preview` runs the pull request's own program with these secrets: anyone who can push a
 branch could change that program to read them. The workflow keeps them off the install and build
 steps, but that doesn't change this, so before adding the secrets (manual, once):
 
 - give the `infra-preview` environment **required reviewers** (Settings → Environments →
-  `infra-preview`), or a deployment-branch rule, so a run only gets them once approved;
-- make `CLOUDFLARE_API_TOKEN` the read token, never one that can edit, and the Auth0 pairs the
-  `pulumi-read` clients (no write scope, no `read:client_keys`);
+  `infra-preview`), so a run only gets them once approved; after step 21, dev's `up` keeps it so;
+- make `CLOUDFLARE_API_TOKEN` the read token, never one that can edit, the Auth0 pairs the
+  `pulumi-read` clients (no write scope, no `read:client_keys`), and `INFRA_GITHUB_TOKEN` the
+  read-only GitHub token;
 - reviewers of the `infra-preview` environment read the pull request's diff of `infra/**` and
   `packages/auth0-actions/src/**` before approving a run: the job holds the passphrase, so the
   program can decrypt every secret in the state and config, the link-accounts client's secret and
@@ -515,7 +688,9 @@ A fork's pull request gets no secrets.
   `pulumi preview --stack dev --diff`, then `up`. Same for production.
 - Tests (`pnpm --filter @internal/infra test`) run the program against Pulumi's mocks and pin the
   rule expressions, HSTS, retention and names, the SPA's URLs, the audience and issuer against the
-  apps' and APIs' config, the linking grant's scopes and the order of the Login flow.
+  apps' and APIs' config, the linking grant's scopes and the order of the Login flow, and on
+  GitHub the merge settings, `main`'s checks against `ci.yml`, the variables against `deploy.yml`,
+  and that no GitHub setting is declared by both stacks.
 - `error: the stack is currently locked`: a run was killed before releasing its lock in the state
   bucket. Check nothing else is running, then `pulumi cancel --stack <stack>` and retry. *(unverified
   against R2)*

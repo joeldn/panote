@@ -35,6 +35,36 @@ export interface Settings {
    * it exists (infra/README.md, steps 13 and 16).
    */
   readonly auth0?: Auth0Settings;
+  /**
+   * The GitHub repository (src/github.ts). Absent until the stack names its
+   * owner (`github:owner`, the provider's own key), so nothing on GitHub is
+   * declared before the import (infra/README.md, step 19).
+   */
+  readonly github?: GithubSettings;
+}
+
+export interface GithubSettings {
+  /** The account that owns the repository: `joeldn`. */
+  readonly owner: string;
+  /** The repository's name: `panote`. */
+  readonly repository: string;
+  /**
+   * The one person who approves this stack's GitHub Environment (production).
+   * Dev has none: a reviewer would hold every automatic deploy.
+   */
+  readonly environmentReviewer?: string;
+  /**
+   * Set on exactly one stack (dev): the settings there is one of per
+   * repository, so two stacks never fight over them (docs/decisions.md).
+   */
+  readonly repositoryWide?: GithubRepositoryWideSettings;
+}
+
+export interface GithubRepositoryWideSettings {
+  /** Who approves an `infra-preview` run, which holds the stacks' passphrase. */
+  readonly infraPreviewReviewer: string;
+  /** The `DEV_AUTO_DEPLOY` repository variable (docs/deploy.md, GitHub setup). */
+  readonly devAutoDeploy: boolean;
 }
 
 export interface Auth0Settings {
@@ -64,12 +94,18 @@ export interface ConfigSource {
 /** The key `ConfigSource.get` answers with the provider's `auth0:domain`. */
 export const AUTH0_DOMAIN_KEY = 'auth0:domain';
 
+/** The key `ConfigSource.get` answers with the provider's `github:owner`. */
+export const GITHUB_OWNER_KEY = 'github:owner';
+
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 const ZONE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 const RESOURCE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 const FILE_NAME = /^[A-Za-z0-9._-]+\.json$/;
 /** A tenant's own domain: `<name>.auth0.com` or `<name>.<region>.auth0.com`. */
 const AUTH0_DOMAIN = /^[a-z0-9-]+(\.[a-z]{2})?\.auth0\.com$/;
+/** A GitHub login: letters, digits and single hyphens, at most 39 characters. */
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}$/;
+const GITHUB_REPOSITORY = /^[A-Za-z0-9._-]{1,100}$/;
 const GOOGLE_CLIENT_ID = /^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/;
 
 /**
@@ -126,6 +162,7 @@ export function readSettings(stack: string, config: ConfigSource): Settings {
   }
 
   const auth0 = readAuth0Settings(stack, config);
+  const github = readGithubSettings(stack, config);
   return {
     stack,
     accountId,
@@ -137,6 +174,7 @@ export function readSettings(stack: string, config: ConfigSource): Settings {
     noindexAllResponses,
     wwwRedirect: config.getBoolean('wwwRedirect') ?? false,
     ...(auth0 ? { auth0 } : {}),
+    ...(github ? { github } : {}),
   };
 }
 
@@ -181,4 +219,56 @@ function readAuth0Settings(stack: Settings['stack'], config: ConfigSource) {
     ...(googleClientId === undefined ? {} : { googleClientId }),
     localDevCallbacks,
   } satisfies Auth0Settings;
+}
+
+/**
+ * The GitHub half. Production's Environment must have its reviewer (the
+ * approval deploy.yml relies on) and dev's must not (it would hold every
+ * automatic deploy).
+ */
+function readGithubSettings(stack: Settings['stack'], config: ConfigSource) {
+  const owner = config.get(GITHUB_OWNER_KEY);
+  const environmentReviewer = config.get('githubEnvironmentReviewer');
+  const repositoryWide = config.getBoolean('githubRepositoryWide') ?? false;
+  const infraPreviewReviewer = config.get('githubInfraPreviewReviewer');
+  const devAutoDeploy = config.getBoolean('devAutoDeploy');
+  // Like Auth0's, the other keys may sit in the stack file before the owner is named.
+  if (owner === undefined) return undefined;
+  const repository = config.require('githubRepository');
+  for (const [key, login] of Object.entries({
+    [GITHUB_OWNER_KEY]: owner,
+    githubEnvironmentReviewer: environmentReviewer,
+    githubInfraPreviewReviewer: infraPreviewReviewer,
+  })) {
+    if (login !== undefined && !GITHUB_LOGIN.test(login)) {
+      throw new Error(`${key} "${login}" is not a GitHub login`);
+    }
+  }
+  if (!GITHUB_REPOSITORY.test(repository)) {
+    throw new Error(`githubRepository "${repository}" is not a repository name`);
+  }
+  if (stack === 'production' && environmentReviewer === undefined) {
+    throw new Error('production needs githubEnvironmentReviewer: deploys to it wait for approval');
+  }
+  if (stack === 'dev' && environmentReviewer !== undefined) {
+    throw new Error('githubEnvironmentReviewer on dev would hold every automatic deploy');
+  }
+  if (!repositoryWide && (infraPreviewReviewer !== undefined || devAutoDeploy !== undefined)) {
+    throw new Error(
+      'githubInfraPreviewReviewer and devAutoDeploy only apply with githubRepositoryWide',
+    );
+  }
+  if (repositoryWide && infraPreviewReviewer === undefined) {
+    throw new Error(
+      'githubRepositoryWide needs githubInfraPreviewReviewer: infra-preview runs hold the passphrase',
+    );
+  }
+  return {
+    owner,
+    repository,
+    ...(environmentReviewer === undefined ? {} : { environmentReviewer }),
+    ...(repositoryWide && infraPreviewReviewer !== undefined
+      ? { repositoryWide: { infraPreviewReviewer, devAutoDeploy: devAutoDeploy ?? false } }
+      : {}),
+  } satisfies GithubSettings;
 }

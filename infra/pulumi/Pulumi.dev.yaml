@@ -13,3 +13,10 @@ config:
   # Auth0 (src/auth0.ts): nothing is declared until the import names the
   # tenant here with `auth0:domain` (infra/README.md, step 13).
   panote-infra:auth0LocalDevCallbacks: true
+  # GitHub (src/github.ts): nothing is declared until the import names the
+  # owner here with `github:owner` (infra/README.md, step 19). Dev owns the
+  # repository-wide settings; each stack owns its own Environment.
+  panote-infra:githubRepository: panote
+  panote-infra:githubRepositoryWide: true
+  panote-infra:githubInfraPreviewReviewer: joeldn
+  panote-infra:devAutoDeploy: true

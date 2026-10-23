@@ -2,6 +2,7 @@ import * as cloudflare from '@pulumi/cloudflare';
 import type * as pulumi from '@pulumi/pulumi';
 
 import { createAuth0, type Auth0Outputs, type Auth0Secrets } from './auth0.js';
+import { createGithub } from './github.js';
 import { RESOURCES, RULESET_PHASES, type ResourceKey } from './names.js';
 import {
   loadCacheRules,
@@ -57,7 +58,8 @@ export interface Infra {
 
 /**
  * Declares one environment's Cloudflare resources and, once the stack names
- * its tenant, its Auth0 tenant (src/auth0.ts). Workers, their routes and
+ * its tenant, its Auth0 tenant (src/auth0.ts), and once it names the GitHub
+ * owner, what it owns of the repository (src/github.ts). Workers, their routes and
  * bindings are not here: wrangler deploys those (`deploy.yml`).
  */
 export function createInfra(settings: Settings, auth0Secrets: Auth0Secrets = {}): Infra {
@@ -201,6 +203,7 @@ export function createInfra(settings: Settings, auth0Secrets: Auth0Secrets = {})
   }
 
   const auth0 = settings.auth0 && createAuth0(zone, settings.auth0, auth0Secrets, track);
+  if (settings.github) createGithub(settings, settings.github, track);
 
   return {
     resources,

@@ -22,6 +22,20 @@ const PRODUCTION = {
   cacheRulesFile: 'cache-rules.production.json',
 };
 
+const DEV_GITHUB = {
+  ...DEV,
+  'github:owner': 'joeldn',
+  githubRepository: 'panote',
+  githubRepositoryWide: 'true',
+  githubInfraPreviewReviewer: 'joeldn',
+};
+const PRODUCTION_GITHUB = {
+  ...PRODUCTION,
+  'github:owner': 'joeldn',
+  githubRepository: 'panote',
+  githubEnvironmentReviewer: 'joeldn',
+};
+
 describe('readSettings', () => {
   it('reads the committed stack files', () => {
     expect(stackSettings('dev')).toMatchObject({ ...DEV, noindexAllResponses: true });
@@ -79,7 +93,70 @@ describe('readSettings', () => {
     ).toEqual({ domain: 'panote-dev.auth0.com', localDevCallbacks: false });
   });
 
+  it('declares nothing on GitHub until the stack names the owner', () => {
+    const { 'github:owner': _, ...unnamed } = DEV_GITHUB;
+    expect(readSettings('dev', mapConfig(unnamed)).github).toBeUndefined();
+  });
+
+  it('reads the GitHub repository and who owns what of it', () => {
+    expect(readSettings('dev', mapConfig({ ...DEV_GITHUB, devAutoDeploy: 'true' })).github).toEqual(
+      {
+        owner: 'joeldn',
+        repository: 'panote',
+        repositoryWide: { infraPreviewReviewer: 'joeldn', devAutoDeploy: true },
+      },
+    );
+    // DEV_AUTO_DEPLOY defaults to off.
+    expect(readSettings('dev', mapConfig(DEV_GITHUB)).github?.repositoryWide?.devAutoDeploy).toBe(
+      false,
+    );
+    expect(readSettings('production', mapConfig(PRODUCTION_GITHUB)).github).toEqual({
+      owner: 'joeldn',
+      repository: 'panote',
+      environmentReviewer: 'joeldn',
+    });
+  });
+
   it.each([
+    ['a bad GitHub owner', 'dev', { ...DEV_GITHUB, 'github:owner': '-joel' }, /not a GitHub login/],
+    [
+      'a bad reviewer',
+      'dev',
+      { ...DEV_GITHUB, githubInfraPreviewReviewer: 'joel dn' },
+      /not a GitHub login/,
+    ],
+    [
+      'a bad repository',
+      'dev',
+      { ...DEV_GITHUB, githubRepository: 'joeldn/panote' },
+      /not a repository name/,
+    ],
+    ['no repository', 'dev', { ...DEV_GITHUB, githubRepository: undefined }, /githubRepository/],
+    [
+      'production without its reviewer',
+      'production',
+      { ...PRODUCTION_GITHUB, githubEnvironmentReviewer: undefined },
+      /needs githubEnvironmentReviewer/,
+    ],
+    [
+      'a reviewer on dev',
+      'dev',
+      { ...DEV_GITHUB, githubEnvironmentReviewer: 'joeldn' },
+      /hold every automatic deploy/,
+    ],
+    [
+      'repository-wide settings without a preview reviewer',
+      'dev',
+      { ...DEV_GITHUB, githubInfraPreviewReviewer: undefined },
+      /needs githubInfraPreviewReviewer/,
+    ],
+    [
+      'devAutoDeploy on a stack without the repository-wide settings',
+      'production',
+      { ...PRODUCTION_GITHUB, devAutoDeploy: 'true' },
+      /only apply with githubRepositoryWide/,
+    ],
+
     ['an unknown stack', 'staging', DEV, /unknown stack/],
     [
       'a custom domain as the tenant',

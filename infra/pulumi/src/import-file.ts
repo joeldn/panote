@@ -132,9 +132,12 @@ export function cloudflareGet(token: string, fetchImpl: typeof fetch = fetch): C
   };
 }
 
+/** The one key read from each provider's namespace. */
+const PROVIDER_KEYS: Record<string, string | undefined> = { auth0: 'domain', github: 'owner' };
+
 /**
  * Reads the flat `panote-infra:key: value` lines of a `Pulumi.<stack>.yaml`,
- * and the Auth0 provider's `auth0:domain` (as that key), so the scripts need
+ * and the providers' `auth0:domain` and `github:owner` (as those keys), so the scripts need
  * neither a backend login nor a YAML dependency. A secret's line has no value
  * on it (the ciphertext is on the next line, under `secure:`), so secrets are
  * never read.
@@ -142,11 +145,12 @@ export function cloudflareGet(token: string, fetchImpl: typeof fetch = fetch): C
 export function parseStackConfig(yaml: string): Map<string, string> {
   const values = new Map<string, string>();
   for (const line of yaml.split('\n')) {
-    const match = /^\s+(panote-infra|auth0):([A-Za-z0-9]+):\s*(.*?)\s*$/.exec(line);
+    const match = /^\s+(panote-infra|auth0|github):([A-Za-z0-9]+):\s*(.*?)\s*$/.exec(line);
     const [, namespace, key, raw] = match ?? [];
     if (!namespace || !key || !raw) continue;
-    if (namespace === 'auth0' && key !== 'domain') continue;
-    values.set(namespace === 'auth0' ? `auth0:${key}` : key, raw.replace(/^"|"$/g, ''));
+    const providerKey = PROVIDER_KEYS[namespace];
+    if (providerKey !== undefined && key !== providerKey) continue;
+    values.set(providerKey === undefined ? key : `${namespace}:${key}`, raw.replace(/^"|"$/g, ''));
   }
   return values;
 }

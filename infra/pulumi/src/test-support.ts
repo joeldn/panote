@@ -48,6 +48,18 @@ export const ZONE_IDS: Record<string, string> = {
 /** The id the mocked `getConnection` gives the tenant's password database. */
 export const DATABASE_CONNECTION_ID = 'con_database';
 
+/** The ids the mocked `getUser` gives GitHub logins. */
+export const GITHUB_USER_IDS: Record<string, number> = { joeldn: 4242 };
+
+/**
+ * A stack's settings once the GitHub import names the owner in its file
+ * (infra/README.md, step 19).
+ */
+export function stackSettingsWithGithub(stack: 'dev' | 'production'): Settings {
+  const yaml = readFileSync(new URL(`../Pulumi.${stack}.yaml`, import.meta.url), 'utf8');
+  return settingsFromStackFile(stack, `${yaml}  github:owner: joeldn\n`);
+}
+
 /** Every resource the mocked engine saw, by logical name, per run. */
 let registered = new Map<string, Registered>();
 
@@ -77,6 +89,11 @@ export async function installMocks(
         if (args.token === 'cloudflare:index/getZone:getZone') {
           const filter = args.inputs.filter as { name: string };
           return { id: ZONE_IDS[filter.name] ?? 'unknown-zone' };
+        }
+        if (args.token === 'github:index/getUser:getUser') {
+          const id = GITHUB_USER_IDS[args.inputs.username as string];
+          if (id === undefined) throw new Error(`no GitHub user ${String(args.inputs.username)}`);
+          return { id: String(id), login: args.inputs.username };
         }
         if (args.token === 'auth0:index/getConnection:getConnection') {
           return { id: args.inputs.name === DATABASE_CONNECTION ? DATABASE_CONNECTION_ID : 'nope' };

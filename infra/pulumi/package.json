@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Pulumi program for panote's Cloudflare account (R2, queues, zone rulesets and settings) and Auth0 tenants",
+  "description": "Pulumi program for panote's Cloudflare account (R2, queues, zone rulesets and settings), Auth0 tenants and GitHub repository settings",
   "license": "UNLICENSED",
   "main": "dist/index.js",
   "scripts": {
@@ -15,11 +15,13 @@
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",
     "import-file": "node dist/import-file-cli.js",
-    "import-file-auth0": "node dist/auth0-import-file-cli.js"
+    "import-file-auth0": "node dist/auth0-import-file-cli.js",
+    "import-file-github": "node dist/github-import-file-cli.js"
   },
   "dependencies": {
     "@pulumi/auth0": "catalog:",
     "@pulumi/cloudflare": "catalog:",
+    "@pulumi/github": "catalog:",
     "@pulumi/pulumi": "catalog:"
   },
   "devDependencies": {
