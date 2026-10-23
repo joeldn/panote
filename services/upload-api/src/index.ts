@@ -231,13 +231,12 @@ const r2Client = (env: Env): R2 =>
 
 // GET: the account page's usage, counted as the limits count it (quota.ts), with the limits.
 // Two listings, whatever the limits are. Storage is the caller's own account's, not the
-// tours they edit for someone else.
-async function usage(r2: R2, sub: string, env: Env, ctx: ExecutionContext): Promise<Response> {
+// tours they edit for someone else. A read only: pruning old log entries stays the POST's.
+async function usage(r2: R2, sub: string, env: Env): Promise<Response> {
   const [held, uploads] = await Promise.all([
     countHoldings(r2, sub).catch(unavailable),
     countRecentUploads(r2, sub, Date.now()).catch(unavailable),
   ]);
-  pruneLater(r2, uploads.expired, ctx);
   const body: UploadUsage = {
     panos: held.panos,
     bytes: held.bytes,
@@ -272,7 +271,7 @@ export default {
       // Per owner, before any R2 request: a runaway client can't run up S3 calls.
       const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS);
       if (limited) return limited;
-      if (req.method === 'GET') return await usage(r2Client(env), sub, env, ctx);
+      if (req.method === 'GET') return await usage(r2Client(env), sub, env);
       // Read at most MAX_BODY_BYTES (worker-kit's body.ts). Not JSON reads as {}: the field
       // checks below answer the 400.
       const read = await readJsonBody(req, MAX_BODY_BYTES);

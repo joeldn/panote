@@ -211,6 +211,8 @@ describe('GET /api/upload-url', () => {
       uploadsToday: 1,
       limits: { maxPanos: 500, maxBytes: 21474836480, maxUploadsPerDay: 50 },
     });
+    // A read: the expired entry is left for the next upload-URL request to prune.
+    expect(logged(OWNER)).toBe(2);
   });
 
   it("is the caller's own account, not the tours they edit", async () => {

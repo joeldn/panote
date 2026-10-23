@@ -41,7 +41,10 @@ function server(over: Partial<Record<string, () => Response>> = {}) {
     const answer = over[key];
     if (answer) return answer();
     if (key === 'GET /api/admin/account') {
-      return json({ email: 'maya@example.com', signIns: ['google-oauth2', 'email', 'github'] });
+      return json({
+        email: 'maya@example.com',
+        signIns: ['google-oauth2', 'email', 'github', 'constructor'],
+      });
     }
     if (key === 'GET /api/upload-url') return json(USAGE);
     if (key === 'GET /api/admin/tours') {
@@ -60,7 +63,7 @@ describe('the account page', () => {
     renderAdmin('/app/account', { fetch });
     expect(await screen.findByRole('heading', { name: 'Account' })).toBeTruthy();
     expect(await screen.findByText('maya@example.com')).toBeTruthy();
-    expect(screen.getByText('Google, Email code, github')).toBeTruthy();
+    expect(screen.getByText('Google, Email code, github, constructor')).toBeTruthy();
 
     const usage = within(screen.getByRole('region', { name: 'Usage' }));
     expect(await usage.findByText('12 of 500')).toBeTruthy();

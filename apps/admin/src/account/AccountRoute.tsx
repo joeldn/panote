@@ -46,12 +46,12 @@ async function countTours(api: Pick<AdminApi, 'listTours'>): Promise<number> {
   return count;
 }
 
-const signInName = (connection: string): string =>
-  connection in KNOWN_CONNECTIONS
-    ? connection === 'email'
-      ? 'Email code'
-      : KNOWN_CONNECTIONS[connection as keyof typeof KNOWN_CONNECTIONS].label
+function signInName(connection: string): string {
+  if (connection === 'email') return 'Email code';
+  return Object.hasOwn(KNOWN_CONNECTIONS, connection)
+    ? KNOWN_CONNECTIONS[connection as keyof typeof KNOWN_CONNECTIONS].label
     : connection;
+}
 
 function Meter({
   label,
