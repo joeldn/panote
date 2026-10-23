@@ -1,12 +1,15 @@
-import type { PanoSummary, TourSummary, Visibility } from './types.js';
+import type { PanoSummary, SharedTourSummary, TourSummary, Visibility } from './types.js';
 import {
   ApiError,
   isAuthError,
+  panoDeleteErrorOf,
   type AdminApi,
   type PublicApi,
   type TourDocInput,
 } from '@internal/web-kit';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { deletePanoErrorMessage, panoTitle } from './use-unused-panos.js';
 
 const PAGE_LIMIT = 100;
 // Bounds a runaway cursor loop; 50 pages of 100 is far beyond any real library.
@@ -82,12 +85,21 @@ export function deleteErrorMessage(e: unknown): string {
 
 export type LoadStatus = 'loading' | 'ready' | 'error';
 
+/** Tours other people invited this account to edit. Loaded apart: a failure here leaves
+ * the owner's own tours alone. */
+export type SharedTours =
+  { status: 'loading' | 'error'; tours: null } | { status: 'ready'; tours: SharedTourSummary[] };
+
 export interface Dashboard {
   status: LoadStatus;
   tours: TourSummary[];
-  /** Live panos by id (tombstoned ones excluded); null until loaded or if the list failed. */
+  /**
+   * Live panos by id (tombstoned ones excluded), each with its `referenced` flag; null
+   * until loaded or if the list failed.
+   */
   panos: ReadonlyMap<string, PanoSummary> | null;
-  /** Views per tour: absent while loading, null when the stats call failed. */
+  shared: SharedTours;
+  /** Views per tour, own and shared: absent while loading, null when the stats call failed. */
   views: Readonly<Record<string, number | null>>;
   /** Tombstoned panos whose interrupted delete is being re-issued. */
   resuming: readonly string[];
@@ -96,17 +108,25 @@ export interface Dashboard {
   notice: string | null;
   dismissNotice(): void;
   reload(): void;
+  reloadShared(): void;
   finishDeleting(): Promise<void>;
   setVisibility(tour: TourSummary, visibility: Visibility): Promise<void>;
   duplicate(tour: TourSummary): Promise<void>;
   /** Rejects with a user-facing message; a 404 counts as already deleted. */
   deleteTour(tour: TourSummary): Promise<void>;
+  /**
+   * Deletes an unused pano. Resolves once it is gone, or was kept because a tour uses it
+   * again (a notice says so); rejects with a message to show in the confirm modal.
+   */
+  deletePano(pano: PanoSummary): Promise<void>;
 }
 
 export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
   const [status, setStatus] = useState<LoadStatus>('loading');
   const [tours, setTours] = useState<TourSummary[]>([]);
   const [panos, setPanos] = useState<ReadonlyMap<string, PanoSummary> | null>(null);
+  const [shared, setShared] = useState<SharedTours>({ status: 'loading', tours: null });
+  const [sharedKey, setSharedKey] = useState(0);
   const [views, setViews] = useState<Record<string, number | null>>({});
   const [resuming, setResuming] = useState<string[]>([]);
   const [stuck, setStuck] = useState<string[]>([]);
@@ -144,7 +164,11 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const [tourRes, panoRes] = await Promise.allSettled([listAllTours(api), listAllPanos(api)]);
+      // With references, so the unused panos need no request of their own.
+      const [tourRes, panoRes] = await Promise.allSettled([
+        listAllTours(api),
+        listAllPanos(api, true),
+      ]);
       if (cancelled) return;
       if (panoRes.status === 'fulfilled') applyPanos(panoRes.value);
       if (tourRes.status === 'rejected') {
@@ -159,9 +183,22 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
     };
   }, [api, applyPanos, reloadKey]);
 
+  useEffect(() => {
+    let live = true;
+    api.listSharedTours().then(
+      (res) => live && setShared({ status: 'ready', tours: [...res.tours].sort(byNewest) }),
+      () => live && setShared({ status: 'error', tours: null }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, sharedKey]);
+
   // Views per card from the public stats route; never cancelled, so StrictMode keeps them.
   useEffect(() => {
-    const queue = tours.map((t) => t.tourId).filter((id) => !statsRequested.current.has(id));
+    const queue = [...tours, ...(shared.tours ?? [])]
+      .map((t) => t.tourId)
+      .filter((id) => !statsRequested.current.has(id));
     queue.forEach((id) => statsRequested.current.add(id));
     const worker = async () => {
       for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
@@ -174,7 +211,7 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
       }
     };
     for (let i = 0; i < Math.min(STATS_CONCURRENCY, queue.length); i++) void worker();
-  }, [tours, publicApi]);
+  }, [tours, shared.tours, publicApi]);
 
   const removeTour = (tourId: string) => setTours((ts) => ts.filter((t) => t.tourId !== tourId));
 
@@ -188,7 +225,7 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
 
   const refreshPanos = useCallback(async () => {
     try {
-      applyPanos(await listAllPanos(api));
+      applyPanos(await listAllPanos(api, true));
     } catch {
       // Covers keep their last state; the next reload catches up.
     }
@@ -263,10 +300,38 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
     [api, refreshPanos],
   );
 
+  const deletePano = useCallback(
+    async (pano: PanoSummary) => {
+      const patch = (keep: boolean) =>
+        setPanos((ps) => {
+          if (!ps) return ps;
+          const next = new Map(ps);
+          if (keep) next.set(pano.panoId, { ...pano, referenced: true });
+          else next.delete(pano.panoId);
+          return next;
+        });
+      try {
+        await api.deletePano(pano.panoId);
+      } catch (e) {
+        const reason = panoDeleteErrorOf(e);
+        if (reason === 'in-use') {
+          // A tour started using it since the list loaded; the server kept it.
+          patch(true);
+          setNotice(`“${panoTitle(pano)}” is used by a tour now, so it was kept.`);
+          return;
+        }
+        if (reason !== 'not-found') throw new Error(deletePanoErrorMessage(e), { cause: e });
+      }
+      patch(false);
+    },
+    [api],
+  );
+
   return {
     status,
     tours,
     panos,
+    shared,
     views,
     resuming,
     stuck,
@@ -276,9 +341,14 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
       setStatus('loading');
       setReloadKey((k) => k + 1);
     }, []),
+    reloadShared: useCallback(() => {
+      setShared({ status: 'loading', tours: null });
+      setSharedKey((k) => k + 1);
+    }, []),
     finishDeleting: useCallback(() => resumeDeletes([...stuck]), [resumeDeletes, stuck]),
     setVisibility,
     duplicate,
     deleteTour,
+    deletePano,
   };
 }

@@ -4,3 +4,4 @@ import type { AdminApi } from '@internal/web-kit';
 export type TourSummary = Awaited<ReturnType<AdminApi['listTours']>>['tours'][number];
 export type PanoSummary = Awaited<ReturnType<AdminApi['listPanos']>>['panos'][number];
 export type Visibility = NonNullable<TourSummary['publish']>['visibility'];
+export type SharedTourSummary = Awaited<ReturnType<AdminApi['listSharedTours']>>['tours'][number];

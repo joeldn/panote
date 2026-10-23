@@ -45,7 +45,10 @@ function server(routes: Record<string, Handler>) {
   return { fetch, calls };
 }
 
+// The unused panos are a filter on the dashboard, which also lists tours and shared tours.
 const listing = (panos: PanoSummary[]) => ({
+  'GET /api/admin/tours': () => json({ tours: [], cursor: null }),
+  'GET /api/admin/shared-tours': () => json({ tours: [] }),
   'GET /api/admin/panos': (url: URL) => {
     // Without the flag the server sends no `referenced`, and nothing may count as unused.
     const refs = url.searchParams.get('include') === 'references';
@@ -55,6 +58,7 @@ const listing = (panos: PanoSummary[]) => ({
 });
 
 const row = (title: string) => screen.getByText(title).closest('li')!;
+const UNUSED = '/app/?view=unused';
 
 configure({ asyncUtilTimeout: 5000 });
 // Pin the clock (Date only, so waitFor keeps real timers): the fixture's
@@ -74,6 +78,13 @@ const openConfirm = async (title: string) => {
 };
 
 describe('Unused panos', () => {
+  it('opens at /panos/unused too, the page it used to be', async () => {
+    const { fetch } = server(listing([pano()]));
+    const { router } = renderAdmin('/app/panos/unused', { fetch });
+    expect(await screen.findByText('Old nave')).toBeTruthy();
+    expect(router.state.location.search).toBe('?view=unused');
+  });
+
   it('lists only panos no tour uses, with preview, title and date', async () => {
     const { fetch, calls } = server(
       listing([
@@ -83,18 +94,17 @@ describe('Unused panos', () => {
         pano({ panoId: 'p-raw', title: null, manifest: null, tiling: 'pending' }),
       ]),
     );
-    renderAdmin('/app/panos/unused', { fetch, strict: true });
+    renderAdmin(UNUSED, { fetch, strict: true });
 
-    expect(await screen.findByRole('heading', { name: 'Unused panos' })).toBeTruthy();
     await screen.findByText('Old nave');
+    expect(screen.getByRole('button', { name: 'Unused panos 2', pressed: true })).toBeTruthy();
     expect(screen.queryByText('In a tour')).toBeNull();
     expect(screen.queryByText('Being deleted')).toBeNull();
-    expect(screen.getByText('2 unused panos')).toBeTruthy();
 
     expect(row('Old nave').querySelector('img')?.getAttribute('src')).toBe(
       'https://cdn.panote.dev/tiles/p1/t1-abc/preview.webp',
     );
-    expect(row('Old nave').textContent).toBe('Old naveUpdated 2 days ago');
+    expect(row('Old nave').textContent).toBe('Old naveUpdated 2 days agoDelete');
     expect(within(row('Untitled pano')).getByTestId('thumb-fallback')).toBeTruthy();
     expect(row('Untitled pano').textContent).toContain('Still processing');
 
@@ -107,7 +117,7 @@ describe('Unused panos', () => {
     const { fetch } = server(
       listing([pano(), pano({ panoId: 'p-face', title: 'Crypt', manifest: face })]),
     );
-    renderAdmin('/app/panos/unused', { fetch, strict: true });
+    renderAdmin(UNUSED, { fetch, strict: true });
     await screen.findByText('Crypt');
     const img = (title: string) => row(title).querySelector('img');
     expect(img('Crypt')?.getAttribute('src')).toBe(
@@ -119,7 +129,7 @@ describe('Unused panos', () => {
 
   it('shows an empty state when every pano is in a tour', async () => {
     const { fetch } = server(listing([pano({ referenced: true })]));
-    renderAdmin('/app/panos/unused', { fetch });
+    renderAdmin(UNUSED, { fetch });
     expect(await screen.findByText('Every pano you’ve uploaded is in a tour.')).toBeTruthy();
   });
 
@@ -128,7 +138,7 @@ describe('Unused panos', () => {
       ...listing([pano(), pano({ panoId: 'p2', title: 'Porch' })]),
       'DELETE /api/admin/panos/p1': () => noContent(),
     });
-    renderAdmin('/app/panos/unused', { fetch });
+    renderAdmin(UNUSED, { fetch });
     const dialog = await openConfirm('Old nave');
     expect(dialog.textContent).toContain('“Old nave” isn’t in any of your tours.');
     const confirm = within(dialog).getByRole('button', { name: 'Delete pano' });
@@ -143,7 +153,7 @@ describe('Unused panos', () => {
 
   it('cancel deletes nothing', async () => {
     const { fetch, calls } = server(listing([pano()]));
-    renderAdmin('/app/panos/unused', { fetch });
+    renderAdmin(UNUSED, { fetch });
     const dialog = await openConfirm('Old nave');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -156,12 +166,12 @@ describe('Unused panos', () => {
       ...listing([pano()]),
       'DELETE /api/admin/panos/p1': () => json({ error: 'pano is in use' }, 409),
     });
-    renderAdmin('/app/panos/unused', { fetch });
+    renderAdmin(UNUSED, { fetch });
     const dialog = await openConfirm('Old nave');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete pano' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(screen.getByRole('status').textContent).toContain(
+    expect(screen.getByRole('alert').textContent).toContain(
       '“Old nave” is used by a tour now, so it was kept.',
     );
     expect(screen.queryByRole('button', { name: 'Delete “Old nave”' })).toBeNull();
@@ -176,7 +186,7 @@ describe('Unused panos', () => {
       ...listing([pano()]),
       'DELETE /api/admin/panos/p1': () => json(body, code),
     });
-    renderAdmin('/app/panos/unused', { fetch });
+    renderAdmin(UNUSED, { fetch });
     const dialog = await openConfirm('Old nave');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete pano' }));
     expect((await within(dialog).findByRole('alert')).textContent).toContain(message);
@@ -188,7 +198,7 @@ describe('Unused panos', () => {
       ...listing([pano()]),
       'DELETE /api/admin/panos/p1': () => json({ error: 'not found' }, 404),
     });
-    renderAdmin('/app/panos/unused', { fetch });
+    renderAdmin(UNUSED, { fetch });
     const dialog = await openConfirm('Old nave');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete pano' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -198,13 +208,15 @@ describe('Unused panos', () => {
   it('offers a retry when the list fails to load', async () => {
     let fail = true;
     const { fetch } = server({
+      ...listing([]),
       'GET /api/admin/panos': () =>
         fail
           ? json({ error: 'boom' }, 500)
           : json({ panoIds: ['p1'], panos: [pano()], cursor: null }),
     });
-    renderAdmin('/app/panos/unused', { fetch });
-    const retry = await screen.findByRole('button', { name: 'Try again' });
+    renderAdmin(UNUSED, { fetch });
+    expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load your panos.');
+    const retry = screen.getByRole('button', { name: 'Try again' });
     fail = false;
     fireEvent.click(retry);
     expect(await screen.findByText('Old nave')).toBeTruthy();

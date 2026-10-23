@@ -3,8 +3,8 @@ import './dashboard.css';
 import type { TourSummary } from './types.js';
 import { Button, ConfirmModal } from '@internal/ui';
 import { createPublicApi, tilesBaseUrl } from '@internal/web-kit';
-import { useMemo, useRef, useState } from 'react';
-import { Link, Outlet } from 'react-router';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { Link, Outlet, useSearchParams } from 'react-router';
 
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
@@ -14,29 +14,73 @@ import { useUploads } from '../upload/upload-context.js';
 import { coverImage } from './cover.js';
 import { readCurrentTour } from './current-tour.js';
 import { formatCount, plural } from './format.js';
-import { SharedTours } from './SharedTours.js';
 import { TourCard } from './TourCard.js';
+import { UnusedPanos } from './UnusedPanos.js';
 import { useDashboard, type Dashboard as DashboardData } from './use-dashboard.js';
+import { unusedPanos } from './use-unused-panos.js';
 
+/** What the dashboard lists, from `?view=`: the owner's tours unless it says otherwise. */
+type View = 'yours' | 'shared' | 'unused';
+const VIEWS: Record<View, string> = {
+  yours: 'Your tours',
+  shared: 'Shared with you',
+  unused: 'Unused panos',
+};
+const viewOf = (param: string | null): View =>
+  param === 'shared' || param === 'unused' ? param : 'yours';
+
+/** One mono line under the title: "4 tours · 20 panos · 18k views". */
 function Totals({ dash }: { dash: DashboardData }) {
   // Only tours still listed, so a deleted tour's views drop out of the total.
   const known = dash.tours
     .map((t) => dash.views[t.tourId])
     .filter((v): v is number => typeof v === 'number');
-  const items = [
-    [String(dash.tours.length), 'tours'],
-    [dash.panos ? String(dash.panos.size) : '–', 'panos'],
-    [known.length ? formatCount(known.reduce((a, b) => a + b, 0)) : '–', 'total views'],
-  ] as const;
+  const parts = [plural(dash.tours.length, 'tour')];
+  if (dash.panos) parts.push(plural(dash.panos.size, 'pano'));
+  if (known.length) {
+    const total = known.reduce((a, b) => a + b, 0);
+    parts.push(`${formatCount(total)} view${total === 1 ? '' : 's'}`);
+  }
+  return <p className="dash__totals">{parts.join(' · ')}</p>;
+}
+
+/**
+ * The filter row: a chip per list with something in it, and none at all when the owner's
+ * own tours are all there is. The chip in use stays, so there is always a way back.
+ */
+function Filters({
+  view,
+  counts,
+  onPick,
+}: {
+  view: View;
+  counts: Record<View, number | null>;
+  onPick(v: View): void;
+}) {
+  const shown = (Object.keys(VIEWS) as View[]).filter(
+    (v) => v === 'yours' || v === view || (counts[v] ?? 0) > 0,
+  );
+  if (shown.length < 2) return null;
   return (
-    <dl className="dash__totals">
-      {items.map(([value, label]) => (
-        <div key={label} className="dash__total">
-          <dt>{label}</dt>
-          <dd>{value}</dd>
-        </div>
+    <div className="dash__filters" role="group" aria-label="Show">
+      {shown.map((v) => (
+        <button
+          key={v}
+          type="button"
+          className="dash__filter"
+          aria-pressed={v === view}
+          onClick={() => onPick(v)}
+        >
+          {VIEWS[v]}
+          {counts[v] !== null && (
+            <>
+              {' '}
+              <span className="dash__filter-n">{counts[v]}</span>
+            </>
+          )}
+        </button>
       ))}
-    </dl>
+    </div>
   );
 }
 
@@ -58,6 +102,25 @@ function PendingDeletes({ dash }: { dash: DashboardData }) {
       </span>
       <Button size="sm" variant="ghost" onClick={() => void dash.finishDeleting()}>
         Finish deleting
+      </Button>
+    </div>
+  );
+}
+
+function Retry({
+  text,
+  onRetry,
+  role = 'alert',
+}: {
+  text: string;
+  onRetry(): void;
+  role?: string;
+}) {
+  return (
+    <div className={`dash__banner${role === 'alert' ? ' dash__banner--warn' : ''}`} role={role}>
+      <span>{text}</span>
+      <Button size="sm" variant="ghost" onClick={onRetry}>
+        Try again
       </Button>
     </div>
   );
@@ -104,7 +167,10 @@ function greeting(dash: Pick<DashboardData, 'status' | 'tours'>, name?: string):
   return dash.tours.length === 0 ? `Welcome to panote${to}.` : `Welcome back${to}.`;
 }
 
-/** Owner home (design screens 02 and 13): tour cards, totals, duplicate and delete. */
+/**
+ * Owner home (design screens 02 and 13): tour cards and totals, with filters for the tours
+ * shared with this account and the panos no tour uses.
+ */
 export function Dashboard() {
   const { api, user } = useSession();
   const env = useAuthEnv();
@@ -115,11 +181,20 @@ export function Dashboard() {
   );
   const dash = useDashboard(api, publicApi);
   const uploads = useUploads();
+  const [search, setSearch] = useSearchParams();
+  const view = viewOf(search.get('view'));
   const [now] = useState(() => Date.now());
   const [currentTour] = useState(readCurrentTour);
   const [confirm, setConfirm] = useState<TourSummary | null>(null);
   const inFlight = useRef<Promise<void> | null>(null);
   const tilesBase = tilesBaseUrl(config);
+  const unused = useMemo(
+    () => (dash.panos ? unusedPanos(dash.panos.values()) : null),
+    [dash.panos],
+  );
+  const viewSearch = view === 'yours' ? '' : `?view=${view}`;
+
+  const pick = (v: View) => setSearch(v === 'yours' ? {} : { view: v }, { replace: true });
 
   const confirmDelete = (): Promise<void> => {
     // ConfirmModal only disables itself after a re-render; this blocks a fast double click.
@@ -136,30 +211,91 @@ export function Dashboard() {
     return run;
   };
 
-  const name = user.name?.trim();
-  let body;
-  if (dash.status === 'loading') {
-    body = (
-      <p className="app-status" role="status">
-        Loading your tours…
-      </p>
+  const loading = (text: string) => (
+    <p className="app-status" role="status">
+      {text}
+    </p>
+  );
+
+  let list: ReactNode;
+  if (view === 'shared') {
+    const shared = dash.shared.tours;
+    if (dash.shared.status === 'loading') list = loading('Loading the tours shared with you…');
+    else if (!shared) {
+      list = <Retry text="Couldn’t load the tours shared with you." onRetry={dash.reloadShared} />;
+    } else if (shared.length === 0) {
+      list = <p className="unused__note">No one has shared a tour with you yet.</p>;
+    } else {
+      list = (
+        <div className="dash__grid">
+          {shared.map((tour) => (
+            <TourCard
+              key={tour.tourId}
+              tour={tour}
+              // The owner's panos aren't listed here, so there's nothing to draw a cover from.
+              cover={null}
+              views={dash.views[tour.tourId]}
+              current={false}
+              now={now}
+              siteOrigin={config.siteOrigin}
+              ownerEmail={tour.ownerEmail}
+              search={viewSearch}
+            />
+          ))}
+        </div>
+      );
+    }
+  } else if (view === 'unused') {
+    list = unused ? (
+      <UnusedPanos panos={unused} tilesBase={tilesBase} now={now} deletePano={dash.deletePano} />
+    ) : (
+      <Retry text="Couldn’t load your panos." onRetry={dash.reload} />
     );
-  } else if (dash.status === 'error') {
-    body = (
-      <div className="dash__banner dash__banner--warn" role="alert">
-        <span>Couldn’t load your tours.</span>
-        <Button size="sm" variant="ghost" onClick={dash.reload}>
-          Try again
-        </Button>
+  } else if (dash.tours.length === 0) {
+    list = <Empty />;
+  } else {
+    list = (
+      <div className="dash__grid">
+        {dash.tours.map((tour) => (
+          <TourCard
+            key={tour.tourId}
+            tour={tour}
+            cover={
+              tour.coverPanoId ? coverImage(tilesBase, dash.panos?.get(tour.coverPanoId)) : null
+            }
+            views={dash.views[tour.tourId]}
+            current={tour.tourId === currentTour}
+            now={now}
+            siteOrigin={config.siteOrigin}
+            search={viewSearch}
+            owner={{
+              onVisibility: dash.setVisibility,
+              onDuplicate: dash.duplicate,
+              onDelete: setConfirm,
+            }}
+          />
+        ))}
       </div>
     );
+  }
+
+  let body: ReactNode;
+  if (dash.status === 'loading') {
+    body = loading(view === 'unused' ? 'Loading your panos…' : 'Loading your tours…');
+  } else if (dash.status === 'error') {
+    body = <Retry text="Couldn’t load your tours." onRetry={dash.reload} />;
   } else {
     body = (
       <>
-        <Totals dash={dash} />
-        <p className="dash__more">
-          <Link to="/panos/unused">Unused panos</Link>
-        </p>
+        <Filters
+          view={view}
+          counts={{
+            yours: dash.tours.length,
+            shared: dash.shared.tours?.length ?? null,
+            unused: unused?.length ?? null,
+          }}
+          onPick={pick}
+        />
         <PendingDeletes dash={dash} />
         {dash.notice && (
           <div className="dash__banner dash__banner--warn" role="alert">
@@ -169,29 +305,14 @@ export function Dashboard() {
             </Button>
           </div>
         )}
-        {dash.tours.length === 0 ? (
-          <Empty />
-        ) : (
-          <div className="dash__grid">
-            {dash.tours.map((tour) => (
-              <TourCard
-                key={tour.tourId}
-                tour={tour}
-                cover={
-                  tour.coverPanoId ? coverImage(tilesBase, dash.panos?.get(tour.coverPanoId)) : null
-                }
-                views={dash.views[tour.tourId]}
-                current={tour.tourId === currentTour}
-                now={now}
-                siteOrigin={config.siteOrigin}
-                onVisibility={dash.setVisibility}
-                onDuplicate={dash.duplicate}
-                onDelete={setConfirm}
-              />
-            ))}
-          </div>
+        {list}
+        {view === 'yours' && dash.shared.status === 'error' && (
+          <Retry
+            text="Couldn’t load the tours shared with you."
+            onRetry={dash.reloadShared}
+            role="status"
+          />
         )}
-        <SharedTours api={api} now={now} />
       </>
     );
   }
@@ -199,13 +320,14 @@ export function Dashboard() {
   return (
     <section className="dash">
       <header className="dash__head">
-        <div>
-          <p className="dash__kicker">Your tours</p>
-          <h1 className="dash__title">{greeting(dash, name)}</h1>
+        <div className="dash__intro">
+          <h1 className="dash__title">{greeting(dash, user.name?.trim())}</h1>
+          {dash.status === 'ready' && (dash.tours.length > 0 || !!dash.panos?.size) && (
+            <Totals dash={dash} />
+          )}
         </div>
         <Button
           variant="primary"
-          size="lg"
           icon="fa-solid fa-plus"
           onClick={() => uploads.pick({ kind: 'new-tour' })}
         >

@@ -232,4 +232,16 @@ describe('insights route', () => {
     expect(router.state.location.pathname).toBe('/app');
     expect(screen.getByText('Dashboard')).toBeTruthy();
   });
+
+  it('closes back to the dashboard filter it was opened from', async () => {
+    const { router } = renderInsights(
+      fakeApi(async () => ({ status: 'ok', data: INSIGHTS })),
+      statsFetch(3),
+      '/app/insights/tour-1?view=shared',
+    );
+    expect(await screen.findByText('Old Town · last 14 days')).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close' })));
+    expect(router.state.location.pathname).toBe('/app');
+    expect(router.state.location.search).toBe('?view=shared');
+  });
 });
