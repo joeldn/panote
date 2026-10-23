@@ -1,8 +1,9 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { manifestKey, tileFailedKeyFromOriginalKey } from '@internal/contracts';
+import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { ALERT_THROTTLE_MS, alertThrottleKey } from './alert.js';
-import worker from './consumer.js';
+import worker, { retryDelaySeconds } from './consumer.js';
 
 // Owner segment for the log-hygiene tests. Distinctive, so a substring
 // match can't come from anything but a leaked key or owner.
@@ -450,6 +451,138 @@ describe('res.ok handling', () => {
       getSpy.mockRestore();
     }
     expectOwnerNeverLogged(consoleSpies);
+  });
+});
+
+describe('retry back-off', () => {
+  it('doubles the delay with each attempt, from a minute, and stops growing', () => {
+    expect([1, 2, 3, 4, 5, 6, 50].map(retryDelaySeconds)).toEqual([
+      60, 120, 240, 480, 960, 960, 960,
+    ]);
+    expect(retryDelaySeconds(0)).toBe(60);
+  });
+
+  it('asks the queue for that delay when it retries a failed job', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(async () => new Response('boom', { status: 500 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    try {
+      const ctx = createExecutionContext();
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-backoff',
+          timestamp: new Date(),
+          body: { object: { key: 'panos/u1/backoff/original', size: 10 }, action: 'PutObject' },
+          attempts: 2,
+        },
+      ]);
+      const retry = vi.spyOn(batch.messages[0]!, 'retry');
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.retryMessages).toEqual([{ msgId: 'msg-backoff' }]);
+      expect(retry).toHaveBeenCalledWith({ delaySeconds: 120 });
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
+});
+
+describe('a source the tiler refuses (422)', () => {
+  it('acks without retrying and writes an unsupported marker, keeping the original', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(
+      async () =>
+        new Response('SourceRejectedError: source format svg is not one of jpeg, png, webp', {
+          status: 422,
+        }),
+    );
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    try {
+      const ctx = createExecutionContext();
+      const key = 'panos/u1/rejected-source/original';
+      await env.BUCKET.put(key, 'not really a jpeg');
+      const head = await env.BUCKET.head(key);
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-rejected',
+          timestamp: new Date(),
+          body: { object: { key, size: 17, eTag: head!.etag }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.explicitAcks).toEqual(['msg-rejected']);
+      expect(result.retryMessages).toEqual([]);
+      const marker = await env.BUCKET.get(tileFailedKeyFromOriginalKey(key));
+      expect((await marker!.json()) as { reason: string }).toMatchObject({
+        reason: 'unsupported',
+        originalEtag: head!.etag,
+      });
+      expect(await env.BUCKET.head(key)).not.toBeNull();
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
+});
+
+describe('an original that is already tiled', () => {
+  const run = async (panoId: string, manifest: string | null, eTag: string | undefined) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    if (manifest !== null) await env.BUCKET.put(manifestKey(panoId), manifest);
+    const fakeFetch = vi.fn(async () => new Response('ok', { status: 200 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    try {
+      const ctx = createExecutionContext();
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: `msg-${panoId}`,
+          timestamp: new Date(),
+          body: {
+            object: { key: `panos/u1/${panoId}/original`, size: 10, ...(eTag ? { eTag } : {}) },
+            action: 'PutObject',
+          },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.explicitAcks).toEqual([`msg-${panoId}`]);
+      return fakeFetch.mock.calls.length;
+    } finally {
+      getSpy.mockRestore();
+    }
+  };
+  const current = (etag: string) => JSON.stringify({ version: `t${TILER_OUTPUT_VERSION}-${etag}` });
+
+  it('skips the container when the manifest already names this ETag and tiler build', async () => {
+    expect(await run('dup-same', current('e1'), 'e1')).toBe(0);
+  });
+
+  it('matches a quoted event ETag', async () => {
+    expect(await run('dup-quoted', current('e2'), '"e2"')).toBe(0);
+  });
+
+  it.each([
+    ['a different ETag', 'dup-other-etag', current('older'), 'e3'],
+    [
+      'an older tiler build',
+      'dup-old-tiler',
+      JSON.stringify({ version: `t${TILER_OUTPUT_VERSION - 1}-e4` }),
+      'e4',
+    ],
+    ['no manifest', 'dup-none', null, 'e5'],
+    ['an unreadable manifest', 'dup-bad', 'not json', 'e6'],
+    ['no ETag on the event', 'dup-no-etag', current('e7'), undefined],
+  ])('tiles as before with %s', async (_name, panoId, manifest, eTag) => {
+    expect(await run(panoId, manifest, eTag)).toBe(1);
   });
 });
 

@@ -36,6 +36,20 @@ export interface EquirectPlan {
 export const ASPECT_TOLERANCE = 0.02;
 
 /**
+ * build() refuses a source whose long side is more than this many times its
+ * short side. A 16:1 strip is a full sweep with a 22.5 degree vertical field of
+ * view, narrower than any phone or camera panorama mode; a vertical sweep is
+ * rarely past 1:4. Cost is not the reason: planEquirect already holds the padded
+ * decode to MAX_INPUT_PIXELS, so a 65,536 x 2,288 strip (just under 150 MP)
+ * becomes a 17,320 x 8,660 decode with 8,192 px faces, the same work as a real
+ * 150 MP 2:1 panorama, and a source narrower than 2:1 gets faces from its width,
+ * which the pixel cap keeps smaller still. It turns inputs that can only come out
+ * as a sliver of image on a sphere into a clear, permanent failure instead of a
+ * full job.
+ */
+export const MAX_ASPECT_RATIO = 16;
+
+/**
  * Plans the decode of a width x height source. The caller has already checked
  * width * height against MAX_INPUT_PIXELS; padding makes the decoded buffer
  * bigger than the source, so the padded size is held to the same cap here,

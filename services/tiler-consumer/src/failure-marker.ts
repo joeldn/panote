@@ -7,7 +7,7 @@ import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { putJson } from '@internal/worker-kit/r2-binding';
 import { errorText, panoIdForLog } from './upload-prefix.js';
 
-export type FailureReason = 'dlq' | 'oversize' | 'unprocessable-key';
+export type FailureReason = 'dlq' | 'oversize' | 'unprocessable-key' | 'unsupported';
 export type MarkerOutcome = 'written' | 'skipped' | 'failed';
 
 // R2 event etags may arrive quoted (S3-style) or bare; R2Object.etag is

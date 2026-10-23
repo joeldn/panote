@@ -1,5 +1,6 @@
 import { Container } from '@cloudflare/containers';
-import { redactOwner } from '@internal/contracts';
+import { manifestKey, redactOwner } from '@internal/contracts';
+import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { containerEnvVars } from './container-env.js';
 import { deriveUploadTarget, errorText, panoIdForLog } from './upload-prefix.js';
 import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
@@ -41,6 +42,44 @@ const CREATE_ACTIONS = ['PutObject', 'CompleteMultipartUpload', 'CopyObject'];
 // container is sized for the ~150 MP v1 cap). Overridable via the
 // MAX_ORIGINAL_BYTES var.
 const DEFAULT_MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
+
+// Back-off between attempts of a failed tile job: 1, 2, then 4 minutes before
+// max_retries (3) sends it to the DLQ. A failure that isn't about the source is
+// usually R2 or the container platform, which an immediate retry would just hit
+// again; spacing them out also stops a burst of failing jobs from holding all
+// max_concurrency slots back to back. Matches retry_delay in wrangler.jsonc, which
+// covers a retry this code didn't ask for (an uncaught throw).
+export const RETRY_BASE_SECONDS = 60;
+export const retryDelaySeconds = (attempts: number): number =>
+  RETRY_BASE_SECONDS * 2 ** Math.min(Math.max(attempts, 1) - 1, 4);
+
+// R2 event etags may arrive quoted (S3-style) or bare.
+const bareEtag = (raw: string): string => raw.replace(/^"|"$/g, '');
+
+/**
+ * True when the pano's manifest already names the version this original would
+ * tile into (t<TILER_OUTPUT_VERSION>-<ETag>, as container.ts derives it): the
+ * same bytes were already tiled by this tiler build, so the job would only
+ * rewrite identical keys. R2 fires an event for every PUT, including one that
+ * re-uploads the same bytes, and the queue can deliver twice. A failed or
+ * unreadable manifest read answers false, so the job runs as before.
+ */
+export const alreadyTiled = async (
+  bucket: R2Bucket,
+  panoId: string,
+  eTag: string | undefined,
+): Promise<boolean> => {
+  if (!eTag) return false;
+  try {
+    const obj = await bucket.get(manifestKey(panoId));
+    if (!obj) return false;
+    const { version } = (await obj.json()) as { version?: unknown };
+    return version === `t${TILER_OUTPUT_VERSION}-${bareEtag(eTag)}`;
+  } catch (e) {
+    console.warn(`could not read the manifest pano=${panoId}, tiling anyway: ${errorText(e)}`);
+    return false;
+  }
+};
 
 // Exact match, not a substring test (wrangler.jsonc): a hypothetical main
 // queue whose name happens to contain "-dlq" must not route here.
@@ -103,6 +142,13 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       continue;
     }
     // panoId only in log lines from here on: the key carries the owner segment.
+    if (await alreadyTiled(env.BUCKET, panoId, msg.body.object.eTag)) {
+      console.warn(
+        `skip tile job pano=${panoId}: the manifest already has this original's version`,
+      );
+      msg.ack();
+      continue;
+    }
     const t0 = Date.now();
     const elapsed = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
     console.warn(`tile job start pano=${panoId}`);
@@ -125,14 +171,22 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
           // A failed body read must not block the retry below.
         }
         console.error(`tile job failed pano=${panoId}: ${res.status} ${redactOwner(bodyText)}`);
-        msg.retry();
+        if (res.status === 422) {
+          // The tiler refused the source itself (format, pixel or aspect cap):
+          // the same bytes fail the same way, so mark it failed now rather than
+          // retrying into the DLQ. The original stays; a new upload replaces it.
+          await writeFailureMarker(env.BUCKET, key, 'unsupported', msg.body.object.eTag);
+          msg.ack();
+        } else {
+          msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
+        }
       }
     } catch (e) {
       // Covers a failed fetch and a DO constructor throw (missing R2
       // secrets, container-env.ts); e's message never contains a secret.
       console.warn(`tile job end pano=${panoId} threw after ${elapsed()}`);
       console.error(`tile job failed pano=${panoId}: ${errorText(e)}`);
-      msg.retry();
+      msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
     }
   }
 };

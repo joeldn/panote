@@ -33,7 +33,7 @@ import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
 
-import { BACKUP_CRON, restoreFromBackup, runBackup } from './backup.js';
+import { BACKUP_CRON, restoreFromBackup } from './backup.js';
 import {
   conditionalGet,
   guardedPut,
@@ -56,7 +56,7 @@ import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './op
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
-import { sweepSupersededTiles } from './tile-gc.js';
+import { runBackupThenTileGc } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
@@ -573,19 +573,20 @@ app.onError(errorHandler);
 
 export default {
   fetch: app.fetch,
-  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
-  // finishes (or re-sweeps) every account marked for deletion, and deletes tile
-  // versions a re-tile superseded more than a day ago (no purge: nothing
-  // references their URLs any more, and edge copies age out on their own).
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6), and
+  // finishes (or re-sweeps) every account marked for deletion.
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
+  // The same invocation then deletes tile versions a re-tile superseded more than a
+  // day ago, with what the backup left of that budget (tile-gc.ts; no purge: nothing
+  // references their URLs any more, and edge copies age out on their own).
   // It returns before runDailyCron, so the 15-minute cron never runs the daily
   // tasks or records a daily cron run.
   // runDailyCron logs each task that throws and records the run for the health check.
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === BACKUP_CRON) {
-      ctx.waitUntil(runBackup(env.BUCKET, now));
+      ctx.waitUntil(runBackupThenTileGc(env.BUCKET, now));
       return;
     }
     ctx.waitUntil(
@@ -593,7 +594,6 @@ export default {
         'slug-aliases': () => sweepExpiredAliases(env.BUCKET, now),
         'account-deletions': () =>
           sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)),
-        'tile-gc': () => sweepSupersededTiles(env.BUCKET, now),
       }),
     );
   },
