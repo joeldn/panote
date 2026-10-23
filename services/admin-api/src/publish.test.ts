@@ -883,7 +883,8 @@ describe('released slugs cool off (slug-hold.ts)', () => {
     'an operator %s holds the slug for no owner, not even the one taken down',
     async (action) => {
       const slug = `hold-op-${action}`;
-      const tourId = await publishedTour(`hold-op-${action}`, slug);
+      const tourId = await publishedTour(`hold-op-${action}`, `${slug}-old`);
+      expect((await putSlug(tourId, slug)).status).toBe(200);
       const r = await SELF.fetch(`https://x${OPERATOR_TAKEDOWN_PATH}`, {
         method: 'POST',
         headers: {
@@ -894,6 +895,7 @@ describe('released slugs cool off (slug-hold.ts)', () => {
       });
       expect(r.status).toBe(200);
       expect((await holdOf(slug))?.owner).toBe(TAKEDOWN_HOLD_OWNER);
+      expect((await holdOf(`${slug}-old`))?.owner).toBe(TAKEDOWN_HOLD_OWNER);
       // The owner can't take it straight back, from this tour or another one.
       await readyPano(`hold-op-${action}-p2`);
       const another = await createTour('Again', [`hold-op-${action}-p2`]);
