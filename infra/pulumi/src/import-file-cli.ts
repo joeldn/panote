@@ -26,6 +26,7 @@ if (!token) {
 const packageDir = new URL('../', import.meta.url);
 const values = parseStackConfig(readFileSync(new URL(`Pulumi.${stack}.yaml`, packageDir), 'utf8'));
 const settings = readSettings(stack, {
+  get: (key) => values.get(key),
   require: (key) => {
     const value = values.get(key);
     if (value === undefined) throw new Error(`Pulumi.${stack}.yaml: no panote-infra:${key}`);

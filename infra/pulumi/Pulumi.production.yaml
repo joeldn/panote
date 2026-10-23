@@ -5,6 +5,9 @@ config:
   panote-infra:accountId: 12e2809e05de8a2bf20b815fd394ec9a
   panote-infra:zone: panote.io
   panote-infra:bucket: pano-content
+  # Eastern North America: the best average latency for a global audience
+  # (the US and Europe). Only read when the bucket is created.
+  panote-infra:bucketLocation: enam
   panote-infra:uploadsQueue: pano-uploads
   panote-infra:deadLetterQueue: pano-uploads-dlq
   panote-infra:corsFile: cors.json

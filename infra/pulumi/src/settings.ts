@@ -10,6 +10,13 @@ export interface Settings {
   /** The zone the site and its CDN live on: `panote.dev` / `panote.io`. */
   readonly zone: string;
   readonly bucket: string;
+  /**
+   * The R2 location hint the bucket is created with. Cloudflare only reads it
+   * when the bucket is first created and never moves a bucket afterwards.
+   * Production requires one, so the bucket doesn't end up near whoever happens
+   * to run `pulumi up`. Dev's bucket already exists, so it has none.
+   */
+  readonly bucketLocation?: BucketLocation | undefined;
   readonly uploadsQueue: string;
   readonly deadLetterQueue: string;
   /** File name under `infra/r2/`. */
@@ -22,8 +29,13 @@ export interface Settings {
   readonly wwwRedirect: boolean;
 }
 
+/** R2's location hints: best effort, not a guarantee (unlike a jurisdiction). */
+export const BUCKET_LOCATIONS = ['wnam', 'enam', 'weur', 'eeur', 'apac', 'oc'] as const;
+export type BucketLocation = (typeof BUCKET_LOCATIONS)[number];
+
 /** The subset of `pulumi.Config` this module needs, so tests can pass a map. */
 export interface ConfigSource {
+  get(key: string): string | undefined;
   require(key: string): string;
   getBoolean(key: string): boolean | undefined;
 }
@@ -62,6 +74,16 @@ export function readSettings(stack: string, config: ConfigSource): Settings {
     }
   }
 
+  const bucketLocation = config.get('bucketLocation');
+  if (bucketLocation !== undefined && !isBucketLocation(bucketLocation)) {
+    throw new Error(
+      `bucketLocation "${bucketLocation}" is not one of ${BUCKET_LOCATIONS.join(', ')}`,
+    );
+  }
+  if (stack === 'production' && bucketLocation === undefined) {
+    throw new Error('production needs a bucketLocation: R2 never moves a bucket once created');
+  }
+
   const corsFile = config.require('corsFile');
   const cacheRulesFile = config.require('cacheRulesFile');
   for (const [key, file] of Object.entries({ corsFile, cacheRulesFile })) {
@@ -81,9 +103,14 @@ export function readSettings(stack: string, config: ConfigSource): Settings {
     accountId,
     zone,
     ...names,
+    bucketLocation,
     corsFile,
     cacheRulesFile,
     noindexAllResponses,
     wwwRedirect: config.getBoolean('wwwRedirect') ?? false,
   };
+}
+
+function isBucketLocation(value: string): value is BucketLocation {
+  return (BUCKET_LOCATIONS as readonly string[]).includes(value);
 }
