@@ -3,6 +3,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -96,19 +97,22 @@ export function TourPanel({
   const from = current?.kind === 'config' ? current.current : null;
   const reorder = onMove && scenes.length > 1 ? onMove : null;
   // Any connection between two of the tour's panos yet.
-  const linked = scenes.some(({ panoId }) => {
-    const s = docs.scenes[panoId];
-    return (
-      s?.kind === 'config' &&
-      s.current.hotspots.some(
-        (h) =>
-          h.type === 'link' &&
-          h.targetPanoId !== undefined &&
-          h.targetPanoId !== panoId &&
-          scenes.some((t) => t.panoId === h.targetPanoId),
-      )
-    );
-  });
+  const linked = useMemo(() => {
+    const ids = new Set(scenes.map((t) => t.panoId));
+    return scenes.some(({ panoId }) => {
+      const s = docs.scenes[panoId];
+      return (
+        s?.kind === 'config' &&
+        s.current.hotspots.some(
+          (h) =>
+            h.type === 'link' &&
+            h.targetPanoId !== undefined &&
+            h.targetPanoId !== panoId &&
+            ids.has(h.targetPanoId),
+        )
+      );
+    });
+  }, [scenes, docs.scenes]);
   const keysId = useId();
   const list = useRef<HTMLUListElement>(null);
   const handles = useRef(new Map<string, HTMLButtonElement>());
@@ -205,7 +209,6 @@ export function TourPanel({
         <p className="ed-hint">
           Click a pano to edit it. Connections point <b>from</b> the open pano: <b>Aim here</b> sets
           one to the current view.
-          {reorder && <> Drag a pano by its handle to change the order visitors see.</>}
         </p>
       )}
       {reorder && (

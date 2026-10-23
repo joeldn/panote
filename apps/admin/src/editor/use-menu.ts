@@ -28,6 +28,7 @@ export function useMenu() {
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const all = [...(menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    if (all.length === 0 && e.key !== 'Escape') return;
     const at = all.indexOf(document.activeElement as HTMLElement);
     const next =
       e.key === 'ArrowDown'

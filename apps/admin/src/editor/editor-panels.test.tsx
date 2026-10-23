@@ -1,4 +1,12 @@
-import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
@@ -93,6 +101,16 @@ describe('editor panels', () => {
     fireEvent.click(toggle(ui, /^Points/));
     expect(side(ui).getByRole('button', { name: 'Fountain' })).toBeTruthy();
     expect(localStorage.getItem(panelStorageKey('points'))).toBe('open');
+  });
+
+  it('follows a card folded in another tab', async () => {
+    const ui = await openTab();
+    expect(toggle(ui, /^Points/).getAttribute('aria-expanded')).toBe('true');
+    localStorage.setItem(panelStorageKey('points'), 'closed');
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: panelStorageKey('points') }));
+    });
+    expect(toggle(ui, /^Points/).getAttribute('aria-expanded')).toBe('false');
   });
 
   it('still works with storage blocked, for the page', async () => {

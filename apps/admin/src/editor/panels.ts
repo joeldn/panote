@@ -54,10 +54,19 @@ export function setPanelOpen(key: PanelKey, open: boolean): void {
   for (const l of listeners) l();
 }
 
+// Another tab folding a card shows here too.
+const onStorage = (e: StorageEvent) => {
+  if (e.key === null || e.key.startsWith('panote.editor.panel.')) {
+    for (const l of listeners) l();
+  }
+};
+
 const subscribe = (l: () => void) => {
+  if (listeners.size === 0) window.addEventListener('storage', onStorage);
   listeners.add(l);
   return () => {
     listeners.delete(l);
+    if (listeners.size === 0) window.removeEventListener('storage', onStorage);
   };
 };
 
