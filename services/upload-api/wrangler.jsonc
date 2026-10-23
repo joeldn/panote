@@ -17,6 +17,12 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.dev/api/upload-url", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
+      // The global daily upload ceiling (src/ceiling.ts): one instance counts every
+      // owner's upload URLs and bytes per UTC day.
+      "durable_objects": {
+        "bindings": [{ "name": "UPLOAD_CEILING", "class_name": "UploadCeiling" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UploadCeiling"] }],
       // namespace_id is ours to choose (any integer, unique in the account; nothing to
       // create), dev 11xx and production 21xx. `period` (10 or 60) must match
       // UPLOAD_URL_RATE_PERIOD_SECONDS in src/index.ts, which is the 429's Retry-After.
@@ -41,6 +47,12 @@
         "MAX_BYTES_PER_OWNER": "21474836480",
         // Upload URLs issued per rolling 24 hours, new and replace alike (upload-log/).
         "MAX_UPLOADS_PER_OWNER_PER_DAY": "50",
+        // The global ceiling (src/ceiling.ts), across all owners per UTC day: past
+        // either, every upload URL gets a 503 until 00:00 UTC. "0" pauses uploads now;
+        // an empty value lifts a limit. See docs/deploy.md, Owner quotas.
+        "MAX_UPLOADS_PER_DAY_GLOBAL": "2000",
+        // 200 GiB of declared upload bytes (200 * 1024^3).
+        "MAX_UPLOAD_BYTES_PER_DAY_GLOBAL": "214748364800",
       },
     },
     "production": {
@@ -50,6 +62,11 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.io/api/upload-url", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
+      // The global daily upload ceiling (src/ceiling.ts).
+      "durable_objects": {
+        "bindings": [{ "name": "UPLOAD_CEILING", "class_name": "UploadCeiling" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["UploadCeiling"] }],
       // Upload URLs per owner (Auth0 sub) per minute.
       "ratelimits": [
         {
@@ -73,6 +90,12 @@
         "MAX_BYTES_PER_OWNER": "21474836480",
         // Upload URLs issued per rolling 24 hours, new and replace alike (upload-log/).
         "MAX_UPLOADS_PER_OWNER_PER_DAY": "50",
+        // The global ceiling (src/ceiling.ts), across all owners per UTC day: past
+        // either, every upload URL gets a 503 until 00:00 UTC. "0" pauses uploads now;
+        // an empty value lifts a limit. See docs/deploy.md, Owner quotas.
+        "MAX_UPLOADS_PER_DAY_GLOBAL": "2000",
+        // 200 GiB of declared upload bytes (200 * 1024^3).
+        "MAX_UPLOAD_BYTES_PER_DAY_GLOBAL": "214748364800",
       },
     },
   },

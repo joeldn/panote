@@ -22,7 +22,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
-| `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
+| `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | `UPLOAD_CEILING` — Durable Object, class `UploadCeiling` (one instance, the global daily upload ceiling, see Owner quotas; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); otherwise none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
@@ -1987,8 +1987,9 @@ auth, rate limit, body checks and the account markers. Three vars, set in both e
   counting the declared `size` of the upload; a replace frees the old original's bytes.
 - `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most upload URLs one owner may get in a rolling 24
   hours, new uploads and replaces alike (each is a tiling job), counting this one. It bounds
-  tiling compute per account (a job is about $0.01); the global backstops are the 60-per-minute
-  `UPLOAD_URL_LIMITER` and the tiler's `max_concurrency`.
+  tiling compute per account (a job is about $0.01); the per-minute backstop is the 60-per-minute
+  `UPLOAD_URL_LIMITER`, and across all accounts the global daily ceiling below and the tiler's
+  `max_concurrency`.
 
 Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
 limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
@@ -2017,6 +2018,78 @@ binding can't express a day (its period is 10 or 60 seconds), which is why the c
 
 To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
 (the vars are in the generated `env.d.ts`) and deploy.
+
+**Global daily ceiling (the kill switch).** Every limit above is per Auth0 sub, so many throwaway
+accounts would add up without bound. One `UploadCeiling` Durable Object (`src/ceiling.ts`,
+binding `UPLOAD_CEILING`, `idFromName('global')`) counts the upload URLs issued and their declared
+bytes per UTC day across every owner, pano originals and floor-plan images alike. Two vars, in both
+env blocks:
+
+- `MAX_UPLOADS_PER_DAY_GLOBAL` (`2000`): each URL is about one tiling job (about $0.01), so this
+  holds tiling to roughly $20 a day, under the roughly $45 a day the five tiler containers
+  (`max_concurrency: 5`) cost running flat out. It is 40 accounts' worth of the per-owner daily
+  limit.
+- `MAX_UPLOAD_BYTES_PER_DAY_GLOBAL` (`214748364800`, 200 GiB): at R2's $0.015 per GB-month, a full
+  day adds about $3 a month of originals (plus their tiles), so a month at the ceiling adds about
+  $90 a month of originals: slow enough for the billing alerts to catch.
+  Real panoramas are 10-40 MB, so the upload count binds first; this one binds when someone sends
+  near-150 MiB files.
+
+The check comes last, after the owner's own limits pass (a request they refuse costs no DO call),
+and is one RPC per URL: `reserve` reads today's count, and either counts the URL (one upload, its
+declared `size`) or refuses it, in one synchronous step (the SQLite-backed `storage.kv` API, no
+await between the read and the write), so parallel requests can't overshoot. If anything after
+it fails (the upload-log write, or signing the URL), no URL is issued and the reservation is given
+back (`release`, best-effort in `waitUntil`). It counts URLs issued, not PUTs, so it only bounds
+tiling cost once each URL is single-use (#138); until then one URL can be PUT to again and again.
+An upload that would pass either limit gets `503 {"error":"uploads paused"}` with `Retry-After` set to
+the seconds until 00:00 UTC, and nothing is logged against the owner; the admin app says "Uploads
+are paused for today. Try again tomorrow." and stops the rest of a multi-photo pick. Near the byte limit a large file can be refused while
+smaller ones still get through; the copy says "paused" either way. The first refusal of each day
+logs `upload ceiling reached` (a `console.warn` from the DO, visible in
+Workers Logs and `wrangler tail`); the health check doesn't alert on it.
+
+If the DO can't be reached, a single failure fails open (the per-owner limits still hold, so that
+is no worse than before the ceiling existed), but three failures in a row in one isolate fail
+closed with `502 {"error":"storage unavailable"}` until a call gets through. The count lives in
+the isolate, so each new isolate still lets its first couple of requests through during a lasting
+outage: this limits how far an outage lifts the ceiling rather than closing it outright. Empty vars lift a limit (both empty: no DO call at all); a
+non-integer refuses every upload (`500`), as for the owner quotas.
+
+The trade-off is deliberate: someone with enough accounts can use up the day's ceiling and pause
+uploads for everyone until 00:00 UTC. A day without uploads costs less than an unbounded bill, and
+it leaves time to disable the accounts (Takedown) and decide whether to raise the limit.
+
+Operator steps, all by editing `services/upload-api/wrangler.jsonc` in both env blocks and
+deploying (vars changed in the dashboard are overwritten by the next deploy):
+
+- **Raise it** (real traffic is close): raise either var. Today's count is kept, so a raised limit
+  reopens uploads at once if today's count is under it.
+- **Pause uploads now** (an attack, a runaway bill): set `MAX_UPLOADS_PER_DAY_GLOBAL` to `"0"`.
+  Every upload URL gets the 503 until it is set back.
+- **Reset it**: there is no reset route; the count starts again at 00:00 UTC on its own. To reopen
+  uploads earlier the same day, raise the limit above today's count.
+
+**Floor-plan images.** Plan images live under the owner-free `pub/plans/<tourId>/`, so counting
+them in `MAX_BYTES_PER_OWNER` would mean listing every tour's prefix on each request. Instead a plan
+upload lists only its own tour's prefix (one more `ListObjectsV2`) and is refused with
+`403 {"error":"plan storage limit reached"}` once the images there plus the declared size would pass
+`MAX_PLAN_BYTES_PER_TOUR` (16 MiB, four full-size plans, in `src/index.ts`). That covers the
+live image, the one a share link may still show, and a few uploaded but not saved; `admin-api`
+deletes unused ones an hour old on the tour's next save. The listing follows every page, but the
+cap is soft: it only sees images already uploaded, not URLs issued and not yet used. The admin
+uploads at once, so in normal use a tour stays near 16 MiB. A client that takes its URLs first and
+uploads after can get a day's worth through one check (the owner's 50 URLs at 4 MiB), so one tour
+can reach about 216 MiB, and over many days an owner's plan images across 200 tours about 40 GiB.
+Plan uploads also count toward the daily limit and the global ceiling, which bound how fast that
+can grow.
+
+**Not counted: tiles and JSON.** Tiles (`tiles/<panoId>/`) are derived from originals and grow with the
+original's pixels (capped by the tiler's pixel limit), so `MAX_BYTES_PER_OWNER` and the pano limit
+bound them indirectly; superseded tile versions are deleted by the daily
+`tile-gc/` sweep. There is no cheap exact per-owner signal (tiles sit under an owner-free prefix and
+are written by the container after the URL is issued), so they aren't counted. Configs, tours and
+bundles are small JSON capped by `admin-api`'s own limits.
 
 ### Report link
 

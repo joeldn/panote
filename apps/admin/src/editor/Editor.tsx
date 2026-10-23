@@ -40,7 +40,12 @@ import { LibraryPicker } from './LibraryPicker.js';
 import { MapPanel } from './MapPanel.js';
 import { newId, pointSizeForDrag, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
-import { PlanImageError, preparePlanImage, uploadPlanImage } from './plan-image.js';
+import {
+  planErrorMessage,
+  PlanImageError,
+  preparePlanImage,
+  uploadPlanImage,
+} from './plan-image.js';
 import { PointerLayer, type LayerPoint } from './PointerLayer.js';
 import {
   isLanding,
@@ -510,9 +515,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       dispatch({ type: 'tour/plan', plan });
     } catch (e) {
       if (!(e instanceof PlanImageError)) console.error('plan image upload failed', e);
-      setPlanError(
-        e instanceof PlanImageError ? e.message : 'The image couldn’t be added. Try again.',
-      );
+      setPlanError(planErrorMessage(e));
     } finally {
       setPlanUploading(false);
     }

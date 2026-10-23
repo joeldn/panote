@@ -156,6 +156,10 @@ const isUploading = (j: Job): boolean =>
 function limitOf(e: unknown): UploadLimit {
   if (!(e instanceof ApiError)) return null;
   if (e.status === 429) return 'rate';
+  // The service-wide daily ceiling (upload-api's 503 'uploads paused').
+  if (e.status === 503) {
+    return (e.body as { error?: unknown } | null)?.error === 'uploads paused' ? 'paused' : null;
+  }
   // upload-api answers 403 only for a quota ('pano limit reached', 'storage limit reached',
   // 'daily upload limit reached') or 'account disabled', and 410 only for 'account deleted'.
   if (e.status === 410) return 'account';
