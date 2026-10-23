@@ -66,6 +66,37 @@ describe('editor model', () => {
     expect(sameValue({ a: 1, b: undefined }, { a: 1 })).toBe(true);
   });
 
+  it('sets a scene description trimmed, and removes a blank one', () => {
+    let docs = run({
+      type: 'scene/description',
+      panoId: 'a',
+      description: '  Busy.\nQuiet at night. ',
+    });
+    expect(configOf(docs, 'a').current.description).toBe('Busy.\nQuiet at night.');
+    expect(dirtyKeys(docs)).toEqual(['pano:a']);
+    docs = editorReducer(docs, { type: 'scene/description', panoId: 'a', description: ' \n ' })!;
+    expect('description' in configOf(docs, 'a').current).toBe(false);
+    expect(dirtyKeys(docs)).toEqual([]);
+  });
+
+  it('translates a scene description beside the title, and drops an emptied one', () => {
+    let docs = run(
+      { type: 'scene/title', panoId: 'a', title: 'Platz', lang: 'de' },
+      { type: 'scene/description', panoId: 'a', description: ' Belebt. ', lang: 'de' },
+    );
+    expect(configOf(docs, 'a').current.i18n).toEqual({
+      de: { title: 'Platz', description: 'Belebt.' },
+    });
+    expect(configOf(docs, 'a').current.description).toBeUndefined();
+    docs = editorReducer(docs, {
+      type: 'scene/description',
+      panoId: 'a',
+      description: '',
+      lang: 'de',
+    })!;
+    expect(configOf(docs, 'a').current.i18n).toEqual({ de: { title: 'Platz' } });
+  });
+
   it('aims, nudges and removes a connection as a link hotspot', () => {
     let docs = run({ type: 'link/set', from: 'a', to: 'b', yaw: 1, title: 'Church' });
     const link = findLink(configOf(docs, 'a').current, 'b');
@@ -354,5 +385,44 @@ describe('editor model: the floor plan', () => {
     docs = editorReducer(docs, { type: 'tour/plan', plan: null })!;
     expect(docs.tour.current).not.toHaveProperty('plan');
     expect(dirtyKeys(docs)).toEqual([]);
+  });
+});
+
+describe('editor model: scene order', () => {
+  const order = (docs: EditorDocs) => docs.tour.current.scenes.map((s) => s.panoId);
+  const move = (panoId: string, to: number): EditorAction => ({
+    type: 'tour/move-scene',
+    panoId,
+    to,
+  });
+
+  it('moves a scene to a new place in the list, as a tour edit', () => {
+    const docs = run(move('fresh', 0));
+    expect(order(docs)).toEqual(['fresh', 'a', 'b', 'gone']);
+    expect(dirtyKeys(docs)).toEqual(['tour']);
+    expect(order(run(move('a', 2)))).toEqual(['b', 'gone', 'a', 'fresh']);
+  });
+
+  it('keeps each scene’s map position with it', () => {
+    const docs = run({ type: 'map/place', panoId: 'b', x: 0.25, y: 0.75 }, move('b', 3));
+    expect(docs.tour.current.scenes[3]).toEqual({ panoId: 'b', mapX: 0.25, mapY: 0.75 });
+  });
+
+  it('is undone by moving it back: the tour is clean again', () => {
+    const docs = run(move('gone', 0), move('gone', 2));
+    expect(order(docs)).toEqual(['a', 'b', 'gone', 'fresh']);
+    expect(dirtyKeys(docs)).toEqual([]);
+  });
+
+  it('clamps the target and ignores an unknown scene', () => {
+    expect(order(run(move('a', 99)))).toEqual(['b', 'gone', 'fresh', 'a']);
+    expect(order(run(move('fresh', -3)))).toEqual(['fresh', 'a', 'b', 'gone']);
+    expect(dirtyKeys(run(move('nope', 0)))).toEqual([]);
+    expect(dirtyKeys(run(move('a', Number.NaN)))).toEqual([]);
+  });
+
+  it('leaves a starred start scene alone wherever it moves', () => {
+    const docs = run(move('b', 3));
+    expect(docs.tour.current.startPanoId).toBe('b');
   });
 });

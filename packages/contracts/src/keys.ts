@@ -110,6 +110,10 @@ export const accountDeletionKey = (u: string): string =>
 // writes or removes it; account deletion leaves it, so a disabled owner stays so.
 export const accountDisabledKey = (u: string): string =>
   `${ACCOUNTS_ROOT}${encodeId(u)}/disabled.json`;
+// When admin-api first saw the account ({ v, since }): the oldest original it had at the
+// owner's first publish. Fixes the account's age for the new-account hold on Explore and
+// search indexing. Written once, create-only; account deletion removes it.
+export const accountSinceKey = (u: string): string => `${ACCOUNTS_ROOT}${encodeId(u)}/since.json`;
 
 // Operator lookup: which owner holds a tour, written when admin-api creates or publishes
 // it, so the takedown script needn't scan every owner (it still does for older tours).
@@ -234,6 +238,12 @@ export const slugKey = (slug: string): string => {
 const STORED_SLUG_RE = /^[a-z0-9-]{1,64}$/;
 export const storedSlugKey = (slug: string): string | null =>
   STORED_SLUG_RE.test(slug) ? `${SLUGS_ROOT}${slug}.json` : null;
+// A released slug's cooling-off hold ({ v, owner, expiresAt }, owner a SHA-256 of the
+// owner segment): until it expires only that owner may claim the slug again, so an old
+// share link can't be taken over. Private, unlike slugs/: outside the CDN's WAF prefixes.
+export const SLUG_HOLDS_ROOT = 'slug-holds/';
+export const slugHoldKey = (slug: string): string | null =>
+  STORED_SLUG_RE.test(slug) ? `${SLUG_HOLDS_ROOT}${slug}.json` : null;
 
 // Explore (the public discovery list): private, read only through public-api's
 // GET /api/explore, never served raw (the CDN WAF rule only lets tiles/, pub/ and

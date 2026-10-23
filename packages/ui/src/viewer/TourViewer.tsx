@@ -1,6 +1,6 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
 import type { PanoViewerApi, View } from '@panote/viewer';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
 import { prefetchPano } from '../panote-viewer.js';
@@ -11,6 +11,7 @@ import { Compass } from './Compass.js';
 import { FloorLinks } from './FloorLinks.js';
 import { HotspotMarkers } from './HotspotMarkers.js';
 import { HotspotPanel } from './HotspotPanel.js';
+import { InfoPanel } from './InfoPanel.js';
 import { LanguagePicker } from './LanguagePicker.js';
 import { SceneMap, type SceneMapPlan } from './SceneMap.js';
 import type { ViewerHotspot, ViewerLinkArrow, ViewerTourGraph } from './types.js';
@@ -27,6 +28,8 @@ export interface TourViewerData {
   links: Record<string, Array<{ to: string; yaw: number; label?: string }>>;
   north: Record<string, number>;
   titles: Record<string, string>;
+  /** Each scene's description, plain text; a scene without one is left out. */
+  descriptions?: Record<string, string>;
   mapPositions: Record<string, { x: number; y: number }>;
   /** Scenes whose north is set: the map shows which way their view faces. */
   hasNorth?: Record<string, boolean>;
@@ -47,6 +50,11 @@ export interface TourViewerProps {
   data: TourViewerData;
   /** The tour's title, for the breadcrumb and the stage label. */
   title: string;
+  /**
+   * The tour's description, plain text. With it, or a description on the scene on
+   * screen, an About button in the controls opens both.
+   */
+  description?: string | undefined;
   /** Tiles base, e.g. `tilesBaseUrl(config)`. */
   baseUrl: string;
   /** Scene to open on, with its own initial view. Must be a scene of `data.tour`. */
@@ -251,6 +259,7 @@ function LinkPrefetch({ targets, prefetch }: LinkPrefetchProps) {
 export function TourViewer({
   data,
   title,
+  description,
   baseUrl,
   start,
   startView,
@@ -295,6 +304,10 @@ export function TourViewer({
   );
   const arrived = arrivedOn?.viewer === viewer && arrivedOn.baseUrl === baseUrl;
   const [active, setActive] = useState<ViewerHotspot | null>(null);
+  // The About panel; it and a point's panel take the same place, so one closes the other.
+  const [infoOpen, setInfoOpen] = useState(false);
+  const infoButton = useRef<HTMLButtonElement>(null);
+  const infoId = useId();
   const [autoRotate, setAutoRotate] = useState(
     () => data.settings.autoRotate && !prefersReducedMotion(),
   );
@@ -346,11 +359,23 @@ export function TourViewer({
   };
   const landed = (id: string) => {
     setShown(id);
+    // A scene with nothing to say closes About, so it doesn't reopen by itself (and take
+    // focus) on the next scene that has a description. Between two described scenes it
+    // stays open.
+    if (!description && !data.descriptions?.[id]) setInfoOpen(false);
     if (viewer) setArrivedOn({ viewer, baseUrl });
     if (reported.current === id) return;
     reported.current = id;
     onSceneChange?.(id);
   };
+  const openPoint = (h: ViewerHotspot | null) => {
+    setActive(h);
+    if (h) setInfoOpen(false);
+  };
+  // The scene on screen's, kept while a change is in flight: the old pano is still
+  // shown, and an About panel that unmounted mid-move would drop focus.
+  const sceneDescription = data.descriptions?.[panoId];
+  const hasInfo = !!description || !!sceneDescription;
   const loadFailed = (error: unknown, id: string) => {
     // A failed change leaves the old pano on screen: go back to it, which
     // also lets the visitor try the same link again.
@@ -404,6 +429,7 @@ export function TourViewer({
         autoRotate={autoRotate && !gyro.on}
         transition
         embed={embed}
+        lostNotice
         {...(createViewer && { createViewer })}
         aria-label={`${title}: ${data.titles[panoId] ?? ''}`}
         onViewer={setViewer}
@@ -420,7 +446,7 @@ export function TourViewer({
           hotspots={hotspots}
           links={links}
           active={active}
-          setActive={setActive}
+          setActive={openPoint}
           onGo={(link) => go(link.to, { yaw: link.yaw })}
         />
         {bar && (
@@ -443,6 +469,17 @@ export function TourViewer({
           </div>
         )}
         {!bar && picker}
+        {infoOpen && hasInfo && (
+          <InfoPanel
+            id={infoId}
+            title={title}
+            description={description}
+            sceneTitle={data.titles[panoId]}
+            sceneDescription={sceneDescription}
+            returnFocus={infoButton}
+            onClose={() => setInfoOpen(false)}
+          />
+        )}
         {overlay?.(panoId)}
         {showCompass && <Compass className="pn-tour__compass" />}
         {showMap && !single && scenes.length > 1 && (
@@ -471,6 +508,22 @@ export function TourViewer({
             embed ? (fullscreenHref ? { href: fullscreenHref(panoId) } : 'none') : 'pseudo'
           }
         >
+          {hasInfo && (
+            <button
+              ref={infoButton}
+              type="button"
+              className="pn-controls__btn"
+              aria-label="About this tour"
+              aria-expanded={infoOpen}
+              aria-controls={infoOpen ? infoId : undefined}
+              onClick={() => {
+                if (!infoOpen) setActive(null);
+                setInfoOpen(!infoOpen);
+              }}
+            >
+              <i className="fa-solid fa-circle-info" aria-hidden="true" />
+            </button>
+          )}
           {gyro.available && (
             <button
               type="button"

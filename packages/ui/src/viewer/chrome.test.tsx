@@ -542,7 +542,7 @@ describe('HotspotPanel', () => {
     const link = screen.getByRole('link', { name: 'Visit example.org ↗' });
     expect(link.getAttribute('href')).toBe('https://example.org/history');
     expect(link.getAttribute('target')).toBe('_blank');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('rel')).toBe('nofollow ugc noopener noreferrer');
     expect(container.querySelector('img, audio, video, iframe')).toBeNull();
   });
 
@@ -573,7 +573,7 @@ describe('HotspotPanel', () => {
     const link = screen.getByRole('link', { name: label });
     expect(link.getAttribute('href')).toBe(url);
     expect(link.getAttribute('target')).toBe('_blank');
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('rel')).toBe('nofollow ugc noopener noreferrer');
   });
 });
 

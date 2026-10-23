@@ -26,7 +26,8 @@ import {
 // Daily backup of the JSON that defines user content (BACKUP_SOURCES in
 // @internal/contracts), copied to backup/<YYYY-MM-DD>/<original key> in the same
 // bucket and kept BACKUP_RETENTION_DAYS. It runs on its own cron (BACKUP_CRON,
-// every 15 minutes), so it has a whole invocation's subrequest budget to itself.
+// every 15 minutes), so it has an invocation's subrequest budget, shared only with the
+// small, capped retry of queued CDN purges (purge.ts, RETRY_RUN_*).
 // Each run does at most BACKUP_RUN_BUDGET R2 operations and records where it got
 // to in backup/progress.json; the next run carries on from there, past midnight if
 // it must, and a new day's set starts only once the last one is complete. Once a

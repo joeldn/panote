@@ -101,7 +101,7 @@ body {
   margin: 0 auto;
   padding: 54px 30px 46px;
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
   gap: 30px;
 }
 

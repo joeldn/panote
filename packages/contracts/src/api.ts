@@ -271,6 +271,9 @@ export const ReauthRequiredSchema = z.object({ error: z.literal(REAUTH_REQUIRED_
 // 410 from every owner write (and upload-url) once the account is marked.
 export const AccountDeletedSchema = z.object({ error: z.literal('account deleted') });
 
+// How many linked subs a deletion marker holds at most, across retries.
+export const MARKER_MAX_LINKED_SUBS = MAX_LINKED_SUBS * 4;
+
 // The marker at accountDeletionKey. `sub` lets the sweep rebuild the owner's keys.
 export const AccountDeletionRecordSchema = z.object({
   v: z.literal(1),
@@ -278,8 +281,13 @@ export const AccountDeletionRecordSchema = z.object({
   requestedAt: z.string(),
   completedAt: z.string().optional(),
   // Identities linked into this user (the token's LINKED_SUBS_CLAIM): their
-  // prefixes are deleted with the account's own.
-  linkedSubs: z.array(z.string().min(1)).max(MAX_LINKED_SUBS).optional(),
+  // prefixes are deleted with the account's own. Retries can add to it, so it may
+  // grow past one token's MAX_LINKED_SUBS; the bound only keeps the marker small.
+  linkedSubs: z.array(z.string().min(1)).max(MARKER_MAX_LINKED_SUBS).optional(),
+  // Linked subs an earlier, completed run already deleted. A retry that reopens the
+  // delete for a new linked sub never deletes under these again: since completion,
+  // one may have been unlinked and belong to a new, separate user.
+  completedLinkedSubs: z.array(z.string().min(1)).max(MARKER_MAX_LINKED_SUBS).optional(),
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
 
@@ -340,10 +348,28 @@ export const OperatorTakedownRequestSchema = z.object({
   action: z.enum(OPERATOR_TAKEDOWN_ACTIONS),
 });
 export type OperatorTakedownRequest = z.infer<typeof OperatorTakedownRequestSchema>;
-// 200: done. `purged` counts the public keys queued for a CDN purge.
+// What a CDN purge did, item by item (a prefix or a URL each). `purged`: Cloudflare took
+// them. `pending`: they still failed after retries, or didn't fit in the request's budget,
+// and admin-api's cron retries them every 15 minutes. `failed`: neither (not configured,
+// refused outright and dead-lettered, or the queue couldn't be written). `status` sums it
+// up: `failed` if any failed, else `pending` if any are queued; `none` had nothing to purge.
+export const CDN_PURGE_STATUSES = ['none', 'purged', 'pending', 'failed', 'skipped'] as const;
+export const CdnPurgeOutcomeSchema = z.object({
+  status: z.enum(CDN_PURGE_STATUSES),
+  purged: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+});
+export type CdnPurgeOutcome = z.infer<typeof CdnPurgeOutcomeSchema>;
+// 200: done. `purged` is a misnomer kept for older scripts: it is the number of purge
+// targets PLANNED (public keys handed to the purge), not purged. What the purge actually
+// did is `purge` (`purge.purged` went through).
 export const OperatorTakedownOkSchema = z.object({
   action: z.enum(OPERATOR_TAKEDOWN_ACTIONS),
+  /** Planned purge targets, whatever became of them; see `purge` for the outcome. */
   purged: z.number().int().nonnegative(),
+  // Optional so this script still reads an admin-api deployed before it.
+  purge: CdnPurgeOutcomeSchema.optional(),
 });
 export type OperatorTakedownOk = z.infer<typeof OperatorTakedownOkSchema>;
 

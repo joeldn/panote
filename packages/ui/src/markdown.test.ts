@@ -25,7 +25,7 @@ describe('renderMarkdown', () => {
 
   it('renders safe http links', () => {
     expect(renderMarkdown('[site](https://example.com)')).toBe(
-      '<p><a href="https://example.com" target="_blank" rel="noopener noreferrer">site</a></p>',
+      '<p><a href="https://example.com" target="_blank" rel="nofollow ugc noopener noreferrer">site</a></p>',
     );
   });
 
@@ -78,7 +78,7 @@ describe('renderMarkdown', () => {
     // regex runs, `&` in the URL is already `&amp;`. Escaping it again here
     // would turn it into `&amp;amp;`, corrupting the link.
     expect(renderMarkdown('[site](https://example.com?a=1&b=2)')).toBe(
-      '<p><a href="https://example.com?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">site</a></p>',
+      '<p><a href="https://example.com?a=1&amp;b=2" target="_blank" rel="nofollow ugc noopener noreferrer">site</a></p>',
     );
   });
 
@@ -120,7 +120,7 @@ describe('renderMarkdown', () => {
   });
   describe('link URLs survive the emphasis and code passes', () => {
     const a = (href: string, label: string) =>
-      `<p><a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a></p>`;
+      `<p><a href="${href}" target="_blank" rel="nofollow ugc noopener noreferrer">${label}</a></p>`;
 
     it('keeps `*` in a URL and in the label', () => {
       expect(renderMarkdown('[a *b](https://x.com/c*d)')).toBe(a('https://x.com/c*d', 'a *b'));
@@ -136,7 +136,7 @@ describe('renderMarkdown', () => {
 
     it('still styles the label and the text around the link', () => {
       expect(renderMarkdown('*see* [**bold**](https://x.com/a*b*c) `c`')).toBe(
-        '<p><em>see</em> <a href="https://x.com/a*b*c" target="_blank" rel="noopener noreferrer">' +
+        '<p><em>see</em> <a href="https://x.com/a*b*c" target="_blank" rel="nofollow ugc noopener noreferrer">' +
           '<strong>bold</strong></a> <code>c</code></p>',
       );
     });

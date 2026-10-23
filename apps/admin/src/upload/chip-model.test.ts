@@ -198,6 +198,20 @@ describe('chipModel', () => {
     expect(actions(active(f, { limited: 'rate' }))).toEqual(['retry-upload']);
   });
 
+  it('uploads paused for everyone get their own title, and no retry until tomorrow', () => {
+    const f = {
+      phase: 'failed',
+      panoId: null,
+      stage: 'presign',
+      message: 'Uploads are paused for today. Try again tomorrow.',
+    } as UploadState;
+    expect(chipModel(active(f, { limited: 'paused', skipped: 2 }))).toMatchObject({
+      title: 'Uploads paused',
+      note: 'Uploads are paused for today. Try again tomorrow. 2 more photos weren’t uploaded. Add them again tomorrow.',
+      actions: [],
+    });
+  });
+
   it('a disabled or deleted account gets its own title, no retry, and no "add again"', () => {
     const f = {
       phase: 'failed',

@@ -274,6 +274,17 @@ function placeOnMap(
   };
 }
 
+/** `tour` with `panoId` moved to index `to` (clamped); the same tour when nothing moves. */
+function moveScene(tour: TourDoc, panoId: string, to: number): TourDoc {
+  const from = tour.scenes.findIndex((s) => s.panoId === panoId);
+  if (from < 0 || !Number.isFinite(to)) return tour;
+  const at = Math.min(tour.scenes.length - 1, Math.max(0, Math.trunc(to)));
+  if (at === from) return tour;
+  const scenes = tour.scenes.filter((_, i) => i !== from);
+  scenes.splice(at, 0, tour.scenes[from]!);
+  return { ...tour, scenes };
+}
+
 export type TranslationPatch = Partial<{ title: string | null; body: string | null }>;
 
 export type EditorAction =
@@ -287,6 +298,12 @@ export type EditorAction =
   | { type: 'tour/settings'; settings: Partial<TourSettings> }
   | { type: 'tour/start'; panoId: string }
   | { type: 'tour/remove-scene'; panoId: string }
+  /**
+   * Moves a scene to index `to` of the scene list (clamped), the order visitors see it in.
+   * With no starred start scene the first one opens the tour, so moving a scene to the
+   * top makes it the start; a starred one stays the start wherever it goes.
+   */
+  | { type: 'tour/move-scene'; panoId: string; to: number }
   /** Puts a scene on the floor plan, or moves it: 0..1 fractions, clamped. */
   | { type: 'map/place'; panoId: string; x: number; y: number }
   | { type: 'map/remove'; panoId: string }
@@ -295,6 +312,8 @@ export type EditorAction =
   /** The floor-plan image; null removes it. */
   | { type: 'tour/plan'; plan: TourPlan | null }
   | { type: 'scene/title'; panoId: string; title: string; lang?: string }
+  /** Stored trimmed; blank removes it (or, with `lang`, its translation). */
+  | { type: 'scene/description'; panoId: string; description: string; lang?: string }
   | { type: 'scene/start-view'; panoId: string; view: View }
   | { type: 'scene/north'; panoId: string; north: number }
   | { type: 'point/add'; panoId: string; hotspot: Hotspot }
@@ -408,6 +427,8 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
           ? { ...rest, scenes }
           : { ...rest, scenes, startPanoId };
       });
+    case 'tour/move-scene':
+      return withTour(docs, (t) => moveScene(t, action.panoId, action.to));
     case 'map/place':
       return withTour(docs, (t) =>
         placeOnMap(t, new Map([[action.panoId, { x: action.x, y: action.y }]])),
@@ -438,6 +459,19 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
         );
       }
       return withConfig(docs, action.panoId, (c) => ({ ...c, title: action.title }));
+    }
+    case 'scene/description': {
+      const { lang } = action;
+      const description = action.description.trim();
+      if (lang) {
+        return withConfig(docs, action.panoId, (c) =>
+          withI18n(c, setTranslation(c.i18n, lang, 'description', description || null)),
+        );
+      }
+      return withConfig(docs, action.panoId, (c) => {
+        const { description: _old, ...rest } = c;
+        return description ? { ...rest, description } : rest;
+      });
     }
     case 'scene/start-view':
       return withConfig(docs, action.panoId, (c) => ({

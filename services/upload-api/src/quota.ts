@@ -30,7 +30,7 @@ export const UPLOAD_LOG_PRUNE_MAX = 50;
 
 // A var that isn't a non-negative integer is a config mistake: fail closed
 // (no uploads) rather than silently lift the limit.
-const parseLimit = (name: string, raw: string | undefined): number | null => {
+export const parseLimit = (name: string, raw: string | undefined): number | null => {
   if (raw === undefined || raw.trim() === '') return null;
   const n = Number(raw);
   if (!Number.isSafeInteger(n) || n < 0) throw new Error(`${name} must be a non-negative integer`);

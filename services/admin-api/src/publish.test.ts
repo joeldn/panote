@@ -1,14 +1,18 @@
 import {
+  accountSinceKey,
   configKey,
   deletingKey,
   encodeId,
   manifestKey,
+  OPERATOR_TAKEDOWN_PATH,
+  OPERATOR_TOKEN_HEADER,
   originalKey,
   PublishedTourSchema,
   PublishOkSchema,
   publishKey,
   pubTourKey,
   sharingStoppedKey,
+  slugHoldKey,
   slugKey,
   tourKey,
   SlugPutOkSchema,
@@ -36,7 +40,10 @@ import {
   parseAliasDays,
   publishTour,
   renameSlug,
+  sweepExpiredAliases,
+  unpublish,
 } from './publish.js';
+import { SLUG_HOLD_DAYS, TAKEDOWN_HOLD_OWNER } from './slug-hold.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
@@ -636,7 +643,7 @@ describe('DELETE /api/admin/tours/:tourId/publish', () => {
     expect(again.status).toBe(200);
   });
 
-  it('releases its rename aliases too, so another tour can claim them', async () => {
+  it('releases its rename aliases too, so another of my tours can claim them', async () => {
     const tourId = await publishedTour('unpub-alias', 'unpub-alias-old');
     await putSlug(tourId, 'unpub-alias-new');
     expect((await unpublishReq(tourId)).status).toBe(204);
@@ -737,6 +744,214 @@ describe('DELETE /api/admin/tours/:tourId/publish', () => {
     expect(await env.BUCKET.head(slugKey('del-tour-pub-slug'))).toBeNull();
     expect(await env.BUCKET.head(pubTourKey(tourId))).toBeNull();
     expect(await env.BUCKET.head(publishKey(MY_SUB, tourId))).toBeNull();
+  });
+});
+
+describe('released slugs cool off (slug-hold.ts)', () => {
+  const holdOf = (slug: string) =>
+    readJson<{ owner: string; expiresAt: string }>(slugHoldKey(slug)!);
+  const expireHold = async (slug: string) => {
+    const hold = (await holdOf(slug))!;
+    const expiresAt = new Date(Date.now() - 1000).toISOString();
+    await env.BUCKET.put(slugHoldKey(slug)!, JSON.stringify({ ...hold, expiresAt }), {
+      customMetadata: { expiresAt },
+    });
+  };
+
+  it("another owner can't claim a slug I stopped sharing until the hold ends; I can", async () => {
+    const tourId = await publishedTour('hold-stop', 'hold-stop-slug');
+    await putSlug(tourId, 'hold-stop-new');
+    expect((await unpublishReq(tourId)).status).toBe(204);
+    // Both the live slug and the alias are held, privately and with no sub in them.
+    for (const slug of ['hold-stop-new', 'hold-stop-slug']) {
+      const hold = await holdOf(slug);
+      expect(Date.parse(hold!.expiresAt) - Date.now()).toBeGreaterThan(
+        (SLUG_HOLD_DAYS - 1) * DAY_MS,
+      );
+      expect(JSON.stringify(hold)).not.toContain('auth0');
+      expect(hold!.owner).not.toContain(encodeId(MY_SUB));
+    }
+    await readyPano('hold-stop-o1', 'other');
+    const theirs = await createTour('Theirs', ['hold-stop-o1'], 'other');
+    const taken = await publish(theirs, { slug: 'hold-stop-new' }, 'other');
+    expect(taken.status).toBe(409);
+    expect(await taken.json()).toEqual({ error: 'slug taken' });
+    expect(await env.BUCKET.head(slugKey('hold-stop-new'))).toBeNull();
+    // The same owner may take it back, from another tour as well.
+    const mine = await publishedTour('hold-stop-mine', 'hold-stop-new');
+    expect(await readSlug('hold-stop-new')).toEqual({ v: 1, kind: 'tour', tourId: mine });
+    // Once the hold is over, anyone may claim it.
+    await expireHold('hold-stop-slug');
+    expect((await publish(theirs, { slug: 'hold-stop-slug' }, 'other')).status).toBe(200);
+  });
+
+  it("a deleted tour's slug is held, and a rename can't reach a held slug either", async () => {
+    const tourId = await publishedTour('hold-del', 'hold-del-slug');
+    const r = await SELF.fetch(`https://x/api/admin/tours/${tourId}`, {
+      method: 'DELETE',
+      headers: bearer('me'),
+    });
+    expect(r.status).toBe(204);
+    expect(await holdOf('hold-del-slug')).not.toBeNull();
+    await readyPano('hold-del-o1', 'other');
+    const theirs = await createTour('Theirs too', ['hold-del-o1'], 'other');
+    expect((await publish(theirs, { slug: 'hold-del-other' }, 'other')).status).toBe(200);
+    expect((await putSlug(theirs, 'hold-del-slug', 'other')).status).toBe(409);
+  });
+
+  it('a default slug skips one another owner released', async () => {
+    const tourId = await publishedTour('hold-def', 'hold-def-x');
+    await putSlug(tourId, 'cool-off-title');
+    expect((await unpublishReq(tourId)).status).toBe(204);
+    await readyPano('hold-def-o1', 'other');
+    const theirs = await createTour('Cool off title', ['hold-def-o1'], 'other');
+    const r = await publish(theirs, {}, 'other');
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { slug: string }).slug).toBe('cool-off-title-2');
+  });
+
+  it('a claim that lands just after a release gives the slug back', async () => {
+    const tourId = await publishedTour('hold-race', 'hold-race-slug');
+    await readyPano('hold-race-o1', 'other');
+    const theirs = await createTour('Race', ['hold-race-o1'], 'other');
+    // The release (hold, then delete) lands between the claimant's hold check and its create.
+    const bucket = hookedBucket('get', slugHoldKey('hold-race-slug')!, async () => {
+      await unpublish(env.BUCKET, MY_SUB, tourId);
+    });
+    const out = await publishTour(bucket, OTHER_SUB, theirs, { slug: 'hold-race-slug' }, clock());
+    expect(out.status).toBe(409);
+    expect(await env.BUCKET.head(slugKey('hold-race-slug'))).toBeNull();
+  });
+
+  it('a hold that does not parse, or has the wrong shape, still holds the slug', async () => {
+    await readyPano('hold-bad-o1', 'other');
+    const theirs = await createTour('Corrupt hold', ['hold-bad-o1'], 'other');
+    const corrupt = ['not json', 'null', '[]', JSON.stringify({ v: 1, owner: 7 })];
+    const badDate = JSON.stringify({ v: 1, owner: 'x', expiresAt: 'soon' });
+    for (const [i, body] of [...corrupt, badDate].entries()) {
+      await env.BUCKET.put(slugHoldKey(`hold-bad-${i}`)!, body);
+      const r = await publish(theirs, { slug: `hold-bad-${i}` }, 'other');
+      expect(r.status).toBe(409);
+      expect(await env.BUCKET.head(slugKey(`hold-bad-${i}`))).toBeNull();
+    }
+  });
+
+  it('an R2 error reading a hold fails the claim instead of letting it through', async () => {
+    await readyPano('hold-err-o1', 'other');
+    const theirs = await createTour('Hold error', ['hold-err-o1'], 'other');
+    const holdKey = slugHoldKey('hold-err-slug')!;
+    const broken = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return (k: string) =>
+            k === holdKey ? Promise.reject(new Error('r2 down')) : target.get(k);
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      publishTour(broken, OTHER_SUB, theirs, { slug: 'hold-err-slug' }, clock()),
+    ).rejects.toThrow('r2 down');
+    expect(await env.BUCKET.head(slugKey('hold-err-slug'))).toBeNull();
+  });
+
+  it('a re-check that fails after the create gives the slug back and rethrows', async () => {
+    await readyPano('hold-recheck-o1', 'other');
+    const theirs = await createTour('Recheck', ['hold-recheck-o1'], 'other');
+    const holdKey = slugHoldKey('hold-recheck-slug')!;
+    let reads = 0;
+    // The first hold read (before the create) works; the re-check after it fails.
+    const flaky = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return (k: string) =>
+            k === holdKey && reads++ > 0 ? Promise.reject(new Error('r2 down')) : target.get(k);
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      publishTour(flaky, OTHER_SUB, theirs, { slug: 'hold-recheck-slug' }, clock()),
+    ).rejects.toThrow('r2 down');
+    expect(reads).toBe(2);
+    expect(await env.BUCKET.head(slugKey('hold-recheck-slug'))).toBeNull();
+  });
+
+  it.each(['unpublish', 'delete'])(
+    'an operator %s holds the slug for no owner, not even the one taken down',
+    async (action) => {
+      const slug = `hold-op-${action}`;
+      const tourId = await publishedTour(`hold-op-${action}`, `${slug}-old`);
+      expect((await putSlug(tourId, slug)).status).toBe(200);
+      const r = await SELF.fetch(`https://x${OPERATOR_TAKEDOWN_PATH}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          [OPERATOR_TOKEN_HEADER]: 'test-operator-token',
+        },
+        body: JSON.stringify({ sub: MY_SUB, tourId, action }),
+      });
+      expect(r.status).toBe(200);
+      expect((await holdOf(slug))?.owner).toBe(TAKEDOWN_HOLD_OWNER);
+      expect((await holdOf(`${slug}-old`))?.owner).toBe(TAKEDOWN_HOLD_OWNER);
+      // The owner can't take it straight back, from this tour or another one.
+      await readyPano(`hold-op-${action}-p2`);
+      const another = await createTour('Again', [`hold-op-${action}-p2`]);
+      expect((await publish(another, { slug })).status).toBe(409);
+      if (action === 'unpublish') expect((await publish(tourId, { slug })).status).toBe(409);
+      expect(await env.BUCKET.head(slugKey(slug))).toBeNull();
+    },
+  );
+
+  it('the daily cron sweeps expired holds and keeps live ones', async () => {
+    const tourId = await publishedTour('hold-sweep', 'hold-sweep-a');
+    await putSlug(tourId, 'hold-sweep-b');
+    expect((await unpublishReq(tourId)).status).toBe(204);
+    await expireHold('hold-sweep-a');
+    await sweepExpiredAliases(env.BUCKET, new Date());
+    expect(await holdOf('hold-sweep-a')).toBeNull();
+    expect(await holdOf('hold-sweep-b')).not.toBeNull();
+  });
+});
+
+describe("a new account's tours are held back (account-age.ts)", () => {
+  const holdClock = () => ({ now: new Date(), aliasDays: 30, holdDays: 7 });
+
+  it('a first publish latches the account age and marks the bundle heldUntil', async () => {
+    await readyPano('acct-new-p1', 'other');
+    const tourId = await createTour('New account', ['acct-new-p1'], 'other');
+    const out = await publishTour(
+      env.BUCKET,
+      OTHER_SUB,
+      tourId,
+      { visibility: 'public' },
+      holdClock(),
+    );
+    expect(out.status).toBe(200);
+    const since = await readJson<{ since: string }>(accountSinceKey(OTHER_SUB));
+    const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
+    expect(Date.parse(bundle.heldUntil!)).toBe(Date.parse(since!.since) + 7 * DAY_MS);
+    expect(PublishedTourSchema.parse(bundle).heldUntil).toBe(bundle.heldUntil);
+  });
+
+  it('an account older than the hold publishes with no heldUntil', async () => {
+    await readyPano('acct-old-p1');
+    const tourId = await createTour('Old account', ['acct-old-p1']);
+    await env.BUCKET.put(
+      accountSinceKey(MY_SUB),
+      JSON.stringify({ v: 1, since: new Date(Date.now() - 8 * DAY_MS).toISOString() }),
+    );
+    const out = await publishTour(
+      env.BUCKET,
+      MY_SUB,
+      tourId,
+      { visibility: 'public' },
+      holdClock(),
+    );
+    expect(out.status).toBe(200);
+    expect((await readJson<PublishedTour>(pubTourKey(tourId)))!.heldUntil).toBeUndefined();
   });
 });
 
@@ -842,7 +1057,7 @@ const hookedBucket = (op: 'get' | 'put', key: string, fn: () => Promise<unknown>
   });
 };
 
-const clock = () => ({ now: new Date(), aliasDays: 30 });
+const clock = () => ({ now: new Date(), aliasDays: 30, holdDays: 0 });
 
 const publisherFor = (tourId: string) => env.PUBLISHER.get(env.PUBLISHER.idFromName(tourId));
 
@@ -1035,7 +1250,7 @@ describe('alias edge cases', () => {
     // No cron has run: every expired alias is still in R2.
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + (DEFAULT_SLUG_ALIAS_DAYS + 1) * DAY_MS);
-    const clock = { now: new Date(), aliasDays: DEFAULT_SLUG_ALIAS_DAYS };
+    const clock = { now: new Date(), aliasDays: DEFAULT_SLUG_ALIAS_DAYS, holdDays: 0 };
     const out = await renameSlug(env.BUCKET, MY_SUB, tourId, 'alias-aged-next', clock);
     expect(out.status).toBe(200);
     expect(await readSlug('alias-aged-0')).toMatchObject({ kind: 'redirect' });

@@ -17,8 +17,10 @@ import {
   type ReactNode,
 } from 'react';
 
+import { Button } from './Button.js';
 import { cx } from './cx.js';
 import { panoteViewerPreset } from './panote-viewer.js';
+import { stagePage } from './stage-page.js';
 import { StageEventsContext, type StageEvents } from './stage-events.js';
 import { PanoViewerContext } from './viewer-context.js';
 
@@ -136,6 +138,12 @@ export interface PanoStageProps {
    * a tap or focus), rather than zooming. Changing it recreates the viewer.
    */
   embed?: boolean;
+  /**
+   * Says so over the stage while the WebGL context is lost (often a phone out of
+   * graphics memory), with a Reload button, instead of leaving it black. It goes
+   * once the context is restored and the viewer reloads the scene by itself.
+   */
+  lostNotice?: boolean;
   /** Read once when the viewer is created. */
   options?: StageViewerOptions;
   onViewer?: (viewer: PanoViewerApi | null) => void;
@@ -183,6 +191,7 @@ export function PanoStage({
   autoRotate = false,
   transition = false,
   embed = false,
+  lostNotice = false,
   options,
   onViewer,
   onSceneChange,
@@ -203,6 +212,8 @@ export function PanoStage({
   const [restores, setRestores] = useState(0);
   // The browser has no WebGL2, so there is no viewer to show.
   const [unsupported, setUnsupported] = useState(false);
+  // Between the viewer's context-lost and context-restored: nothing can draw.
+  const [lost, setLost] = useState(false);
   // The viewer, a marker or a point's panel has keyboard focus: auto-rotate holds still.
   const [held, setHeld] = useState(false);
   // The viewer's idle window, what auto-rotate was last set to on it, the resume in
@@ -288,7 +299,11 @@ export function PanoStage({
         landed.current = cur.viewer === v && cur.panoId === id ? cur : null;
         callbacks.current.onSceneChange?.(id);
       }),
-      v.on('context-restored', () => setRestores((n) => n + 1)),
+      v.on('context-lost', () => setLost(true)),
+      v.on('context-restored', () => {
+        setLost(false);
+        setRestores((n) => n + 1);
+      }),
       // The viewer's own reload after a restore has no promise to reject.
       v.on('load-error', ({ id, error }) => {
         // That pano is no longer on screen (the restore left the stage blank),
@@ -327,6 +342,7 @@ export function PanoStage({
       for (const off of unsubscribe) off();
       callbacks.current.onViewer?.(null);
       setViewer(null);
+      setLost(false);
       v.dispose();
     };
   }, [baseUrl, embed]);
@@ -516,6 +532,15 @@ export function PanoStage({
           <div className="pn-stage__overlay">{children}</div>
         </StageEventsContext.Provider>
       </PanoViewerContext.Provider>
+      {/* Over the chrome too: none of it works until the context is back. */}
+      {lostNotice && lost && panoId && (
+        <div className="pn-stage__lost" role="alert">
+          <p className="pn-stage__lost-text">The viewer ran out of graphics memory.</p>
+          <Button size="sm" variant="glass" pill onClick={() => stagePage.reload()}>
+            Reload
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

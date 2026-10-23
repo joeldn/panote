@@ -83,6 +83,7 @@ describe('toViewerTour', () => {
     expect(v.hasNorth).toEqual({ hall: true, nave: false });
     expect(v.plan).toBeNull();
     expect(v.titles).toEqual({ hall: 'Hall', nave: 'Nave' });
+    expect(v.descriptions).toEqual({});
     expect(v.mapPositions).toEqual({ hall: { x: 0.2, y: 0.4 } });
     expect(v.missing).toEqual([]);
     expect(v.settings).toEqual(DEFAULT_TOUR_SETTINGS);
@@ -106,6 +107,13 @@ describe('toViewerTour', () => {
     for (const [doc, start] of docs) {
       expect(toViewerTour(doc, { hall, nave }).tour?.start).toBe(start);
     }
+  });
+
+  it('lists the scenes in the tour’s order, not the configs’ (the viewer’s scene list)', () => {
+    const doc = tour({ scenes: [{ panoId: 'nave' }, { panoId: 'hall' }] });
+    const v = toViewerTour(doc, { hall, nave });
+    expect(Object.keys(v.tour?.scenes ?? {})).toEqual(['nave', 'hall']);
+    expect(Object.keys(v.titles)).toEqual(['nave', 'hall']);
   });
 
   it('accepts admin ?include=configs entries and reports missing scenes', () => {
@@ -227,6 +235,18 @@ describe('publishedToViewerTour', () => {
   });
 });
 
+describe('scene descriptions', () => {
+  it('carries each scene description that has text, line breaks and all', () => {
+    const doc = tour({ scenes: [{ panoId: 'hall' }, { panoId: 'nave' }, { panoId: 'crypt' }] });
+    const v = toViewerTour(doc, {
+      hall: { ...hall, description: 'Built 1702.\nRestored 1950.' },
+      nave: { ...nave, description: '  ' },
+      crypt: scene({ panoId: 'crypt', title: 'Crypt' }),
+    });
+    expect(v.descriptions).toEqual({ hall: 'Built 1702.\nRestored 1950.' });
+  });
+});
+
 describe('languages', () => {
   const de = (raw: Record<string, unknown>, i18n: Record<string, unknown>) => ({
     ...raw,
@@ -243,7 +263,12 @@ describe('languages', () => {
       { id: 'l1', type: 'link', yaw: 2, pitch: 0, title: 'Nave', targetPanoId: 'nave' },
     ],
   });
-  const naveDe = scene(de({ panoId: 'nave', title: 'Nave', hotspots: [] }, { title: 'Schiff' }));
+  const naveDe = scene(
+    de(
+      { panoId: 'nave', title: 'Nave', description: 'Tall', hotspots: [] },
+      { title: 'Schiff', description: 'Hoch' },
+    ),
+  );
   const doc = tour({
     scenes: [{ panoId: 'hall' }, { panoId: 'nave' }],
     languages: { default: 'en', others: ['de'] },
@@ -252,6 +277,7 @@ describe('languages', () => {
   it('toViewerTour shows scene and point text in the language asked for', () => {
     const v = toViewerTour(doc, { hall: hallDe, nave: naveDe }, 'de');
     expect(v.titles).toEqual({ hall: 'Halle', nave: 'Schiff' });
+    expect(v.descriptions).toEqual({ nave: 'Hoch' });
     // An untranslated body stays in the default language.
     expect(v.hotspots.hall?.[0]).toMatchObject({ title: 'Uhr', body: 'Old' });
     expect(v.links.hall?.[0]?.label).toBe('Schiff');
@@ -280,5 +306,7 @@ describe('languages', () => {
     });
     expect(publishedToViewerTour(pub, 'de').titles).toEqual({ hall: 'Halle', nave: 'Schiff' });
     expect(publishedToViewerTour(pub).titles).toEqual({ hall: 'Hall', nave: 'Nave' });
+    expect(publishedToViewerTour(pub, 'de').descriptions).toEqual({ nave: 'Hoch' });
+    expect(publishedToViewerTour(pub).descriptions).toEqual({ nave: 'Tall' });
   });
 });

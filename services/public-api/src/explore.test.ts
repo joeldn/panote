@@ -122,6 +122,32 @@ describe('listExplore', () => {
     expect(third.cursor).toBeNull();
   });
 
+  it('leaves out an entry filed later than now (a held tour) until its time comes', async () => {
+    await seed('now', { day: 1 });
+    await seed('held', { day: 9 });
+    const before = T0 + 5 * DAY;
+    expect(
+      (await listExplore(env.BUCKET, undefined, 24, before)).tours.map((t) => t.tourId),
+    ).toEqual(['now']);
+    // A cursor pointing into the future can't reach it either.
+    const ahead = `${exploreEntryKey(T0 + 10 * DAY, 'x')
+      .split('/')
+      .at(-1)!
+      .slice(0, -5)}`;
+    expect((await listExplore(env.BUCKET, ahead, 24, before)).tours.map((t) => t.tourId)).toEqual([
+      'now',
+    ]);
+    const after = T0 + 9 * DAY;
+    expect(
+      (await listExplore(env.BUCKET, undefined, 24, after)).tours.map((t) => t.tourId),
+    ).toEqual(['held', 'now']);
+  });
+
+  it('drops an entry whose listedAt is later than now, whatever its key says', async () => {
+    await seed('odd', { day: 1, entry: { listedAt: new Date(T0 + 30 * DAY).toISOString() } });
+    expect((await listExplore(env.BUCKET, undefined, 24, T0 + 2 * DAY)).tours).toEqual([]);
+  });
+
   it('stops after a few list calls when everything is dropped, and hands back a cursor', async () => {
     for (let i = 1; i <= 8; i += 1) await seed(`d${i}`, { day: i, bundle: false });
     const page = await listExplore(env.BUCKET, undefined, 2);

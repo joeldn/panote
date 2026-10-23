@@ -131,6 +131,31 @@ describe('editor: languages', () => {
     );
   });
 
+  it("edits the pano's description, and its translation with the default as placeholder", async () => {
+    const ui = openTab();
+    await ui.findByRole('button', { name: /Tour title: Old town/ });
+    const pano = ui.getByRole('group', { name: 'This pano' });
+    const field = () => within(pano).getByLabelText(/^Description/) as HTMLTextAreaElement;
+    expect(field().value).toBe('');
+    fireEvent.change(field(), { target: { value: 'Market days:\nTue and Sat ' } });
+    // Kept as typed until blur, stored trimmed.
+    expect(field().value).toBe('Market days:\nTue and Sat ');
+    fireEvent.blur(field());
+    expect(field().value).toBe('Market days:\nTue and Sat');
+
+    await addLanguage(ui, 'de');
+    expect(field().value).toBe('');
+    expect(field().placeholder).toBe('Market days:\nTue and Sat');
+    fireEvent.change(field(), { target: { value: 'Markttage' } });
+
+    await save(ui);
+    const square = server.configs.get('square')!.body as Record<string, unknown>;
+    expect(square).toMatchObject({
+      description: 'Market days:\nTue and Sat',
+      i18n: { de: { description: 'Markttage' } },
+    });
+  });
+
   it('refuses a malformed custom language code', async () => {
     const ui = openTab();
     await ui.findByRole('button', { name: /Tour title: Old town/ });
