@@ -91,7 +91,11 @@ beforeEach(() => {
       }
       const body = objects.get(key);
       if (body === undefined) return new Response(null, { status: 404 });
-      return new Response(req.method === 'HEAD' ? null : body, { status: 200 });
+      // R2 sends an ETag on every 200: a replace's URL is pinned to it (If-Match).
+      return new Response(req.method === 'HEAD' ? null : body, {
+        status: 200,
+        headers: { etag: `"${body.length}"` },
+      });
     }),
   );
 });

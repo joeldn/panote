@@ -305,9 +305,10 @@ describe('upload-url', () => {
       expect(headUrls.some((u) => u.includes(deletingKey('auth0|me', 'existing-pano')))).toBe(true);
     });
 
+    // These use `call` (below), off the real per-minute limiter this file's `post`s share.
     it('pins the original’s current ETag as If-Match, so the URL overwrites it only once', async () => {
       vi.stubGlobal('fetch', mockHeads({ original: 200, tombstone: 404 }));
-      const r = await post({ contentType: 'image/png', size: 1024, panoId: 'existing-pano' });
+      const r = await call({ contentType: 'image/png', size: 1024, panoId: 'existing-pano' }, {});
       expect(r.status).toBe(200);
       const { url, headers } = (await r.json()) as { url: string; headers: unknown };
       expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
@@ -328,7 +329,7 @@ describe('upload-url', () => {
               return head(isMarker(reqUrl) || reqUrl.endsWith('/deleting') ? 404 : 200, etag);
             }),
           );
-          const r = await post({ ...validBody, panoId: 'same-pano' });
+          const r = await call({ ...validBody, panoId: 'same-pano' }, {});
           const { url } = (await r.json()) as { url: string };
           return new URL(url).searchParams.get('X-Amz-Signature');
         };
@@ -350,7 +351,7 @@ describe('upload-url', () => {
           return new Response(null, { status: 404 });
         }),
       );
-      const r = await post({ ...validBody, panoId: 'no-etag' });
+      const r = await call({ ...validBody, panoId: 'no-etag' }, {});
       expect(r.status).toBe(502);
       expect(await r.json()).not.toHaveProperty('url');
     });
