@@ -264,6 +264,9 @@ export const ReauthRequiredSchema = z.object({ error: z.literal(REAUTH_REQUIRED_
 // 410 from every owner write (and upload-url) once the account is marked.
 export const AccountDeletedSchema = z.object({ error: z.literal('account deleted') });
 
+// How many linked subs a deletion marker holds at most, across retries.
+export const MARKER_MAX_LINKED_SUBS = MAX_LINKED_SUBS * 4;
+
 // The marker at accountDeletionKey. `sub` lets the sweep rebuild the owner's keys.
 export const AccountDeletionRecordSchema = z.object({
   v: z.literal(1),
@@ -271,8 +274,13 @@ export const AccountDeletionRecordSchema = z.object({
   requestedAt: z.string(),
   completedAt: z.string().optional(),
   // Identities linked into this user (the token's LINKED_SUBS_CLAIM): their
-  // prefixes are deleted with the account's own.
-  linkedSubs: z.array(z.string().min(1)).max(MAX_LINKED_SUBS).optional(),
+  // prefixes are deleted with the account's own. Retries can add to it, so it may
+  // grow past one token's MAX_LINKED_SUBS; the bound only keeps the marker small.
+  linkedSubs: z.array(z.string().min(1)).max(MARKER_MAX_LINKED_SUBS).optional(),
+  // Linked subs an earlier, completed run already deleted. A retry that reopens the
+  // delete for a new linked sub never deletes under these again: since completion,
+  // one may have been unlinked and belong to a new, separate user.
+  completedLinkedSubs: z.array(z.string().min(1)).max(MARKER_MAX_LINKED_SUBS).optional(),
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
 

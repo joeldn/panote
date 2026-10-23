@@ -1447,13 +1447,23 @@ so data made under a sign-in before it was linked (see "Account linking", **Know
 the account. After `completedAt` the sweep's late-data pass covers the account's own sub only:
 data under a linked sub from then on can only belong to a new, separate user with that provider
 id (the Auth0 user was removed and they signed up again, or the operator unlinked it), which the
-marker doesn't block, so it isn't deleted. A retry whose
-token names more linked subs adds them to the marker. The operator's `delete-account.ts --sub`
-marks the primary sub only; to cover a linked sub there, mark that sub too.
+marker doesn't block, so it isn't deleted. A retry whose token names more linked subs adds them
+to the marker, up to `MARKER_MAX_LINKED_SUBS` (40) in all, so the marker always parses; any past
+that are left out and logged (`more linked subs than a marker holds`). If the delete had completed, that reopens it: `completedAt` comes off and the subs
+already done move to `completedLinkedSubs`, so the reopened delete (the route and the sweep)
+covers the account's own sub and the new subs only, never a sub an earlier run finished (it may
+have been unlinked since and belong to someone else). The next completion stamps `completedAt`
+again, so the 30-day marker retention runs from the reopen's completion rather than the first
+one. That is fine: the account only stays read-only (and swept) that much longer, and the Auth0
+removal due date `--list` shows runs from `requestedAt`, which a reopen keeps, so it doesn't move.
+Otherwise a retry on a completed delete deletes only the subs
+its own token names. `completedAt` is stamped only when every pending sub on the marker was among
+what that run deleted, so a linked sub added while a run was going waits for the next one. The
+operator's `delete-account.ts --sub` marks the primary sub only; to cover a linked sub there, mark that sub too.
 
 **Order, and why a retry finishes the job.**
 
-1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt?, linkedSubs? }`), is
+1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt?, linkedSubs?, completedLinkedSubs? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
    under `/api/admin/*`, except the account route itself and the operator routes) and `upload-api`'s
    `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing
