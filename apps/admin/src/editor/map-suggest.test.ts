@@ -132,6 +132,30 @@ describe('suggestPositions', () => {
     expect((b.x - a.x) * 2).toBeCloseTo(a.y - b.y, 3);
   });
 
+  it('treats a plan with no usable shape as square', () => {
+    const square = suggestPositions(
+      input({
+        scenes: ['a', 'b'],
+        links: [{ from: 'a', to: 'b', yaw: Math.PI / 4 }],
+        north: new Map([['a', 0]]),
+      }),
+    );
+    for (const ratio of [Infinity, -Infinity, NaN, 0, -2]) {
+      const r = suggestPositions(
+        input({
+          scenes: ['a', 'b'],
+          links: [{ from: 'a', to: 'b', yaw: Math.PI / 4 }],
+          north: new Map([['a', 0]]),
+          ratio,
+        }),
+      );
+      expect(r).toEqual(square);
+      for (const p of r.positions.values()) {
+        expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+      }
+    }
+  });
+
   it('uses the link back, turned round, when the pano linked from has no north', () => {
     // a has no north; b does, and its link to a points west, so b is east of a.
     const r = suggestPositions(

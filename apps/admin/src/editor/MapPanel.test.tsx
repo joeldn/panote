@@ -269,7 +269,13 @@ describe('MapPanel', () => {
       };
       return (
         <>
-          <button type="button" onClick={() => setDocs(past.at(-1) ?? docs)}>
+          <button
+            type="button"
+            onClick={() => {
+              setDocs(past.at(-1) ?? docs);
+              setPast((p) => p.slice(0, -1));
+            }}
+          >
             Undo
           </button>
           <MapPanel
@@ -312,33 +318,107 @@ describe('MapPanel', () => {
       expect(dot('Square').getAttribute('aria-label')).toBe('Square, 20% across, 30% down');
     });
 
-    it('asks for north when a link has no direction', () => {
-      setup({ onSuggest: vi.fn() }, [{ panoId: 'a' }, { panoId: 'b' }]);
-      // No links at all here, then links with no north.
+    const suggestIn = (res: TourWithConfigsOk) => {
+      render(<Harness initial={fromServer(res)} />);
       open();
       fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
-      expect(screen.getByRole('status').textContent).toBe('Placed 2 panos. Drag any that are off.');
+      const text = screen.getByRole('status').textContent;
       cleanup();
-
-      const res = server([{ panoId: 'a' }, { panoId: 'b' }]);
+      return text;
+    };
+    const withLinks = (
+      res: TourWithConfigsOk,
+      north: number | undefined,
+      to: string[],
+    ): TourWithConfigsOk => {
       res.configs.a = {
         config: {
           panoId: 'a',
           title: 'Square',
-          hotspots: [
-            { id: 'l1', type: 'link', yaw: 1, pitch: -0.4, title: 'B', targetPanoId: 'b' },
-          ],
+          ...(north !== undefined && { north }),
+          hotspots: to.map((t, i) => ({
+            id: `l${i}`,
+            type: 'link' as const,
+            yaw: (i * Math.PI) / 2,
+            pitch: -0.4,
+            title: t,
+            targetPanoId: t,
+          })),
         },
         etag: 'ea',
       };
-      const onSuggest = vi.fn<MapPanelProps['onSuggest']>();
-      setup({ docs: fromServer(res), onSuggest });
-      open();
-      fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
-      expect(Object.keys(onSuggest.mock.calls[0]![0]).sort()).toEqual(['a', 'b']);
-      expect(screen.getByRole('status').textContent).toBe(
+      return res;
+    };
+
+    it('says how many it placed, and how many of those by their links', () => {
+      const placedA = () =>
+        server([{ panoId: 'a', mapX: 0.5, mapY: 0.5 }, { panoId: 'b' }, { panoId: 'c' }]);
+      // Both by a link's direction.
+      expect(suggestIn(withLinks(placedA(), 0, ['b', 'c']))).toBe(
+        'Placed 2 panos from their links. Drag any that are off.',
+      );
+      // One by its link, one with no link at all.
+      expect(suggestIn(withLinks(placedA(), 0, ['b']))).toBe(
+        'Placed 2 panos, 1 from their links. Drag any that are off.',
+      );
+      // No links.
+      expect(suggestIn(placedA())).toBe('Placed 2 panos. Drag any that are off.');
+      // One pano.
+      expect(suggestIn(server([{ panoId: 'a' }]))).toBe('Placed 1 pano. Drag it if it’s off.');
+    });
+
+    it('asks for north when a link has no direction', () => {
+      expect(
+        suggestIn(withLinks(server([{ panoId: 'a' }, { panoId: 'b' }]), undefined, ['b'])),
+      ).toBe(
         'Placed 2 panos. Drag any that are off. Set North is here on more panos for better suggestions.',
       );
+      // Partly by direction: the hint still shows for the rest.
+      const res = withLinks(
+        server([{ panoId: 'a', mapX: 0.5, mapY: 0.5 }, { panoId: 'b' }, { panoId: 'c' }]),
+        0,
+        ['b'],
+      );
+      res.configs.c = {
+        config: {
+          panoId: 'c',
+          title: 'Hall',
+          hotspots: [
+            { id: 'l9', type: 'link', yaw: 1, pitch: -0.4, title: 'B', targetPanoId: 'b' },
+          ],
+        },
+        etag: 'ec',
+      };
+      expect(suggestIn(res)).toBe(
+        'Placed 2 panos, 1 from their links. Drag any that are off. Set North is here on more panos for better suggestions.',
+      );
+    });
+
+    it('drops the line once the tour changes: a move, a remove, an undo or any other edit', () => {
+      render(<Harness initial={fromServer(linked())} />);
+      open();
+      const status = screen.getByRole('status');
+      const suggest = () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
+        expect(status.textContent).not.toBe('');
+      };
+      const undo = () => fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+
+      suggest();
+      fireEvent.keyDown(dot('Church'), { key: 'ArrowRight' });
+      expect(status.textContent).toBe('');
+      undo();
+      undo();
+
+      suggest();
+      fireEvent.keyDown(dot('Hall'), { key: 'Delete' });
+      expect(status.textContent).toBe('');
+      undo();
+      undo();
+
+      suggest();
+      undo();
+      expect(status.textContent).toBe('');
     });
 
     it('is off when every pano is placed', () => {

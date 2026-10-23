@@ -1059,9 +1059,8 @@ describe('editor: map', () => {
     fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
     expect(ui.queryByRole('button', { name: /^Church,/ })).toBeNull();
     fireEvent.click(ui.getByRole('button', { name: 'Suggest positions' }));
-    expect(ui.getByRole('status').textContent).toBe(
-      'Placed 2 panos from their links. Drag any that are off.',
-    );
+    const status = ui.getByRole('status');
+    expect(status.textContent).toBe('Placed 2 panos, 1 from their links. Drag any that are off.');
     const church = ui.getByRole('button', { name: /^Church, \d+% across, 50% down/ });
     expect(parseFloat(church.style.left)).toBeGreaterThan(20);
     expect(ui.getByRole('button', { name: /^Missing pano,/ })).toBeTruthy();
@@ -1070,6 +1069,10 @@ describe('editor: map', () => {
     expect(ui.getByRole('button', { name: 'Suggest positions' })).toHaveProperty('disabled', true);
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
     await ui.findByText('Saved');
+    // A save changes no position: the line stays. A move makes it stale.
+    expect(status.textContent).toContain('Placed 2 panos');
+    fireEvent.keyDown(church, { key: 'ArrowDown' });
+    expect(status.textContent).toBe('');
     const scenes = (tourPut()?.body as { scenes: { panoId: string; mapX?: number }[] }).scenes;
     expect(scenes[0]).toEqual({ panoId: 'square', mapX: 0.2, mapY: 0.5 });
     expect(scenes.every((s) => s.mapX !== undefined)).toBe(true);

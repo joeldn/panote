@@ -41,6 +41,11 @@ export interface SuggestInput {
   ratio?: number;
 }
 
+/**
+ * What a suggestion did. With nothing placed yet, the start pano is put in the middle
+ * first and the others are laid out from it: it is in `positions` but not counted in
+ * any of the counters, so they can add up to one less than `positions.size`.
+ */
 export interface SuggestResult {
   /** The new positions, 0..1 fractions, for unplaced panos only. */
   positions: Map<string, MapPoint>;
@@ -69,7 +74,9 @@ const RING = [0, 2, 4, 6, 1, 3, 5, 7].map((k) => (k * Math.PI) / 4);
  * Deterministic: the same input always gives the same output.
  */
 export function suggestPositions(input: SuggestInput): SuggestResult {
-  const ratio = input.ratio && input.ratio > 0 ? input.ratio : 1;
+  // A plan with no usable shape (0, negative, NaN or Infinity) is drawn as a square.
+  const ratio =
+    input.ratio !== undefined && Number.isFinite(input.ratio) && input.ratio > 0 ? input.ratio : 1;
   const scenes = [...new Set(input.scenes)];
   const inTour = new Set(scenes);
   const empty: SuggestResult = { positions: new Map(), fromLinks: 0, noDirection: 0, unlinked: 0 };

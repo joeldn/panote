@@ -1,4 +1,4 @@
-import type { MapPoint } from '@internal/contracts';
+import type { MapPoint, TourDoc } from '@internal/contracts';
 import { Button, cx } from '@internal/ui';
 import {
   useEffect,
@@ -12,7 +12,7 @@ import {
 } from 'react';
 
 import { suggestForTour } from './map-suggest.js';
-import { mapPositions, type EditorDocs } from './model.js';
+import { editorReducer, mapPositions, sameValue, type EditorDocs } from './model.js';
 
 // The plan's shape without an image: the viewer's map box is 220×140 px (packages/ui
 // styles/viewer.css), so a dot sits in the same place in both.
@@ -89,8 +89,9 @@ export function MapPanel({
   onRemovePlan,
 }: MapPanelProps) {
   const [open, setOpen] = useState(false);
-  // What the last "Suggest positions" did, for the line under the button.
-  const [suggested, setSuggested] = useState<string | null>(null);
+  // What the last "Suggest positions" did, for the line under the button, and the tour
+  // it left: any later edit (a drag, a remove, an undo) makes the line stale.
+  const [suggested, setSuggested] = useState<{ text: string; tour: TourDoc } | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const focusDot = useRef<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -200,15 +201,22 @@ export function MapPanel({
     const out = suggestForTour(docs, ratio);
     const n = out.positions.size;
     if (!n) return;
-    onSuggest(Object.fromEntries(out.positions));
+    const positions = Object.fromEntries(out.positions);
+    onSuggest(positions);
+    const after = editorReducer(docs, { type: 'map/suggest', positions })!.tour.current;
     const panos = n === 1 ? '1 pano' : `${n} panos`;
     const lines = [
-      out.fromLinks > 0 ? `Placed ${panos} from their links.` : `Placed ${panos}.`,
+      out.fromLinks === 0
+        ? `Placed ${panos}.`
+        : out.fromLinks === n
+          ? `Placed ${panos} from their links.`
+          : `Placed ${panos}, ${out.fromLinks} from their links.`,
       n === 1 ? 'Drag it if it’s off.' : 'Drag any that are off.',
     ];
     if (out.noDirection > 0) lines.push('Set North is here on more panos for better suggestions.');
-    setSuggested(lines.join(' '));
+    setSuggested({ text: lines.join(' '), tour: after });
   };
+  const status = suggested && sameValue(suggested.tour, tour) ? suggested.text : null;
 
   return (
     <section
@@ -305,7 +313,7 @@ export function MapPanel({
               Suggest positions
             </Button>
             <p className="ed-hint ed-map__suggested" role="status">
-              {suggested}
+              {status}
             </p>
           </div>
           {current && (
