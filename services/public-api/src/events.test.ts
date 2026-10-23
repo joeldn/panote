@@ -5,7 +5,7 @@ import { MAX_DWELL_MS, pubTourKey } from '@internal/contracts';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { clampDwell, toDataPoint } from './events.js';
-import app, { RATE_PERIOD_SECONDS } from './index.js';
+import app, { CROSS_ORIGIN_WARN_MS, RATE_PERIOD_SECONDS } from './index.js';
 
 const setup = () => {
   const writeDataPoint = vi.fn<(p?: AnalyticsEngineDataPoint) => void>();
@@ -231,6 +231,34 @@ describe('views and events only from our own pages', () => {
       expect(writeDataPoint).not.toHaveBeenCalled();
     },
   );
+
+  it('logs a refusal, at most once a minute per isolate, with no tourId', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 24 * 3600_000);
+      const send = () =>
+        app.request(
+          '/api/tours/ae-embed/view',
+          { method: 'POST', headers: { Origin: 'https://elsewhere.example' }, body: '{}' },
+          env,
+        );
+      expect((await send()).status).toBe(403);
+      expect((await send()).status).toBe(403);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith('[cross-origin] refused', {
+        route: '/api/tours/:tourId/view',
+        secFetchSite: null,
+        origin: 'https://elsewhere.example',
+      });
+      vi.setSystemTime(Date.now() + CROSS_ORIGIN_WARN_MS);
+      await send();
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      warn.mockRestore();
+    }
+  });
 
   // The embed is an iframe on someone else's site, but its document is ours, so its
   // beacons are same-origin requests to the API.

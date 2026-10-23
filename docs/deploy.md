@@ -1726,15 +1726,15 @@ errors the request goes through and `rate limiter unavailable` is logged.
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
 | `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator routes (takedown, restore) | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
-| `admin-api` | `READ_LIMITER` | every `GET`/`HEAD` under `/api/admin/*` | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1302` / `2302` |
+| `admin-api` | `READ_LIMITER` | every `GET`/`HEAD` under `/api/admin/*` | owner (Auth0 sub), checked after the JWT, before any R2 read | 1200/min | `1302` / `2302` |
 | `admin-api` | `INSIGHTS_LIMITER` | `GET /api/admin/tours/:id/insights`, on top of `READ_LIMITER` | owner (Auth0 sub) | 30/min | `1303` / `2303` |
-| `admin-api` | `OPERATOR_LIMITER` | the operator routes (takedown, restore), before the token check, so a wrong token counts | client IP (IPv6 per /64) | 10/min | `1304` / `2304` |
+| `admin-api` | `OPERATOR_LIMITER` | the operator routes (takedown, restore), every request counted before the token check | client IP (IPv6 per /64) | 120/min | `1304` / `2304` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
 | `public-api` | `ERRORS_LIMITER` | `POST /api/errors` | client IP (IPv6 per /64) | 20/min | `1204` / `2204` |
 | `public-api` | `EXPLORE_LIMITER` | `GET /api/explore` | client IP (IPv6 per /64) | 60/min | `1205` / `2205` |
-| `public-api` | `STATS_LIMITER` | `GET /api/tours/:id/stats` | client IP (IPv6 per /64) | 60/min | `1206` / `2206` |
+| `public-api` | `STATS_LIMITER` | `GET /api/tours/:id/stats` | client IP (IPv6 per /64) | 600/min | `1206` / `2206` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
@@ -1750,16 +1750,23 @@ the limiter's key, held in Cloudflare's short-lived counters: nothing of ours st
 300/min lets two editor Saves of a full tour through in one minute (each is up to `MAX_TOUR_SCENES`
 = 100 configs, the tour and the publish); people editing by hand stay far below it. A Save cut off
 by a `429` keeps the refused documents unsaved, and pressing Save again sends just those.
-`admin-api`'s 300 reads a minute cover the editor polling every pano still tiling once each 10 s
-for 50 panos at once (a day's uploads); a poll that gets a `429` tries again on its next turn.
+`admin-api`'s 1,200 reads a minute are four times the editor polling every pano still tiling once
+each 10 s for 50 panos at once (a day's uploads), leaving room for a second tab and the editor's own
+loads; a poll that gets a `429` tries again on its next turn. `STATS_LIMITER`'s 600 lets the admin
+dashboard, which reads each tour's counts when it opens (up to 200 tours), open three times a
+minute.
 
 Request bodies are read through a capped reader (`readJsonBody`, `packages/worker-kit/src/body.ts`):
 a `Content-Length` over the cap is refused before anything is read, and a body sent without one
 (chunked) is counted as it streams in and cancelled once it passes the cap, so nothing past the cap
-is buffered. Over the cap is `413`. The caps: `public-api`'s beacons and error reports 8 KiB
-(`MAX_BODY_BYTES`), `admin-api`'s scene config `PUT` 16 MiB (`MAX_CONFIG_BODY_BYTES`: a config at
-every schema cap is about 4.5 MiB in ASCII and 12.6 MiB in 3-byte characters), and every other
-`admin-api` write 256 KiB (`MAX_WRITE_BODY_BYTES`; a tour at its caps is under 50 KiB).
+is buffered; the text is decoded as it arrives, so the bytes are never held twice. Over the cap
+is `413`. The caps: `public-api`'s beacons and error reports 8 KiB (`MAX_BODY_BYTES`),
+`admin-api`'s scene config `PUT` 14 MiB (`MAX_CONFIG_BODY_BYTES`), every other `admin-api`
+write 256 KiB (`MAX_WRITE_BODY_BYTES`; a tour at its caps is under 50 KiB), and `upload-api`'s
+`POST /api/upload-url` 8 KiB. A config at every schema cap is about 4.5 MiB in ASCII and 12.6 MiB
+written entirely in 3-byte characters, so every config the schema allows fits. One over the
+backup's per-object limit (`BACKUP_MAX_OBJECT_BYTES`, 8 MiB) is stored but left out of the
+backup, which reports it (see Backups).
 
 Ids in a route or a hand-built body (`panoId`, `tourId`, a list `cursor`) must match `PANO_PATTERN`
 and be at most 64 characters (`isContentId` in `@internal/contracts`, the same rule as every body
@@ -1837,7 +1844,12 @@ embed is not affected: the iframe sits on another site, but its document is serv
 own origin (`/s/<slug>/embed`), so its beacons are same-origin requests. An embed placed in a
 `sandbox` iframe without `allow-same-origin` has an opaque origin, and its views stop counting; the
 embed snippet has no `sandbox`. A local Vite dev server proxying `/api` sends a localhost `Origin`,
-so its views and events are refused too.
+so its views and events are refused too. A refusal logs
+`[cross-origin] refused { route, secFetchSite, origin }` (the route as a pattern, never the
+tourId), at most once a minute per isolate, so a page or embed served from an unexpected origin
+shows up in Workers Logs. The origins: dev serves the website (tour pages `/s/<slug>`, embeds
+`/s/<slug>/embed`) on `panote.dev/*` and `public-api` on `panote.dev/api/tours/*`,
+`/api/errors` and `/api/explore`; production the same on `panote.io`. Same origin in both.
 
 ### Owner quotas
 
@@ -1908,9 +1920,12 @@ Two ways to stop abuse, usually together:
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is
   still published and Public (see Explore). It answers `404` for a missing or wrong token, and
   always while the `OPERATOR_TOKEN` secret isn't set on that env, so the route doesn't exist until
-  you set it. It skips the write gate (no Auth0 user); instead `OPERATOR_LIMITER` allows 10
-  requests a minute per client IP, takedown and restore together, counted before the token is
-  checked, so wrong guesses spend it too (`429` with `Retry-After: 60`; see Rate limits).
+  you set it. It skips the write gate (no Auth0 user); instead `OPERATOR_LIMITER` allows 120
+  requests a minute per client IP, takedown and restore together, every request counted before
+  the token is checked, so wrong guesses spend it too (`429` with `Retry-After: 60`; see Rate
+  limits). `takedown.ts` and `restore-backup.ts` wait out a `429` (its `Retry-After`) and send the
+  request again, up to 5 times, so a long `--all-tours` or a restore of thousands of keys still
+  finishes.
 - **Disable the owner.** A marker `accounts/<owner>/disabled.json` (`{ v, disabledAt, reason? }`).
   While it exists every `admin-api` write and `upload-api`'s upload URL answer
   `403 {"error":"account disabled"}` (one more R2 `HEAD` each, in parallel with the deletion
@@ -2390,8 +2405,8 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
   top of the read limit; see Rate limits). A full answer is kept in the Cache API of the
   Cloudflare location for 60 s (`INSIGHTS_CACHE_SECONDS`), one entry per tour and `days`, so
   refreshing doesn't run the 4 SQL queries again: new views show up within a minute or so, on top
-  of AE's own ingestion delay. The route checks the caller owns the tour before it reads the
-  cache, and a `502` is never cached. The browser still gets `private, no-store`.
+  of AE's own ingestion delay. The key holds the owner too (a SHA-256 of the sub), and the
+  route checks the caller owns the tour before it reads the cache; a `502` is never cached. The browser still gets `private, no-store`.
 - **Smoke test (dev).** After both Workers deploy and the secret is set, open a tour a few times,
   wait a minute or two for AE ingestion, then `GET /api/admin/tours/<tourId>/insights` as the
   owner and check `daily` shows today's views. The same token can run ad-hoc queries against

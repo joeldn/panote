@@ -8,10 +8,12 @@ export const WRITE_RATE_PERIOD_SECONDS = 60;
  * The largest scene config body PUT /api/admin/panos/:panoId/config takes. A config at
  * every schema cap (200 hotspots with 20,000-character bodies, 2,048-character media
  * urls and 200,000 translated characters) is about 4.5 MiB of JSON in ASCII and 12.6 MiB
- * in 3-byte UTF-8 (CJK text). 16 MiB lets that through and still bounds what one request
- * can make the Worker hold, which is well under the isolate's 128 MB.
+ * written entirely in 3-byte characters (CJK), so 14 MiB takes every config the schema
+ * allows. The body is decoded as it streams in (worker-kit's body.ts), so the bytes are
+ * never held twice. A config over BACKUP_MAX_OBJECT_BYTES (8 MiB, backup.ts) is stored but
+ * left out of the daily backup, which reports it.
  */
-export const MAX_CONFIG_BODY_BYTES = 16 * 1024 * 1024;
+export const MAX_CONFIG_BODY_BYTES = 14 * 1024 * 1024;
 
 /**
  * Every other write body: a tour (100 scenes, 10 languages' titles and descriptions) is

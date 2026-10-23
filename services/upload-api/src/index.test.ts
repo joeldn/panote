@@ -13,7 +13,11 @@ import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, it, expect, beforeAll, vi, type Mock } from 'vitest';
 
-import worker, { UPLOAD_URL_EXPIRY_SECONDS, UPLOAD_URL_RATE_PERIOD_SECONDS } from './index.js';
+import worker, {
+  MAX_BODY_BYTES,
+  UPLOAD_URL_EXPIRY_SECONDS,
+  UPLOAD_URL_RATE_PERIOD_SECONDS,
+} from './index.js';
 
 // Neither account marker (deletion, disabled) exists unless a test says so.
 const isMarker = (url: string): boolean =>
@@ -217,6 +221,14 @@ describe('upload-url', () => {
     it('400 when panoId does not match PANO_PATTERN', async () => {
       const r = await post({ ...validBody, panoId: 'not/a/valid/id' });
       expect(r.status).toBe(400);
+    });
+
+    it('413 for a body past MAX_BODY_BYTES, before any R2 request', async () => {
+      const fetchSpy = vi.fn(async () => new Response(null, { status: 404 }));
+      vi.stubGlobal('fetch', fetchSpy);
+      const r = await post({ ...validBody, pad: 'x'.repeat(MAX_BODY_BYTES) });
+      expect(r.status).toBe(413);
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it('400 for a panoId over 64 characters, never building a key from it', async () => {

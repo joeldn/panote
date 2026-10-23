@@ -60,6 +60,23 @@ app.use('/api/tours/:tourId/*', async (c, next) => {
   await next();
 });
 
+// One line per isolate per CROSS_ORIGIN_WARN_MS at most: enough for a misconfigured origin
+// (a page or embed served from somewhere unexpected) to show in Workers Logs, without
+// another site's traffic flooding them. The route is logged as a pattern, never the tourId.
+export const CROSS_ORIGIN_WARN_MS = 60_000;
+let lastCrossOriginWarn = -Infinity;
+const warnCrossOrigin = (path: string, site?: string, origin?: string): void => {
+  const now = Date.now();
+  if (now - lastCrossOriginWarn < CROSS_ORIGIN_WARN_MS) return;
+  lastCrossOriginWarn = now;
+  const route = path.replace(/^\/api\/tours\/[^/]+\//, '/api/tours/:tourId/');
+  console.warn('[cross-origin] refused', {
+    route,
+    secFetchSite: site ?? null,
+    origin: origin ?? null,
+  });
+};
+
 // Beacons and error reports only come from our own pages, which are same-origin: the
 // tour page and the embed (an iframe on another site, but its document, and so every
 // beacon it sends, is on our origin). A browser marks a cross-site request with
@@ -70,6 +87,7 @@ const sameOriginOnly = createMiddleware<{ Bindings: Env }>(async (c, next) => {
   const site = c.req.header('Sec-Fetch-Site');
   const origin = c.req.header('Origin');
   if ((site && site !== 'same-origin') || (origin && origin !== new URL(c.req.url).origin)) {
+    warnCrossOrigin(c.req.path, site, origin);
     return c.json({ error: 'cross-origin' }, 403);
   }
   await next();

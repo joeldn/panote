@@ -44,12 +44,13 @@
           "simple": { "limit": 300, "period": 60 },
         },
         // Reads (GET/HEAD) per owner per minute. The editor polls each pano still tiling
-        // every 10 s: 50 at once (a day's uploads) is 300, and a poll that gets a 429 just
+        // every 10 s: 50 at once (a day's uploads) is 300, a quarter of this, which leaves
+        // room for a second tab and the editor's own loads. A poll that gets a 429 just
         // tries again later.
         {
           "name": "READ_LIMITER",
           "namespace_id": "1302",
-          "simple": { "limit": 300, "period": 60 },
+          "simple": { "limit": 1200, "period": 60 },
         },
         // Insights per owner per minute, on top of READ_LIMITER: each uncached answer is
         // 4 calls to the Analytics Engine SQL API.
@@ -58,12 +59,13 @@
           "namespace_id": "1303",
           "simple": { "limit": 30, "period": 60 },
         },
-        // The operator routes (takedown, restore) per client IP per minute, wrong tokens
-        // included.
+        // The operator routes (takedown, restore) per client IP per minute, every request
+        // counted before the token check. Well above what the scripts send (they wait out a
+        // 429 and retry), far below what guessing the secret would need.
         {
           "name": "OPERATOR_LIMITER",
           "namespace_id": "1304",
-          "simple": { "limit": 10, "period": 60 },
+          "simple": { "limit": 120, "period": 60 },
         },
       ],
       "vars": {
@@ -117,12 +119,13 @@
           "simple": { "limit": 300, "period": 60 },
         },
         // Reads (GET/HEAD) per owner per minute. The editor polls each pano still tiling
-        // every 10 s: 50 at once (a day's uploads) is 300, and a poll that gets a 429 just
+        // every 10 s: 50 at once (a day's uploads) is 300, a quarter of this, which leaves
+        // room for a second tab and the editor's own loads. A poll that gets a 429 just
         // tries again later.
         {
           "name": "READ_LIMITER",
           "namespace_id": "2302",
-          "simple": { "limit": 300, "period": 60 },
+          "simple": { "limit": 1200, "period": 60 },
         },
         // Insights per owner per minute, on top of READ_LIMITER: each uncached answer is
         // 4 calls to the Analytics Engine SQL API.
@@ -131,12 +134,13 @@
           "namespace_id": "2303",
           "simple": { "limit": 30, "period": 60 },
         },
-        // The operator routes (takedown, restore) per client IP per minute, wrong tokens
-        // included.
+        // The operator routes (takedown, restore) per client IP per minute, every request
+        // counted before the token check. Well above what the scripts send (they wait out a
+        // 429 and retry), far below what guessing the secret would need.
         {
           "name": "OPERATOR_LIMITER",
           "namespace_id": "2304",
-          "simple": { "limit": 10, "period": 60 },
+          "simple": { "limit": 120, "period": 60 },
         },
       ],
       "vars": {

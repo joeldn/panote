@@ -91,3 +91,19 @@ describe('readJsonBody', () => {
     });
   });
 });
+
+describe('readBodyText decoding', () => {
+  it('decodes a character split across chunks', async () => {
+    const bytes = new TextEncoder().encode('a漢b');
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // '漢' is 3 bytes: split it between chunks.
+        controller.enqueue(bytes.slice(0, 2));
+        controller.enqueue(bytes.slice(2, 3));
+        controller.enqueue(bytes.slice(3));
+        controller.close();
+      },
+    });
+    expect(await readBodyText(post(stream), 10)).toEqual({ ok: true, text: 'a漢b' });
+  });
+});

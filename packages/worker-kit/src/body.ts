@@ -11,7 +11,10 @@ export const readBodyText = async (req: Request, maxBytes: number): Promise<Body
   if (Number(req.headers.get('content-length') ?? 0) > maxBytes) return { ok: false, status: 413 };
   if (!req.body) return { ok: true, text: '' };
   const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
+  // Decoded as it arrives and each chunk dropped once decoded, so the bytes are never held
+  // twice (no list of chunks, no concatenated copy): at most the text so far and one chunk.
+  const decoder = new TextDecoder();
+  let text = '';
   let total = 0;
   for (;;) {
     const { done, value } = await reader.read();
@@ -22,15 +25,9 @@ export const readBodyText = async (req: Request, maxBytes: number): Promise<Body
       await reader.cancel().catch(() => undefined);
       return { ok: false, status: 413 };
     }
-    chunks.push(value);
+    text += decoder.decode(value, { stream: true });
   }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { ok: true, text: new TextDecoder().decode(bytes) };
+  return { ok: true, text: text + decoder.decode() };
 };
 
 /**

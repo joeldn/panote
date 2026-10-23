@@ -163,6 +163,26 @@ describe('Insights', () => {
     expect(theirs.status).toBe(404);
   });
 
+  it("keys the cache by owner too, so one owner never gets another's answer", async () => {
+    // Can't happen through the API (tourIds are minted by POST; PUT never creates), so
+    // seeded straight into R2: the same tourId under two owners.
+    await env.BUCKET.put(tourKey(SUB, 'ins-shared'), '{}');
+    await env.BUCKET.put(tourKey('auth0|second-owner', 'ins-shared'), '{}');
+    const spy = stubSql();
+    expect((await call('/api/admin/tours/ins-shared/insights', { headers: bearer })).status).toBe(
+      200,
+    );
+    expect(spy).toHaveBeenCalledTimes(4);
+    setTestJwtVerifier(async (t) =>
+      t === 'second' ? { sub: 'auth0|second-owner' } : { sub: SUB },
+    );
+    const second = await call('/api/admin/tours/ins-shared/insights', {
+      headers: { Authorization: 'Bearer second' },
+    });
+    expect(second.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(8);
+  });
+
   it('never caches a failure', async () => {
     await env.BUCKET.put(tourKey(SUB, 'ins-flaky'), '{}');
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('boom', { status: 500 }));
@@ -265,9 +285,8 @@ describe('write bodies are read up to a cap', () => {
     expect(r.status).toBe(413);
   });
 
-  // Every field at its schema cap, in 3-byte UTF-8: the largest config the editor could send.
-  const maxConfig = (panoId: string) => {
-    const ch = '漢';
+  // Every field at its schema cap: the largest config the schema allows, in `ch`.
+  const maxConfig = (panoId: string, ch: string) => {
     let translated = MAX_SCENE_TRANSLATION_CHARS;
     const hotspots = Array.from({ length: MAX_HOTSPOTS }, (_, i) => {
       const n = Math.min(translated, MAX_HOTSPOT_BODY_LENGTH);
@@ -298,20 +317,29 @@ describe('write bodies are read up to a cap', () => {
       hotspots,
     };
   };
-
-  it('takes the largest config the schema allows', async () => {
-    await env.BUCKET.put(originalKey(SUB, 'cfg-max'), 'bytes');
-    const config = maxConfig('cfg-max');
+  const putMax = async (panoId: string, ch: string) => {
+    await env.BUCKET.put(originalKey(SUB, panoId), 'bytes');
+    const config = maxConfig(panoId, ch);
     expect(SceneConfigSchema.safeParse(config).success).toBe(true);
     const body = JSON.stringify(config);
-    // Well past the cap for every other write, and with headroom under its own.
-    expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(12 * 1024 * 1024);
-    const r = await call('/api/admin/panos/cfg-max/config', {
+    const res = await call(`/api/admin/panos/${panoId}/config`, {
       method: 'PUT',
       headers: { ...bearer, 'If-None-Match': '*' },
       body,
     });
-    expect(r.status).toBe(200);
+    return { res, bytes: new TextEncoder().encode(body).byteLength };
+  };
+
+  it('takes the largest config the schema allows in plain text', async () => {
+    const { res, bytes } = await putMax('cfg-max', 'a');
+    expect(bytes).toBeGreaterThan(4 * 1024 * 1024);
+    expect(res.status).toBe(200);
+  });
+
+  it('takes it written entirely in 3-byte characters too', async () => {
+    const { res, bytes } = await putMax('cfg-max-cjk', '漢');
+    expect(bytes).toBeGreaterThan(12 * 1024 * 1024);
+    expect(res.status).toBe(200);
   });
 });
 
@@ -341,5 +369,39 @@ describe('route ids are at most MAX_ID_LENGTH characters', () => {
   it('takes an id of exactly MAX_ID_LENGTH', async () => {
     const r = await call(`/api/admin/tours/${'a'.repeat(MAX_ID_LENGTH)}`, { headers: bearer });
     expect(r.status).toBe(404);
+  });
+});
+
+// Insights (AE), stats, the public bundle and the tour-owners pointer are all keyed by
+// tourId alone, so no owner may hold another's tourId: only POST creates a tour, with a
+// server-minted id, and PUT never creates.
+describe('a tourId belongs to one owner', () => {
+  it("404s a PUT of someone else's tourId and stores nothing under the caller", async () => {
+    const theirs = 'held-by-another-owner';
+    await env.BUCKET.put(
+      tourKey('auth0|the-owner', theirs),
+      JSON.stringify({ tourId: theirs, title: 'T', scenes: [] }),
+    );
+    for (const ifMatch of ['*', '"anything"']) {
+      const r = await call(`/api/admin/tours/${theirs}`, {
+        method: 'PUT',
+        headers: { ...bearer, 'If-Match': ifMatch },
+        body: JSON.stringify({ title: 'Mine now', scenes: [] }),
+      });
+      expect(r.status).toBe(404);
+    }
+    expect(await env.BUCKET.head(tourKey(SUB, theirs))).toBeNull();
+  });
+
+  it('ignores a tourId in the POST body', async () => {
+    const r = await call('/api/admin/tours', {
+      method: 'POST',
+      headers: bearer,
+      body: JSON.stringify({ tourId: 'chosen-by-client', title: 'T', scenes: [] }),
+    });
+    expect(r.status).toBe(201);
+    const { tourId } = (await r.json()) as { tourId: string };
+    expect(tourId).not.toBe('chosen-by-client');
+    expect(await env.BUCKET.head(tourKey(SUB, 'chosen-by-client'))).toBeNull();
   });
 });

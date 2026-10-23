@@ -143,12 +143,24 @@ export const getInsights = async (
   };
 };
 
-// The cache key: this route's own URL with nothing but `days`, so made-up query
-// parameters can't skip the cache. No owner in it: a tourId is one owner's (a random
-// UUID), and the route checks the caller owns the tour before it ever looks here. The
-// admin-api route owns this path, so the CDN never answers it from this cache itself.
-const insightsCacheKey = (reqUrl: string, tourId: string, days: number): Request =>
-  new Request(new URL(`/api/admin/tours/${tourId}/insights?days=${days}`, reqUrl).toString());
+// The cache key: this route's own URL with nothing but `days`, plus the owner, so made-up
+// query parameters can't skip the cache and one owner's entry is never another's. The owner
+// goes in as a SHA-256 of the sub, never the sub itself (it decodes to the Auth0 id). The
+// route also checks the caller owns the tour before it looks here, and admin-api owns this
+// path, so the CDN never answers it from this cache itself.
+const insightsCacheKey = async (
+  reqUrl: string,
+  sub: string,
+  tourId: string,
+  days: number,
+): Promise<Request> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sub));
+  const owner = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const url = new URL(`/api/admin/tours/${tourId}/insights`, reqUrl);
+  url.searchParams.set('days', String(days));
+  url.searchParams.set('owner', owner);
+  return new Request(url.toString());
+};
 
 export const insightsRoute = async (
   c: Context<{ Bindings: Env; Variables: { sub: string | undefined } }>,
@@ -170,7 +182,7 @@ export const insightsRoute = async (
   // Ownership first, every time: the cache below is shared by everyone who asks.
   if (!(await c.env.BUCKET.head(tourKey(sub, tourId)))) return c.json({ error: 'not found' }, 404);
   const cache = caches.default;
-  const key = insightsCacheKey(c.req.url, tourId, days);
+  const key = await insightsCacheKey(c.req.url, sub, tourId, days);
   const hit = await cache.match(key);
   if (hit) return c.json(await hit.json<InsightsOk>());
   let insights: InsightsOk;
