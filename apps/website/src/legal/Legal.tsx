@@ -60,7 +60,7 @@ export function Privacy() {
         </li>
         <li>
           <strong>Reports.</strong> When you report a panorama: the tour, the panorama, the reason
-          and any note you add. Nothing that identifies you. Deleted once reviewed.
+          and any note you add. Nothing that identifies you. Kept until we've dealt with the report.
         </li>
         <li>
           <strong>IP addresses</strong> are used for about a minute to limit abuse.

@@ -136,7 +136,7 @@ export function FlagsRoute() {
                   <li key={`${g.tourId}/${g.panoId}`} className="support__row">
                     <span className="support__row-main">
                       <a
-                        href={`${origins.website}/s/${g.slug}?pano=${encodeURIComponent(g.panoId)}`}
+                        href={`${origins.website}/s/${encodeURIComponent(g.slug)}?pano=${encodeURIComponent(g.panoId)}`}
                         target="_blank"
                         rel="noreferrer"
                       >

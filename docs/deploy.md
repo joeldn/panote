@@ -3064,7 +3064,9 @@ under `/api/admin/ops/flags`) shows the newest 200 flags grouped by tour and pan
 reasons, notes and a link to the scene. **Find owner** opens the tour's owner on the Users page
 (through the owner pointer), where hide, unpublish and disable live; **Dismiss** deletes that
 panorama's flags (recent sign-in needed, logged as `[flags] operator dismissed`). Older flags
-show once newer ones are dismissed.
+show once newer ones are dismissed. Dismiss is the only thing that deletes a flag (no sweep, and
+deleting the tour leaves its flags), so dismiss once a report is dealt with: the privacy page
+says a report is kept until then.
 
 ### Users (support)
 
