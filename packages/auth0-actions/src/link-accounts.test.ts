@@ -9,6 +9,7 @@ const load = createRequire(import.meta.url);
 const action = load('./link-accounts.cjs') as typeof Action;
 const {
   AUTH_TIME_CLAIM,
+  EMAIL_CLAIM,
   LINKED_SUBS_CLAIM,
   MAX_LINKED_SUBS,
   ManagementError,
@@ -19,6 +20,7 @@ const {
   linkAccounts,
   managementClient,
   managementFromSecrets,
+  verifiedEmailOf,
 } = action;
 
 type User = Parameters<typeof choosePrimary>[0];
@@ -604,6 +606,7 @@ describe('linkedSubsOf', () => {
   it('uses the claim names admin-api reads (packages/contracts/src/jwt.ts)', () => {
     expect(AUTH_TIME_CLAIM).toBe('https://panote.io/auth_time');
     expect(LINKED_SUBS_CLAIM).toBe('https://panote.io/linked_subs');
+    expect(EMAIL_CLAIM).toBe('https://panote.io/email');
     expect(MAX_LINKED_SUBS).toBe(10);
   });
 });
@@ -635,6 +638,69 @@ describe('authTimeOf', () => {
   });
 });
 
+describe('verifiedEmailOf', () => {
+  it('is the address, lower case, when a trusted provider verified it', () => {
+    expect(verifiedEmailOf({ ...google, email: ' Maya@Example.com' })).toBe(EMAIL);
+    expect(verifiedEmailOf(emailUser)).toBe(EMAIL);
+    expect(verifiedEmailOf(appleUser)).toBe(EMAIL);
+  });
+
+  it('is undefined when the provider has not verified it', () => {
+    expect(verifiedEmailOf({ ...google, email_verified: false })).toBeUndefined();
+  });
+
+  it('is undefined for an untrusted provider, even verified', () => {
+    for (const provider of ['windowslive', 'facebook']) {
+      expect(
+        verifiedEmailOf(
+          user(`${provider}|9`, '2026-01-01T00:00:00.000Z', {
+            identities: [{ provider, user_id: '9' }],
+          }),
+        ),
+      ).toBeUndefined();
+    }
+  });
+
+  it('trusts an untrusted primary through a linked trusted identity with the same address', () => {
+    expect(
+      verifiedEmailOf(
+        user('facebook|9', '2026-01-01T00:00:00.000Z', {
+          identities: [
+            { provider: 'facebook', user_id: '9' },
+            {
+              provider: 'email',
+              user_id: '222',
+              profileData: { email: 'MAYA@example.com', email_verified: true },
+            },
+          ],
+        }),
+      ),
+    ).toBe(EMAIL);
+  });
+
+  it('ignores a linked identity that verified a different address', () => {
+    expect(
+      verifiedEmailOf(
+        user('facebook|9', '2026-01-01T00:00:00.000Z', {
+          identities: [
+            { provider: 'facebook', user_id: '9' },
+            {
+              provider: 'google-oauth2',
+              user_id: '1',
+              profileData: { email: 'other@example.com', email_verified: true },
+            },
+          ],
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('is undefined without an address', () => {
+    expect(verifiedEmailOf(without(google, 'email'))).toBeUndefined();
+    expect(verifiedEmailOf({ ...google, email: 'not-an-address' })).toBeUndefined();
+  });
+});
+
 describe('onExecutePostLogin', () => {
   it('claims the sign-in time and the linked identities on an ordinary login', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -658,10 +724,11 @@ describe('onExecutePostLogin', () => {
       AUTH_TIME_CLAIM,
       Date.parse('2026-10-01T00:00:00Z') / 1000,
     );
+    expect(api.accessToken.setCustomClaim).toHaveBeenCalledWith(EMAIL_CLAIM, EMAIL);
     log.mockRestore();
   });
 
-  it('keeps the linked identities but claims no sign-in time on a refresh', async () => {
+  it('keeps the linked identities and the email but claims no sign-in time on a refresh', async () => {
     const api = fakeApi();
     await action.onExecutePostLogin(
       {
@@ -671,7 +738,26 @@ describe('onExecutePostLogin', () => {
       },
       api,
     );
-    expect(api.accessToken.setCustomClaim).toHaveBeenCalledExactlyOnceWith(LINKED_SUBS_CLAIM, []);
+    expect(api.accessToken.setCustomClaim.mock.calls).toEqual([
+      [LINKED_SUBS_CLAIM, []],
+      [EMAIL_CLAIM, EMAIL],
+    ]);
+  });
+
+  it('claims no email for an untrusted sign-in', async () => {
+    const api = fakeApi();
+    await action.onExecutePostLogin(
+      {
+        user: user('facebook|9', '2026-01-01T00:00:00.000Z', {
+          identities: [{ provider: 'facebook', user_id: '9' }],
+        }),
+        transaction: { protocol: 'oauth2-refresh-token' },
+      },
+      api,
+    );
+    expect(api.accessToken.setCustomClaim.mock.calls.map(([name]) => name)).not.toContain(
+      EMAIL_CLAIM,
+    );
   });
 
   it('is exported for Auth0 and never throws, even unconfigured', async () => {
