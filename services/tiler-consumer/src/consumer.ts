@@ -3,9 +3,16 @@ import { manifestKey, redactOwner } from '@internal/contracts';
 import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { recordOps, type OpsEvent } from '@internal/worker-kit';
 import { containerEnvVars } from './container-env.js';
-import { deriveUploadTarget, errorText, panoIdForLog } from './upload-prefix.js';
+import { deriveUploadTarget, errorText, panoIdForLog, uploaderOf } from './upload-prefix.js';
 import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
-import { flushHeldDlqAlerts, sendDlqAlert, type DeadLetteredItem } from './alert.js';
+import {
+  flushHeldDlqAlerts,
+  sendDlqAlert,
+  sendRequeueAlert,
+  sendScreeningAlert,
+  type DeadLetteredItem,
+} from './alert.js';
+import { isSevere, screenPano } from './screen.js';
 import { runHealthCheck } from './health.js';
 
 export class Tiler extends Container<Env> {
@@ -61,6 +68,67 @@ export const retryDelaySeconds = (attempts: number): number =>
 
 // The operator event stream (@internal/contracts ops-events.ts): what each job came to.
 const record = (env: Env, e: OpsEvent): void => recordOps(env.OPS_EVENTS, 'tiler-consumer', e);
+
+/** admin-api's Moderation entrypoint, as the MODERATION binding reaches it. */
+interface ModerationRpc {
+  panoTiled(panoId: string): Promise<number>;
+}
+
+/**
+ * After a tile job that succeeded, run once the message is acked: the automatic check of the
+ * new image (screen.ts), then admin-api takes the approval of any Explore tour showing this
+ * pano, since the operator approved it before this image existed. Skipped when the job
+ * re-tiled the very original the manifest already came from (`sameOriginal`: a forced
+ * re-tile after a tiler change, or a repair), which shows nothing new. Never throws, and a
+ * failure is loud rather than retried: the tiles are already live.
+ */
+export const afterTiling = async (
+  env: Env,
+  key: string,
+  panoId: string,
+  sameOriginal = false,
+): Promise<void> => {
+  if (sameOriginal) {
+    console.warn(`skip screening pano=${panoId}: the same original was tiled before`);
+    return;
+  }
+  const owner = uploaderOf(key);
+  const result = owner
+    ? await screenPano({ bucket: env.BUCKET, ai: env.AI, now: new Date() }, panoId, owner)
+    : ({ outcome: 'failed', why: 'no owner' } as const);
+  record(env, { event: 'pano-screened', detail: result.outcome });
+  if (result.outcome === 'failed') console.error(`screening failed pano=${panoId}: ${result.why}`);
+  if (result.outcome === 'flagged') {
+    console.warn(`screening flagged pano=${panoId}: ${result.flag.categories.join(',')}`);
+    if (isSevere(result.flag)) await sendScreeningAlert(env, result.flag);
+  }
+  try {
+    const n = await (env.MODERATION as unknown as ModerationRpc).panoTiled(panoId);
+    record(env, { event: 'explore-requeue', detail: 'done', value: n });
+  } catch (e) {
+    console.error(`could not re-queue Explore tours for pano=${panoId}: ${errorText(e)}`);
+    record(env, { event: 'explore-requeue', detail: 'failed' });
+    await sendRequeueAlert(env, panoId);
+  }
+};
+
+/**
+ * The version the pano's manifest names now, or null when it has none or it can't be read.
+ * Read before a tile job, so afterTiling can tell a new original from a re-tile of the same.
+ */
+export const manifestVersion = async (bucket: R2Bucket, panoId: string): Promise<string | null> => {
+  try {
+    const obj = await bucket.get(manifestKey(panoId));
+    const version = obj ? ((await obj.json()) as { version?: unknown }).version : null;
+    return typeof version === 'string' ? version : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Whether `version` (t<tiler>-<ETag>) was tiled from the original with this ETag. */
+export const tiledFrom = (version: string | null, eTag: string | undefined): boolean =>
+  !!version && !!eTag && version.endsWith(`-${bareEtag(eTag)}`);
 
 // R2 event etags may arrive quoted (S3-style) or bare.
 const bareEtag = (raw: string): string => raw.replace(/^"|"$/g, '');
@@ -165,6 +233,8 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
     }
     const t0 = Date.now();
     const elapsed = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+    const before = await manifestVersion(env.BUCKET, panoId);
+    let tiled = false;
     console.warn(`tile job start pano=${panoId}`);
     try {
       const stub = env.TILER.get(env.TILER.idFromName(key));
@@ -176,6 +246,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       if (res.ok) {
         record(env, { event: 'tile-ok', value: Date.now() - t0 });
         msg.ack();
+        tiled = true;
       } else {
         // container.ts puts its error text in the body; log it or a
         // tiling failure dead-letters with no trace of the cause.
@@ -218,6 +289,14 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       console.error(`tile job failed pano=${panoId}: ${errorText(e)}`);
       record(env, { event: 'tile-retry', detail: 'threw' });
       msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
+    }
+    // Outside the try above, after the ack: nothing here may retry a job whose tiles are live.
+    if (tiled) {
+      try {
+        await afterTiling(env, key, panoId, tiledFrom(before, msg.body.object.eTag));
+      } catch (e) {
+        console.error(`after-tiling step failed pano=${panoId}: ${errorText(e)}`);
+      }
     }
   }
 };

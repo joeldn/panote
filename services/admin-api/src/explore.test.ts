@@ -1,6 +1,7 @@
 import {
   ACCOUNT_DELETE_CONFIRMATION,
   exploreApprovedKey,
+  exploreApprovedPanoKey,
   EXPLORE_INDEX_ROOT,
   EXPLORE_QUEUE_PATH,
   EXPLORE_STALE_ERROR,
@@ -20,10 +21,11 @@ import {
   type PublishedTour,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
-import { env, SELF } from 'cloudflare:test';
+import { createExecutionContext, env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { syncExploreQuietly } from './explore.js';
+import { listApprovalQueue, READ_CONCURRENCY, syncExploreQuietly } from './explore.js';
+import { Moderation } from './moderation-rpc.js';
 import { unpublish } from './publish.js';
 
 // Storage is shared across it() cases in this file, so every case uses its own
@@ -40,6 +42,7 @@ beforeAll(() => {
 
 const subOf = (who: string) => `auth0|${who}`;
 const bearer = (who: string) => ({ Authorization: `Bearer good:${who}` });
+const R2BucketGet = env.BUCKET.get.bind(env.BUCKET);
 const has = async (key: string) => !!(await env.BUCKET.head(key));
 const readJson = async <T>(key: string): Promise<T | null> => {
   const obj = await env.BUCKET.get(key);
@@ -549,5 +552,108 @@ describe('Explore approval: the verifier’s cases', () => {
     await env.BUCKET.put(manifestKey(panoId), body);
     await syncExploreQuietly(env.BUCKET, bundle, new Date(Date.now() + 2000));
     expect((await waiting(tourId))?.queuedAt).toBe(first.queuedAt);
+  });
+});
+
+describe('Explore approval: a re-tiled pano (the Moderation entrypoint)', () => {
+  const panoTiled = (panoId: string) =>
+    new Moderation(createExecutionContext(), env).panoTiled(panoId);
+
+  it('sends an approved tour showing the pano back to the queue as changed', async () => {
+    const who = 'ex-rt-listed';
+    const { tourId, panoId } = await publishedTour(who, { visibility: 'public' });
+    expect(await listed(tourId)).not.toBeNull();
+    expect(await panoTiled(panoId)).toBe(1);
+    expect(await has(exploreApprovedKey(tourId))).toBe(false);
+    expect(await listed(tourId)).toBeNull();
+    expect((await waiting(tourId))?.reason).toBe('changed');
+    // The operator approves the new image: listed again, in its old place.
+    await approve(tourId);
+    expect(await listed(tourId)).not.toBeNull();
+    // A second tile job with no approval left to take does nothing.
+    await env.BUCKET.delete(exploreApprovedKey(tourId));
+    expect(await panoTiled(panoId)).toBe(0);
+  });
+
+  it('leaves approved tours that show other panos, and refuses a bad id', async () => {
+    const { tourId } = await publishedTour('ex-rt-other', { visibility: 'public' });
+    expect(await panoTiled('ex-rt-nobody-p1')).toBe(0);
+    expect(await has(exploreApprovedKey(tourId))).toBe(true);
+    expect(await panoTiled('../x')).toBe(0);
+  });
+
+  it('re-queues the other tours when one fails, then says so', async () => {
+    const a = await publishedTour('ex-rt-fa', { visibility: 'public' });
+    const b = await publishedTour('ex-rt-fb', { visibility: 'public' });
+    // Both tours show a's pano.
+    await env.BUCKET.put(exploreApprovedPanoKey(a.panoId, b.tourId), '{}');
+    const realGet = env.PUBLISHER.get.bind(env.PUBLISHER);
+    const failing = env.PUBLISHER.idFromName(a.tourId).toString();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(env.PUBLISHER, 'get').mockImplementation((id) => {
+      if (id.toString() === failing) throw new Error('down');
+      return realGet(id);
+    });
+    await expect(panoTiled(a.panoId)).rejects.toThrow('1 of 2 tour(s) not re-queued');
+    // b doesn't show the pano: checked, marker dropped, approval kept.
+    expect(await has(exploreApprovedKey(b.tourId))).toBe(true);
+    expect(await has(exploreApprovedPanoKey(a.panoId, b.tourId))).toBe(false);
+  });
+
+  it('finds tours by the pano index, which a listing writes and a revoke clears', async () => {
+    const who = 'ex-rt-index';
+    const { tourId, panoId } = await publishedTour(who, { visibility: 'public' });
+    expect(await has(exploreApprovedPanoKey(panoId, tourId))).toBe(true);
+    // A marker the tour no longer backs (its approval gone some other way) is dropped.
+    await env.BUCKET.delete(exploreApprovedKey(tourId));
+    expect(await panoTiled(panoId)).toBe(0);
+    expect(await has(exploreApprovedPanoKey(panoId, tourId))).toBe(false);
+    // An approved tour with no marker (approved before the index) isn't found until its next
+    // sync, which the backfill runs.
+    const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
+    await syncExploreQuietly(env.BUCKET, bundle, new Date());
+    await approve(tourId);
+    await env.BUCKET.delete(exploreApprovedPanoKey(panoId, tourId));
+    expect(await panoTiled(panoId)).toBe(0);
+    await syncExploreQuietly(env.BUCKET, bundle, new Date());
+    expect(await panoTiled(panoId)).toBe(1);
+  });
+});
+
+describe('Explore approval queue: reads', () => {
+  it('reads a long queue in bounded batches', async () => {
+    const who = 'ex-q-many';
+    const at = new Date().toISOString();
+    for (let i = 0; i < READ_CONCURRENCY + 5; i++) {
+      const pending: ExplorePending = {
+        v: 1,
+        tourId: `${who}-${i}`,
+        slug: `${who}-${i}`,
+        title: 'T',
+        sceneCount: 1,
+        cover: null,
+        fingerprint: 'f',
+        reason: 'new',
+        queuedAt: at,
+        updatedAt: at,
+      };
+      await env.BUCKET.put(explorePendingKey(`${who}-${i}`), JSON.stringify(pending));
+    }
+    let inFlight = 0;
+    let peak = 0;
+    const get = vi.spyOn(env.BUCKET, 'get').mockImplementation(async function (...args) {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      try {
+        return await R2BucketGet(...args);
+      } finally {
+        inFlight -= 1;
+      }
+    } as R2Bucket['get']);
+    const tours = await listApprovalQueue(env.BUCKET);
+    get.mockRestore();
+    expect(tours.filter((t) => t.tourId.startsWith(who))).toHaveLength(READ_CONCURRENCY + 5);
+    expect(peak).toBeLessThanOrEqual(READ_CONCURRENCY);
   });
 });

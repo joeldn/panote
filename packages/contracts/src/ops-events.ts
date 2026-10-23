@@ -39,6 +39,13 @@ export const OPS_EVENT_NAMES = [
   'client-error',
   /** public-api stored a visitor's flag on a panorama. detail: the reason. */
   'pano-flagged',
+  /** tiler-consumer checked a newly tiled panorama. detail: clear | flagged | failed. */
+  'pano-screened',
+  /**
+   * tiler-consumer asked admin-api to send approved tours showing a re-tiled pano back to the
+   * Explore queue. detail: done | failed. value: tours sent back.
+   */
+  'explore-requeue',
 ] as const;
 export type OpsEventName = (typeof OPS_EVENT_NAMES)[number];
 

@@ -321,16 +321,25 @@ export const exploreHiddenKey = (t: string): string =>
   `${EXPLORE_ROOT}hidden/${assertValidId(t, 'tourId')}.json`;
 // The operator's approval ({ v, approvedAt, fingerprint }): a tour is listed only while
 // one exists and names the fingerprint of its live bundle. Deleted when the bundle changes.
+export const EXPLORE_APPROVED_ROOT = `${EXPLORE_ROOT}approved/`;
 export const exploreApprovedKey = (t: string): string =>
-  `${EXPLORE_ROOT}approved/${assertValidId(t, 'tourId')}.json`;
+  `${EXPLORE_APPROVED_ROOT}${assertValidId(t, 'tourId')}.json`;
+// One marker per pano an approved tour shows, `explore/approved-panos/<panoId>/<tourId>.json`,
+// so a re-tiled pano finds the approvals it affects without reading every tour. Written while
+// the tour is listed; may outlive the approval (the TourPublisher re-checks and drops it).
+export const EXPLORE_APPROVED_PANOS_ROOT = `${EXPLORE_ROOT}approved-panos/`;
+export const exploreApprovedPanosPrefix = (p: string): string =>
+  `${EXPLORE_APPROVED_PANOS_ROOT}${assertValidId(p, 'panoId')}/`;
+export const exploreApprovedPanoKey = (p: string, t: string): string =>
+  `${exploreApprovedPanosPrefix(p)}${assertValidId(t, 'tourId')}.json`;
 // A tour waiting for that approval: the operator's review queue (ExplorePendingSchema).
 export const EXPLORE_PENDING_ROOT = `${EXPLORE_ROOT}pending/`;
 export const explorePendingKey = (t: string): string =>
   `${EXPLORE_PENDING_ROOT}${assertValidId(t, 'tourId')}.json`;
 
-// Moderation (contracts moderation.ts): visitors' flags on a panorama, for the operator's
-// review queue. Private (outside the WAF's public prefixes) and owner-free; not backed up,
-// since a flag only matters until the operator has looked at it.
+// Moderation (contracts moderation.ts): flags on a panorama (visitors' reports and the
+// automatic check), for the operator's review queue. Private (outside the WAF's public
+// prefixes); not backed up, since a flag only matters until the operator has looked at it.
 export const MODERATION_ROOT = 'moderation/';
 export const FLAGS_ROOT = `${MODERATION_ROOT}flags/`;
 /** One flag, newest first: `moderation/flags/<rank>-<flagId>.json` (rank as exploreRank). */

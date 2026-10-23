@@ -1,4 +1,4 @@
-import { PANO_PATTERN, redactOwner } from '@internal/contracts';
+import { decodeId, PANO_PATTERN, redactOwner } from '@internal/contracts';
 
 // Shape of a pano original's object-create notification key
 // (packages/contracts/src/keys.ts's originalKey()): panos/<owner>/<panoId>/original.
@@ -41,6 +41,15 @@ export const deriveUploadTarget = (key: string): UploadTarget => {
     );
   }
   return { panoId };
+};
+
+/**
+ * The uploader's account id (sub) from a notification key, for the automatic check's flag
+ * (screen.ts) and nothing else: never for a log line. Null for a key of the wrong shape.
+ */
+export const uploaderOf = (key: string): string | null => {
+  const owner = NOTIFICATION_KEY_RE.exec(key)?.[1];
+  return owner && OWNER_CHARSET_RE.test(owner) ? decodeId(owner) : null;
 };
 
 // Looser than NOTIFICATION_KEY_RE on purpose: only the shape, no charset

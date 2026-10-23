@@ -1,3 +1,5 @@
+import type { ScreeningFlag } from '@internal/contracts';
+
 import type { MarkerOutcome } from './failure-marker.js';
 
 export interface DeadLetteredItem {
@@ -213,5 +215,69 @@ export const flushHeldDlqAlerts = async (
       // The name only: the error message may echo the recipient address.
       console.error(`DLQ held alert for ${queue} failed: ${errorName(e)}`);
     }
+  }
+};
+
+/**
+ * Emails the operator about a severe hit from the automatic check (screen.ts), so it is seen
+ * before anyone opens the Flags page. No throttle: one email per flagged upload, which the
+ * daily upload cap bounds. Never throws; the recipient address is never logged.
+ */
+export const sendScreeningAlert = async (env: Env, flag: ScreeningFlag): Promise<void> => {
+  const to = env.ALERT_EMAIL_TO;
+  if (!to || !env.ALERT_EMAIL || !env.ALERT_EMAIL_FROM) {
+    console.warn('skip screening alert: ALERT_EMAIL_TO, ALERT_EMAIL_FROM or ALERT_EMAIL not set');
+    return;
+  }
+  try {
+    const text = [
+      `The automatic check flagged a newly uploaded panorama: ${flag.categories.join(', ')}.`,
+      ...(flag.summary ? [`The model said: ${flag.summary}`] : []),
+      '',
+      `Pano: ${flag.panoId} (version ${flag.version})`,
+      `Time (UTC): ${flag.at}`,
+      '',
+      // The site origin the health check probes; the admin app is served under /app.
+      `Review it, and find its owner, on the Flags page: ${env.HEALTH_SITE_ORIGIN}/app/ops/flags`,
+      'Nothing was hidden: it is live wherever its owner shared it until you act.',
+    ].join('\n');
+    await env.ALERT_EMAIL.send({
+      to,
+      from: env.ALERT_EMAIL_FROM,
+      subject: `[panote] panorama flagged: ${flag.categories.join(', ')}`,
+      text,
+    });
+    console.warn(`screening alert sent pano=${flag.panoId}`);
+  } catch (e) {
+    console.error(`screening alert for pano=${flag.panoId} failed: ${errorName(e)}`);
+  }
+};
+
+/**
+ * Emails the operator when admin-api couldn't send the Explore tours showing a re-tiled pano
+ * back to the queue (consumer.ts afterTiling): those tours may stay listed with an image
+ * nobody approved. Rare (admin-api down); never throws, never logs the recipient.
+ */
+export const sendRequeueAlert = async (env: Env, panoId: string): Promise<void> => {
+  const to = env.ALERT_EMAIL_TO;
+  if (!to || !env.ALERT_EMAIL || !env.ALERT_EMAIL_FROM) return;
+  try {
+    const text = [
+      `Pano ${panoId} was tiled again, but admin-api could not send the Explore tours that show`,
+      'it back to the approval queue. They may still be listed with the new image unreviewed.',
+      '',
+      `Time (UTC): ${new Date().toISOString()}`,
+      '',
+      'Check the admin-api logs ([explore] re-queue), then run the Explore backfill or hide the',
+      'tours from the Users page (docs/deploy.md, Screening).',
+    ].join('\n');
+    await env.ALERT_EMAIL.send({
+      to,
+      from: env.ALERT_EMAIL_FROM,
+      subject: `[panote] Explore re-review failed for pano ${panoId}`,
+      text,
+    });
+  } catch (e) {
+    console.error(`re-queue alert for pano=${panoId} failed: ${errorName(e)}`);
   }
 };

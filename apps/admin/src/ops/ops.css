@@ -156,3 +156,12 @@
   font-style: italic;
   overflow-wrap: anywhere;
 }
+
+.flags__thumb {
+  flex: none;
+  width: 120px;
+  aspect-ratio: 2 / 1;
+  border-radius: 6px;
+  background: var(--ink-13);
+  object-fit: cover;
+}

@@ -23,7 +23,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention except visitors' flags under `moderation/flags/` (likes check `pub/`, Explore reads `explore/`; see Flags); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `OPERATOR_SUB_SHA256` (who may open the operator pages, see Operator pages), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | `UPLOAD_CEILING` — Durable Object, class `UploadCeiling` (one instance, the global daily upload ceiling, see Owner quotas; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); otherwise none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ, health and screening alert email, see below); `AI` — Workers AI, the automatic check of each new pano (Operator pages, Screening); `MODERATION` — service binding to `admin-api`'s `Moderation` entrypoint (Explore, Approval queue); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ, health and screening alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
 are `false` in both `dev` and `production`: from the first dev deploy
@@ -2090,7 +2090,18 @@ that changes what the tour shows therefore takes an approved tour off Explore un
 approved again (the queue marks it "Changed since approved"); a Save with no change, a trip to
 Unlisted and back, a scene not ready yet or the owner's Stop sharing keep the approval. A tour
 delete, an account delete and every operator takedown (`unpublish`, `delete`, `hide`) delete it.
-A re-tile or replaced photo changes no bundle, so it doesn't re-queue the tour on its own.
+A replaced photo (or a scene first tiled after approval) changes no bundle, so after a tile
+job of a new original tiler-consumer asks admin-api's `Moderation` entrypoint
+(`services/admin-api/src/moderation-rpc.ts`, over the `MODERATION` service binding; RPC only, no
+HTTP route) to revoke the approval of every approved tour that shows that pano: each goes back to
+the queue as changed, in its `TourPublisher` (`revokeForPano`, which re-checks the live bundle).
+It finds them through a pano index, `explore/approved-panos/<panoId>/<tourId>.json`, written for
+each scene whenever a listed tour is synced and dropped when the tour turns out not to back it.
+The index is not in the nightly backup; the backfill rewrites it for every listed tour, so run it
+after a restore, and once after this shipped, for tours approved before it. A forced re-tile of
+the same original (`retile.ts` after a tiler change, or a repair) shows nothing new and revokes
+nothing. If the entrypoint fails, the tiles stay live, the failure is logged and counted
+(`explore-requeue`, detail `failed`) and `ALERT_EMAIL_TO` gets an email naming the pano.
 Approve runs in the tour's `TourPublisher`, checks the fingerprint the operator saw against the
 live bundle (else `409`, so nothing is approved unseen), writes the approval and lists the tour
 as new at that moment (or where it was, for a tour listed before). Reject is the hide below.
@@ -3066,6 +3077,34 @@ panorama's flags (recent sign-in needed, logged as `[flags] operator dismissed`)
 show once newer ones are dismissed. Dismiss is the only thing that deletes a flag (no sweep, and
 deleting the tour leaves its flags), so dismiss once a report is dealt with: the privacy page
 says a report is kept until then.
+
+### Screening
+
+After every successful tile job of a new original (not a forced re-tile of the same one, which
+shows nothing new; panos tiled before this shipped are not checked), tiler-consumer
+(`services/tiler-consumer/src/screen.ts`), once the queue message is acked, sends the new pano's
+`preview.webp` (the whole sphere at 1024 px; `og.jpg` if the model refuses it) to
+the Workers AI model `@cf/meta/llama-4-scout-17b-16e-instruct` through the `AI` binding. The model
+answers which of sexual, child safety, violence or hate it sees (`SCREEN_CATEGORIES`). No key and
+no third party: the image stays within Cloudflare. A hit is stored as a `source: "screening"` flag
+beside visitors' ones, naming the pano, the tile version it looked at, the categories, the model's
+short reason and the uploader's account id (the pano may be in no tour, so nothing else leads to
+its owner). It shows on the Flags page as **Automatic check** with the image, and **Find owner**
+opens the uploader on the Users page. A sexual or child-safety hit also emails `ALERT_EMAIL_TO`
+straight away, with no owner in it (no throttle: the daily upload cap bounds it). Nothing is
+hidden or deleted automatically, and a failed check (model error, unreadable answer, no preview)
+never fails or retries the tile job: it logs `screening failed` and counts as `pano-screened` with
+detail `failed` (`clear` and `flagged` otherwise). A model call that takes over 30 s counts as
+failed. A run of `failed` on the metrics dashboard means unscreened uploads: check the logs.
+
+The model is a best-effort filter, not a safeguard: expect misses and false hits, and treat a
+flag as "look at this". It sees only the 1024 px preview, so small details are lost, and the image
+is the uploader's: text in a photo can try to steer it (the prompt says to ignore such text, and
+to flag when unsure, but a determined uploader can still get past it). Visitors' reports and the
+Explore approval stay the real checks. Each check costs Workers AI neurons (within the free daily allocation at today's upload
+volumes). Known CSAM is a separate layer: Cloudflare's CSAM Scanning Tool matches cached images
+against known hashes. It is a zone setting switched on in the dashboard (Caching, Configuration),
+an operator step, not code.
 
 ### Users (support)
 

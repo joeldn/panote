@@ -1139,3 +1139,4 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 export { TourPublisher };
+export { Moderation } from './moderation-rpc.js';

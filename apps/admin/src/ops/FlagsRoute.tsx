@@ -1,10 +1,16 @@
-import type { FlagReason, FlagRecord } from '@internal/contracts';
+import type { FlagReason, FlagRecord, ScreeningFlag, ViewerFlag } from '@internal/contracts';
 import { Button, SignInModal } from '@internal/ui';
-import { ReauthRequiredError, type ConnectionId } from '@internal/web-kit';
+import {
+  exploreCoverUrl,
+  ReauthRequiredError,
+  tilesBaseUrl,
+  type ConnectionId,
+} from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { useAuthEnv } from '../auth-context.js';
+import { useConfig } from '../config-context.js';
 import { useSession } from '../session.js';
 
 /** Short labels for the queue; the tour page's own read longer (website FlagDialog.tsx). */
@@ -23,16 +29,40 @@ const REASON: Record<FlagReason, string> = {
 type Load =
   { status: 'loading' | 'error' } | { status: 'ready'; flags: FlagRecord[]; more: boolean };
 
-/** Flags on one panorama of one tour, newest first. */
-type Group = { tourId: string; panoId: string; slug: string; flags: FlagRecord[] };
+/**
+ * Visitors' flags on one panorama of one tour, newest first; or one hit from the automatic
+ * check, which names the image it looked at.
+ */
+type Group =
+  | {
+      kind: 'viewer';
+      key: string;
+      tourId: string;
+      panoId: string;
+      slug: string;
+      flags: ViewerFlag[];
+    }
+  | { kind: 'screening'; key: string; flags: [ScreeningFlag] };
 
 const groupFlags = (flags: FlagRecord[]): Group[] => {
   const groups = new Map<string, Group>();
   for (const f of flags) {
+    if (f.source === 'screening') {
+      groups.set(`auto/${f.flagId}`, { kind: 'screening', key: `auto/${f.flagId}`, flags: [f] });
+      continue;
+    }
     const key = `${f.tourId}/${f.panoId}`;
-    const g = groups.get(key) ?? { tourId: f.tourId, panoId: f.panoId, slug: f.slug, flags: [] };
-    g.flags.push(f);
-    groups.set(key, g);
+    const g = groups.get(key);
+    if (g?.kind === 'viewer') g.flags.push(f);
+    else
+      groups.set(key, {
+        kind: 'viewer',
+        key,
+        tourId: f.tourId,
+        panoId: f.panoId,
+        slug: f.slug,
+        flags: [f],
+      });
   }
   return [...groups.values()];
 };
@@ -40,13 +70,14 @@ const groupFlags = (flags: FlagRecord[]): Group[] => {
 const when = (iso: string): string => iso.slice(0, 16).replace('T', ' ');
 
 /**
- * /app/ops/flags: what visitors reported, grouped by panorama, most recent first. Open the
- * scene, act on its tour from the Users page (hide, unpublish, disable the owner), then
- * Dismiss the flags dealt with.
+ * /app/ops/flags: what visitors reported, grouped by panorama, and what the automatic check
+ * of new uploads flagged, most recent first. Open the scene or image, act from the Users page
+ * (hide, unpublish, disable the owner), then Dismiss the flags dealt with.
  */
 export function FlagsRoute() {
   const { api } = useSession();
   const { auth, origins } = useAuthEnv();
+  const tilesBase = tilesBaseUrl(useConfig());
   const { pathname, search } = useLocation();
   const navigate = useNavigate();
   const [load, setLoad] = useState<Load>({ status: 'loading' });
@@ -95,7 +126,8 @@ export function FlagsRoute() {
   return (
     <div className="support">
       <p className="support__note">
-        Visitors’ reports on a panorama. Open it, act on its tour from Users, then dismiss.
+        Visitors’ reports on a panorama, and new uploads the automatic check flagged. Open it, act
+        from Users, then dismiss.
       </p>
       {note && (
         <div className="dash__banner dash__banner--warn" role="alert">
@@ -129,11 +161,56 @@ export function FlagsRoute() {
           <>
             <ul className="support__list">
               {groupFlags(load.flags).map((g) => {
+                if (g.kind === 'screening') {
+                  const [f] = g.flags;
+                  // The equirect preview the check looked at, by the version it checked.
+                  const image = exploreCoverUrl(tilesBase, {
+                    panoId: f.panoId,
+                    version: f.version,
+                    image: 'preview',
+                  });
+                  return (
+                    <li key={g.key} className="support__row">
+                      <a href={image} target="_blank" rel="noreferrer">
+                        <img className="flags__thumb" src={image} alt="" />
+                      </a>
+                      <span className="support__row-main">
+                        <span>Automatic check · {f.panoId}</span>
+                        <span className="support__meta">
+                          {f.categories.map((c) => REASON[c]).join(' · ')}
+                          {` · ${when(f.at)}`}
+                        </span>
+                        {f.summary && (
+                          <span className="support__meta flags__note">“{f.summary}”</span>
+                        )}
+                      </span>
+                      <span className="support__actions">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            void navigate(`/ops/users?sub=${encodeURIComponent(f.owner)}`)
+                          }
+                        >
+                          Find owner
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy}
+                          onClick={() => void dismiss(g)}
+                        >
+                          Dismiss
+                        </Button>
+                      </span>
+                    </li>
+                  );
+                }
                 const counts = new Map<FlagReason, number>();
                 for (const f of g.flags) counts.set(f.reason, (counts.get(f.reason) ?? 0) + 1);
                 const notes = g.flags.filter((f) => f.note);
                 return (
-                  <li key={`${g.tourId}/${g.panoId}`} className="support__row">
+                  <li key={g.key} className="support__row">
                     <span className="support__row-main">
                       <a
                         href={`${origins.website}/s/${encodeURIComponent(g.slug)}?pano=${encodeURIComponent(g.panoId)}`}

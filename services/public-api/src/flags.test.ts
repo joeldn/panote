@@ -3,7 +3,7 @@ import {
   FLAGS_ROOT,
   MAX_FLAG_NOTE_LENGTH,
   pubTourKey,
-  type FlagRecord,
+  type ViewerFlag,
 } from '@internal/contracts';
 import { env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -40,12 +40,12 @@ const flag = (tourId: string, body: unknown, headers: Record<string, string> = {
     body: JSON.stringify(body),
   });
 
-const flagsOf = async (tourId: string): Promise<{ key: string; record: FlagRecord }[]> => {
+const flagsOf = async (tourId: string): Promise<{ key: string; record: ViewerFlag }[]> => {
   const { objects } = await env.BUCKET.list({ prefix: FLAGS_ROOT });
   const all = await Promise.all(
     objects.map(async (o) => ({
       key: o.key,
-      record: (await (await env.BUCKET.get(o.key))!.json()) as FlagRecord,
+      record: (await (await env.BUCKET.get(o.key))!.json()) as ViewerFlag,
     })),
   );
   return all.filter((f) => f.record.tourId === tourId);
