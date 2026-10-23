@@ -150,3 +150,9 @@
     flex-wrap: wrap;
   }
 }
+
+/* Flags (FlagsRoute.tsx): visitors' notes under each panorama's reasons. */
+.flags__note {
+  font-style: italic;
+  overflow-wrap: anywhere;
+}

@@ -59,6 +59,10 @@ export function Privacy() {
           accounts or IP addresses.
         </li>
         <li>
+          <strong>Reports.</strong> When you report a panorama: the tour, the panorama, the reason
+          and any note you add. Nothing that identifies you. Kept until we've dealt with the report.
+        </li>
+        <li>
           <strong>IP addresses</strong> are used for about a minute to limit abuse.
         </li>
         <li>
@@ -176,9 +180,10 @@ export function ContentPolicy() {
 
       <h2>Report a tour</h2>
       <p>
-        Use the Report link on the tour, or email <Mail /> with the tour’s link and what’s wrong.
-        For copyright, say which work is yours and how to reach you. Every report is read, and
-        content that breaks these rules is taken down.
+        Press Report on the tour, pick what’s wrong with the panorama on screen and send it, or
+        email <Mail /> with the tour’s link and what’s wrong. For copyright, say which work is yours
+        and how to reach you. Every report is read, and content that breaks these rules is taken
+        down.
       </p>
 
       <h2>What happens next</h2>

@@ -24,6 +24,7 @@ describe('wrangler.jsonc ratelimits', () => {
       'ERRORS_LIMITER',
       'EVENTS_LIMITER',
       'EXPLORE_LIMITER',
+      'FLAG_LIMITER',
       'LIKE_LIMITER',
       'STATS_LIMITER',
       'VIEW_LIMITER',

@@ -20,7 +20,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention except visitors' flags under `moderation/flags/` (likes check `pub/`, Explore reads `explore/`; see Flags); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `OPERATOR_SUB_SHA256` (who may open the operator pages, see Operator pages), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | `UPLOAD_CEILING` — Durable Object, class `UploadCeiling` (one instance, the global daily upload ceiling, see Owner quotas; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); otherwise none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
@@ -2217,6 +2217,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | `public-api` | `ERRORS_LIMITER` | `POST /api/errors` | client IP (IPv6 per /64) | 20/min | `1204` / `2204` |
 | `public-api` | `EXPLORE_LIMITER` | `GET /api/explore` | client IP (IPv6 per /64) | 60/min | `1205` / `2205` |
 | `public-api` | `STATS_LIMITER` | `GET /api/tours/:id/stats` | client IP (IPv6 per /64) | 600/min | `1206` / `2206` |
+| `public-api` | `FLAG_LIMITER` | `POST /api/tours/:id/flag` | client IP (IPv6 per /64) | 5/min | `1207` / `2207` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
@@ -3044,6 +3045,28 @@ A decision names the version shown: if the tour changed since the page loaded it
 the page reloads. Decisions need a recent sign-in, like the support writes, and log
 `[explore] operator approve|reject of tour <tourId>` with the operator's hash prefix. See Explore,
 "Approval queue".
+
+### Flags
+
+Visitors report a panorama from the tour page: **Report** (beside Edit, never in the embed) opens
+a dialog that flags the scene on screen with one reason (sexual, child safety, violence, hate,
+illegal, privacy, copyright, spam, other) and an optional note of up to 500 characters, with a
+mail link kept for longer reports. public-api's `POST /api/tours/:tourId/flag`
+(`services/public-api/src/flags.ts`; same-origin only, `FLAG_LIMITER`) checks the pano is a scene
+of the published bundle and writes `moderation/flags/<rank>-<flagId>.json` (`FlagRecordSchema` in
+`@internal/contracts` `moderation.ts`; `rank` as Explore's, so newest first). Nothing about the
+sender is stored: no IP, account or client id. It is public-api's only R2 write. `moderation/` is
+outside the CDN WAF's public prefixes and not in the nightly backup. Each stored flag is a
+`pano-flagged` operator event, detail the reason.
+
+`/app/ops/flags` (`apps/admin/src/ops/FlagsRoute.tsx`, API in `services/admin-api/src/flags.ts`
+under `/api/admin/ops/flags`) shows the newest 200 flags grouped by tour and panorama, with the
+reasons, notes and a link to the scene. **Find owner** opens the tour's owner on the Users page
+(through the owner pointer), where hide, unpublish and disable live; **Dismiss** deletes that
+panorama's flags (recent sign-in needed, logged as `[flags] operator dismissed`). Older flags
+show once newer ones are dismissed. Dismiss is the only thing that deletes a flag (no sweep, and
+deleting the tour leaves its flags), so dismiss once a report is dealt with: the privacy page
+says a report is kept until then.
 
 ### Users (support)
 

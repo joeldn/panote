@@ -20,5 +20,6 @@ export { AccountRoute as Account } from './account/AccountRoute.js';
 export { OpsRoute as Ops } from './ops/OpsRoute.js';
 export { OpsDashboard as OpsOverview } from './ops/OpsDashboard.js';
 export { ExploreQueueRoute as OpsExplore } from './ops/ExploreQueueRoute.js';
+export { FlagsRoute as OpsFlags } from './ops/FlagsRoute.js';
 export { SupportRoute as OpsUsers } from './ops/SupportRoute.js';
 export const NotFound = () => <Placeholder title="Page not found" />;

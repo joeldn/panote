@@ -5,6 +5,7 @@ import {
   ClientErrorReportSchema,
   EXPLORE_CURSOR_PATTERN,
   EXPLORE_PATH,
+  FlagRequestSchema,
   ViewBeaconSchema,
 } from '@internal/contracts';
 import { Hono } from 'hono';
@@ -25,6 +26,7 @@ import { errorHandler } from '@internal/worker-kit/hono';
 import { logClientError } from './client-error.js';
 import { readBeaconBody, toDataPoint } from './events.js';
 import { listExplore } from './explore.js';
+import { storeFlag } from './flags.js';
 import { createPublishedCheck } from './published.js';
 import { TourStats } from './stats.js';
 
@@ -103,12 +105,14 @@ const sameOriginOnly = createMiddleware<{ Bindings: Env }>(async (c, next) => {
 app.post('/api/tours/:tourId/view', sameOriginOnly);
 app.post('/api/tours/:tourId/events', sameOriginOnly);
 app.post('/api/errors', sameOriginOnly);
+app.post('/api/tours/:tourId/flag', sameOriginOnly);
 
 // Rate limits, one per route, run before the handlers below.
 app.post('/api/tours/:tourId/view', limitByIp('VIEW_LIMITER'));
 app.post('/api/tours/:tourId/events', limitByIp('EVENTS_LIMITER'));
 app.post('/api/tours/:tourId/like', limitByIp('LIKE_LIMITER'));
 app.post('/api/errors', limitByIp('ERRORS_LIMITER'));
+app.post('/api/tours/:tourId/flag', limitByIp('FLAG_LIMITER'));
 
 app.post('/api/tours/:tourId/view', async (c) => {
   const body = await readBeaconBody(c.req.raw);
@@ -157,6 +161,19 @@ app.post('/api/tours/:tourId/like', async (c) => {
   return stat(c, tourId).fetch(`https://do/like?u=${encodeURIComponent(who)}`, {
     method: 'POST',
   });
+});
+
+// A visitor's flag on one panorama of a published tour (flags.ts), for the operator's
+// review queue. Anonymous on purpose: nothing about the sender is stored.
+app.post('/api/tours/:tourId/flag', async (c) => {
+  const body = await readBeaconBody(c.req.raw);
+  if (!body.ok) return c.json({ error: 'invalid body' }, body.status);
+  const parsed = FlagRequestSchema.safeParse(body.value);
+  if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
+  const out = await storeFlag(c.env.BUCKET, c.req.param('tourId'), parsed.data, new Date());
+  if (out === 'not-found') return c.json({ error: 'tour not found' }, 404);
+  recordOps(c.env.OPS_EVENTS, SERVICE, { event: 'pano-flagged', detail: parsed.data.reason });
+  return c.body(null, 204);
 });
 
 // Frontend error reports (both SPAs). Logged to Workers Logs; the operator event

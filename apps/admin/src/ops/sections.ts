@@ -8,5 +8,6 @@ export interface OpsSection {
 export const OPS_SECTIONS: OpsSection[] = [
   { path: '', label: 'Overview' },
   { path: 'explore', label: 'Explore queue' },
+  { path: 'flags', label: 'Flags' },
   { path: 'users', label: 'Users' },
 ];

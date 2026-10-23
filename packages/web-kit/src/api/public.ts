@@ -2,6 +2,7 @@ import {
   EXPLORE_CURSOR_PATTERN,
   EXPLORE_PATH,
   ExplorePageSchema,
+  type FlagRequest,
   ManifestSchema,
   PANO_PATTERN,
   type ExploreCover,
@@ -36,6 +37,8 @@ export interface PublicApi {
   like(tourId: string): Promise<TourStats>;
   /** One page of Explore, newest first; pass the previous page's `cursor` for the next. */
   explore(cursor?: string | null, opts?: { signal?: AbortSignal }): Promise<ExplorePage>;
+  /** Flags one panorama of a published tour for the operator, with a reason. */
+  flagPano(tourId: string, flag: FlagRequest): Promise<void>;
 }
 
 const tourPath = (tourId: string, rest: string): string => {
@@ -72,6 +75,15 @@ export function createPublicApi(opts: PublicApiOptions = {}): PublicApi {
 
   return {
     explore,
+    flagPano: async (tourId, flag) => {
+      const url = `${base}${tourPath(tourId, 'flag')}`;
+      const res = await doFetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(flag),
+      });
+      if (!res.ok) throw new ApiError(res.status, await readJson(res));
+    },
     getStats: async (tourId) => call(tourPath(tourId, 'stats'), { method: 'GET' }),
     recordView: async (tourId, view) =>
       call(

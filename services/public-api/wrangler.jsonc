@@ -61,9 +61,12 @@
           "namespace_id": "1206",
           "simple": { "limit": 600, "period": 60 },
         },
+        // POST /api/tours/:id/flag: a visitor's flag on a panorama; few are ever needed.
+        { "name": "FLAG_LIMITER", "namespace_id": "1207", "simple": { "limit": 5, "period": 60 } },
       ],
-      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist,
-      // and Explore reads its index (explore/) and re-checks each entry against pub/.
+      // Read-only but for visitors' flags (moderation/flags/, src/flags.ts): a like needs the
+      // tour's public bundle (pub/tours/<tourId>.json) to exist, and Explore reads its index
+      // (explore/) and re-checks each entry against pub/.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content-dev" }],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
@@ -120,9 +123,12 @@
           "namespace_id": "2206",
           "simple": { "limit": 600, "period": 60 },
         },
+        // POST /api/tours/:id/flag: a visitor's flag on a panorama; few are ever needed.
+        { "name": "FLAG_LIMITER", "namespace_id": "2207", "simple": { "limit": 5, "period": 60 } },
       ],
-      // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist,
-      // and Explore reads its index (explore/) and re-checks each entry against pub/.
+      // Read-only but for visitors' flags (moderation/flags/, src/flags.ts): a like needs the
+      // tour's public bundle (pub/tours/<tourId>.json) to exist, and Explore reads its index
+      // (explore/) and re-checks each entry against pub/.
       "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pano-content" }],
       "vars": {
         // OAUTH_ISSUER is a placeholder until the Auth0 tenant exists; replace it

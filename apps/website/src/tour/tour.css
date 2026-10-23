@@ -207,3 +207,56 @@
     display: none;
   }
 }
+
+/* Report dialog (FlagDialog.tsx): one reason, an optional note. */
+button.tour-report {
+  border: 0;
+  cursor: pointer;
+}
+.tour-flag__reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+.tour-flag__reasons > legend {
+  margin-bottom: 10px;
+  padding: 0;
+}
+.tour-flag__reason {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 400 14px/1.35 var(--fbody);
+  color: var(--ink);
+  cursor: pointer;
+}
+.tour-flag__reason > input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.tour-flag__label {
+  display: block;
+  margin-bottom: 6px;
+  font: 500 13px var(--fbody);
+  color: var(--ink-62);
+}
+.tour-flag__note {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--ink-13);
+  border-radius: 8px;
+  background: transparent;
+  font: 400 14px/1.4 var(--fbody);
+  color: var(--ink);
+  resize: vertical;
+}
+.tour-flag__mail {
+  margin: 12px 0 0;
+  font: 400 13px/1.45 var(--fbody);
+  color: var(--ink-62);
+}
