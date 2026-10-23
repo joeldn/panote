@@ -75,7 +75,7 @@ describe('landing', () => {
     expect(dropTarget().getAttribute('href')).toBe(href);
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(href);
     expect(
-      screen.getByRole('link', { name: /Upload your first tour — free/ }).getAttribute('href'),
+      screen.getByRole('link', { name: /Upload your first tour, free/ }).getAttribute('href'),
     ).toBe(href);
 
     fireEvent.click(dropTarget());

@@ -408,7 +408,7 @@ function FinalCta() {
         <UploadLink className="landing-final__cta">
           {(signedIn) => (
             <>
-              {signedIn ? 'Upload a new tour' : 'Upload your first tour — free'}{' '}
+              {signedIn ? 'Upload a new tour' : 'Upload your first tour, free'}{' '}
               <span aria-hidden="true">→</span>
             </>
           )}
