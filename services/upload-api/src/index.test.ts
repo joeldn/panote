@@ -1195,7 +1195,7 @@ describe('operator events', () => {
     expect(s.writeDataPoint.mock.calls[0]?.[0].doubles).toEqual([1024]);
   });
 
-  it('records a refusal with its reason', async () => {
+  it('records a refusal by its reason code, never the error text', async () => {
     const s = sink();
     vi.stubGlobal(
       'fetch',
@@ -1205,7 +1205,7 @@ describe('operator events', () => {
       }),
     );
     expect((await call(validBody, { OPS_EVENTS: s })).status).toBe(403);
-    expect(s.events()).toEqual([['upload-refused', 'account disabled', 'upload-api', 'o1']]);
+    expect(s.events()).toEqual([['upload-refused', 'account-disabled', 'upload-api', 'o1']]);
   });
 
   it('records a rate-limit refusal once, as rate-limited', async () => {

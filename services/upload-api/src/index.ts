@@ -299,6 +299,21 @@ const SERVICE = 'upload-api';
 // not a 400 for a malformed body or the rate limit's 429 (rateLimit records that one).
 const REFUSAL_STATUSES = new Set([403, 404, 410, 503]);
 
+// The refusals' error texts, as a fixed vocabulary: anything else is recorded by its
+// status alone, so no text a handler builds can reach the event stream.
+const REFUSAL_CODES: Record<string, string> = {
+  'pano limit reached': 'pano-limit',
+  'storage limit reached': 'storage-limit',
+  'plan storage limit reached': 'plan-storage-limit',
+  'daily upload limit reached': 'daily-limit',
+  'uploads paused': 'paused',
+  'account deleted': 'account-deleted',
+  'account disabled': 'account-disabled',
+  'owner account disabled': 'owner-disabled',
+  'tour not found': 'tour-not-found',
+  'original not found': 'original-not-found',
+};
+
 /** An operator event for a POST to the route that was refused (ops-events.ts). */
 const recordRefusal = async (req: Request, res: Response, env: Env): Promise<void> => {
   if (req.method !== 'POST' || !REFUSAL_STATUSES.has(res.status)) return;
@@ -307,8 +322,11 @@ const recordRefusal = async (req: Request, res: Response, env: Env): Promise<voi
     .clone()
     .json()
     .catch(() => null)) as { error?: unknown } | null;
-  const detail = typeof body?.error === 'string' ? body.error : String(res.status);
-  recordOps(env.OPS_EVENTS, SERVICE, { event: 'upload-refused', detail });
+  const known = typeof body?.error === 'string' ? REFUSAL_CODES[body.error] : undefined;
+  recordOps(env.OPS_EVENTS, SERVICE, {
+    event: 'upload-refused',
+    detail: known ?? `status-${res.status}`,
+  });
 };
 
 const api = {

@@ -17,6 +17,8 @@ const DATASET_PATTERN = /^[A-Za-z0-9_]+$/;
 /** Distinct (event, detail, service) rows; the details are a small fixed vocabulary. */
 export const MAX_PIPELINE_ROWS = 500;
 
+// "Failed" is the dead-lettered jobs: an ops problem. Refused ones (oversize, unsupported)
+// are the uploader's and show in the refusals table instead.
 const SERIES_EVENTS = {
   'upload-url': 'uploads',
   'tile-ok': 'tiled',

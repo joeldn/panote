@@ -3059,7 +3059,7 @@ write, so there's nothing to set up. admin-api reads it back through `OPS_EVENTS
 
 | Worker | Events |
 |---|---|
-| upload-api | `upload-url` (detail `new`, `replace` or `plan`, value the declared bytes), `upload-refused` (detail the refusal) |
+| upload-api | `upload-url` (detail `new`, `replace` or `plan`, value the declared bytes), `upload-refused` (detail a fixed code such as `daily-limit`, `storage-limit` or `paused`, else `status-<n>`) |
 | tiler-consumer | `tile-ok` (value ms), `tile-retry` (detail the container's status, or `threw`), `tile-refused` (`oversize`, `unsupported`, `unprocessable-key`), `tile-dead`, `tile-skipped` |
 | admin-api | `tour-created`, `tour-published` (`share` or `save`), `tour-unpublished`, `tour-deleted`, `pano-deleted`, `account-deleted` (`deleted` or `pending`), `invite-created`, `invite-accepted` |
 | public-api | `client-error` (detail the app) |

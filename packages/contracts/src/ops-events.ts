@@ -10,7 +10,7 @@ export const OPS_EVENTS_SCHEMA_VERSION = 'o1';
 export const OPS_EVENT_NAMES = [
   /** upload-api handed out an upload URL. detail: new | replace | plan. value: bytes. */
   'upload-url',
-  /** upload-api refused one. detail: the refusal (limit reached, paused, ...). */
+  /** upload-api refused one. detail: a code (daily-limit, paused, ...), else status-<n>. */
   'upload-refused',
   /** tiler-consumer tiled an original. value: ms from job start to the container's answer. */
   'tile-ok',
