@@ -853,6 +853,25 @@ describe('TourViewer', () => {
       expect(about()!.getAttribute('aria-expanded')).toBe('false');
     });
 
+    it('stays open, keeping focus, while a change is in flight', async () => {
+      const { viewer } = renderViewer({
+        data: data({ descriptions: { square: 'Busy on Saturdays.', church: 'From 1702.' } }),
+      });
+      await waitFor(() => expect(viewer().load.mock.calls[0]?.[0]).toBe('square'));
+      fireEvent.click(about()!);
+      viewer().defer = true;
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(viewer().pending).toHaveLength(1));
+      const aside = panel()!;
+      // Still the scene on screen's text, and focus never left the panel.
+      expect(within(aside).getByText('Busy on Saturdays.')).toBeTruthy();
+      aside.focus();
+      await act(async () => viewer().pending[0]!.resolve());
+      expect(panel()).toBe(aside);
+      expect(within(aside).getByText('From 1702.')).toBeTruthy();
+      expect(aside.contains(document.activeElement)).toBe(true);
+    });
+
     it('takes the place of an open point, and the other way round', () => {
       renderViewer({ description: 'A walk round the old town.' });
       fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));

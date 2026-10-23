@@ -372,7 +372,9 @@ export function TourViewer({
     setActive(h);
     if (h) setInfoOpen(false);
   };
-  const sceneDescription = moving ? undefined : data.descriptions?.[panoId];
+  // The scene on screen's, kept while a change is in flight: the old pano is still
+  // shown, and an About panel that unmounted mid-move would drop focus.
+  const sceneDescription = data.descriptions?.[panoId];
   const hasInfo = !!description || !!sceneDescription;
   const loadFailed = (error: unknown, id: string) => {
     // A failed change leaves the old pano on screen: go back to it, which

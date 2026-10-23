@@ -36,7 +36,7 @@
 }
 .tour-loading__label {
   font: 500 13px var(--fmono);
-  color: rgba(244, 241, 234, 0.6);
+  opacity: 0.6;
 }
 @keyframes tour-loading-in {
   to {
