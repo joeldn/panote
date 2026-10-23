@@ -1,4 +1,9 @@
-import { PANO_PATTERN, type PlanImageType } from '@internal/contracts';
+import {
+  PANO_PATTERN,
+  UploadUsageSchema,
+  type PlanImageType,
+  type UploadUsage,
+} from '@internal/contracts';
 import { z } from 'zod';
 
 import { AuthRequiredError } from '../auth.js';
@@ -50,32 +55,40 @@ export interface UploadApi {
   presign(req: PresignRequest): Promise<UploadUrlOk>;
   /** A PUT URL for a tour's new floor-plan image, at a fresh key of its own. */
   presignPlan(req: PlanPresignRequest): Promise<PlanUrlOk>;
+  /** What the signed-in user holds against the upload limits, for the account page. */
+  getUsage(): Promise<UploadUsage>;
 }
 
 export function createUploadApi(opts: UploadApiOptions): UploadApi {
   const base = (opts.baseUrl ?? '').replace(/\/+$/, '');
   const doFetch: FetchLike = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const url = `${base}/api/upload-url`;
-  const post = async (req: object): Promise<{ status: number; body: unknown }> => {
-    const res = await doFetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${await opts.getToken()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(req),
-    });
+  const send = async (req?: object): Promise<{ status: number; body: unknown }> => {
+    const auth = { Authorization: `Bearer ${await opts.getToken()}` };
+    const res = await doFetch(
+      url,
+      req === undefined
+        ? { method: 'GET', headers: auth }
+        : {
+            method: 'POST',
+            headers: { ...auth, 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+          },
+    );
     if (res.status === 401) throw new AuthRequiredError('401 from /api/upload-url');
     const body = await readJson(res);
     if (!res.ok) throw new ApiError(res.status, body);
     return { status: res.status, body };
   };
   return {
+    async getUsage() {
+      return parseWith(UploadUsageSchema, url, (await send()).body);
+    },
     async presignPlan(req) {
-      return parseWith(PlanUrlOkSchema, url, (await post({ kind: 'plan', ...req })).body);
+      return parseWith(PlanUrlOkSchema, url, (await send({ kind: 'plan', ...req })).body);
     },
     async presign(req) {
-      const { status, body } = await post(req);
+      const { status, body } = await send(req);
       const ok = parseWith(UploadUrlOkSchema, url, body);
       if (req.panoId !== undefined && ok.panoId !== req.panoId) {
         throw new ApiError(status, body, 'presign returned a different panoId');

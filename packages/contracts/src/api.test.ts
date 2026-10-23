@@ -17,6 +17,8 @@ import {
   PanoStatusSchema,
   PanoSummarySchema,
   TourOkSchema,
+  signInOf,
+  UploadUsageSchema,
 } from './api.js';
 
 describe('PanoConfigOkSchema canonicalizes legacy out-of-range angles/fov', () => {
@@ -237,5 +239,26 @@ describe('OperatorRestoreRequestSchema', () => {
     },
   ])('refuses %j', (body) => {
     expect(OperatorRestoreRequestSchema.safeParse(body).success).toBe(false);
+  });
+});
+
+describe('signInOf', () => {
+  it('is the connection part of an Auth0 user id', () => {
+    expect(signInOf('google-oauth2|123')).toBe('google-oauth2');
+    expect(signInOf('email|abc|def')).toBe('email');
+    expect(signInOf('no-provider')).toBe('');
+  });
+});
+
+describe('UploadUsageSchema', () => {
+  it('takes a null limit as unlimited, and no negative counts', () => {
+    const usage = {
+      panos: 3,
+      bytes: 10,
+      uploadsToday: 1,
+      limits: { maxPanos: 500, maxBytes: null, maxUploadsPerDay: 50 },
+    };
+    expect(UploadUsageSchema.safeParse(usage).success).toBe(true);
+    expect(UploadUsageSchema.safeParse({ ...usage, panos: -1 }).success).toBe(false);
   });
 });

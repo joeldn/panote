@@ -6,6 +6,13 @@ export function formatCount(n: number): string {
   return `${rounded}${unit}`;
 }
 
+/** 20 GB, 1.5 GB, 340 MB: binary units, as the storage limit is set. */
+export function formatBytes(bytes: number): string {
+  const gb = bytes / 1024 ** 3;
+  if (gb >= 1) return `${Number(gb.toFixed(1))} GB`;
+  return `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [

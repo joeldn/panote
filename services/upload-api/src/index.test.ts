@@ -150,8 +150,8 @@ describe('upload-url', () => {
     }
   });
 
-  it('404 for GET /api/upload-url', async () => {
-    const r = await SELF.fetch('https://x/api/upload-url', { method: 'GET' });
+  it('404 for PUT /api/upload-url (GET is the usage read)', async () => {
+    const r = await SELF.fetch('https://x/api/upload-url', { method: 'PUT' });
     expect(r.status).toBe(404);
     expect(await r.json()).toEqual({ error: 'not found' });
   });

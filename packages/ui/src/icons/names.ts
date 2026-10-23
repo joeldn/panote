@@ -159,6 +159,7 @@ export const UI_ICONS = [
   'trash',
   'trash-can',
   'triangle-exclamation',
+  'user',
   'user-group',
   'xmark',
 ] as const;

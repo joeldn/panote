@@ -29,3 +29,75 @@
 .delete-account__input:focus-visible {
   border-color: var(--accent);
 }
+
+/* The account page at /app/account (no design screen; follows the dashboard's type). */
+.acct {
+  max-width: 720px;
+}
+
+.acct__section {
+  margin-top: 36px;
+}
+
+.acct__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 24px;
+  margin: 0;
+  font: 400 15px/1.4 var(--fbody);
+  color: var(--ink);
+}
+
+.acct__facts dt {
+  color: var(--ink-55);
+}
+
+.acct__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.acct__hint {
+  max-width: 56ch;
+  margin: 14px 0 16px;
+  font: 400 13px/1.55 var(--fbody);
+  color: var(--ink-62);
+}
+
+.acct__meters {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.acct__meter {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 16px;
+  font: 400 15px/1.4 var(--fbody);
+}
+
+.acct__meter-value {
+  font: 400 13px var(--fmono);
+  color: var(--ink-62);
+}
+
+.acct__bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--ink-08);
+}
+
+.acct__bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+}
+
+.acct__bar-fill--full {
+  background: var(--accent);
+}

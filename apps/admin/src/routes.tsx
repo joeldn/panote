@@ -2,6 +2,7 @@ import type { RouteObject } from 'react-router';
 
 import { Callback } from './Callback.js';
 import {
+  Account,
   Dashboard,
   Editor,
   InsightsModal,
@@ -34,6 +35,7 @@ export const routes: RouteObject[] = [
             ],
           },
           { path: 'panos/unused', element: <UnusedPanos /> },
+          { path: 'account', element: <Account /> },
           // An editor invite's link: /app/invite#<token>.
           { path: 'invite', element: <Invite /> },
           { path: '*', element: <NotFound /> },

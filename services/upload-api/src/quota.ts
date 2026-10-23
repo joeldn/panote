@@ -73,6 +73,29 @@ export const checkQuota = async (
   req: QuotaRequest,
 ): Promise<QuotaRefusal | null> => {
   if (limits.maxPanos === null && limits.maxBytes === null) return null;
+  const { panos, bytes } = await countHoldings(r2, sub, req.replacing);
+  if (limits.maxPanos !== null) {
+    // A new pano must fit under the limit; a replace only must not be over it.
+    if (req.replacing === undefined ? panos >= limits.maxPanos : panos > limits.maxPanos) {
+      return 'pano limit reached';
+    }
+  }
+  if (limits.maxBytes !== null && bytes + req.size > limits.maxBytes) {
+    return 'storage limit reached';
+  }
+  return null;
+};
+
+/**
+ * What the owner holds against the storage limits, in one listing of their panos/ prefix:
+ * panos not on their way out (no `deleting` tombstone), and their originals' bytes, less
+ * `replacing`'s (a replace's old original goes).
+ */
+export const countHoldings = async (
+  r2: Pick<R2S3Client, 'listObjects'>,
+  sub: string,
+  replacing?: string,
+): Promise<{ panos: number; bytes: number }> => {
   const prefix = userPanosPrefix(sub);
   const originalBytes = new Map<string, number>();
   const panoIds = new Set<string>();
@@ -89,18 +112,9 @@ export const checkQuota = async (
   for (const panoId of panoIds) {
     if (deleting.has(panoId)) continue;
     panos += 1;
-    if (panoId !== req.replacing) bytes += originalBytes.get(panoId) ?? 0;
+    if (panoId !== replacing) bytes += originalBytes.get(panoId) ?? 0;
   }
-  if (limits.maxPanos !== null) {
-    // A new pano must fit under the limit; a replace only must not be over it.
-    if (req.replacing === undefined ? panos >= limits.maxPanos : panos > limits.maxPanos) {
-      return 'pano limit reached';
-    }
-  }
-  if (limits.maxBytes !== null && bytes + req.size > limits.maxBytes) {
-    return 'storage limit reached';
-  }
-  return null;
+  return { panos, bytes };
 };
 
 export interface DailyUploads {
@@ -126,6 +140,16 @@ export const checkDailyUploads = async (
   now: number,
 ): Promise<DailyUploads> => {
   if (maxUploadsPerDay === null) return { refused: false, expired: [] };
+  const { recent, expired } = await countRecentUploads(r2, sub, now);
+  return { refused: recent + 1 > maxUploadsPerDay, expired };
+};
+
+/** The owner's upload-log entries from the past 24 hours, and the older ones to prune. */
+export const countRecentUploads = async (
+  r2: Pick<R2S3Client, 'listObjects'>,
+  sub: string,
+  now: number,
+): Promise<{ recent: number; expired: string[] }> => {
   const prefix = userUploadLogPrefix(sub);
   const since = now - UPLOAD_WINDOW_MS;
   let recent = 0;
@@ -137,7 +161,7 @@ export const checkDailyUploads = async (
     if (Number.isNaN(at) || at < since) expired.push(key);
     else recent += 1;
   }
-  return { refused: recent + 1 > maxUploadsPerDay, expired };
+  return { recent, expired };
 };
 
 /** Logs one issued upload URL for checkDailyUploads; written before the URL is returned. */

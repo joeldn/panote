@@ -41,7 +41,7 @@ function renderAt(path: string, api: Partial<AdminApi>, auth = fakeAuth()) {
           value={{
             user: { sub: 'u1' },
             api: api as AdminApi,
-            upload: { presign: vi.fn(), presignPlan: vi.fn() },
+            upload: { presign: vi.fn(), presignPlan: vi.fn(), getUsage: vi.fn() },
             requestSignIn: () => {},
             holdSignIn: () => {},
             signOut: async () => {},

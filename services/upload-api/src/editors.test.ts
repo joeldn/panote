@@ -5,8 +5,11 @@ import {
   tourKey,
   tourOwnerKey,
   uploadedForKey,
+  deletingKey,
+  uploadLogKey,
   userUploadLogPrefix,
   type TourMembers,
+  type UploadUsage,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { SELF } from 'cloudflare:test';
@@ -185,5 +188,47 @@ describe('an editor uploading to a shared tour', () => {
   it('checks the tourId', async () => {
     const r = await post('editor', { ...upload, tourId: 'bad id' });
     expect(r.status).toBe(400);
+  });
+});
+
+// The account page's read, on the same route: what the caller holds against the limits.
+describe('GET /api/upload-url', () => {
+  const usage = (who: string) =>
+    SELF.fetch('https://x/api/upload-url', { headers: { Authorization: `Bearer ${who}` } });
+
+  it('counts the panos, originals and the past day of upload URLs, with the limits', async () => {
+    const now = Date.now();
+    objects.set(originalKey(OWNER, 'p-gone'), 'bytes');
+    objects.set(deletingKey(OWNER, 'p-gone'), '');
+    objects.set(uploadLogKey(OWNER, new Date(now - 60_000), 'p-in'), '');
+    objects.set(uploadLogKey(OWNER, new Date(now - 25 * 60 * 60 * 1000), 'p-old'), '');
+    const r = await usage('owner');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Cache-Control')).toBe('no-store');
+    expect(await r.json<UploadUsage>()).toEqual({
+      panos: 2,
+      bytes: 10,
+      uploadsToday: 1,
+      limits: { maxPanos: 500, maxBytes: 21474836480, maxUploadsPerDay: 50 },
+    });
+    // A read: the expired entry is left for the next upload-URL request to prune.
+    expect(logged(OWNER)).toBe(2);
+  });
+
+  it("is the caller's own account, not the tours they edit", async () => {
+    expect(await (await usage('editor')).json<UploadUsage>()).toMatchObject({
+      panos: 0,
+      bytes: 0,
+      uploadsToday: 0,
+    });
+  });
+
+  it('needs a signed-in user, and takes no other method', async () => {
+    expect((await usage('nope')).status).toBe(401);
+    const put = await SELF.fetch('https://x/api/upload-url', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer owner' },
+    });
+    expect(put.status).toBe(404);
   });
 });
