@@ -46,7 +46,7 @@ export function embedSnippet(src: string, height: number): string {
   return (
     `<iframe src="${src}"\n` +
     `  width="100%" height="${height}" style="border:0"\n` +
-    `  allow="fullscreen"></iframe>`
+    `  allow="fullscreen; gyroscope; accelerometer"></iframe>`
   );
 }
 

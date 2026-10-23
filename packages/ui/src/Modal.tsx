@@ -105,6 +105,8 @@ export function Modal({
     (first ?? dialog)?.focus();
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape' && openStack[openStack.length - 1] === self) {
+        // Handled: nothing under the dialog (say, a pinned fullscreen viewer) acts on it too.
+        e.preventDefault();
         e.stopPropagation();
         onCloseRef.current();
       }
