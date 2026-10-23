@@ -49,6 +49,31 @@ describe('parseBanList', () => {
   });
 });
 
+describe('isBanned: a malformed list', () => {
+  it('warns with how many entries it ignored, never what they were', async () => {
+    const log = vi.fn();
+    const secret = `${sha256('banned@gmail.com')}, oops@example.com,${'a'.repeat(63)}`;
+    const banned = await isBanned(
+      { user: { email: 'banned@gmail.com' }, secrets: { BANNED_EMAIL_SHA256: secret } },
+      log,
+    );
+    expect(banned).toBe(true);
+    expect(log).toHaveBeenCalledOnce();
+    const line = log.mock.calls.flat().join(' ');
+    expect(line).toContain('2 BANNED_EMAIL_SHA256 entries');
+    expect(line).not.toContain('oops');
+    expect(line).not.toContain('aaaa');
+  });
+
+  it('stays quiet when every entry is a hash, or there are none', async () => {
+    const log = vi.fn();
+    const secrets = { BANNED_EMAIL_SHA256: ` ${sha256('x@example.com')} ,\n` };
+    await isBanned({ user: { email: 'maya@example.com' }, secrets }, log);
+    await isBanned({ user: { email: 'maya@example.com' } }, log);
+    expect(log).not.toHaveBeenCalled();
+  });
+});
+
 describe('emailsOf', () => {
   it('takes the root email and each linked identity’s', () => {
     expect(

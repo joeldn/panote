@@ -24,6 +24,7 @@ export interface Auth0Like {
       redirect_uri?: string;
       prompt?: 'login';
       max_age?: number;
+      login_hint?: string;
     };
     appState?: AppState;
   }): Promise<void>;
@@ -125,6 +126,8 @@ export interface Auth {
     connection: ConnectionId;
     returnTo?: string;
     reauthenticate?: boolean;
+    /** Pre-fills the address where the connection asks for one (Auth0 `login_hint`). */
+    loginHint?: string;
   }): Promise<void>;
   /** Finish the redirect on the callback route; resolves to the path to go to next. */
   handleCallback(url: string): Promise<string>;
@@ -229,7 +232,7 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
   return {
     configured: config.configured,
     connections,
-    async signIn({ connection, returnTo, reauthenticate = false }) {
+    async signIn({ connection, returnTo, reauthenticate = false, loginHint }) {
       if (!config.connections.includes(connection)) {
         throw new Error(`sign-in connection not enabled: ${connection}`);
       }
@@ -239,6 +242,7 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
           connection,
           redirect_uri: opts.redirectUri,
           ...(reauthenticate && { prompt: 'login', max_age: RECENT_AUTH_MAX_AGE_SECONDS }),
+          ...(loginHint && { login_hint: loginHint }),
         },
         appState: { returnTo: safeReturnTo(returnTo, origin) },
       });

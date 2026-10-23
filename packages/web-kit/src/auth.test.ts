@@ -90,13 +90,19 @@ describe('createAuth', () => {
   it('signIn with reauthenticate forces a fresh sign-in, bounded by the recent-auth age', async () => {
     const client = fakeClient();
     const auth = createAuth(config, { redirectUri: CB, createClient: async () => client });
-    await auth.signIn({ connection: 'google-oauth2', returnTo: '/app/', reauthenticate: true });
+    await auth.signIn({
+      connection: 'google-oauth2',
+      returnTo: '/app/',
+      reauthenticate: true,
+      loginHint: 'maya@example.com',
+    });
     expect(client.loginWithRedirect).toHaveBeenCalledWith({
       authorizationParams: {
         connection: 'google-oauth2',
         redirect_uri: CB,
         prompt: 'login',
         max_age: RECENT_AUTH_MAX_AGE_SECONDS,
+        login_hint: 'maya@example.com',
       },
       appState: { returnTo: '/app/' },
     });

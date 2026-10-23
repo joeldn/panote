@@ -9,10 +9,12 @@ import { useLocation } from 'react-router';
 import { useAuthEnv } from '../auth-context.js';
 import { cancelBeforeSignIn, runBeforeSignIn } from '../before-sign-in.js';
 import type { Session } from '../session.js';
-
-/** The query param that brings the owner back to this dialog after signing in again. */
-export const DELETE_ACCOUNT_PARAM = 'delete-account';
-export const DELETE_ACCOUNT_RESUME = 'reauthenticated';
+import {
+  DELETE_ACCOUNT_PARAM,
+  DELETE_ACCOUNT_RESUME,
+  forgetDeletingSub,
+  rememberDeletingSub,
+} from './delete-account-resume.js';
 
 export interface DeleteAccountModalProps {
   open: boolean;
@@ -20,6 +22,8 @@ export interface DeleteAccountModalProps {
   onClose: () => void;
   /** Back from the sign-in this dialog asked for: a second refusal isn't a stale sign-in. */
   reauthenticated?: boolean;
+  /** With `reauthenticated`: the sub that asked to sign in again (null when unknown). */
+  expectedSub?: string | null;
 }
 
 /** The current admin page (`/app/...`) with the resume param added, for the sign-in's returnTo. */
@@ -44,6 +48,7 @@ export function DeleteAccountModal({
   session,
   onClose,
   reauthenticated = false,
+  expectedSub = null,
 }: DeleteAccountModalProps) {
   const { auth, origins, assign } = useAuthEnv();
   const inputId = useId();
@@ -52,6 +57,13 @@ export function DeleteAccountModal({
   const warnedRef = useRef(false);
   const resumePath = useResumePath();
   const matches = typed.trim() === ACCOUNT_DELETE_CONFIRMATION;
+  // Back from signing in again, but not as the account that asked: deleting now would
+  // delete this other account, so the dialog refuses.
+  const wrongAccount =
+    reauthenticated && (!expectedSub || !session.user.sub || expectedSub !== session.user.sub);
+  const wrongAccountMessage = expectedSub
+    ? 'You signed in with a different account from the one you were deleting, so nothing was deleted. To delete that account, sign out and sign in with it, then try again.'
+    : 'We couldn’t tell which account you were deleting, so nothing was deleted. Choose Delete account from the menu to start again.';
 
   const close = () => {
     setTyped('');
@@ -60,6 +72,7 @@ export function DeleteAccountModal({
   };
 
   const confirm = async () => {
+    if (wrongAccount) throw new Error(wrongAccountMessage);
     try {
       await session.api.deleteAccount(typed.trim());
     } catch (e) {
@@ -93,14 +106,18 @@ export function DeleteAccountModal({
       warnedRef.current = true;
       throw new Error(`${refusal} Choose a sign-in option again to continue anyway.`);
     }
+    rememberDeletingSub(session.user.sub);
     try {
       await auth.signIn({
         connection: id as ConnectionId,
         returnTo: resumePath,
         reauthenticate: true,
+        // Steers Auth0 to the same account where the connection can use it (the email code).
+        ...(session.user.email && { loginHint: session.user.email }),
       });
     } catch (e) {
       cancelBeforeSignIn();
+      forgetDeletingSub();
       throw e;
     }
   };
@@ -143,10 +160,15 @@ export function DeleteAccountModal({
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
           />
+          {wrongAccount && (
+            <p className="delete-account__text" role="alert">
+              {wrongAccountMessage}
+            </p>
+          )}
         </>
       }
       confirmLabel="Delete account"
-      confirmDisabled={!matches}
+      confirmDisabled={!matches || wrongAccount}
       onConfirm={confirm}
       onCancel={close}
     />

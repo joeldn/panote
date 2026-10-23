@@ -16,7 +16,11 @@
  *   BANNED_EMAIL_SHA256  SHA-256 hashes (hex) of normalised email addresses, separated by
  *                        commas, spaces or newlines. Never the addresses themselves.
  *                        `node packages/auth0-actions/scripts/ban-email.cjs <email>` prints
- *                        the hash to add. Missing or empty: nobody is refused.
+ *                        the hash to add. Missing or empty: nobody is refused. Entries
+ *                        that aren't 64 hex digits are ignored, and counted in a warning.
+ *
+ * The hashes are unsalted SHA-256, so they keep addresses out of plain sight, not secret:
+ * anyone who can read the secret can test whether a given address is on the list.
  *
  * Every address the user carries is checked: the root email and each linked identity's,
  * verified or not (an unverified address that matches still belongs to whoever was banned or
@@ -61,6 +65,15 @@ async function emailHash(email) {
   return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+const isHash = (/** @type {string} */ h) => /^[0-9a-f]{64}$/.test(h);
+
+/** @param {string | undefined} secret @returns {string[]} the secret's non-empty entries */
+const entriesOf = (secret) =>
+  (secret ?? '')
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map((h) => h.toLowerCase());
+
 /**
  * The hashes in the secret; anything that isn't 64 hex digits is ignored.
  *
@@ -68,13 +81,15 @@ async function emailHash(email) {
  * @returns {Set<string>}
  */
 function parseBanList(secret) {
-  return new Set(
-    (secret ?? '')
-      .split(/[\s,]+/)
-      .map((h) => h.toLowerCase())
-      .filter((h) => /^[0-9a-f]{64}$/.test(h)),
-  );
+  return new Set(entriesOf(secret).filter(isHash));
 }
+
+/**
+ * How many of the secret's entries aren't hashes (a pasted address, a truncated hash).
+ *
+ * @param {string | undefined} secret
+ */
+const ignoredEntries = (secret) => entriesOf(secret).filter((h) => !isHash(h)).length;
 
 /**
  * @typedef {object} BanEvent
@@ -95,10 +110,17 @@ function emailsOf(user) {
 
 /**
  * @param {BanEvent} event
+ * @param {(...args: unknown[]) => void} [log]
  * @returns {Promise<boolean>}
  */
-async function isBanned(event) {
-  const banned = parseBanList(event.secrets?.BANNED_EMAIL_SHA256);
+// eslint-disable-next-line no-console
+async function isBanned(event, log = console.log) {
+  const secret = event.secrets?.BANNED_EMAIL_SHA256;
+  const ignored = ignoredEntries(secret);
+  // The count only: an entry may be a pasted address, which must not reach the logs.
+  if (ignored > 0)
+    log(LOG, `${ignored} BANNED_EMAIL_SHA256 entries are not SHA-256 hashes, ignored`);
+  const banned = parseBanList(secret);
   if (banned.size === 0) return false;
   const hashes = await Promise.all(emailsOf(event.user).map(emailHash));
   return hashes.some((h) => banned.has(h));

@@ -477,7 +477,11 @@ cancelled, or this account isn't allowed to sign in." The list is the Action sec
 newlines, so no plaintext address sits in the tenant config. Normalised means trimmed, lower case,
 any `+tag` dropped, and for `gmail.com`/`googlemail.com` the dots dropped too (so
 `J.Doe+x@googlemail.com` and `jdoe@gmail.com` are one entry). Missing or empty, nobody is refused.
-The log line is `[ban-list] sign-in refused` with neither the address nor the user id.
+The log line is `[ban-list] sign-in refused` with neither the address nor the user id; entries
+that aren't 64 hex digits (a pasted address, a cut-off hash) are ignored and logged as a count
+only (`[ban-list] N BANNED_EMAIL_SHA256 entries are not SHA-256 hashes, ignored`). The hashes are
+unsalted SHA-256: they keep addresses out of plain sight in the dashboard, but anyone who can read
+the secret can check whether a given address is on the list, so treat the secret as private.
 
 Setting it up, once per tenant (**Needs you**, Auth0 dashboard): Actions → Library → Create Action
 → Build from scratch, trigger *Login / Post Login*, runtime Node 22, name `Block banned emails`.
@@ -1337,7 +1341,10 @@ The admin app handles that `403` by asking the owner to sign in again: a sign-in
 again to delete your account") whose buttons call `loginWithRedirect` with `prompt=login` and
 `max_age=600`, so Auth0 makes them actually sign in even with a live Auth0 session. They come back
 to the same page with `?delete-account=reauthenticated`, the delete dialog opens again, and they
-type the phrase once more. If the server still refuses right after that sign-in (the Action isn't
+type the phrase once more. The sign-in sends the owner's email as `login_hint`, and the dialog
+keeps the sub that asked in `sessionStorage` across the redirect: if they come back signed in as
+a different account (or the tab lost that record), it refuses and deletes nothing, so a re-auth
+with the wrong Google account can't delete that other account. If the server still refuses right after that sign-in (the Action isn't
 deployed, so no token has the claim), the dialog says it couldn't confirm the sign-in and names
 the contact address instead of looping. With Google, `prompt=login` makes Auth0 itself
 re-authenticate; Google may sign the person straight back in if their Google session is live,

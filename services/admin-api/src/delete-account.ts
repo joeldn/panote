@@ -68,6 +68,29 @@ export const ownersOf = (record: Pick<AccountDeletionRecord, 'sub' | 'linkedSubs
 ];
 
 /**
+ * Read-modify-write of the marker, conditional on the ETag it read, so two writers (a
+ * retry adding linked subs, the sweep stamping completedAt) can't drop each other's
+ * change. `change` returns null to leave the marker as it is. On a lost race it reads
+ * again and retries once, then throws. False when the marker is missing or unreadable.
+ */
+const updateMarker = async (
+  bucket: R2Bucket,
+  sub: string,
+  change: (record: AccountDeletionRecord) => AccountDeletionRecord | null,
+): Promise<boolean> => {
+  const key = accountDeletionKey(sub);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const got = await getJson<unknown>(bucket, key).catch(() => null);
+    const parsed = got ? AccountDeletionRecordSchema.safeParse(got.value) : null;
+    if (!got || !parsed?.success) return false;
+    const next = change(parsed.data);
+    if (!next) return true;
+    if ((await putJson(bucket, key, next, { etagMatches: got.etag })).ok) return true;
+  }
+  throw new Error('account deletion marker changed while it was being updated');
+};
+
+/**
  * Create-only, so a retry keeps the first requestedAt (and any completedAt). A retry
  * whose token names linked subs the marker doesn't have yet adds them.
  */
@@ -88,23 +111,24 @@ export const markAccountForDeletion = async (
     etagDoesNotMatch: '*',
   });
   if (created.ok) return;
-  const existing = await readMarker(bucket, sub);
+  const readable = await updateMarker(bucket, sub, (existing) => {
+    const known = new Set(existing.linkedSubs);
+    if (linked.every((s) => known.has(s))) return null;
+    const merged = ownersOf({ sub, linkedSubs: [...(existing.linkedSubs ?? []), ...linked] });
+    return { ...existing, linkedSubs: merged.slice(1) };
+  });
   // An unreadable marker still blocks writes; rewrite it so the sweep can read it.
-  if (!existing) {
-    await putJson(bucket, accountDeletionKey(sub), record);
-    return;
-  }
-  const known = new Set(existing.linkedSubs);
-  if (linked.every((s) => known.has(s))) return;
-  const merged = ownersOf({ sub, linkedSubs: [...(existing.linkedSubs ?? []), ...linked] });
-  await putJson(bucket, accountDeletionKey(sub), { ...existing, linkedSubs: merged.slice(1) });
+  if (!readable) await putJson(bucket, accountDeletionKey(sub), record);
 };
 
 /** Stamps completedAt once; later sweeps keep the first one, so retention runs from it. */
 const markComplete = async (bucket: R2Bucket, sub: string, now: Date): Promise<void> => {
-  const record = await readMarker(bucket, sub);
-  if (!record || record.completedAt) return;
-  await putJson(bucket, accountDeletionKey(sub), { ...record, completedAt: now.toISOString() });
+  let stamped = false;
+  await updateMarker(bucket, sub, (record) => {
+    stamped = !record.completedAt;
+    return stamped ? { ...record, completedAt: now.toISOString() } : null;
+  });
+  if (!stamped) return;
   console.warn(
     `${LOG_PREFIX} account deleted: remove its Auth0 user within ${ACCOUNT_MARKER_DAYS} days (delete-account.ts --list)`,
   );

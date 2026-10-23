@@ -280,6 +280,37 @@ describe('DELETE /api/admin/account: linked identities', () => {
     });
   });
 
+  it('a linked sub added by a concurrent request is not lost (conditional write)', async () => {
+    const sub = subOf('acct-linked-race');
+    const key = accountDeletionKey(sub);
+    await markAccountForDeletion(env.BUCKET, sub, new Date('2026-10-01T00:00:00.000Z'), [
+      'email|a',
+    ]);
+    // Another request adds its own linked sub between this one's read and its write.
+    let raced = false;
+    const racing = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return async (k: string) => {
+            const obj = await target.get(k);
+            if (k !== key || raced || !obj) return obj;
+            raced = true;
+            const text = await obj.text();
+            await markAccountForDeletion(target, sub, new Date(), ['email|a', 'email|other']);
+            return { etag: obj.etag, json: async () => JSON.parse(text) as unknown };
+          };
+        }
+        const v = Reflect.get(target, prop) as unknown;
+        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    await markAccountForDeletion(racing, sub, new Date(), ['email|a', 'apple|mine']);
+    expect(raced).toBe(true);
+    expect([...((await marker(sub))?.linkedSubs ?? [])].sort()).toEqual(
+      ['apple|mine', 'email|a', 'email|other'].sort(),
+    );
+  });
+
   it("the sweep reaches a linked sub's late data too", async () => {
     const sub = subOf('acct-linked-sweep');
     const linked = 'email|acct-linked-sweep';

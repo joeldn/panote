@@ -638,7 +638,6 @@ export const BAN_EMAIL_HINT = (sub: string): string =>
  * through admin-api, and close the account, in that order. A quarantine makes and checks
  * every copy, and writes the case record, before any delete is requested.
  */
-
 export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promise<void> {
   const { store, log } = deps;
   // Read-only from here to the dry-run stop: find the tour(s) and the owner.

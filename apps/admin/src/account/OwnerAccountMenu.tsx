@@ -4,11 +4,13 @@ import { useSearchParams } from 'react-router';
 
 import { useAuthEnv } from '../auth-context.js';
 import type { Session } from '../session.js';
+import { DeleteAccountModal } from './DeleteAccount.js';
 import {
   DELETE_ACCOUNT_PARAM,
   DELETE_ACCOUNT_RESUME,
-  DeleteAccountModal,
-} from './DeleteAccount.js';
+  forgetDeletingSub,
+  readDeletingSub,
+} from './delete-account-resume.js';
 
 /** The account menu every admin page shows: home link, Delete account, sign out. */
 export function OwnerAccountMenu({ session }: { session: Session }) {
@@ -17,11 +19,14 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
   const resuming = params.get(DELETE_ACCOUNT_PARAM) === DELETE_ACCOUNT_RESUME;
   const [deleting, setDeleting] = useState(resuming);
   const [reauthenticated, setReauthenticated] = useState(resuming);
+  // Who asked to sign in again; read once here, forgotten in the effect below.
+  const [expectedSub] = useState(() => (resuming ? readDeletingSub() : null));
 
   // Back from signing in again for Delete account: the dialog is open; drop the param
   // so a reload or a shared link doesn't open it again.
   useEffect(() => {
     if (!resuming) return;
+    forgetDeletingSub();
     setParams(
       (p) => {
         const next = new URLSearchParams(p);
@@ -50,6 +55,7 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
         open={deleting}
         session={session}
         reauthenticated={reauthenticated}
+        expectedSub={expectedSub}
         onClose={() => {
           setDeleting(false);
           setReauthenticated(false);
