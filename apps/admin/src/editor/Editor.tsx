@@ -1007,6 +1007,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           planError={planError}
           onPlace={(panoId, x, y) => dispatch({ type: 'map/place', panoId, x, y })}
           onRemove={(panoId) => dispatch({ type: 'map/remove', panoId })}
+          onSuggest={(positions) => dispatch({ type: 'map/suggest', positions })}
           onSelect={select}
           onPlanFile={(file) => void addPlanImage(file)}
           onRemovePlan={() => {

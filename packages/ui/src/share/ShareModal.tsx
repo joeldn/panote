@@ -3,6 +3,7 @@ import { useId, useState, type ReactNode } from 'react';
 
 import { Button } from '../Button.js';
 import { ConfirmModal } from '../ConfirmModal.js';
+import { IFRAME_SANDBOX } from '../constants.js';
 import { cx } from '../cx.js';
 import { Modal, ModalHeader } from '../Modal.js';
 import { Segmented } from '../Segmented.js';
@@ -430,6 +431,7 @@ function EmbedTab({
           src={src}
           height={height}
           allow="fullscreen"
+          sandbox={IFRAME_SANDBOX}
           loading="lazy"
         />
       )}

@@ -1,4 +1,4 @@
-import { PANO_PATTERN } from '@internal/contracts';
+import { PANO_PATTERN, redactOwner } from '@internal/contracts';
 
 // Shape of a pano original's object-create notification key
 // (packages/contracts/src/keys.ts's originalKey()): panos/<owner>/<panoId>/original.
@@ -53,19 +53,6 @@ const LOG_PANO_RE = /^panos\/[^/]+\/([^/]+)\/original$/;
  * throws: a key of the wrong shape yields a fixed placeholder.
  */
 export const panoIdForLog = (key: string): string => LOG_PANO_RE.exec(key)?.[1] ?? '<unparsed-key>';
-
-// Any `panos/<owner>/` prefix inside free text, e.g. an R2 key in an error.
-// The owner match runs to the next `/` and may contain spaces (a malformed
-// owner can), but never crosses a line break, so it can't swallow more than
-// one line's worth of text looking for a slash.
-const OWNER_PREFIX_IN_TEXT_RE = /panos\/[^/\r\n]+\//g;
-
-/**
- * Strips the owner segment out of any `panos/<owner>/...` key in `text`,
- * keeping the rest of the key.
- */
-export const redactOwner = (text: string): string =>
-  text.replace(OWNER_PREFIX_IN_TEXT_RE, 'panos/<owner>/');
 
 /**
  * An error as text that is safe to log or return. Errors from the R2 S3

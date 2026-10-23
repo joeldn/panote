@@ -628,6 +628,19 @@
   padding: 2px 16px 6px;
 }
 
+.ed-map__suggest {
+  padding: 2px 16px 6px;
+}
+
+.ed-map__suggest .ed-map__suggested {
+  margin: 0;
+}
+
+/* Kept in the page while empty: a live region has to be there before it speaks. */
+.ed-map__suggest .ed-map__suggested:not(:empty) {
+  margin-top: 6px;
+}
+
 .ed-map__name {
   min-width: 0;
   overflow: hidden;
