@@ -5,6 +5,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { cx } from '../cx.js';
 import { prefetchPano } from '../panote-viewer.js';
 import { PanoStage, type ViewerFactory } from '../PanoStage.js';
+import { prefersReducedMotion } from '../reduced-motion.js';
 import { useStageEvents } from '../stage-events.js';
 import { usePanoViewer } from '../viewer-context.js';
 import { Compass } from './Compass.js';
@@ -125,10 +126,6 @@ export interface TourViewerProps {
 type Scene = { id: string; view: { yaw?: number; pitch?: number; fov?: number } | undefined };
 
 const NONE: never[] = [];
-
-// Auto-rotate is motion the visitor didn't start, so it starts off for those who opt out.
-const prefersReducedMotion = () =>
-  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const toHotspot = ({ source }: { source: Hotspot }): ViewerHotspot => source;
 

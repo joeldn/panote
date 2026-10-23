@@ -1,5 +1,7 @@
 .explore {
+  /* 1180px including the gutters, like .landing-wrap, so it lines up with the header. */
   max-width: 1180px;
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 40px 30px 90px;
 }

@@ -2,10 +2,10 @@ import type { PublishedTour } from '@internal/contracts';
 import { loadPublishedTour } from '@internal/web-kit';
 import { useEffect, useState } from 'react';
 
-/** The showcase tour behind the hero, or null while loading, unset or unavailable. */
+/** The showcase tour behind the hero: undefined while it loads, null when unset or unavailable. */
 export function useShowcase(cdnBase: string | undefined, slug: string | null | undefined) {
   const key = cdnBase && slug ? `${cdnBase}|${slug}` : null;
-  const [loaded, setLoaded] = useState<{ key: string; tour: PublishedTour } | null>(null);
+  const [loaded, setLoaded] = useState<{ key: string; tour: PublishedTour | null } | null>(null);
 
   useEffect(() => {
     if (!cdnBase || !slug) return;
@@ -13,15 +13,19 @@ export function useShowcase(cdnBase: string | undefined, slug: string | null | u
     const k = `${cdnBase}|${slug}`;
     loadPublishedTour(cdnBase, slug, { signal: ac.signal }).then(
       (result) => {
-        if (!ac.signal.aborted && result.kind === 'tour') setLoaded({ key: k, tour: result.tour });
+        if (!ac.signal.aborted)
+          setLoaded({ key: k, tour: result.kind === 'tour' ? result.tour : null });
       },
       (err: unknown) => {
         // The landing works without its hero tour; plain background instead.
-        if (!ac.signal.aborted) console.warn('showcase tour failed to load', err);
+        if (ac.signal.aborted) return;
+        console.warn('showcase tour failed to load', err);
+        setLoaded({ key: k, tour: null });
       },
     );
     return () => ac.abort();
   }, [cdnBase, slug]);
 
-  return loaded && loaded.key === key ? loaded.tour : null;
+  if (!key) return null;
+  return loaded?.key === key ? loaded.tour : undefined;
 }

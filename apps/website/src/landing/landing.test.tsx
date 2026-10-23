@@ -71,6 +71,18 @@ describe('landing', () => {
     // Without a showcase tour there's no live hero or "See a live tour".
     expect(screen.queryByRole('link', { name: /See a live tour/ })).toBeNull();
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeTruthy();
+    // No pano to show: the hero sizes to its content instead of filling an empty screen.
+    expect(document.querySelector('.landing-hero')?.classList).toContain('landing-hero--static');
+  });
+
+  it('starts with a skip link to the page content', async () => {
+    renderSite('/');
+    await screen.findByRole('heading', { level: 1 });
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    const first = document.querySelector('a[href], button, [tabindex]:not([tabindex="-1"])');
+    expect(first).toBe(skip);
+    expect(skip.getAttribute('href')).toBe('#main');
+    expect(screen.getByRole('main').id).toBe('main');
   });
 
   it('sends a signed-out upload through sign-in, back to the upload picker', async () => {
@@ -267,6 +279,9 @@ describe('landing showcase', () => {
     );
     const { loads, options } = renderWithShowcase();
     const live = await screen.findByRole('link', { name: /See a live tour/ });
+    expect(document.querySelector('.landing-hero')?.classList).not.toContain(
+      'landing-hero--static',
+    );
     expect(live.getAttribute('href')).toBe('/s/old-town');
     expect(screen.getByText('live · drag to look around')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Old town' })).toBeTruthy();
@@ -274,6 +289,7 @@ describe('landing showcase', () => {
       '/s/old-town',
     );
     await waitFor(() => expect(loads).toContain('church'));
+    expect(options[0]!.autoRotate).toMatchObject({ enabled: true });
     // The stage resolves scenes against the CDN's tiles.
     await expect(
       options[0]!.resolveSource!('church', new AbortController().signal),
@@ -292,6 +308,35 @@ describe('landing showcase', () => {
     expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
     expect(screen.queryByRole('link', { name: /See a live tour/ })).toBeNull();
     expect(screen.queryByText('Featured tour')).toBeNull();
+    await waitFor(() =>
+      expect(document.querySelector('.landing-hero')?.classList).toContain('landing-hero--static'),
+    );
+  });
+
+  it('keeps the full-height hero while the showcase loads', async () => {
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithShowcase();
+    await screen.findByRole('heading', { level: 1 });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const hero = document.querySelector('.landing-hero')!;
+    expect(hero.classList).not.toContain('landing-hero--static');
+  });
+
+  it('does not auto-rotate the hero for visitors who ask for less motion', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const key = String(input).slice(CDN.length);
+        return key in objects ? Response.json(objects[key]) : new Response('', { status: 404 });
+      }),
+    );
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === '(prefers-reduced-motion: reduce)',
+    }));
+    const { loads, options } = renderWithShowcase();
+    await waitFor(() => expect(loads).toContain('church'));
+    expect(options[0]!.autoRotate).toMatchObject({ enabled: false });
   });
 });
 

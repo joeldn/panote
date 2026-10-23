@@ -86,4 +86,5 @@ export {
   type TourViewerProps,
 } from './viewer/TourViewer.js';
 export { useViewerFrame } from './viewer/use-render.js';
+export { prefersReducedMotion } from './reduced-motion.js';
 export { ViewerControls, type ViewerControlsProps } from './viewer/ViewerControls.js';
