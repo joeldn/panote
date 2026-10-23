@@ -1,6 +1,7 @@
 import { Container } from '@cloudflare/containers';
+import { redactOwner } from '@internal/contracts';
 import { containerEnvVars } from './container-env.js';
-import { deriveUploadTarget, errorText, panoIdForLog, redactOwner } from './upload-prefix.js';
+import { deriveUploadTarget, errorText, panoIdForLog } from './upload-prefix.js';
 import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
 import { flushHeldDlqAlerts, sendDlqAlert, type DeadLetteredItem } from './alert.js';
 import { runHealthCheck } from './health.js';

@@ -156,6 +156,29 @@ export const uploadLogTime = (name: string): number => {
   return Date.parse(`${y}-${mo}-${d}T${h}:${mi}:${sec}.${ms}Z`);
 };
 
+// Every root whose next segment is the owner (encodeId(sub), which decodes back to
+// the sub). A new owner-keyed root goes here too, so logs and error reports mask it.
+export const OWNER_ROOTS = ['panos/', 'tours/', ACCOUNTS_ROOT, UPLOAD_LOG_ROOT] as const;
+const ownerRootAlternation = OWNER_ROOTS.map((r) => r.slice(0, -1)).join('|');
+// `<root>/<owner>/` anywhere in free text: an R2 key in an error, an S3 URL, a backup or
+// quarantine copy's key. Not right after a word character, and not the same word in a
+// route (`/api/tours/`, `/api/admin/tours/`, `/app/panos/`, `pub/tours/`, `explore/tours/`),
+// whose next segment is an id, unless that word is a quarantine case id
+// (`quarantine/api/panos/<owner>/...` is still a key). The owner runs to the next `/` and may hold spaces (a
+// malformed owner can) but never crosses a line break, so the scan stays linear.
+const OWNER_IN_TEXT_RE = new RegExp(
+  `(?<![A-Za-z0-9_-])(?<!(?<!quarantine/)(?:api|admin|app|pub|explore)/)(${ownerRootAlternation})/[^/\\r\\n]+/`,
+  'g',
+);
+
+/**
+ * Masks the owner segment of every owner-keyed R2 key in `text`
+ * (`panos/ZXhhbXBsZQ/p1/original` -> `panos/<owner>/p1/original`), keeping the
+ * rest of the key. For log lines and error bodies.
+ */
+export const redactOwner = (text: string): string =>
+  text.replace(OWNER_IN_TEXT_RE, (_m, root: string) => `${root}/<owner>/`);
+
 // Owner-free: base64url(sub) is reversible, so these must stay safe for a
 // public bucket - panoId alone (a server-generated UUID) is unique enough.
 export const TILES_ROOT = 'tiles/';

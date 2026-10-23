@@ -477,6 +477,24 @@ describe('HotspotPanel', () => {
     );
   });
 
+  it.each([
+    { kind: 'youtube', id: 'dQw4w9WgXcQ' },
+    { kind: 'vimeo', id: '76979871' },
+  ] as const)('sandboxes the $kind player, keeping fullscreen', (media) => {
+    panel(media);
+    const frame = screen.getByTitle('Kitchen');
+    const flags = frame.getAttribute('sandbox')!.split(' ').sort();
+    expect(flags).toEqual([
+      'allow-forms',
+      'allow-popups',
+      'allow-popups-to-escape-sandbox',
+      'allow-presentation',
+      'allow-same-origin',
+      'allow-scripts',
+    ]);
+    expect(frame.getAttribute('allow')).toContain('fullscreen');
+  });
+
   const panel = (media: NonNullable<ViewerHotspot['media']>, id = 'a') =>
     render(<HotspotPanel hotspot={{ ...base, id, media }} onClose={() => {}} />);
 
