@@ -195,7 +195,9 @@ export function useDashboard(
     };
   }, [api, applyPanos, reloadKey]);
 
-  // Once the tours are showing: the unused panos, for their filter chip and list.
+  // Once the tours are showing: the unused panos, for their filter chip and list. Asked on
+  // every visit on purpose: the chip only shows when there are some, so it needs the count,
+  // and a tour count is capped, so the server's walk of them stays bounded.
   const ready = status === 'ready';
   useEffect(() => {
     if (!ready) return;

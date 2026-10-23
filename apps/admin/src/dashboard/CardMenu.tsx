@@ -6,8 +6,7 @@ export type CardMenuItem = {
   label: string;
   icon: string;
   danger?: boolean;
-  disabled?: boolean;
-} & ({ to: string } | { href: string } | { onSelect(): void });
+} & ({ to: string } | { href: string } | { onSelect(): void; disabled?: boolean });
 
 export interface CardMenuProps {
   /** The menu button's accessible name, e.g. `More for “Harbour walk”`. */
