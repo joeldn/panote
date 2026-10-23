@@ -8,6 +8,7 @@ import {
 import { getJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
+import { forgetMembers } from './members.js';
 import { forgetTourOwner } from './operator.js';
 import { deletePlans } from './plans.js';
 import { mergePurges, type CdnPurge } from './purge.js';
@@ -64,6 +65,8 @@ export const deleteTour = async (
   // caller's own tour.json proves the tour is theirs; before tour.json goes, so a retry
   // after a crash still finds the tour and gets here again.
   files.push(...(await deletePlans(bucket, tourId)));
+  // Editors lose it now, not when their dashboards next notice.
+  await forgetMembers(bucket, sub, tourId);
   const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
 
   const referenced = await referencedPanoIds(bucket, sub, tourId);

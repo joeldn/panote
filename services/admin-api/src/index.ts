@@ -5,6 +5,8 @@ import {
   configKey,
   contentIdError,
   deletingKey,
+  InviteAcceptRequestSchema,
+  InviteCreateRequestSchema,
   isContentId,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
@@ -62,6 +64,20 @@ import {
   PANO_DELETE_RATE_PERIOD_SECONDS,
   WRITE_RATE_PERIOD_SECONDS,
 } from './limits.js';
+import {
+  acceptInvite,
+  createInvite,
+  getMembers,
+  isRefusal,
+  listSharedTours,
+  recordMembership,
+  removeMember,
+  revokeInvite,
+  scenesEditorMayNotAdd,
+  tourAccessFor,
+  uploadedForTour,
+  type AccessRefusal,
+} from './members.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
@@ -234,6 +250,37 @@ app.use('/api/admin/*', async (c, next) => {
 const ownerOf = async (c: Context<AppEnv>): Promise<string> =>
   c.get('sub') ?? (await authenticate(c.req.raw, c.env)).sub;
 
+// The caller's whole verified token (sub, email, ...), the same way.
+const authOf = async (c: Context<AppEnv>): Promise<AuthContext> =>
+  c.get('auth') ?? (await authenticate(c.req.raw, c.env));
+
+const refuse = (c: Context<AppEnv>, r: AccessRefusal) => c.json({ error: r.error }, r.status);
+
+/**
+ * Whose prefix a pano route uses: the caller's own, or with `?tourId=` naming a tour they
+ * edit, the tour owner's. An editor reaches only a pano in that tour, or one that has no
+ * config yet (their fresh upload, before Save adds it to the tour). Never for DELETE: an
+ * editor removes a scene from the tour, and the pano stays in the owner's library.
+ */
+const panoOwnerOf = async (
+  c: Context<AppEnv>,
+  sub: string,
+  panoId: string,
+  write: boolean,
+): Promise<string | AccessRefusal> => {
+  const tourId = c.req.query('tourId');
+  if (tourId === undefined) return sub;
+  const access = await tourAccessFor(c.env.BUCKET, sub, tourId, { write });
+  if (isRefusal(access)) return access;
+  if (access.role === 'owner') return sub;
+  // The tour's scenes are safe to go by: an editor can only add a pano they uploaded for it.
+  const tour = await getJson<TourDoc>(c.env.BUCKET, tourKey(access.owner, tourId));
+  if (tour?.value.scenes.some((s) => s.panoId === panoId)) return access.owner;
+  return (await uploadedForTour(c.env.BUCKET, access.owner, tourId, panoId))
+    ? access.owner
+    : { status: 404, error: 'not found' };
+};
+
 // Runs after the response; purgeCdn never throws, so a failure can't turn a 204 into a 500.
 const purgeLater = (
   c: { env: Env; executionCtx: { waitUntil: (p: Promise<unknown>) => void } },
@@ -274,11 +321,16 @@ app.get('/api/admin/panos', async (c) => {
 });
 
 app.get('/api/admin/panos/:panoId', async (c) => {
-  const sub = await ownerOf(c);
+  const caller = await ownerOf(c);
   const panoId = c.req.param('panoId');
   if (!isContentId(panoId)) {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: contentIdError('panoId') }, 400);
+  }
+  const sub = await panoOwnerOf(c, caller, panoId, false);
+  if (typeof sub !== 'string') {
+    c.header('Cache-Control', NO_STORE);
+    return refuse(c, sub);
   }
   // Cheap polling path (the upload chip's failure detection, every 15s, and the
   // editor's tiling watch, every 10s; both every 30s once a pano is slow):
@@ -309,7 +361,7 @@ app.get('/api/admin/panos/:panoId', async (c) => {
 });
 
 app.put('/api/admin/panos/:panoId/config', async (c) => {
-  const sub = await ownerOf(c);
+  const caller = await ownerOf(c);
   const panoId = c.req.param('panoId');
   const parsed = SceneConfigSchema.safeParse({
     ...(await jsonObjectBody(c.req.raw, MAX_CONFIG_BODY_BYTES)),
@@ -319,6 +371,8 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
   // 428 (no If-Match or If-None-Match) is checked before any state read, so it holds
   // regardless of whether a tombstone or the pano even exists. `If-None-Match: *` = create-only.
   const onlyIf = writeConditional(c.req.header('If-Match'), c.req.header('If-None-Match'));
+  const sub = await panoOwnerOf(c, caller, panoId, true);
+  if (typeof sub !== 'string') return refuse(c, sub);
   const [tombstone, original] = await Promise.all([
     c.env.BUCKET.head(deletingKey(sub, panoId)),
     c.env.BUCKET.head(originalKey(sub, panoId)),
@@ -402,11 +456,22 @@ app.get('/api/admin/tours', async (c) => {
 });
 
 app.get('/api/admin/tours/:tourId', async (c) => {
-  const sub = await ownerOf(c);
+  const caller = await ownerOf(c);
   const tourId = c.req.param('tourId');
   if (!isContentId(tourId)) {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: contentIdError('tourId') }, 400);
+  }
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId);
+  if (isRefusal(access)) {
+    c.header('Cache-Control', NO_STORE);
+    return refuse(c, access);
+  }
+  const sub = access.owner;
+  const role = access.role;
+  // Heals the editor's dashboard index if its write was lost; tiny, so after the answer.
+  if (role === 'editor') {
+    c.executionCtx.waitUntil(recordMembership(c.env.BUCKET, caller, sub, tourId));
   }
   const [obj, stored] = await Promise.all([
     c.env.BUCKET.get(tourKey(sub, tourId)),
@@ -426,14 +491,14 @@ app.get('/api/admin/tours/:tourId', async (c) => {
     ? { slug: record.slug, visibility: record.visibility, publishedAt: record.publishedAt }
     : null;
   if (c.req.query('include') !== 'configs') {
-    return c.json({ tour, etag: obj.etag, publish });
+    return c.json({ tour, etag: obj.etag, publish, role });
   }
   const configs = await loadSceneConfigs(c.env.BUCKET, sub, tour.scenes);
-  return c.json({ tour, etag: obj.etag, publish, configs });
+  return c.json({ tour, etag: obj.etag, publish, role, configs });
 });
 
 app.put('/api/admin/tours/:tourId', async (c) => {
-  const sub = await ownerOf(c);
+  const caller = await ownerOf(c);
   const tourId = c.req.param('tourId');
   const parsed = TourDocSchema.safeParse({
     ...(await jsonObjectBody(c.req.raw)),
@@ -442,13 +507,33 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
   // 428 before any state read, same reasoning as the config PUT above.
   const conditional = updateConditional(tourIfMatch(c.req.header('If-Match')));
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { write: true });
+  if (isRefusal(access)) return refuse(c, access);
+  const sub = access.owner;
+  let guard = conditional;
+  if (access.role === 'editor') {
+    // An editor adds only panos they uploaded for this tour, checked against the copy this
+    // write then replaces (its ETag is the guard), so nothing slips in between.
+    const saved = await getJson<TourDoc>(c.env.BUCKET, tourKey(sub, tourId));
+    if (!saved) return c.json({ error: 'not found' }, 404);
+    if (guard && guard.etagMatches !== saved.etag) return c.json({ error: 'conflict' }, 412);
+    guard = { etagMatches: saved.etag };
+    const refused = await scenesEditorMayNotAdd(
+      c.env.BUCKET,
+      sub,
+      tourId,
+      saved.value,
+      parsed.data,
+    );
+    if (refused.length) return c.json({ error: 'pano not found', panoIds: refused }, 403);
+  }
   // PUT never creates a tour - tourIds only ever come from POST - so a
   // missing key here is "not found", not a create (guardedPut's 404).
   const result = await guardedPut(
     c.env.BUCKET,
     tourKey(sub, tourId),
     parsed.data,
-    conditional,
+    guard,
     tourCustomMetadata(parsed.data),
   );
   if (!result.ok) {
@@ -493,12 +578,21 @@ const slugError = (slug: string): string | null => {
 const publisher = (env: Env, tourId: string) => env.PUBLISHER.get(env.PUBLISHER.idFromName(tourId));
 
 app.post('/api/admin/tours/:tourId/publish', async (c) => {
-  const sub = await ownerOf(c);
+  const caller = await ownerOf(c);
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
   const body = PublishRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { write: true });
+  if (isRefusal(access)) return refuse(c, access);
+  // An editor's Save republishes what is already shared, as the owner's does; the share
+  // link, its visibility and sharing a tour again stay the owner's.
+  const { slug, visibility, afterSave } = body.data;
+  if (access.role === 'editor' && (!afterSave || slug !== undefined || visibility !== undefined)) {
+    return c.json({ error: 'owner only' }, 403);
+  }
+  const sub = access.owner;
   const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
   const out = await publisher(c.env, tourId).publish(sub, tourId, body.data);
@@ -543,6 +637,81 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
 });
 
 app.get('/api/admin/tours/:tourId/insights', (c) => insightsRoute(c, c.req.param('tourId')));
+
+// --- Tour editors (members.ts) ---
+
+app.get('/api/admin/tours/:tourId/members', async (c) => {
+  const caller = await ownerOf(c);
+  const tourId = c.req.param('tourId');
+  c.header('Cache-Control', NO_STORE);
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId);
+  if (isRefusal(access)) return refuse(c, access);
+  return c.json(await getMembers(c.env.BUCKET, access, tourId));
+});
+
+app.post('/api/admin/tours/:tourId/invites', async (c) => {
+  const auth = await authOf(c);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const body = InviteCreateRequestSchema.safeParse(await jsonBody(c.req.raw));
+  if (!body.success) return c.json({ error: 'email must be an email address' }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, auth.sub, tourId, { ownerOnly: true });
+  if (isRefusal(access)) return refuse(c, access);
+  const out = await createInvite(
+    c.env.BUCKET,
+    { sub: auth.sub, email: auth.email },
+    tourId,
+    body.data.email,
+    new Date(),
+  );
+  return c.json(out.body, out.status);
+});
+
+app.delete('/api/admin/tours/:tourId/invites/:inviteId', async (c) => {
+  const caller = await ownerOf(c);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { ownerOnly: true });
+  if (isRefusal(access)) return refuse(c, access);
+  await revokeInvite(c.env.BUCKET, caller, tourId, c.req.param('inviteId'));
+  return c.body(null, 204);
+});
+
+// The owner removes an editor, or an editor leaves (their own member id).
+app.delete('/api/admin/tours/:tourId/members/:memberId', async (c) => {
+  const caller = await ownerOf(c);
+  const tourId = c.req.param('tourId');
+  const idError = tourIdError(tourId);
+  if (idError) return c.json({ error: idError }, 400);
+  const access = await tourAccessFor(c.env.BUCKET, caller, tourId);
+  if (isRefusal(access)) return refuse(c, access);
+  const ok = await removeMember(c.env.BUCKET, access, caller, tourId, c.req.param('memberId'));
+  return ok ? c.body(null, 204) : c.json({ error: 'owner only' }, 403);
+});
+
+app.post('/api/admin/invites/accept', async (c) => {
+  const auth = await authOf(c);
+  const body = InviteAcceptRequestSchema.safeParse(await jsonBody(c.req.raw));
+  if (!body.success) return c.json({ error: 'invite not found' }, 404);
+  const out = await acceptInvite(
+    c.env.BUCKET,
+    { sub: auth.sub, email: auth.email },
+    body.data.token,
+    new Date(),
+  );
+  return c.json(out.body, out.status);
+});
+
+app.get('/api/admin/shared-tours', async (c) => {
+  const caller = await ownerOf(c);
+  c.header('Cache-Control', NO_STORE);
+  const tours = await listSharedTours(c.env.BUCKET, caller, (p) => c.executionCtx.waitUntil(p));
+  return c.json({ tours });
+});
 
 // What account delete needs from the rest of the Worker; the sweep uses it too.
 const accountDeps = (env: Env): AccountDeps => ({

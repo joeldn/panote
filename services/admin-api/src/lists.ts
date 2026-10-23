@@ -90,7 +90,7 @@ export const resolvePanoTitle = async (
 
 // A publish.json's customMetadata ({ slug, visibility }, written by publish.ts);
 // null for an unpublished tour.
-const toPublishSummary = (
+export const toPublishSummary = (
   meta: Record<string, string> | undefined,
 ): { slug: string; visibility: 'public' | 'unlisted' } | null => {
   if (!meta?.slug) return null;

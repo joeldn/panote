@@ -95,6 +95,10 @@ export const publishKey = (u: string, t: string): string =>
 // after-Save publish skips the tour while it exists; an explicit publish clears it.
 export const sharingStoppedKey = (u: string, t: string): string =>
   `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/sharing-stopped.json`;
+// A tour's editors and pending invites (TourMembers in members.ts). Inside the tour's own
+// prefix, so it is backed up with the tour and only the owner's prefix ever holds it.
+export const membersKey = (u: string, t: string): string =>
+  `tours/${encodeId(u)}/${assertValidId(t, 'tourId')}/members.json`;
 // Account deletion marker: written first, so the delete is resumable and the
 // account read-only until it finishes. Owner-scoped like panos/ and tours/:
 // the CDN's WAF rule only lets tiles/, pub/ and slugs/ through.
@@ -118,6 +122,20 @@ export const accountSinceKey = (u: string): string => `${ACCOUNTS_ROOT}${encodeI
 export const TOUR_OWNERS_ROOT = 'tour-owners/';
 export const tourOwnerKey = (t: string): string =>
   `${TOUR_OWNERS_ROOT}${assertValidId(t, 'tourId')}.json`;
+// The tours an editor was added to, one MembershipRecord per tour, so their dashboard can
+// list them without scanning owners. A hint only: every read re-checks the owner's
+// members.json, which is the truth. Private, like accounts/: the record holds the owner's sub.
+export const MEMBERSHIPS_ROOT = 'memberships/';
+export const userMembershipsPrefix = (u: string): string => `${MEMBERSHIPS_ROOT}${encodeId(u)}/`;
+export const membershipKey = (u: string, t: string): string =>
+  `${userMembershipsPrefix(u)}${assertValidId(t, 'tourId')}.json`;
+// uploaded-for/<owner>/<panoId>.json: written by upload-api when a tour's editor uploads
+// into the owner's account, naming the one tour an editor may add that pano to (members.ts
+// PanoUploadedForSchema). Outside panos/, so a URL never used leaves no pano behind.
+export const UPLOADED_FOR_ROOT = 'uploaded-for/';
+export const userUploadedForPrefix = (u: string): string => `${UPLOADED_FOR_ROOT}${encodeId(u)}/`;
+export const uploadedForKey = (u: string, p: string): string =>
+  `${userUploadedForPrefix(u)}${assertValidId(p, 'panoId')}.json`;
 // Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
 // kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
 // public prefixes, and nothing in the Workers reads, lists or deletes it.
@@ -145,7 +163,14 @@ export const uploadLogTime = (name: string): number => {
 
 // Every root whose next segment is the owner (encodeId(sub), which decodes back to
 // the sub). A new owner-keyed root goes here too, so logs and error reports mask it.
-export const OWNER_ROOTS = ['panos/', 'tours/', ACCOUNTS_ROOT, UPLOAD_LOG_ROOT] as const;
+export const OWNER_ROOTS = [
+  'panos/',
+  'tours/',
+  ACCOUNTS_ROOT,
+  UPLOAD_LOG_ROOT,
+  MEMBERSHIPS_ROOT,
+  UPLOADED_FOR_ROOT,
+] as const;
 const ownerRootAlternation = OWNER_ROOTS.map((r) => r.slice(0, -1)).join('|');
 // `<root>/<owner>/` anywhere in free text: an R2 key in an error, an S3 URL, a backup or
 // quarantine copy's key. Not right after a word character, and not the same word in a
