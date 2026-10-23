@@ -11,6 +11,7 @@ import {
   userPanosPrefix,
   userToursPrefix,
   userMembershipsPrefix,
+  userUploadedForPrefix,
   userUploadLogPrefix,
   type AccountDeletionRecord,
 } from '@internal/contracts';
@@ -249,6 +250,8 @@ export const deleteAccountData = async (
   if (panos.length < panoIds.length) return false;
   // Off every tour they edit for someone else; at most MAX_MEMBERSHIPS, so not budgeted.
   await leaveAllTours(bucket, sub);
+  // Small records, one per pano an editor uploaded here: not counted against the budget.
+  await deletePrefix(bucket, userUploadedForPrefix(sub));
   // Empty objects, at most about a day's worth: not counted against the budget.
   await deletePrefix(bucket, userUploadLogPrefix(sub));
   return true;
@@ -302,6 +305,7 @@ const hasData = async (bucket: R2Bucket, owners: readonly string[]): Promise<boo
       userPanosPrefix(sub),
       userUploadLogPrefix(sub),
       userMembershipsPrefix(sub),
+      userUploadedForPrefix(sub),
     ]) {
       if ((await bucket.list({ prefix, limit: 1 })).objects.length > 0) return true;
     }

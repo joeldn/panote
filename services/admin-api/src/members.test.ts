@@ -1,5 +1,6 @@
 import {
   ACCOUNT_DELETE_CONFIRMATION,
+  accountDeletionKey,
   accountDisabledKey,
   configKey,
   INVITE_DAYS,
@@ -11,6 +12,7 @@ import {
   publishKey,
   tourKey,
   tourOwnerKey,
+  uploadedForKey,
   type InviteCreateOk,
   type MembersOk,
   type SharedToursOk,
@@ -91,6 +93,15 @@ const sharedTour = async (owner: string, editor: string) => {
   return t;
 };
 
+/** What upload-api leaves for an editor's new pano: the original and whose upload it is. */
+const editorUpload = async (owner: string, editor: string, tourId: string, panoId: string) => {
+  await env.BUCKET.put(originalKey(subOf(owner), panoId), 'bytes');
+  await env.BUCKET.put(
+    uploadedForKey(subOf(owner), panoId),
+    JSON.stringify({ v: 1, tourId, sub: subOf(editor) }),
+  );
+};
+
 const membersFile = async (owner: string, tourId: string) => {
   const obj = await env.BUCKET.get(membersKey(subOf(owner), tourId));
   return obj ? ((await obj.json()) as TourMembers) : null;
@@ -151,8 +162,8 @@ describe('invites', () => {
     const del = await api('rev-owner', 'DELETE', `/tours/${tourId}/invites/${second.invite.id}`);
     expect(del.status).toBe(204);
     expect((await accept('rev-ed', second.token)).status).toBe(404);
-    // Nothing left: the file goes too.
-    expect(await membersFile('rev-owner', tourId)).toBeNull();
+    // Nothing left: an empty file (a delete could drop a racing write), granting nothing.
+    expect(await membersFile('rev-owner', tourId)).toMatchObject({ members: [], invites: [] });
   });
 
   it(`stops working after ${INVITE_DAYS} days`, async () => {
@@ -162,6 +173,13 @@ describe('invites', () => {
     const r = await accept('exp-ed', token);
     expect(r.status).toBe(410);
     expect(await r.json()).toEqual({ error: 'invite expired', email: emailOf('exp-ed') });
+  });
+
+  it('takes no one on while the owner is disabled', async () => {
+    const { tourId } = await tourOf('acc-dis-owner');
+    const { token } = await invite('acc-dis-owner', tourId, emailOf('acc-dis-ed'));
+    await env.BUCKET.put(accountDisabledKey(subOf('acc-dis-owner')), '{}');
+    expect((await accept('acc-dis-ed', token)).status).toBe(404);
   });
 
   it("is the owner's alone to send, and never to themselves or an editor twice", async () => {
@@ -246,7 +264,7 @@ describe('what an editor can do', () => {
     ).toBe('Renamed scene');
 
     // A fresh upload in the owner's account, not in the tour yet: its first config only.
-    await env.BUCKET.put(originalKey(subOf('cfg-owner'), 'cfg-fresh'), 'bytes');
+    await editorUpload('cfg-owner', 'cfg-ed', tourId, 'cfg-fresh');
     const create = await api(
       'cfg-ed',
       'PUT',
@@ -256,8 +274,8 @@ describe('what an editor can do', () => {
     );
     expect(create.status).toBe(200);
     const status = await api('cfg-ed', 'GET', `/panos/cfg-fresh?tourId=${tourId}&status=1`);
-    // Configured now and still not in the tour: out of the editor's reach.
-    expect(status.status).toBe(404);
+    // Still theirs to reach before Save adds it: it was uploaded for this tour.
+    expect(status.status).toBe(200);
 
     // Another of the owner's panos, configured, in no tour the editor has.
     await readyPano('cfg-owner', 'cfg-other');
@@ -266,8 +284,66 @@ describe('what an editor can do', () => {
       hotspots: [],
     });
     expect(other.status).toBe(404);
+    // Nor one with no config yet that no editor uploaded for this tour.
+    await env.BUCKET.put(originalKey(subOf('cfg-owner'), 'cfg-bare'), 'bytes');
+    const bare = await api('cfg-ed', 'GET', `/panos/cfg-bare?tourId=${tourId}&status=1`);
+    expect(bare.status).toBe(404);
     // Without the tourId it is their own (empty) account.
     expect((await api('cfg-ed', 'GET', `/panos/${panoId}`)).status).toBe(404);
+  });
+
+  it("adds only panos they uploaded for this tour, never the owner's others", async () => {
+    const { tourId, panoId } = await sharedTour('add-owner', 'add-ed');
+    // The owner's pano in another, unshared tour: its id is public once that tour is.
+    await readyPano('add-owner', 'add-secret');
+    const r = await api('add-owner', 'POST', '/tours', {
+      title: 'Other',
+      scenes: [{ panoId: 'add-secret' }],
+    });
+    expect(r.status).toBe(201);
+    const put = (scenes: string[]) =>
+      api('add-ed', 'PUT', `/tours/${tourId}`, {
+        title: 'Shared',
+        scenes: scenes.map((id) => ({ panoId: id })),
+      });
+
+    const sneak = await put([panoId, 'add-secret']);
+    expect(sneak.status).toBe(403);
+    expect(await sneak.json()).toEqual({ error: 'pano not found', panoIds: ['add-secret'] });
+    const config = await api('add-ed', 'PUT', `/panos/add-secret/config?tourId=${tourId}`, {
+      title: 'Hijack',
+      hotspots: [],
+    });
+    expect(config.status).toBe(404);
+
+    // Uploaded for another tour: still not this one's.
+    await editorUpload('add-owner', 'add-ed', 'some-other-tour', 'add-elsewhere');
+    expect((await put([panoId, 'add-elsewhere'])).status).toBe(403);
+
+    // Their own upload for this tour goes in; scenes already there stay, and can be dropped.
+    await editorUpload('add-owner', 'add-ed', tourId, 'add-mine');
+    expect((await put([panoId, 'add-mine'])).status).toBe(200);
+    expect((await put(['add-mine'])).status).toBe(200);
+    // Once out, the owner's pano is like any other: an editor can't put it back.
+    expect((await put(['add-mine', panoId])).status).toBe(403);
+    // The owner adds whatever they like.
+    const owner = await api('add-owner', 'PUT', `/tours/${tourId}`, {
+      title: 'Shared',
+      scenes: [{ panoId: 'add-mine' }, { panoId: 'add-secret' }],
+    });
+    expect(owner.status).toBe(200);
+  });
+
+  it("checks an editor's If-Match against the tour it vets", async () => {
+    const { tourId, panoId } = await sharedTour('etag-owner', 'etag-ed');
+    const r = await api(
+      'etag-ed',
+      'PUT',
+      `/tours/${tourId}`,
+      { title: 'x', scenes: [{ panoId }] },
+      { 'If-Match': '"stale"' },
+    );
+    expect(r.status).toBe(412);
   });
 
   it('republishes on Save but leaves the share link and sharing to the owner', async () => {
@@ -312,6 +388,12 @@ describe('what an editor can do', () => {
       scenes: [{ panoId }],
     });
     expect(put.status).toBe(403);
+  });
+
+  it('sees no insights once the owner is being deleted', async () => {
+    const { tourId } = await sharedTour('ins-owner', 'ins-ed');
+    await env.BUCKET.put(accountDeletionKey(subOf('ins-owner')), '{}');
+    expect((await api('ins-ed', 'GET', `/tours/${tourId}/insights`)).status).toBe(404);
   });
 
   it('sees no other tour of the owner', async () => {
@@ -413,10 +495,12 @@ describe('deletion', () => {
 
   it("closes an owner's tours to their editors", async () => {
     const { tourId } = await sharedTour('odel-owner', 'odel-ed');
+    await editorUpload('odel-owner', 'odel-ed', tourId, 'odel-up');
     const r = await api('odel-owner', 'DELETE', '/account', {
       confirm: ACCOUNT_DELETE_CONFIRMATION,
     });
     expect(r.status).toBe(200);
+    expect(await env.BUCKET.head(uploadedForKey(subOf('odel-owner'), 'odel-up'))).toBeNull();
     expect(await env.BUCKET.head(membershipKey(subOf('odel-ed'), tourId))).toBeNull();
     expect((await api('odel-ed', 'GET', `/tours/${tourId}`)).status).toBe(404);
   });

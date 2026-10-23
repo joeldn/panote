@@ -1599,7 +1599,13 @@ Everything stays in the owner's account: an editor works on the owner's `tours/<
   `tourId` on `POST /api/upload-url`), and see its insights and its People list. Not: change the
   share link, visibility or Stop sharing, invite or remove others (they can leave), delete the
   tour, or delete the owner's panoramas. Pano routes take `?tourId=` for an editor and reach only
-  that tour's scenes, or a fresh upload that has no config yet.
+  that tour's scenes, or a panorama an editor uploaded for that tour and Save hasn't added yet.
+- **Which panoramas an editor can add.** An editor's tour Save may keep or drop the tour's
+  scenes, and add only panoramas an editor uploaded for this tour: upload-api writes
+  `uploaded-for/<owner>/<panoId>.json` (`{ v, tourId, sub }`) before it hands an editor an upload
+  URL. Anything else gets a 403 (`pano not found`), so knowing the id of the owner's other
+  panoramas (they are public in shared tours) never reaches them through a tour someone edits.
+  The records go with the owner's account; a deleted panorama's record is left, and is harmless.
 - **Invites.** `POST /api/admin/tours/<tourId>/invites` with `{ "email" }` returns a link token
   (`<tourId>.<secret>`) once; only its SHA-256 is stored. Panote sends no email: the owner copies
   the link. It works for 7 days, once, and only for someone signed in with that address as their

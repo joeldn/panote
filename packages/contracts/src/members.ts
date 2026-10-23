@@ -62,6 +62,18 @@ export const EMPTY_MEMBERS: TourMembers = { v: 1, ownerEmail: null, members: [],
 export const MembershipRecordSchema = z.object({ v: z.literal(1), owner: z.string().min(1) });
 export type MembershipRecord = z.infer<typeof MembershipRecordSchema>;
 
+/**
+ * uploaded-for/<owner>/<panoId>.json: an editor uploaded this pano for `tourId`. An
+ * editor may add a pano to a tour's scenes only when it is already there or has this record
+ * for that tour, so an editor can't reach the owner's other panos by naming them.
+ */
+export const PanoUploadedForSchema = z.object({
+  v: z.literal(1),
+  tourId: z.string().min(1),
+  sub: z.string().min(1),
+});
+export type PanoUploadedFor = z.infer<typeof PanoUploadedForSchema>;
+
 // An invite token is `<tourId>.<secret>`: the tourId finds the tour (through its owner
 // pointer), the secret proves the link. 32 random bytes, base64url.
 const TOKEN_RE = /^([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{43})$/;

@@ -9,7 +9,9 @@ import {
   planKey,
   resolveTourAccess,
   tourKey,
+  uploadedForKey,
   type AccessStore,
+  type PanoUploadedFor,
   type PlanImageType,
   type TourDoc,
 } from '@internal/contracts';
@@ -118,8 +120,12 @@ async function planUrl(
   const owner = await tourOwnerFor(r2, sub, tourId);
   if (owner instanceof Response) return owner;
   const planId = crypto.randomUUID();
-  const refused = await dailyLimit(r2, uploaders(sub, owner), planId, env, ctx);
+  const subs = uploaders(sub, owner);
+  const { maxUploadsPerDay } = quotaLimits(env);
+  const now = Date.now();
+  const refused = await dailyLimit(r2, subs, maxUploadsPerDay, now, ctx);
   if (refused) return refused;
+  await recordUploads(r2, subs, planId, maxUploadsPerDay, now);
   const key = planKey(tourId, planId, contentType);
   const url = await r2.presignPut(key, {
     expiresInSeconds: UPLOAD_URL_EXPIRY_SECONDS,
@@ -139,12 +145,10 @@ const uploaders = (sub: string, owner: string): string[] => (owner === sub ? [su
 async function dailyLimit(
   r2: R2,
   subs: readonly string[],
-  id: string,
-  env: Env,
+  maxUploadsPerDay: number | null,
+  now: number,
   ctx: ExecutionContext,
 ): Promise<Response | null> {
-  const { maxUploadsPerDay } = quotaLimits(env);
-  const now = Date.now();
   const daily = await Promise.all(
     subs.map((s) => checkDailyUploads(r2, s, maxUploadsPerDay, now).catch(unavailable)),
   );
@@ -152,10 +156,19 @@ async function dailyLimit(
   if (daily.some((d) => d.refused)) {
     return Response.json({ error: 'daily upload limit reached' }, { status: 403 });
   }
-  if (maxUploadsPerDay !== null) {
-    await Promise.all(subs.map((s) => recordUpload(r2, s, id, now).catch(unavailable)));
-  }
   return null;
+}
+
+// Logged before the URL exists, so every URL handed out is counted: no log entry, no URL.
+async function recordUploads(
+  r2: R2,
+  subs: readonly string[],
+  id: string,
+  maxUploadsPerDay: number | null,
+  now: number,
+): Promise<void> {
+  if (maxUploadsPerDay === null) return;
+  await Promise.all(subs.map((s) => recordUpload(r2, s, id, now).catch(unavailable)));
 }
 
 // A failed listing or write is no answer either: fail closed, as for the HEADs.
@@ -299,15 +312,29 @@ export default {
       // Storage counts against the account the pano goes into; the daily limit against
       // both the uploader and that account (uploaders above).
       const limits = quotaLimits(env);
-      const refusal = await checkQuota(r2, owner, limits, {
-        size,
-        replacing: 'panoId' in body ? panoId : undefined,
-      }).catch(unavailable);
+      const now = Date.now();
+      const subs = uploaders(sub, owner);
+      const [refusal, daily] = await Promise.all([
+        checkQuota(r2, owner, limits, {
+          size,
+          replacing: 'panoId' in body ? panoId : undefined,
+        }).catch(unavailable),
+        dailyLimit(r2, subs, limits.maxUploadsPerDay, now, ctx),
+      ]);
       if (refusal) return Response.json({ error: refusal }, { status: 403 });
-      // Logged before the URL exists, so every URL handed out is counted: no log
-      // entry, no URL.
-      const daily = await dailyLimit(r2, uploaders(sub, owner), panoId, env, ctx);
       if (daily) return daily;
+      await recordUploads(r2, subs, panoId, limits.maxUploadsPerDay, now);
+      // An editor's new pano: the record that lets them add it to this tour, and only this
+      // one (admin-api's tour PUT). Written before the URL, so no upload lands without it.
+      if (owner !== sub && !('panoId' in body)) {
+        const record: PanoUploadedFor = { v: 1, tourId: body.tourId as string, sub };
+        await r2
+          .put(uploadedForKey(owner, panoId), JSON.stringify(record), {
+            contentType: 'application/json',
+            ifNoneMatch: '*',
+          })
+          .catch(unavailable);
+      }
 
       const key = originalKey(owner, panoId);
       // content-length is signed too: the browser sends the File's size, which is the

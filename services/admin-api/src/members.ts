@@ -5,6 +5,7 @@ import {
   MAX_MEMBERSHIPS,
   MAX_TOUR_MEMBERS,
   MembershipRecordSchema,
+  PanoUploadedForSchema,
   membersKey,
   membershipKey,
   newInviteToken,
@@ -15,6 +16,7 @@ import {
   tourKey,
   tourOwnerKey,
   TourMembersSchema,
+  uploadedForKey,
   TourOwnerRecordSchema,
   userMembershipsPrefix,
   type AccessStore,
@@ -82,6 +84,39 @@ export const tourAccessFor = async (
 export const isRefusal = (a: TourAccess | AccessRefusal): a is AccessRefusal => 'status' in a;
 
 /**
+ * Whether an editor uploaded `panoId` for `tourId` (upload-api's uploaded-for record). The
+ * only owner's panos an editor may add to a tour's scenes, or reach before Save adds them.
+ */
+export const uploadedForTour = async (
+  bucket: R2Bucket,
+  owner: string,
+  tourId: string,
+  panoId: string,
+): Promise<boolean> => {
+  const got = await getJson<unknown>(bucket, uploadedForKey(owner, panoId));
+  const parsed = PanoUploadedForSchema.safeParse(got?.value);
+  return parsed.success && parsed.data.tourId === tourId;
+};
+
+/**
+ * The scenes an editor's tour PUT adds that they may not: every pano not already in the
+ * saved tour must be one an editor uploaded for this tour. Otherwise an editor could name
+ * any of the owner's panos (their ids are public) and then reach it through this tour.
+ */
+export const scenesEditorMayNotAdd = async (
+  bucket: R2Bucket,
+  owner: string,
+  tourId: string,
+  saved: Pick<TourDoc, 'scenes'>,
+  next: Pick<TourDoc, 'scenes'>,
+): Promise<string[]> => {
+  const had = new Set(saved.scenes.map((s) => s.panoId));
+  const added = [...new Set(next.scenes.map((s) => s.panoId))].filter((id) => !had.has(id));
+  const ok = await Promise.all(added.map((id) => uploadedForTour(bucket, owner, tourId, id)));
+  return added.filter((_, i) => !ok[i]);
+};
+
+/**
  * Makes the tour-owners/ pointer name `owner`, who must already be proven to hold
  * tour.json. Editor access goes through it, so unlike recordTourOwner this one must
  * succeed: a pointer naming anyone else is left alone and refused (tourIds are only ever
@@ -120,7 +155,8 @@ type Change<T> = { members: TourMembers; result: T } | { refuse: T };
 /**
  * Read, change, write members.json conditionally, redone from a fresh read when another
  * write got there first. `change` returning `refuse` writes nothing. A change that leaves
- * nobody and no invites deletes the file instead.
+ * nobody and no invites still writes the (empty) file: R2 deletes aren't conditional, so a
+ * delete could drop a write that raced it. The tour's delete removes the file.
  */
 const updateMembers = async <T>(
   bucket: R2Bucket,
@@ -133,12 +169,6 @@ const updateMembers = async <T>(
     const next = change(members);
     if ('refuse' in next) return next.refuse;
     const key = membersKey(owner, tourId);
-    if (next.members.members.length === 0 && next.members.invites.length === 0) {
-      // R2 deletes aren't conditional: a racing write here is lost, and that write was
-      // only ever an invite the owner can send again.
-      if (etag !== null) await bucket.delete(key);
-      return next.result;
-    }
     const onlyIf: R2Conditional = etag === null ? { etagDoesNotMatch: '*' } : { etagMatches: etag };
     if ((await putJson(bucket, key, next.members, onlyIf)).ok) return next.result;
     if (attempt >= MEMBERS_WRITE_ATTEMPTS) throw new Error('members.json kept changing');
@@ -291,11 +321,13 @@ export const acceptInvite = async (
   if (!pointer.success) return refused(404, 'invite not found');
   const owner = pointer.data.sub;
   if (owner === caller.sub) return refused(409, 'own tour');
-  const [tour, ownerDeleted] = await Promise.all([
+  // An owner being deleted, or disabled by the operator, takes on no new editors.
+  const [tour, ownerDeleted, ownerDisabled] = await Promise.all([
     bucket.head(tourKey(owner, tourId)),
     isAccountDeleted(bucket, owner),
+    isAccountDisabled(bucket, owner),
   ]);
-  if (!tour || ownerDeleted) return refused(404, 'invite not found');
+  if (!tour || ownerDeleted || ownerDisabled) return refused(404, 'invite not found');
   const tokenHash = await hashInviteSecret(secret);
 
   // The index cap is checked before the write; a race past it costs one extra entry.

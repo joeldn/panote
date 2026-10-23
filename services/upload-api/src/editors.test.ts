@@ -4,6 +4,7 @@ import {
   originalKey,
   tourKey,
   tourOwnerKey,
+  uploadedForKey,
   userUploadLogPrefix,
   type TourMembers,
 } from '@internal/contracts';
@@ -81,7 +82,7 @@ beforeEach(() => {
       }
       const key = keyOf(req);
       if (req.method === 'PUT') {
-        objects.set(key, '');
+        objects.set(key, await req.text());
         return new Response(null, { status: 200 });
       }
       const body = objects.get(key);
@@ -113,6 +114,21 @@ describe('an editor uploading to a shared tour', () => {
     expect(j.key).toBe(originalKey(OWNER, j.panoId));
     expect(logged(EDITOR)).toBe(1);
     expect(logged(OWNER)).toBe(1);
+    // Whose upload it is, for which tour: the one tour an editor may add it to.
+    expect(JSON.parse(objects.get(uploadedForKey(OWNER, j.panoId))!)).toEqual({
+      v: 1,
+      tourId: TOUR,
+      sub: EDITOR,
+    });
+  });
+
+  it("leaves no uploader record on the owner's own upload or a replace", async () => {
+    const own = (await (await post('owner', { ...upload, tourId: TOUR })).json()) as {
+      panoId: string;
+    };
+    expect(objects.has(uploadedForKey(OWNER, own.panoId))).toBe(false);
+    expect((await post('editor', { ...upload, tourId: TOUR, panoId: 'p-in' })).status).toBe(200);
+    expect(objects.has(uploadedForKey(OWNER, 'p-in'))).toBe(false);
   });
 
   it('is refused for a tour they are not on', async () => {

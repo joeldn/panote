@@ -5,14 +5,13 @@ import {
   MAX_INSIGHTS_DAYS,
   MIN_INSIGHTS_DAYS,
   PANO_PATTERN,
-  resolveTourAccess,
   type InsightsOk,
 } from '@internal/contracts';
 import { authenticate, rateLimit } from '@internal/worker-kit';
 import type { Context } from 'hono';
 
 import { WRITE_RATE_PERIOD_SECONDS } from './limits.js';
-import { bindingStore } from './members.js';
+import { isRefusal, tourAccessFor } from './members.js';
 
 // Tour insights (unit B5): Workers Analytics Engine via its SQL API. The
 // event schema is written by public-api's events.ts (blob1 = type, etc.).
@@ -180,11 +179,10 @@ export const insightsRoute = async (
       400,
     );
   }
-  // Access first, every time (the owner or one of the tour's editors): the cache below is
-  // shared by everyone who asks.
-  if (!(await resolveTourAccess(bindingStore(c.env.BUCKET), sub, tourId))) {
-    return c.json({ error: 'not found' }, 404);
-  }
+  // Access first, every time (the owner, or one of the tour's editors while the owner's
+  // account isn't being deleted): the cache below is shared by everyone who asks.
+  const access = await tourAccessFor(c.env.BUCKET, sub, tourId);
+  if (isRefusal(access)) return c.json({ error: access.error }, access.status);
   const cache = caches.default;
   const key = await insightsCacheKey(c.req.url, sub, tourId, days);
   const hit = await cache.match(key);

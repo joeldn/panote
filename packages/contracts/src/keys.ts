@@ -125,6 +125,13 @@ export const MEMBERSHIPS_ROOT = 'memberships/';
 export const userMembershipsPrefix = (u: string): string => `${MEMBERSHIPS_ROOT}${encodeId(u)}/`;
 export const membershipKey = (u: string, t: string): string =>
   `${userMembershipsPrefix(u)}${assertValidId(t, 'tourId')}.json`;
+// uploaded-for/<owner>/<panoId>.json: written by upload-api when a tour's editor uploads
+// into the owner's account, naming the one tour an editor may add that pano to (members.ts
+// PanoUploadedForSchema). Outside panos/, so a URL never used leaves no pano behind.
+export const UPLOADED_FOR_ROOT = 'uploaded-for/';
+export const userUploadedForPrefix = (u: string): string => `${UPLOADED_FOR_ROOT}${encodeId(u)}/`;
+export const uploadedForKey = (u: string, p: string): string =>
+  `${userUploadedForPrefix(u)}${assertValidId(p, 'panoId')}.json`;
 // Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
 // kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
 // public prefixes, and nothing in the Workers reads, lists or deletes it.
@@ -158,6 +165,7 @@ export const OWNER_ROOTS = [
   ACCOUNTS_ROOT,
   UPLOAD_LOG_ROOT,
   MEMBERSHIPS_ROOT,
+  UPLOADED_FOR_ROOT,
 ] as const;
 const ownerRootAlternation = OWNER_ROOTS.map((r) => r.slice(0, -1)).join('|');
 // `<root>/<owner>/` anywhere in free text: an R2 key in an error, an S3 URL, a backup or

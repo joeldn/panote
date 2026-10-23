@@ -71,7 +71,9 @@ import {
   recordMembership,
   removeMember,
   revokeInvite,
+  scenesEditorMayNotAdd,
   tourAccessFor,
+  uploadedForTour,
   type AccessRefusal,
 } from './members.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
@@ -247,13 +249,12 @@ const panoOwnerOf = async (
   const access = await tourAccessFor(c.env.BUCKET, sub, tourId, { write });
   if (isRefusal(access)) return access;
   if (access.role === 'owner') return sub;
+  // The tour's scenes are safe to go by: an editor can only add a pano they uploaded for it.
   const tour = await getJson<TourDoc>(c.env.BUCKET, tourKey(access.owner, tourId));
   if (tour?.value.scenes.some((s) => s.panoId === panoId)) return access.owner;
-  const [original, config] = await Promise.all([
-    c.env.BUCKET.head(originalKey(access.owner, panoId)),
-    c.env.BUCKET.head(configKey(access.owner, panoId)),
-  ]);
-  return original && !config ? access.owner : { status: 404, error: 'not found' };
+  return (await uploadedForTour(c.env.BUCKET, access.owner, tourId, panoId))
+    ? access.owner
+    : { status: 404, error: 'not found' };
 };
 
 // Runs after the response; purgeCdn never throws, so a failure can't turn a 204 into a 500.
@@ -482,13 +483,30 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   const access = await tourAccessFor(c.env.BUCKET, caller, tourId, { write: true });
   if (isRefusal(access)) return refuse(c, access);
   const sub = access.owner;
+  let guard = conditional;
+  if (access.role === 'editor') {
+    // An editor adds only panos they uploaded for this tour, checked against the copy this
+    // write then replaces (its ETag is the guard), so nothing slips in between.
+    const saved = await getJson<TourDoc>(c.env.BUCKET, tourKey(sub, tourId));
+    if (!saved) return c.json({ error: 'not found' }, 404);
+    if (guard && guard.etagMatches !== saved.etag) return c.json({ error: 'conflict' }, 412);
+    guard = { etagMatches: saved.etag };
+    const refused = await scenesEditorMayNotAdd(
+      c.env.BUCKET,
+      sub,
+      tourId,
+      saved.value,
+      parsed.data,
+    );
+    if (refused.length) return c.json({ error: 'pano not found', panoIds: refused }, 403);
+  }
   // PUT never creates a tour - tourIds only ever come from POST - so a
   // missing key here is "not found", not a create (guardedPut's 404).
   const result = await guardedPut(
     c.env.BUCKET,
     tourKey(sub, tourId),
     parsed.data,
-    conditional,
+    guard,
     tourCustomMetadata(parsed.data),
   );
   if (!result.ok) {
