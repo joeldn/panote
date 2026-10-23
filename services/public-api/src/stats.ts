@@ -122,28 +122,28 @@ export class TourStats {
     const isLike = req.method === 'POST' && url.pathname === '/like';
     const raw = url.searchParams.get('u');
     const who = isLike && raw && raw.length <= MAX_LIKER_LENGTH ? raw : null;
-    // Hashed before counts is read: from that read to its write only storage
-    // operations may await, since the input gate only holds across those. A crypto
-    // await in between would let two likes read the same count.
+    // Hashed (and legacy keys migrated) before counts is read: from that read to its
+    // write everything runs through the synchronous SQLite-backed KV API, with no
+    // await at all, so the read-modify-write can't interleave with another request
+    // and parallel views or likes never lose an increment.
     const likeKey = who === null ? null : await this.hash(who);
     if (who !== null && likeKey === null) {
       console.error('LIKER_HASH_KEY is not set: refusing a like (fails closed off dev)');
       return Response.json({ error: 'likes unavailable' }, { status: 503 });
     }
     const migrated = await this.migrateLegacyLikes();
-    const c = (await this.storage.get<Counts>('counts')) ?? { views: 0, likes: 0 };
+    const kv = this.storage.kv;
+    const c = kv.get<Counts>('counts') ?? { views: 0, likes: 0 };
     if (req.method === 'POST' && url.pathname === '/view') {
       c.views++;
-      await this.storage.put('counts', c);
+      kv.put('counts', c);
     } else if (who !== null && likeKey !== null && c.likes < MAX_LIKES_PER_TOUR) {
       const key = `${HASHED_PREFIX}${likeKey}`;
-      const liked =
-        (await this.storage.get(key)) ||
-        (!migrated && (await this.storage.get(`${LEGACY_PREFIX}${who}`)));
+      const liked = kv.get(key) || (!migrated && kv.get(`${LEGACY_PREFIX}${who}`));
       if (!liked) {
         c.likes++;
-        await this.storage.put('counts', c);
-        await this.storage.put(key, 1); // dedupe one like per user
+        kv.put('counts', c);
+        kv.put(key, 1); // dedupe one like per user
       }
     }
     return Response.json(c);

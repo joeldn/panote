@@ -149,6 +149,13 @@ describe('TourStats liker hashing', () => {
     expect(await (await callDO('t-race', '/')).json()).toEqual({ views: 0, likes: 20 });
   });
 
+  it('loses no increment when many views and likes land in parallel', async () => {
+    const views = Array.from({ length: 200 }, () => callDO('t-race-mix', '/view'));
+    const likes = Array.from({ length: 50 }, (_, i) => callDO('t-race-mix', `/like?u=u-${i}`));
+    await Promise.all([...views, ...likes]);
+    expect(await (await callDO('t-race-mix', '/')).json()).toEqual({ views: 200, likes: 50 });
+  });
+
   it('counts a like stored raw before the change, and rewrites it hashed', async () => {
     await runInDurableObject(stub('t-legacy'), async (_i, state) => {
       await state.storage.put({ counts: { views: 0, likes: 1 }, 'liked:alice': 1 });
