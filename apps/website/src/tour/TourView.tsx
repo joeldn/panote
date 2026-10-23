@@ -5,9 +5,9 @@ import {
   type PublishedTour,
   type ViewBeacon,
 } from '@internal/contracts';
-import { Logo, LogoMark, TourViewer } from '@internal/ui';
+import { Logo, LogoMark, TourViewer, type View } from '@internal/ui';
 import { publishedToViewerTour, tilesBaseUrl } from '@internal/web-kit';
-import { useContext, useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
 import './tour.css';
@@ -23,6 +23,7 @@ import { StatsChips } from './StatsChips.js';
 import { Unavailable } from './Unavailable.js';
 import { useIsOwner } from './use-owner.js';
 import { useTourStats } from './use-stats.js';
+import { roundView, sameParams, VIEW_PARAMS, viewFromParams, withView } from './view-url.js';
 
 // Mounted only once a scene is shown, so an unavailable tour never records a view.
 function TourStats({
@@ -109,6 +110,17 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
   // Embed ?pano= pins a single scene with no way out (design README:130).
   const single = embed && requested !== null;
   const start = requestedOk ? requested : (vt.tour?.start ?? null);
+  // The camera the link asks for; read as the tour opens, and on Back or Forward.
+  const urlView = useMemo(() => viewFromParams(params), [params]);
+  // The scene and camera last at rest on screen, for sharing "this view".
+  const [here, setHere] = useState<{ panoId: string; view: View } | null>(null);
+  // Each scene's first rest after it lands: a camera still there is not written to the URL.
+  const landedAt = useRef<{ panoId: string; view: string } | null>(null);
+  // The full page keeps the scene and camera in its URL: each scene is a history entry, so
+  // Back steps through scenes, and the camera at rest replaces the entry's. The embed
+  // leaves the URL alone: an iframe's entries join the host page's history, so its Back
+  // button would step through our scenes before it left their page.
+  const syncUrl = !embed;
 
   const [failed, setFailed] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -123,6 +135,34 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
 
   if (!start || failed || (single && !requestedOk)) return <Unavailable embed={embed} />;
 
+  const viewSettled = (panoId: string, view: View) => {
+    setHere({ panoId, view });
+    // Only for the scene the URL names: on Back, the old scene can settle before the
+    // one the URL now names lands, and must not overwrite its entry.
+    if (!syncUrl || panoId !== start) return;
+    const key = JSON.stringify(roundView(view));
+    const first = landedAt.current?.panoId !== panoId;
+    if (first) landedAt.current = { panoId, view: key };
+    const asksView = VIEW_PARAMS.some((k) => params.has(k));
+    if (!asksView && (first || landedAt.current?.view === key)) return;
+    const next = withView(params, panoId, view);
+    if (!sameParams(next, params)) setParams(next, { replace: true });
+  };
+  const sceneLanded = (id: string) => {
+    if (!syncUrl || id === start) return;
+    // A new entry per scene, so Back returns to the one before.
+    setParams((p) => withView(p, id, null));
+  };
+  // A tour link's query for a scene, with the camera at rest on it (when that is known)
+  // and the language if the URL picked one.
+  const viewQuery = (panoId: string) =>
+    withView(
+      new URLSearchParams(params.has('lang') ? { lang: params.get('lang') ?? '' } : {}),
+      panoId,
+      here?.panoId === panoId ? here.view : null,
+    ).toString();
+  const shareView = here && { name: vt.titles[here.panoId] ?? '', query: viewQuery(here.panoId) };
+
   return (
     <TourViewer
       {...(embed && { className: 'tour-view--embed' })}
@@ -130,6 +170,9 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
       title={tour.title}
       baseUrl={tilesBaseUrl(config)}
       start={start}
+      {...(urlView && { startView: urlView, sceneView: urlView })}
+      scene={start}
+      onViewSettle={viewSettled}
       single={single}
       // In someone else's page the wheel scrolls it until the visitor engages
       // the viewer; the full-page tour keeps every wheel for zooming.
@@ -138,6 +181,13 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
       languages={languages}
       onLanguageChange={chooseLanguage}
       {...(createViewer && { createViewer })}
+      // An iPhone can't make the frame fullscreen: open the tour page in a tab instead,
+      // where it can fill the screen. Not for a pinned scene, which has no way out.
+      {...(embed &&
+        !single && {
+          fullscreenHref: (panoId: string) =>
+            `/s/${encodeURIComponent(tour.slug)}?${viewQuery(panoId)}`,
+        })}
       {...(!embed && {
         bar: {
           home: (
@@ -180,6 +230,7 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
         )
       }
       onSceneChange={(id) => {
+        sceneLanded(id);
         setShown(true);
         trackViewerEvent({ type: 'scene', panoId: id });
       }}
@@ -204,6 +255,7 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
           title={tour.title}
           slug={tour.slug}
           visibility={tour.visibility}
+          currentView={shareView}
         />
       )}
     </TourViewer>
