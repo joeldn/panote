@@ -1,7 +1,5 @@
 import { z } from 'zod';
 
-import { OPS_EVENT_NAMES } from './ops-events.js';
-
 // GET /api/admin/ops/metrics: the operator dashboard (admin-api ops-metrics/, the admin
 // app's /app/ops). Each section comes from its own source and fails on its own: one
 // Cloudflare dataset that refuses a query leaves the rest of the page standing.
@@ -179,7 +177,9 @@ export const OpsPipelineSchema = z.object({
   /** Every event, detail and Worker seen, with its count and the sum of its values. */
   events: z.array(
     z.object({
-      event: z.enum(OPS_EVENT_NAMES),
+      // A string, not the enum: an admin app older than admin-api still parses the page
+      // when a new event name ships (admin-api itself drops names it doesn't know).
+      event: z.string(),
       detail: z.string(),
       service: z.string(),
       n: count(),

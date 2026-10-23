@@ -3063,7 +3063,7 @@ write, so there's nothing to set up. admin-api reads it back through `OPS_EVENTS
 | tiler-consumer | `tile-ok` (value ms), `tile-retry` (detail the container's status, or `threw`), `tile-refused` (`oversize`, `unsupported`, `unprocessable-key`), `tile-dead`, `tile-skipped` |
 | admin-api | `tour-created`, `tour-published` (`share` or `save`), `tour-unpublished`, `tour-deleted`, `pano-deleted`, `account-deleted` (`deleted` or `pending`), `invite-created`, `invite-accepted` |
 | public-api | `client-error` (detail the app) |
-| all four | `rate-limited` (detail the limiter's binding name) |
+| upload-api, admin-api, public-api | `rate-limited` (detail the limiter's binding name) |
 
 - **Nothing personal.** No sub, email, IP, tour or pano id: the event, a detail from a fixed
   vocabulary, the Worker and one number. The per-person view stays in each owner's own records.

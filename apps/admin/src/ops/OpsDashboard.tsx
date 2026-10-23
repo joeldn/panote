@@ -345,7 +345,7 @@ function Pipeline({ p, step }: { p: OpsPipeline; step: 'hour' | 'day' }) {
   const tileMs = tiles.reduce((s, e) => s + e.value, 0);
   const dead = total('tile-dead');
   const uploadBytes = rows('upload-url').reduce((s, e) => s + e.value, 0);
-  const refusals = p.events.filter((e) => REFUSAL_LABEL[e.event]);
+  const refusals = p.events.filter((e) => REFUSAL_LABEL[e.event as OpsEventName]);
   const activity = [
     ['Tours created', total('tour-created')],
     ['Tours shared', total('tour-published', 'share')],
@@ -390,7 +390,7 @@ function Pipeline({ p, step }: { p: OpsPipeline; step: 'hour' | 'day' }) {
         caption="Refused and retried"
         head={['What', 'Reason', 'Count']}
         rows={refusals.map((e) => [
-          REFUSAL_LABEL[e.event],
+          REFUSAL_LABEL[e.event as OpsEventName],
           e.detail || <span className="opsd__muted">none given</span>,
           formatNumber(e.n),
         ])}
