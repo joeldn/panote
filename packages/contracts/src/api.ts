@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { TILE_FORMATS } from './manifest.js';
-import { BACKUP_DATE_PATTERN, isRestorableKey, PANO_PATTERN } from './keys.js';
+import { BACKUP_DATE_PATTERN, isOriginalKey, isRestorableKey, PANO_PATTERN } from './keys.js';
 import { VisibilitySchema } from './publish.js';
 import { SceneConfigSchema, TourDocSchema } from './schema.js';
 
@@ -335,19 +335,28 @@ export const OPERATOR_RESTORE_MAX_KEYS = 100;
 // Far past any key the app writes (an encoded owner, a tourId and a file name), and under
 // R2's 1,024-byte key limit, so a request can't make the route build huge strings.
 export const OPERATOR_RESTORE_MAX_KEY_LENGTH = 512;
-export const OperatorRestoreRequestSchema = z.object({
-  date: z.string().regex(BACKUP_DATE_PATTERN),
-  keys: z
-    .array(
-      z
-        .string()
-        .max(OPERATOR_RESTORE_MAX_KEY_LENGTH)
-        .refine(isRestorableKey, 'not a restorable key'),
-    )
-    .min(1)
-    .max(OPERATOR_RESTORE_MAX_KEYS),
-  overwrite: z.boolean().default(false),
-});
+// `from`: a day's backup set (backup/<date>/, the default) or a day's trash
+// (trash/<date>/, deleted originals only; see TRASH_ROOT).
+export const OPERATOR_RESTORE_SOURCES = ['backup', 'trash'] as const;
+export type OperatorRestoreSource = (typeof OPERATOR_RESTORE_SOURCES)[number];
+export const OperatorRestoreRequestSchema = z
+  .object({
+    from: z.enum(OPERATOR_RESTORE_SOURCES).default('backup'),
+    date: z.string().regex(BACKUP_DATE_PATTERN),
+    keys: z
+      .array(z.string().max(OPERATOR_RESTORE_MAX_KEY_LENGTH))
+      .min(1)
+      .max(OPERATOR_RESTORE_MAX_KEYS),
+    overwrite: z.boolean().default(false),
+  })
+  .superRefine((body, ctx) => {
+    const restorable = body.from === 'trash' ? isOriginalKey : isRestorableKey;
+    body.keys.forEach((key, i) => {
+      if (!restorable(key)) {
+        ctx.addIssue({ code: 'custom', path: ['keys', i], message: 'not a restorable key' });
+      }
+    });
+  });
 export type OperatorRestoreRequest = z.infer<typeof OperatorRestoreRequestSchema>;
 // 200: what happened to each key. `existing`: left as it is (create-only); `missing`: not
 // in that day's set; `refused`: its owner's account is marked for deletion, or its owner

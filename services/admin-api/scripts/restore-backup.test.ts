@@ -49,6 +49,45 @@ describe('parseRestoreArgs', () => {
     expect(() => parseRestoreArgs(argv, ENV)).toThrow(error);
   });
 
+  it('lists and restores the trash by pano or owner', () => {
+    expect(parseRestoreArgs(['--list-trash'], ENV)).toEqual(
+      expect.objectContaining({ mode: 'trash-list', sub: undefined }),
+    );
+    expect(parseRestoreArgs(['--list-trash', '--sub', SUB], ENV)).toMatchObject({ sub: SUB });
+    expect(
+      parseRestoreArgs(['--from-trash', '--pano', 'p1', '--pano', 'p2', '--pano', 'p1'], ENV),
+    ).toMatchObject({
+      mode: 'trash-restore',
+      panos: ['p1', 'p2'],
+      sub: undefined,
+      date: undefined,
+      apply: false,
+      api: undefined,
+    });
+    expect(
+      parseRestoreArgs(['--from-trash', '--sub', SUB, '--date', DATE, '--apply'], ENV),
+    ).toMatchObject({
+      panos: [],
+      sub: SUB,
+      date: DATE,
+      apply: true,
+      api: { token: 'test-operator-token' },
+    });
+  });
+
+  it.each([
+    [['--from-trash'], /--pano, or --sub/],
+    [['--from-trash', '--tour', 't1'], /not --tour or --all/],
+    [['--from-trash', '--all'], /not --tour or --all/],
+    [['--from-trash', '--pano', 'a/b'], /--pano must match/],
+    [['--from-trash', '--pano', 'p1', '--date', 'x'], /YYYY-MM-DD/],
+    [['--list-trash', '--from-trash'], /exclusive/],
+    [['--list-trash', '--apply'], /takes only --sub/],
+    [['--date', DATE, '--all', '--pano', 'p1'], /only goes with --from-trash/],
+  ])('rejects %j', (argv, error) => {
+    expect(() => parseRestoreArgs(argv, ENV)).toThrow(error);
+  });
+
   it('makes a non-dev bucket be named twice', () => {
     const prod = { ...ENV, R2_BUCKET: 'pano-content' };
     expect(() => parseRestoreArgs(['--date', DATE, '--all'], prod)).toThrow(/--allow-bucket/);

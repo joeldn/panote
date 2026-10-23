@@ -44,6 +44,9 @@ import {
   sharingStoppedKey,
   slugKey,
   tourIdOfPlanKey,
+  trashDayPrefix,
+  trashKey,
+  isOriginalKey,
 } from './keys.js';
 
 describe('keys', () => {
@@ -408,6 +411,24 @@ describe('backup keys', () => {
       'pub/plans/../pl1.png',
     ]) {
       expect(tourIdOfPlanKey(key)).toBeNull();
+    }
+  });
+
+  it('keeps trash outside every owner prefix, every public prefix and the backup', () => {
+    const key = trashKey('2026-10-22', originalKey(sub, 'p1'));
+    expect(key).toBe(`trash/2026-10-22/${originalKey(sub, 'p1')}`);
+    expect(key.startsWith(userPanosPrefix(sub))).toBe(false);
+    expect(key.startsWith('panos/')).toBe(false);
+    expect(['tiles/', 'pub/', 'slugs/'].some((p) => key.startsWith(p))).toBe(false);
+    expect(isBackedUpKey(key)).toBe(false);
+    expect(trashDayPrefix('2026-10-22')).toBe('trash/2026-10-22/');
+    expect(() => trashDayPrefix('2026-10-22/..')).toThrow();
+  });
+
+  it('knows an original key from anything else', () => {
+    expect(isOriginalKey(originalKey(sub, 'p1'))).toBe(true);
+    for (const k of [configKey(sub, 'p1'), 'panos/a b/p1/original', 'panos/abc/p.1/original']) {
+      expect(isOriginalKey(k)).toBe(false);
     }
   });
 

@@ -7,6 +7,8 @@ import {
   backupKey,
   configKey,
   exploreEntryKey,
+  originalKey,
+  trashKey,
   exploreTourKey,
   planKey,
   publishKey,
@@ -21,12 +23,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   existingNow,
   listBackupSets,
+  listTrash,
+  planTrashRestore,
   planRestore,
   runRestore,
   type RestoreArgs,
   type RestoreStore,
 } from '../scripts/restore-backup-lib.ts';
 import { runBackup } from './backup.js';
+import { moveToTrash } from './trash.js';
 
 const SUB = 'google-oauth2|restore-1';
 const OTHER = 'google-oauth2|restore-2';
@@ -291,6 +296,7 @@ describe('runRestore', () => {
     expect(await (await env.BUCKET.get(configKey(SUB, 'p1')))!.json()).toEqual({ panoId: 'p1' });
   });
 
+  // Hundreds of R2 calls: about 2 s alone, past the 5 s default under a loaded run.
   it('batches a large restore into requests the route accepts', async () => {
     for (let i = 0; i < 120; i++) await put(configKey(SUB, `bulk-${i}`), { i });
     await runBackup(env.BUCKET, NOW);
@@ -301,10 +307,11 @@ describe('runRestore', () => {
 
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(await has(configKey(SUB, 'bulk-119'))).toBe(true);
-  });
+  }, 20_000);
 });
 
 describe('runRestore failures', () => {
+  // Hundreds of R2 calls: about 2 s alone, past the 5 s default under a loaded run.
   it('lists the keys that failed and exits 1, keeping the batches that went through', async () => {
     for (let i = 0; i < 120; i++) await put(configKey(SUB, `bulk-${i}`), { i });
     await runBackup(env.BUCKET, NOW);
@@ -329,7 +336,7 @@ describe('runRestore failures', () => {
       Array.from({ length: 120 }, (_, i) => has(configKey(SUB, `bulk-${i}`))),
     );
     expect(restored.filter(Boolean)).toHaveLength(100);
-  });
+  }, 20_000);
 
   it('passes on the keys the route reports as failed', async () => {
     await seedTour(SUB, 't1', 'p1', 'my-tour');
@@ -367,5 +374,74 @@ describe('existingNow', () => {
     const head = vi.spyOn(store, 'head');
     expect([...(await existingNow(store, keys))]).toEqual([tourKey(SUB, 't1')]);
     expect(head).not.toHaveBeenCalled();
+  });
+});
+
+describe('restoring originals from the trash', () => {
+  const trashArgs = (over: Record<string, unknown> = {}) =>
+    ({
+      mode: 'trash-restore',
+      panos: [],
+      sub: undefined,
+      date: undefined,
+      overwrite: false,
+      apply: true,
+      r2: { accountId: 'a', bucket: 'pano-content-dev', accessKeyId: 'k', secretAccessKey: 's' },
+      api: { origin: 'https://panote.dev', token: 'test-operator-token' },
+      ...over,
+    }) as RestoreArgs;
+  const trash = async (sub: string, panoId: string, date: string, body = 'jpeg') => {
+    await env.BUCKET.put(originalKey(sub, panoId), body, {
+      httpMetadata: { contentType: 'image/jpeg' },
+    });
+    await moveToTrash(env.BUCKET, originalKey(sub, panoId), new Date(`${date}T12:00:00Z`));
+  };
+
+  it('lists what is there, and picks the newest copy of each original', async () => {
+    await trash(SUB, 'p1', '2026-10-20', 'old');
+    await trash(SUB, 'p1', '2026-10-21', 'new');
+    await trash(OTHER, 'p2', '2026-10-21');
+
+    expect((await listTrash(store)).map((t) => [t.date, t.panoId])).toEqual([
+      ['2026-10-20', 'p1'],
+      ['2026-10-21', 'p1'],
+      ['2026-10-21', 'p2'],
+    ]);
+    const { picks } = await planTrashRestore(store, { panos: [], sub: SUB, date: undefined });
+    expect(picks.map((p) => [p.date, p.key])).toEqual([['2026-10-21', originalKey(SUB, 'p1')]]);
+    const older = await planTrashRestore(store, {
+      panos: ['p1'],
+      sub: undefined,
+      date: '2026-10-20',
+    });
+    expect(older.picks.map((p) => p.date)).toEqual(['2026-10-20']);
+    const none = await planTrashRestore(store, { panos: ['p9'], sub: undefined, date: undefined });
+    expect(none.notes).toEqual(['pano p9: not in the trash']);
+  });
+
+  it('dry run writes nothing; --apply puts the original back through the route', async () => {
+    await trash(SUB, 'p1', '2026-10-21');
+    const { lines, fetchFn, deps: d } = deps();
+
+    await runRestore(trashArgs({ panos: ['p1'], apply: false, api: undefined }), d);
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(await has(originalKey(SUB, 'p1'))).toBe(false);
+    expect(lines).toContain(`would restore ${originalKey(SUB, 'p1')} from the trash of 2026-10-21`);
+
+    const code = await runRestore(trashArgs({ panos: ['p1'] }), d);
+    expect(code).toBe(0);
+    const back = await env.BUCKET.get(originalKey(SUB, 'p1'));
+    expect(await back!.text()).toBe('jpeg');
+    expect(back!.httpMetadata?.contentType).toBe('image/jpeg');
+    expect(await has(trashKey('2026-10-21', originalKey(SUB, 'p1')))).toBe(true);
+  });
+
+  it('refuses an owner marked for deletion', async () => {
+    await trash(SUB, 'p1', '2026-10-21');
+    await put(accountDeletionKey(SUB), { v: 1, sub: SUB, requestedAt: 'x' });
+    const { deps: d } = deps();
+
+    await expect(runRestore(trashArgs({ sub: SUB }), d)).rejects.toThrow(/marked for deletion/);
+    expect(await has(originalKey(SUB, 'p1'))).toBe(false);
   });
 });

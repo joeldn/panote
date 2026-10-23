@@ -258,8 +258,9 @@ export const BACKUP_PROGRESS_KEY = `${BACKUP_ROOT}progress.json`;
  * can't rebuild: tours and their publish records, each pano's config, the public bundles
  * and share links, the tour-owner index, Explore, and the account markers; and the tours'
  * floor-plan images (at most MAX_PLAN_BYTES each, plan.ts). Not originals or tiles (large;
- * tiles and manifests are rebuilt from originals by a re-tile), nor the derived or
- * operational prefixes (tile-gc/, upload-log/, quarantine/, ops/).
+ * tiles and manifests are rebuilt from originals by a re-tile, and a deleted original waits
+ * in trash/ instead), nor the derived or operational prefixes (tile-gc/, upload-log/,
+ * quarantine/, trash/, ops/).
  */
 export const BACKUP_SOURCES: readonly { prefix: string; match: RegExp }[] = [
   { prefix: ACCOUNTS_ROOT, match: /^accounts\/[^/]+\/(deletion|disabled)\.json$/ },
@@ -280,5 +281,27 @@ export const isBackedUpKey = (key: string): boolean =>
  */
 export const isRestorableKey = (key: string): boolean =>
   isBackedUpKey(key) && !key.startsWith(ACCOUNTS_ROOT);
+
+// Deleted originals (admin-api's trash.ts): every delete of a pano's original moves it,
+// metadata and all, to trash/<YYYY-MM-DD>/<its key> first, and the daily sweep deletes a
+// day's trash TRASH_RETENTION_DAYS later, so a deleted photo can be restored by the operator
+// until then. Private: outside the WAF's public prefixes (only tiles/, pub/ and slugs/
+// pass), outside the R2 notification's panos/ prefix (no tiling job), and outside
+// panos/<owner>/, so it never lists as a pano or counts toward the owner's storage quota.
+export const TRASH_ROOT = 'trash/';
+export const TRASH_RETENTION_DAYS = 30;
+/** One day's trash: trash/<YYYY-MM-DD>/. */
+export const trashDayPrefix = (date: string): string => `${TRASH_ROOT}${assertBackupDate(date)}/`;
+/** Where a deleted `key` waits out the retention. */
+export const trashKey = (date: string, key: string): string => `${trashDayPrefix(date)}${key}`;
+/** True for a pano's original key (panos/<owner segment>/<panoId>/original), the only thing trashed. */
+export const isOriginalKey = (key: string): boolean => {
+  try {
+    parseOriginalKey(key);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export { PANO_PATTERN };

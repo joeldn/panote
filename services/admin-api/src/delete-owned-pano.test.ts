@@ -117,8 +117,9 @@ const seedReadyPano = (b: FakeBucket, sub: string, panoId: string, uploaded = OL
     .seed(previewKey(panoId, version), 'preview');
 };
 
+// The pano's own keys; its original's trash copy (trash.ts) is checked on its own.
 const panoKeys = (b: FakeBucket, panoId: string) =>
-  [...b.store.keys()].filter((k) => k.includes(`/${panoId}/`));
+  [...b.store.keys()].filter((k) => k.includes(`/${panoId}/`) && !k.startsWith('trash/'));
 
 describe('deleteOwnedPano', () => {
   it('deletes every object kind of an unused pano: original, config, marker, manifest, tiles, preview', async () => {
@@ -132,6 +133,9 @@ describe('deleteOwnedPano', () => {
 
     expect(result).toEqual({ ok: true, tilesDeleted: true });
     expect(panoKeys(b, 'p-unused')).toEqual([]);
+    expect([...b.store.keys()].filter((k) => k.startsWith('trash/'))).toEqual([
+      `trash/${new Date(NOW).toISOString().slice(0, 10)}/${originalKey(SUB, 'p-unused')}`,
+    ]);
     expect(panoKeys(b, 'p-sibling')).toHaveLength(5);
   });
 

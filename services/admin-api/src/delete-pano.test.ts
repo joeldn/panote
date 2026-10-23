@@ -8,12 +8,14 @@ import {
   tileGcPrefix,
   tilesPrefix,
   tileVersionPrefix,
+  trashKey,
 } from '@internal/contracts';
 import { describe, expect, it } from 'vitest';
 import { deletePano } from './delete-pano.js';
 
 const SUB = 'auth0|me';
 const PANO = 'p1';
+const NOW = new Date('2026-10-22T10:00:00Z');
 
 /** Records every call in order; can fault a delete under a prefix or insert
  * a key right after one, without a real R2 binding. */
@@ -45,10 +47,15 @@ class RecordingBucket {
     return this.store.has(key) ? ({ key } as unknown as R2Object) : null;
   }
 
+  async get(key: string) {
+    this.calls.push(`get:${key}`);
+    return this.store.has(key) ? ({ key, size: 0, body: null } as unknown as R2ObjectBody) : null;
+  }
+
   async put(key: string, _value: unknown) {
     this.calls.push(`put:${key}`);
     this.store.add(key);
-    return { key } as unknown as R2Object;
+    return { key, size: 0 } as unknown as R2Object;
   }
 
   async list(options?: R2ListOptions) {
@@ -85,16 +92,22 @@ const seededBucket = (): RecordingBucket =>
   ]);
 
 describe('deletePano', () => {
-  it('with proof, deletes in order: tombstone -> original -> tiles sweep -> rest of prefix -> tombstone last', async () => {
+  it('with proof, deletes in order: tombstone -> original (to the trash) -> tiles sweep -> rest of prefix -> tombstone last', async () => {
     const bucket = seededBucket();
 
-    const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO);
+    const result = await deletePano(bucket as unknown as R2Bucket, SUB, PANO, {
+      trash: true,
+      now: NOW,
+    });
 
     expect(result).toEqual({ ok: true, tilesDeleted: true });
     expect(bucket.calls).toEqual([
       `head:${originalKey(SUB, PANO)}`,
       `head:${deletingKey(SUB, PANO)}`,
       `put:${deletingKey(SUB, PANO)}`,
+      // Copied to the trash before it is deleted.
+      `get:${originalKey(SUB, PANO)}`,
+      `put:${trashKey('2026-10-22', originalKey(SUB, PANO))}`,
       `delete:${originalKey(SUB, PANO)}`,
       `list:${tilesPrefix(PANO)}`,
       `delete:${tileVersionPrefix(PANO, 't1-abc') + '0/px/0-0.webp'}`,
@@ -104,6 +117,16 @@ describe('deletePano', () => {
       `list:${panoPrefix(SUB, PANO)}`,
       `delete:${configKey(SUB, PANO)},${deletingKey(SUB, PANO)}`,
     ]);
+  });
+
+  it('a takedown (trash: false) deletes the original outright', async () => {
+    const bucket = seededBucket();
+
+    await deletePano(bucket as unknown as R2Bucket, SUB, PANO, { trash: false, now: NOW });
+
+    expect(bucket.calls.filter((c) => c.includes('trash/'))).toEqual([]);
+    expect(bucket.calls).not.toContain(`get:${originalKey(SUB, PANO)}`);
+    expect(bucket.calls).toContain(`delete:${originalKey(SUB, PANO)}`);
   });
 
   it('a late write landing right after the original is deleted is removed by the one tiles sweep', async () => {

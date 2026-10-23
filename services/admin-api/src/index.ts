@@ -55,6 +55,7 @@ import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './op
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { sweepSupersededTiles } from './tile-gc.js';
+import { restoreFromTrash, sweepTrash } from './trash.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
@@ -522,9 +523,13 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
     console.warn(`[takedown] operator ${action} of tour ${tourId} on Explore done`);
     return c.json({ action, purged: 0 });
   }
+  // A takedown's delete is for real: no trash copy (quarantine keeps what must be kept).
   const purge =
     action === 'delete'
-      ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
+      ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId), {
+          trash: false,
+          now: new Date(),
+        })
       : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
   purgeLater(c, purge);
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
@@ -533,21 +538,25 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
 });
 
 // Operator restore (scripts/restore-backup.ts): copies keys back from a day's backup set,
-// through the binding so each object's metadata comes back exactly. Same token as takedown.
+// or originals from a day's trash, through the binding so each object's metadata comes
+// back exactly. Same token as takedown.
 app.post(OPERATOR_RESTORE_PATH, async (c) => {
   if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
     return c.json({ error: 'not found' }, 404);
   }
   const body = OperatorRestoreRequestSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
-  const { date, keys, overwrite } = body.data;
-  const out = await restoreFromBackup(c.env.BUCKET, date, keys, overwrite);
+  const { from, date, keys, overwrite } = body.data;
+  const out =
+    from === 'trash'
+      ? await restoreFromTrash(c.env.BUCKET, date, keys, overwrite)
+      : await restoreFromBackup(c.env.BUCKET, date, keys, overwrite);
   // A share link or bundle that 404ed may be cached as such; the restored ones are purged.
   const files = out.restored.filter((k) => k.startsWith('pub/') || k.startsWith('slugs/'));
   purgeLater(c, { prefixes: [], files });
   // An audit line: counts only, keys carry the owner.
   console.warn(
-    `[restore] operator restore from ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused, ${out.failed.length} failed`,
+    `[restore] operator restore from ${from} ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused, ${out.failed.length} failed`,
   );
   return c.json(out);
 });
@@ -559,7 +568,8 @@ export default {
   // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
   // finishes (or re-sweeps) every account marked for deletion, and deletes tile
   // versions a re-tile superseded more than a day ago (no purge: nothing
-  // references their URLs any more, and edge copies age out on their own).
+  // references their URLs any more, and edge copies age out on their own), and
+  // empties trash/ of originals deleted 30 days ago (trash.ts).
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
   // It returns before runDailyCron, so the 15-minute cron never runs the daily
@@ -577,6 +587,7 @@ export default {
         'account-deletions': () =>
           sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)),
         'tile-gc': () => sweepSupersededTiles(env.BUCKET, now),
+        trash: () => sweepTrash(env.BUCKET, now),
       }),
     );
   },

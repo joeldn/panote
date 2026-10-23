@@ -7,15 +7,20 @@ import {
 } from '@internal/contracts';
 import { deletePrefix } from '@internal/worker-kit/r2-binding';
 
+import { discard, type DiscardOptions } from './trash.js';
+
 // tilesDeleted: the tiles/<panoId>/ sweep removed objects, so their edge copies need a purge.
 export type DeletePanoResult = { ok: true; tilesDeleted: boolean };
 
 /** Proves ownership via the original OR a tombstone left by an interrupted
- * delete; the route itself checks auth before this ever runs. */
+ * delete; the route itself checks auth before this ever runs. The original goes to
+ * the trash (trash.ts) unless `options.trash` is false, which only a takedown asks for:
+ * quarantine keeps what must be kept, and nothing taken down may linger anywhere else. */
 export const deletePano = async (
   bucket: R2Bucket,
   sub: string,
   panoId: string,
+  options: DiscardOptions = { trash: true, now: new Date() },
 ): Promise<DeletePanoResult> => {
   const [original, tombstone] = await Promise.all([
     bucket.head(originalKey(sub, panoId)),
@@ -28,7 +33,7 @@ export const deletePano = async (
     return { ok: true, tilesDeleted: false };
   }
   if (!tombstone) await bucket.put(deletingKey(sub, panoId), '');
-  await bucket.delete(originalKey(sub, panoId));
+  await discard(bucket, originalKey(sub, panoId), options);
   // One sweep suffices: every tiler write precedes that job's own last HEAD
   // of the original, which 404s after this delete and self-cleans that job's writes.
   const tiles = await deletePrefix(bucket, tilesPrefix(panoId));

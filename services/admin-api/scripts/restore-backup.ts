@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /* eslint-disable no-console -- a CLI; stdout is its interface */
 // Restores tour and config JSON, and floor-plan images, from admin-api's daily backup (backup/<YYYY-MM-DD>/):
-// one tour, one owner, or everything. It plans over the R2 S3 API and writes through
+// one tour, one owner, or everything; and deleted originals from the trash (trash/<date>/,
+// --list-trash, --from-trash). It plans over the R2 S3 API and writes through
 // admin-api's operator restore route, create-only unless --overwrite. A human runs this
 // by hand; see "Backups" in docs/deploy.md. Lists only, unless --apply.
 //

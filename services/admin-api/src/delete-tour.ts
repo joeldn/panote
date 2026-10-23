@@ -12,6 +12,7 @@ import { forgetTourOwner } from './operator.js';
 import { deletePlans } from './plans.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
+import type { DiscardOptions } from './trash.js';
 
 const deleteUnreferenced = async (
   bucket: R2Bucket,
@@ -19,6 +20,7 @@ const deleteUnreferenced = async (
   panoIds: readonly string[],
   referenced: Set<string>,
   purgePrefixes: string[],
+  options: DiscardOptions,
 ): Promise<string[]> => {
   const stillReferenced: string[] = [];
   for (let i = 0; i < panoIds.length; i += REFERENCE_CONCURRENCY) {
@@ -26,7 +28,7 @@ const deleteUnreferenced = async (
     await Promise.all(
       batch.map(async (panoId) => {
         if (referenced.has(panoId)) stillReferenced.push(panoId);
-        else if ((await deletePano(bucket, sub, panoId)).tilesDeleted) {
+        else if ((await deletePano(bucket, sub, panoId, options)).tilesDeleted) {
           purgePrefixes.push(tilesPrefix(panoId));
         }
       }),
@@ -37,11 +39,13 @@ const deleteUnreferenced = async (
 
 // Q5: deletes the tour and its unshared panos; idempotent, tour.json last. `unpublishTour`
 // must go through the TourPublisher. Returns what to purge from the CDN, in one batch (B6).
+// The panos' originals go to the trash unless `options.trash` is false (a takedown).
 export const deleteTour = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
   unpublishTour: () => Promise<string[]>,
+  options: DiscardOptions = { trash: true, now: new Date() },
 ): Promise<CdnPurge> => {
   // Unpublish first so a deleted tour never stays public, even on a partial delete.
   const files = await unpublishTour();
@@ -62,7 +66,7 @@ export const deleteTour = async (
   const ownPanoIds = [...new Set(own.value.scenes.map((s) => s.panoId))];
 
   const referenced = await referencedPanoIds(bucket, sub, tourId);
-  const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced, prefixes);
+  const deferred = await deleteUnreferenced(bucket, sub, ownPanoIds, referenced, prefixes, options);
   await bucket.delete(tourKey(sub, tourId));
   // The operator's owner pointer (it holds the sub) goes with the tour.
   await bucket.delete(tourOwnerKey(tourId));
@@ -73,6 +77,6 @@ export const deleteTour = async (
   // (see PR body); a rarer 3+-way overlap can still leak storage, not safety.
   if (deferred.length === 0) return result();
   const referencedAfter = await referencedPanoIds(bucket, sub, tourId);
-  await deleteUnreferenced(bucket, sub, deferred, referencedAfter, prefixes);
+  await deleteUnreferenced(bucket, sub, deferred, referencedAfter, prefixes, options);
   return result();
 };

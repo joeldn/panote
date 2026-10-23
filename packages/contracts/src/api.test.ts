@@ -186,6 +186,21 @@ describe('OperatorRestoreRequestSchema', () => {
   it('takes a date and restorable keys, create-only by default', () => {
     const parsed = OperatorRestoreRequestSchema.parse({ date: '2026-10-22', keys: [key] });
     expect(parsed.overwrite).toBe(false);
+    expect(parsed.from).toBe('backup');
+  });
+
+  it('takes originals, and only originals, from the trash', () => {
+    const original = 'panos/abc/p1/original';
+    expect(
+      OperatorRestoreRequestSchema.parse({ from: 'trash', date: '2026-10-22', keys: [original] })
+        .keys,
+    ).toEqual([original]);
+    for (const k of [key, 'panos/abc/p1/config.json', 'panos/abc/../original', 'trash/x']) {
+      expect(
+        OperatorRestoreRequestSchema.safeParse({ from: 'trash', date: '2026-10-22', keys: [k] })
+          .success,
+      ).toBe(false);
+    }
   });
 
   it.each([
@@ -195,6 +210,7 @@ describe('OperatorRestoreRequestSchema', () => {
     { date: '2026-10-22', keys: ['panos/abc/p1/original'] },
     { date: '2026-10-22', keys: ['backup/2026-10-21/tours/abc/t1/tour.json'] },
     { date: '2026-10-22', keys: Array.from({ length: 101 }, () => key) },
+    { from: 'bin', date: '2026-10-22', keys: [key] },
     {
       date: '2026-10-22',
       keys: [`tours/abc/t1/${'x'.repeat(OPERATOR_RESTORE_MAX_KEY_LENGTH)}.json`],
