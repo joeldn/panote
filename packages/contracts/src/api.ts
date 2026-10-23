@@ -42,11 +42,18 @@ export const TourPublishStateSchema = z.object({
 });
 export type TourPublishState = z.infer<typeof TourPublishStateSchema>;
 
+// The caller's part in a tour: its owner, or an editor the owner invited (members.ts).
+export const TOUR_ROLES = ['owner', 'editor'] as const;
+export const TourRoleSchema = z.enum(TOUR_ROLES);
+export type TourRole = z.infer<typeof TourRoleSchema>;
+
 export const TourOkSchema = z.object({
   tour: TourDocSchema,
   etag: z.string(),
   // Optional so clients stay compatible with responses from before B2.
   publish: TourPublishStateSchema.nullable().optional(),
+  // Optional for the same reason: absent means the caller owns it, as before editors.
+  role: TourRoleSchema.optional(),
 });
 export type TourOk = z.infer<typeof TourOkSchema>;
 

@@ -10,12 +10,14 @@ import {
   tourOwnerKey,
   userPanosPrefix,
   userToursPrefix,
+  userMembershipsPrefix,
   userUploadLogPrefix,
   type AccountDeletionRecord,
 } from '@internal/contracts';
 import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 
 import { deletePano } from './delete-pano.js';
+import { forgetMembers, leaveAllTours } from './members.js';
 import { deletePlans } from './plans.js';
 import { readPublishRecord } from './publish.js';
 import { mergePurges, type CdnPurge } from './purge.js';
@@ -194,6 +196,8 @@ const deleteOwnedTour = async (
     await unpublish();
     // Its plan images are public and owner-free: they don't go with the owner's prefix.
     purge.files.push(...(await deletePlans(bucket, tourId)));
+    // Editors' index entries live under their own prefixes; members.json goes with ours.
+    await forgetMembers(bucket, sub, tourId);
     // While tour.json exists a retry lists this tour again, so stats go before it.
     await deps.clearStats(tourId);
     await bucket.delete(tourKey(sub, tourId));
@@ -243,6 +247,8 @@ export const deleteAccountData = async (
     }
   });
   if (panos.length < panoIds.length) return false;
+  // Off every tour they edit for someone else; at most MAX_MEMBERSHIPS, so not budgeted.
+  await leaveAllTours(bucket, sub);
   // Empty objects, at most about a day's worth: not counted against the budget.
   await deletePrefix(bucket, userUploadLogPrefix(sub));
   return true;
@@ -291,7 +297,12 @@ export const deleteAccount = async (
 // One cheap LIST per prefix: whether anything is left (a late upload, say).
 const hasData = async (bucket: R2Bucket, owners: readonly string[]): Promise<boolean> => {
   for (const sub of owners) {
-    for (const prefix of [userToursPrefix(sub), userPanosPrefix(sub), userUploadLogPrefix(sub)]) {
+    for (const prefix of [
+      userToursPrefix(sub),
+      userPanosPrefix(sub),
+      userUploadLogPrefix(sub),
+      userMembershipsPrefix(sub),
+    ]) {
       if ((await bucket.list({ prefix, limit: 1 })).objects.length > 0) return true;
     }
   }
