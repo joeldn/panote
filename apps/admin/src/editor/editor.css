@@ -517,47 +517,35 @@
   transform: rotate(90deg);
 }
 
-/* The Map card's head: whether visitors see the map. */
+/* The Map card's head: whether visitors see the map (a native box, like Tour settings). */
 .ed-switch {
   display: inline-flex;
   cursor: pointer;
 }
 
 .ed-switch input {
-  position: relative;
-  width: 32px;
+  width: 18px;
   height: 18px;
   margin: 0;
-  border-radius: var(--r-pill);
-  background: var(--ink-13);
-  appearance: none;
+  accent-color: var(--accent);
   cursor: pointer;
-  transition: background 0.15s;
 }
 
-.ed-switch input::before {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: transform 0.15s;
+/* Notes for every card (translating, look-only, too much translation): never folded away. */
+.ed-side__notes {
+  pointer-events: auto;
+  flex: none;
+  padding: 2px 0 8px;
+  border-radius: var(--r-lg);
+  background: var(--cbg-solid);
+  box-shadow: var(--shadow-glass);
 }
 
-.ed-switch input:checked {
-  background: var(--accent);
-}
-
-.ed-switch input:checked::before {
-  transform: translateX(14px);
+.ed-side__notes > .ed-note {
+  margin: 10px 16px 0;
 }
 
 .ed-card__toggle:focus-visible,
-.ed-switch input:focus-visible,
 .ed-map__dot:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -707,8 +695,13 @@
   margin-right: auto;
 }
 
+/* Under the card's head, so it shows folded too. */
 .ed-map__error {
-  padding: 0 16px 12px;
+  padding: 10px 16px 0;
+}
+
+.ed-card--folded .ed-map__error {
+  padding-bottom: 12px;
 }
 
 .ed-map__fine {
@@ -1334,9 +1327,9 @@ p.ed-banner__text {
   }
 
   /* One sheet: the tab bar, then the one card it shows, filling the rest. */
+  /* As tall as the tab showing needs, at most the 46% every phone overlay allows for. */
   .ed-side--sheet {
     gap: 0;
-    height: 46%;
     overflow: hidden;
     border-radius: var(--r-lg);
     background: var(--cbg-solid);
@@ -1352,6 +1345,12 @@ p.ed-banner__text {
   .ed-side__tabs .pn-seg__opt {
     padding: 7px 0;
     font-size: 12.5px;
+  }
+
+  .ed-side--sheet .ed-side__notes {
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
   }
 
   .ed-side--sheet .ed-card {

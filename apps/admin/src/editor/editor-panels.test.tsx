@@ -38,8 +38,8 @@ beforeEach(() => {
   ({ create, viewers } = viewerFactory());
 });
 
-async function openTab() {
-  const r = renderAdmin('/app/t/t1', {
+async function openTab(path = '/app/t/t1') {
+  const r = renderAdmin(path, {
     auth: fakeAuth(),
     fetch: server.fetch,
     wrap: (tree) => <StageFactoryContext value={create}>{tree}</StageFactoryContext>,
@@ -111,6 +111,45 @@ describe('editor panels', () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it('opens and folds a card with storage full: reads work, writes throw', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    try {
+      const ui = await openTab();
+      fireEvent.click(toggle(ui, /^Map/));
+      expect(toggle(ui, /^Map/).getAttribute('aria-expanded')).toBe('true');
+      expect(ui.getByRole('group', { name: 'Floor plan' })).toBeTruthy();
+      fireEvent.click(toggle(ui, /^Map/));
+      expect(toggle(ui, /^Map/).getAttribute('aria-expanded')).toBe('false');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('keeps the notes for every card in view with Points folded', async () => {
+    server.setTour({
+      ...server.tour!.body,
+      languages: { default: 'en', others: ['de'] },
+    });
+    localStorage.setItem(panelStorageKey('points'), 'closed');
+    const ui = await openTab('/app/t/t1?lang=de');
+    expect(toggle(ui, /^Points/).getAttribute('aria-expanded')).toBe('false');
+    expect(side(ui).getByRole('note').textContent).toMatch(/Translating into Deutsch/);
+  });
+
+  it('returns focus to the point’s ⋯ button when Delete point is cancelled', async () => {
+    const ui = await openTab();
+    fireEvent.click(side(ui).getByRole('button', { name: 'Fountain' }));
+    const more = ui.getByRole('button', { name: 'Point actions' });
+    fireEvent.click(more);
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Delete point' }));
+    const modal = await screen.findByRole('dialog', { name: 'Delete point?' });
+    fireEvent.click(within(modal).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(more);
   });
 
   it('opens the folded Points card when a point is opened on the stage', async () => {

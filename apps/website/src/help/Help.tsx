@@ -83,24 +83,30 @@ export function Help() {
         On a narrow screen the language, settings, Insights and Preview buttons move into the{' '}
         <em>More</em> menu (<span aria-hidden="true">•••</span>) in the top bar.
       </p>
+      <p>
+        Beside the pano are four cards: <em>Panos</em>, <em>This pano</em>, <em>Points</em> and{' '}
+        <em>Map</em>. Click a card’s title to fold it away or open it again; the editor remembers
+        which you folded. On a phone they share one sheet at the bottom, with a tab for each.
+      </p>
 
       <h3>Points</h3>
       <p>
         Points are the markers visitors open for more about a spot. Press <em>Add point</em>, then
         click the pano where it goes; drag as you drop it to make it bigger. Each point has a title,
         text with Markdown formatting, an icon and a size, and can show an image, audio, a video, a
-        YouTube or Vimeo video, or a link. You can move, duplicate or delete a point from its panel.
-        A pano holds up to {MAX_HOTSPOTS} points.
+        YouTube or Vimeo video, or a link. Move it from its panel; its <em>⋯</em> button duplicates
+        or deletes it. A pano holds up to {MAX_HOTSPOTS} points.
       </p>
 
       <h3>Start view and north</h3>
       <p>
-        Turn the view to where visitors should first look and press <em>Start here</em>. Turn to
-        face north and press <em>North is here</em>: the compass and the mini-map use it to show
-        which way a visitor is facing.
+        These are in the <em>This pano</em> card, with the pano’s description. Turn the view to
+        where visitors should first look and press <em>Start here</em>. Turn to face north and press{' '}
+        <em>North is here</em>: the compass and the mini-map use it to show which way a visitor is
+        facing.
       </p>
 
-      <h3>The Tour card</h3>
+      <h3>The Panos card</h3>
       <ul>
         <li>Click a pano in the list to open it in the editor.</li>
         <li>
@@ -114,8 +120,9 @@ export function Help() {
         <li>
           <strong>Connections</strong> are the arrows on the floor that visitors walk between panos
           with. They point <em>from</em> the open pano: face the way the next pano is and press{' '}
-          <em>Aim here</em> beside it. Nudge an arrow 5° at a time, or remove it. A connection goes
-          one way, so open the other pano and aim one back.
+          <em>Aim here</em> beside it. Point at a connection, or reach it with the Tab key, to nudge
+          its arrow 5° at a time, aim it again or remove it. A connection goes one way, so open the
+          other pano and aim one back.
         </li>
         <li>
           The camera button replaces a pano’s photo and keeps its points. The cross removes it from
@@ -130,17 +137,18 @@ export function Help() {
 
       <h3>The Map card</h3>
       <p>
-        Open the Map card to show where each pano was taken. Drag a pano’s dot around the plan, or
-        click the plan to put the open pano there. Add a floor plan image (JPG, PNG or WebP) to draw
-        on, and keep north at the top. Visitors see the plan as a mini-map, with the scene list
-        under it.
+        The switch in the Map card’s title shows the map to visitors, or hides it. Open the card to
+        show where each pano was taken. Drag a pano’s dot around the plan, or click the plan to put
+        the open pano there. Add a floor plan image (JPG, PNG or WebP) to draw on, and keep north at
+        the top. Visitors see the plan as a mini-map, with the scene list under it.
       </p>
 
       <h3>Tour settings and languages</h3>
       <p>
-        The sliders button holds the tour’s description and how the viewer looks: controls at the
-        bottom or the top, the mini-map, the compass, and a slow auto-rotate when nobody is
-        dragging. The globe button adds languages: switch to one and type the translated tour title,
+        The tour menu (<span aria-hidden="true">•••</span>) in the top bar opens{' '}
+        <em>Tour settings</em>: the tour’s description and how the viewer looks, with controls at
+        the bottom or the top, the compass, and a slow auto-rotate when nobody is dragging. Its{' '}
+        <em>Languages</em> item adds languages: switch to one and type the translated tour title,
         description, pano names and points. Blank fields show the main language’s text, and each
         visitor sees their own language when the tour has it.
       </p>

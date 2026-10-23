@@ -290,6 +290,8 @@ describe('PointEditor move, and the point menu', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete point' }));
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).toBeNull();
+    // Back on ⋯, for the confirm dialog to return to.
+    expect(document.activeElement).toBe(more());
   });
 
   it('walks the menu with the arrow keys; Esc closes it back onto ⋯, and goes no further', () => {

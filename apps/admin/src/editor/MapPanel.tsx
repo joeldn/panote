@@ -248,6 +248,13 @@ export function MapPanel({
           />
         </label>
       }
+      notice={
+        planError && (
+          <p className="ed-note ed-note--error ed-map__error" role="alert">
+            {planError}
+          </p>
+        )
+      }
       onToggle={() => setSuggested(null)}
     >
       {placedCount === 0 && (
@@ -390,11 +397,6 @@ export function MapPanel({
             JPG, PNG or WebP
           </span>
         </div>
-      )}
-      {planError && (
-        <p className="ed-note ed-note--error ed-map__error" role="alert">
-          {planError}
-        </p>
       )}
     </PanelCard>
   );

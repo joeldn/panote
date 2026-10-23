@@ -68,7 +68,10 @@ export function Segmented<T extends string | number>({
             role={tabs ? 'tab' : 'radio'}
             aria-checked={tabs ? undefined : selected}
             aria-selected={tabs ? selected : undefined}
-            aria-controls={tabs && idPrefix ? `${idPrefix}-panel-${String(o.value)}` : undefined}
+            // A disabled tab may have no panel to point at.
+            aria-controls={
+              tabs && idPrefix && !o.disabled ? `${idPrefix}-panel-${String(o.value)}` : undefined
+            }
             tabIndex={selected ? 0 : -1}
             disabled={o.disabled}
             className="pn-seg__opt"

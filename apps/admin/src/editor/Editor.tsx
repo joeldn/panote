@@ -395,6 +395,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     currentId && !scene ? (staged.find((p) => p.panoId === currentId) ?? null) : null;
   // "This pano" is the open pano's own settings: none to show without one.
   const hasPanoCard = cfg !== null && currentId !== null;
+  const overLimit = cfg !== null && sceneTranslationChars(cfg) > MAX_SCENE_TRANSLATION_CHARS;
   const sheetTab = tabPicked === 'pano' && !hasPanoCard ? 'panos' : tabPicked;
 
   // Scenes whose tiles the editor checks on itself: ones whose tiles failed to load on
@@ -1026,6 +1027,30 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             onChange={setTabPicked}
           />
         )}
+        {/* What holds for every card: above them, so folding one never hides it. */}
+        {(translation || overLimit || lookOnly) && (
+          <div className="ed-side__notes">
+            {translation && (
+              <p className="ed-hint ed-translating" role="note">
+                <i className="fa-solid fa-globe" aria-hidden="true" /> Translating into{' '}
+                {translation.name}. Blank fields show the {languageName(defaultLang)} text.
+              </p>
+            )}
+            {overLimit && (
+              <p className="ed-note ed-note--error" role="alert">
+                This pano’s translations are over the{' '}
+                {MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit, so it can’t be
+                saved. Shorten some of them.
+              </p>
+            )}
+            {lookOnly && (
+              <p className="ed-hint ed-look-only" role="note">
+                <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
+                uploads: editing unlocks once it lands.
+              </p>
+            )}
+          </div>
+        )}
         <PanelSheetContext value={phone ? { active: sheetTab, idPrefix: sheetId } : null}>
           <TourPanel
             docs={docs}
@@ -1131,25 +1156,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               </Button>
             }
           >
-            {translation && (
-              <p className="ed-hint ed-translating" role="note">
-                <i className="fa-solid fa-globe" aria-hidden="true" /> Translating into{' '}
-                {translation.name}. Blank fields show the {languageName(defaultLang)} text.
-              </p>
-            )}
-            {cfg && sceneTranslationChars(cfg) > MAX_SCENE_TRANSLATION_CHARS && (
-              <p className="ed-note ed-note--error" role="alert">
-                This pano’s translations are over the{' '}
-                {MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit, so it can’t be
-                saved. Shorten some of them.
-              </p>
-            )}
-            {lookOnly && (
-              <p className="ed-hint ed-look-only" role="note">
-                <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
-                uploads: editing unlocks once it lands.
-              </p>
-            )}
             {cfg && !point && points.length === 0 && !lookOnly && (
               <p className="ed-hint ed-empty" role="note">
                 {placingNow ? (

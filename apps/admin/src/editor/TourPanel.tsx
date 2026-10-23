@@ -202,7 +202,7 @@ export function TourPanel({
     >
       {/* How connections work, until the tour has its first one. */}
       {scenes.length > 1 && !linked && (
-        <p className="ed-hint ed-tour__hint">
+        <p className="ed-hint">
           Click a pano to edit it. Connections point <b>from</b> the open pano: <b>Aim here</b> sets
           one to the current view.
           {reorder && <> Drag a pano by its handle to change the order visitors see.</>}
@@ -335,11 +335,7 @@ export function TourPanel({
                 </button>
               </div>
               {from && !isCurrent && !missing && (
-                <div
-                  className={cx('ed-conn', link && 'ed-conn--linked')}
-                  role="group"
-                  aria-label={`Connection to ${name}`}
-                >
+                <div className="ed-conn" role="group" aria-label={`Connection to ${name}`}>
                   <i className="fa-solid fa-diamond-turn-right ed-conn__icon" aria-hidden="true" />
                   {link ? (
                     <>

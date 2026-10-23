@@ -9,6 +9,8 @@ export interface PanelCardProps {
   count?: ReactNode;
   /** Controls that stay in the head whether the card is open or folded. */
   actions?: ReactNode;
+  /** Under the head, shown folded or open: what mustn't hide with the body (an error). */
+  notice?: ReactNode;
   className?: string;
   /** Called with the new state when the head opens or folds the card. */
   onToggle?: (open: boolean) => void;
@@ -23,6 +25,7 @@ export function PanelCard({
   panel,
   count,
   actions,
+  notice,
   className,
   onToggle,
   children,
@@ -70,6 +73,7 @@ export function PanelCard({
         </h2>
         {actions && <div className="ed-card__actions">{actions}</div>}
       </header>
+      {notice}
       {showing && (
         <div id={bodyId} className="ed-card__body">
           {children}

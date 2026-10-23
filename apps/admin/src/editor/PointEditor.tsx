@@ -266,7 +266,8 @@ function PointMenu({ onDuplicate, onDelete }: Pick<PointEditorProps, 'onDuplicat
             role="menuitem"
             className="ed-more__item ed-more__item--danger"
             onClick={() => {
-              close(false);
+              // Back on ⋯ first: the confirm dialog returns focus there if it's cancelled.
+              close(true);
               onDelete();
             }}
           >

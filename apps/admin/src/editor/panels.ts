@@ -22,27 +22,35 @@ const OPEN_BY_DEFAULT: Record<PanelKey, boolean> = {
 /** Where a card's open or folded state is kept, per browser. */
 export const panelStorageKey = (key: PanelKey) => `panote.editor.panel.${key}`;
 
-// Storage can be blocked (private mode, a locked-down browser): then it lasts the page.
-const memory = new Map<PanelKey, boolean>();
+// What this page last chose for each card, and what storage held just after: storage can
+// be blocked, or full (reads work, writes throw), and a toggle must still take. Once storage
+// holds something else (cleared, or another tab), storage wins again.
+const memory = new Map<PanelKey, { open: boolean; stored: string | null }>();
 const listeners = new Set<() => void>();
 
-function readOpen(key: PanelKey): boolean {
-  let stored: string | null;
+function stored(key: PanelKey): string | null {
   try {
-    stored = window.localStorage.getItem(panelStorageKey(key));
+    return window.localStorage.getItem(panelStorageKey(key));
   } catch {
-    return memory.get(key) ?? OPEN_BY_DEFAULT[key];
+    return null;
   }
-  return stored === 'open' ? true : stored === 'closed' ? false : OPEN_BY_DEFAULT[key];
 }
 
-/** Opens or folds a card, and remembers it for the next visit. */
+function readOpen(key: PanelKey): boolean {
+  const now = stored(key);
+  const kept = memory.get(key);
+  if (kept && kept.stored === now) return kept.open;
+  return now === 'open' ? true : now === 'closed' ? false : OPEN_BY_DEFAULT[key];
+}
+
+/** Opens or folds a card, and remembers it for the next visit where storage allows. */
 export function setPanelOpen(key: PanelKey, open: boolean): void {
   try {
     window.localStorage.setItem(panelStorageKey(key), open ? 'open' : 'closed');
   } catch {
-    memory.set(key, open);
+    // Blocked or full: this page still remembers it.
   }
+  memory.set(key, { open, stored: stored(key) });
   for (const l of listeners) l();
 }
 

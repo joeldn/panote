@@ -231,6 +231,14 @@ describe('MapPanel', () => {
     expect(Math.hypot(x - 0.5, y - 0.5)).toBeGreaterThan(0.04);
   });
 
+  it('says why a plan image couldn’t be added even while folded', () => {
+    setup({ planError: 'Use a JPG, PNG or WebP image.' });
+    expect(screen.getByRole('button', { name: /^Map/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(screen.getByRole('alert').textContent).toBe('Use a JPG, PNG or WebP image.');
+  });
+
   it('offers only Add plan image until there is a plan', () => {
     setup();
     open();
