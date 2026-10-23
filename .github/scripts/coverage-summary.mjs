@@ -240,8 +240,9 @@ process.stdout.write(`${render(workspaces)}\n`);
 // with `if: ${{ !cancelled() }}`, so a non-zero exit here fails that step and
 // the job, on both same-repo and fork PRs. A comment alone is not enough -
 // coverage-comment.yml posts nothing on fork PRs, which is the one case this
-// needs to be loud regardless of who sees the PR comment. Exit code is set (not `process.exit`) so the write above
-// is never at risk of being cut off before it reaches the redirected file.
+// needs to be loud regardless of who sees the PR comment. Exit code is set
+// (not `process.exit`) so the write above is never at risk of being cut off
+// before it reaches the redirected file.
 if (workspaces.some((w) => w.totals === null && !w.workersPool)) {
   process.exitCode = 1;
 }

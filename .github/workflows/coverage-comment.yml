@@ -94,16 +94,34 @@ jobs:
           script: |
             const fs = require('node:fs');
             const marker = '<!-- panote:coverage -->';
+            // What .github/scripts/coverage-summary.mjs always starts with.
+            const prefix = `${marker}\n\n## Coverage\n`;
+            // The real table is a few KB. Checked before reading, so a huge
+            // file never gets loaded into this write-token job.
+            const maxBytes = 256 * 1024;
             // GitHub rejects a comment body over 65536 characters.
             const limit = 60000;
             const { owner, repo } = context.repo;
             const issue_number = Number(process.env.PR_NUMBER);
 
-            let body = fs.readFileSync(process.env.COMMENT_FILE, 'utf8');
+            const file = process.env.COMMENT_FILE;
+            const { size } = fs.statSync(file);
+            if (size > maxBytes) {
+              core.notice(`coverage-comment.md is ${size} bytes, over ${maxBytes}; not posting it.`);
+              return;
+            }
+            let body = fs.readFileSync(file, 'utf8');
+            // Anything else was not written by the generator; don't post it
+            // as github-actions[bot]. This also guarantees the marker the
+            // next run looks for.
+            if (!body.startsWith(prefix)) {
+              core.notice('coverage-comment.md does not start with the expected heading; not posting it.');
+              return;
+            }
             if (body.length > limit) body = `${body.slice(0, limit)}\n\n_(truncated)_\n`;
-            // The marker is how the next run finds this comment to update it,
-            // so it is added here rather than trusted to be in the file.
-            if (!body.includes(marker)) body = `${marker}\n${body}`;
+            // A zero-width joiner after every @ so the PR's text can't ping
+            // anyone or a team through the bot.
+            body = body.replace(/@(?=[A-Za-z0-9])/g, '@\u200d');
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
