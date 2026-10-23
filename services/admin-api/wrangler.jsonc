@@ -84,6 +84,8 @@
         "AE_DATASET": "panote_events_dev",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
+        // Days a new account's public tours stay off Explore and noindex (M6); "0" turns it off.
+        "NEW_ACCOUNT_HOLD_DAYS": "7",
         // CDN purge target (B6): the panote.dev zone id (not secret).
         "CDN_ZONE_ID": "2196d8dead0322ad69307711fc72b5d3",
         "CDN_HOST": "cdn.panote.dev",
@@ -168,6 +170,8 @@
         "AE_DATASET": "panote_events",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
+        // Days a new account's public tours stay off Explore and noindex (M6); "0" turns it off.
+        "NEW_ACCOUNT_HOLD_DAYS": "7",
         // CDN purge target (B6). Placeholder zone id: the purge no-ops until it's real.
         "CDN_ZONE_ID": "YOUR_PANOTE_IO_ZONE_ID",
         "CDN_HOST": "cdn.panote.io",

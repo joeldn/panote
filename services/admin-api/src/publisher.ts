@@ -8,6 +8,7 @@ import {
 import { getJson } from '@internal/worker-kit/r2-binding';
 import { DurableObject } from 'cloudflare:workers';
 
+import { parseHoldDays } from './account-age.js';
 import { setExploreHidden } from './explore.js';
 import {
   NOT_FOUND,
@@ -46,7 +47,11 @@ export class TourPublisher extends DurableObject<Env> {
   }
 
   private clock(): Clock {
-    return { now: new Date(), aliasDays: parseAliasDays(this.env.SLUG_ALIAS_DAYS) };
+    return {
+      now: new Date(),
+      aliasDays: parseAliasDays(this.env.SLUG_ALIAS_DAYS),
+      holdDays: parseHoldDays(this.env.NEW_ACCOUNT_HOLD_DAYS),
+    };
   }
 
   async publish(sub: string, tourId: string, req: PublishRequest): Promise<Outcome<PublishBody>> {

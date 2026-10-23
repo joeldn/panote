@@ -41,6 +41,9 @@ export default defineWorkerTestConfig({
         TEST_JWT_SEAM: 'enabled',
         // A secret in a real env; operator.test.ts also runs without it.
         OPERATOR_TOKEN: 'test-operator-token',
+        // Every test account is minutes old: no new-account hold, except where a test asks
+        // for one (account-age.test.ts, and publish.test.ts through its clock).
+        NEW_ACCOUNT_HOLD_DAYS: '0',
       },
       // Every test reads and writes as the same few subs, far past the real limits:
       // lift them here. The 429 path is tested with a stubbed limiter instead.

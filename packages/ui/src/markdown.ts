@@ -3,6 +3,13 @@
 // rules on top — enough for titles, prose, emphasis, links, and lists without
 // pulling in (or auditing) a full Markdown engine.
 
+/**
+ * `rel` for every link a tour's author wrote: nofollow and ugc tell search engines
+ * not to vouch for it (a free, indexed host draws link spam), noopener and
+ * noreferrer keep the new tab from reaching back or learning the tour's URL.
+ */
+export const USER_LINK_REL = 'nofollow ugc noopener noreferrer';
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -73,7 +80,7 @@ function inline(text: string): string {
     // any link whose URL contains `&`, `<`, `>`, or `"`.
     links.push(
       url
-        ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`
+        ? `<a href="${url}" target="_blank" rel="${USER_LINK_REL}">${emphasis(label)}</a>`
         : emphasis(label),
     );
     return `${MARK}${links.length - 1}${MARK}`;

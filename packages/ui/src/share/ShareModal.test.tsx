@@ -191,7 +191,7 @@ describe('ShareModal', () => {
       renderModal({ tab: 'privacy' });
       const radios = within(screen.getByRole('radiogroup')).getAllByRole('radio');
       expect(radios.map((r) => r.querySelector('.pn-share__option-desc')?.textContent)).toEqual([
-        'Listed on Explore and can appear in search.',
+        'Listed on Explore and can appear in search, once your account is a week old.',
         'Only people with the link.',
       ]);
     });
@@ -215,6 +215,8 @@ describe('ShareModal', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Stop sharing' }));
       const confirm = screen.getByRole('dialog', { name: 'Stop sharing this tour?' });
       expect(confirm.textContent).toMatch(/link and embeds stop working/);
+      // Tiles stay on the CDN: the owner is told plainly that past viewers may keep them.
+      expect(confirm.textContent).toMatch(/already viewed it may still be able to load its images/);
       expect(onStopSharing).not.toHaveBeenCalled();
       await act(async () =>
         fireEvent.click(within(confirm).getByRole('button', { name: 'Stop sharing' })),

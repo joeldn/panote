@@ -541,6 +541,14 @@ describe('/s/:slug', () => {
     expect(robots()).toBe('noindex');
   });
 
+  it("adds noindex while a new account's tour is held back", async () => {
+    const heldUntil = new Date(Date.now() + 60_000).toISOString();
+    objects['pub/tours/tour-a.json'] = bundle({ heldUntil });
+    renderAt('/s/old-town');
+    await screen.findByText('Old town');
+    expect(robots()).toBe('noindex');
+  });
+
   it('records one view and shows the counts', async () => {
     renderAt('/s/old-town');
     expect(await screen.findByText('2.4k')).toBeTruthy();
