@@ -159,12 +159,7 @@ describe('account menu', () => {
     expect(avatar.textContent).toBe('M');
     fireEvent.click(avatar);
     expect(screen.getByRole('menu').textContent).toContain('maya@example.com');
-    expect(screen.getByRole('menuitem', { name: 'Home page' }).getAttribute('href')).toBe(
-      'http://localhost:5174/',
-    );
-    expect(
-      screen.getByRole('menuitem', { name: 'Contact support' }).getAttribute('href'),
-    ).toContain(`body=${encodeURIComponent('Account ID: google-oauth2|1')}`);
+    expect(screen.getByRole('menuitem', { name: 'Account…' })).toBeTruthy();
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
     expect(auth.signOut).toHaveBeenCalledWith('http://localhost:5174/');
   });

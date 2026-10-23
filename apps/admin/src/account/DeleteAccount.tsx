@@ -35,7 +35,7 @@ function useResumePath(): string {
 }
 
 /**
- * The account menu's "Delete account": a typed confirmation, then the delete,
+ * The account window's "Delete account": a typed confirmation, then the delete,
  * then sign-out. A `pending` result is still a success for the owner: the
  * account is already read-only and the daily sweep removes what's left.
  *
@@ -63,7 +63,7 @@ export function DeleteAccountModal({
     reauthenticated && (!expectedSub || !session.user.sub || expectedSub !== session.user.sub);
   const wrongAccountMessage = expectedSub
     ? 'You signed in with a different account from the one you were deleting, so nothing was deleted. To delete that account, sign out and sign in with it, then try again.'
-    : 'We couldn’t tell which account you were deleting, so nothing was deleted. Choose Delete account from the menu to start again.';
+    : 'We couldn’t tell which account you were deleting, so nothing was deleted. Open Account from the menu and choose Delete account to start again.';
 
   const close = () => {
     setTyped('');

@@ -2,7 +2,6 @@ import type { RouteObject } from 'react-router';
 
 import { Callback } from './Callback.js';
 import {
-  Account,
   Dashboard,
   Editor,
   InsightsModal,
@@ -36,10 +35,11 @@ export const routes: RouteObject[] = [
               { index: true, element: null },
               { path: 'new', element: <UploadOverlay /> },
               { path: 'insights/:tourId', element: <InsightsModal over="dashboard" /> },
+              // Old links: the account menu opens its Account window over the dashboard here.
+              { path: 'account', element: null },
             ],
           },
           { path: 'panos/unused', element: <UnusedPanos /> },
-          { path: 'account', element: <Account /> },
           // The operator area (ops/sections.ts lists its sections).
           {
             path: 'ops',
