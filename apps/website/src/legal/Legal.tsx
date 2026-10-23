@@ -4,7 +4,16 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { CONTACT_EMAIL } from '../landing/content.js';
-import { OPERATOR_ADDRESS, OPERATOR_JURISDICTION, OPERATOR_NAME } from './operator.js';
+import {
+  DMCA_AGENT_ADDRESS,
+  DMCA_AGENT_NAME,
+  DMCA_AGENT_PHONE,
+  OPERATOR_ADDRESS,
+  OPERATOR_JURISDICTION,
+  OPERATOR_LIABILITY_CAP,
+  OPERATOR_NAME,
+  OPERATOR_REPRESENTATIVES,
+} from './operator.js';
 
 const Mail = () => <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>;
 
@@ -34,13 +43,17 @@ export function Privacy() {
     <LegalPage title="Privacy" updated="23 October 2026">
       <p>
         Panote is a free service for publishing 360° panoramas and tours. This page says what we
-        collect, why, and who helps us run it. The short version: we keep what we need to run your
-        account and show your tours, we count visits without personal data, and we don’t sell
-        anything about you.
+        collect, why, and who helps us run it.
       </p>
       <p>
         Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />,
-        which is responsible for the personal data described here.
+        which is responsible for the personal data described here. Contact us at <Mail />.
+        {OPERATOR_REPRESENTATIVES ? (
+          <>
+            {' '}
+            Our representatives are <Operator value={OPERATOR_REPRESENTATIVES} />.
+          </>
+        ) : null}
       </p>
 
       <h2>Your account</h2>
@@ -53,7 +66,7 @@ export function Privacy() {
         Apple or an email code using the same email address, and each has confirmed that address is
         yours, they are joined into one Panote account. Signing in with Microsoft or Facebook keeps
         a separate account. Your browser keeps the sign-in session in local storage so you stay
-        signed in between visits.
+        signed in between visits. You need an account to upload or publish, not to view tours.
       </p>
 
       <h2>What you upload</h2>
@@ -86,26 +99,22 @@ export function Privacy() {
       <h2>IP addresses and logs</h2>
       <p>
         Every request to Panote arrives with the IP address it came from. We use it briefly to
-        protect the service from abuse: views, likes, visit counts, Explore and error reports are
-        limited per IP address, and uploads and edits per account. The limiter only counts the last
-        minute or so of requests. We don’t store IP addresses with our analytics or visit counts.
+        protect the service from abuse, for about a minute. We don’t store IP addresses with our
+        analytics or visit counts.
       </p>
       <p>
         Our hosting provider, Cloudflare, keeps logs of requests to our service, which can include
         the IP address and the address of the page or file asked for. We use these logs to find and
-        fix problems and to look into abuse. They are kept for a limited time and then deleted
-        automatically.
+        fix problems and to look into abuse. They are kept for a limited time, at most 30 days, and
+        then deleted automatically.
       </p>
 
       <h2>Error reports</h2>
       <p>
         When a Panote page, a tour or the tour editor hits an error in your browser, it may send us
-        a short report. It says which app and version it was, the kind of error, the error message,
-        the top lines of the code trace, and the path of the page. Before the report is sent, and
-        again when we receive it, we remove email addresses, tour ids and tour links, and anything
-        after a ? in a web address. We add nothing about you to it: no IP address, browser or
-        country. Reports go into the same logs as above and are deleted with them. Only some page
-        visits send reports at all.
+        a short report of what went wrong and on which page. We remove email addresses, tour ids and
+        tour links from it, and add nothing about you: no IP address, browser or country. Reports go
+        into the same logs as above and are deleted with them.
       </p>
 
       <h2>Videos and media in tours</h2>
@@ -143,6 +152,12 @@ export function Privacy() {
         </li>
       </ul>
       <p>We don’t show ads and we don’t sell or rent personal data.</p>
+      <p>
+        Cloudflare and Auth0 are US companies and may handle your data in the US and other
+        countries. Where the law requires it, these transfers are protected by the European
+        Commission’s standard contractual clauses or the EU-US Data Privacy Framework, and their UK
+        equivalents.
+      </p>
 
       <h2>Your choices</h2>
       <p>
@@ -150,8 +165,23 @@ export function Privacy() {
         account yourself: once signed in, open the account menu and choose Delete account. That
         removes your tours, panoramas, share links and visit counts, and your sign-in record is
         removed within 30 days. Private backups and the original photos are gone within 31 days (see
-        Backups). Content held after a report is the one exception, below. To ask what we hold about
-        you, email <Mail />.
+        Backups). Content held after a report is the one exception, below.
+      </p>
+
+      <h2>Your rights</h2>
+      <p>
+        You can ask us for a copy of the personal data we hold about you, or ask us to correct or
+        delete it or limit how we use it.{' '}
+        <strong>
+          You can object at any time to anything we do because of our legitimate interests.
+        </strong>{' '}
+        Email <Mail /> and we’ll answer within a month. If you’re unhappy with how we handle your
+        data, you can complain to your local data protection authority (in the UK, the ICO).
+      </p>
+
+      <h2>Children</h2>
+      <p>
+        Panote isn’t for anyone under 16. If we learn we hold a child’s personal data, we delete it.
       </p>
 
       <h2>Reports and legal holds</h2>
@@ -176,7 +206,7 @@ export function Privacy() {
           visit records behind them: about three months.
         </li>
         <li>IP addresses for abuse protection: about a minute.</li>
-        <li>Request logs and error reports: a limited time, then deleted automatically.</li>
+        <li>Request logs and error reports: up to 30 days.</li>
         <li>Reports, notices and content held after a report: as long as the law requires.</li>
         <li>The like id in your browser: until you clear your browser’s storage.</li>
       </ul>
@@ -199,8 +229,9 @@ export function Privacy() {
 
       <h2>Changes</h2>
       <p>
-        If this policy changes we’ll update this page and the date above. See also our{' '}
-        <Link to="/terms">terms</Link>.
+        We don’t track you across other sites, so a Do Not Track signal changes nothing here. If
+        this policy changes we’ll update this page and the date above, and tell you on the site
+        first if the change matters. See also our <Link to="/terms">terms</Link>.
       </p>
     </LegalPage>
   );
@@ -208,10 +239,11 @@ export function Privacy() {
 
 export function Terms() {
   return (
-    <LegalPage title="Terms" updated="22 October 2026">
+    <LegalPage title="Terms" updated="23 October 2026">
       <p>
-        These terms cover your use of Panote (panote.io). By signing in or publishing a tour you
-        agree to them.
+        These terms cover your use of Panote (panote.io), run by <Operator value={OPERATOR_NAME} />,{' '}
+        <Operator value={OPERATOR_ADDRESS} />. By signing in or publishing a tour you agree to them.
+        You must be 16 or older to sign in.
       </p>
 
       <h2>The service</h2>
@@ -225,8 +257,9 @@ export function Terms() {
       <p>
         You keep ownership of everything you upload. You give us permission to store, process (for
         example, tile for zooming) and show it, only as needed to run Panote and in the way you set
-        it up — for example as an unlisted or public tour. You can unpublish or delete it at any
-        time.
+        it up — for example as an unlisted or public tour, including its title and cover image on
+        Explore and in search previews. Copies stay in our caches and private backups for a short
+        time after you remove it. You can unpublish or delete it at any time.
       </p>
       <p>
         Only upload content you have the right to share. Don’t upload anything illegal, anything
@@ -245,11 +278,27 @@ export function Terms() {
         distribute malware or spam.
       </p>
 
+      <h2>Ending</h2>
+      <p>
+        You can stop at any time by deleting your account. We may suspend or close an account that
+        breaks these terms, and we’ll tell you why unless the law stops us.
+      </p>
+
       <h2>No warranty</h2>
       <p>
         Panote is provided as it is, without warranties of any kind. As far as the law allows, we
-        aren’t liable for indirect or consequential losses, or for loss of content. Keep your own
-        copies of your originals.
+        aren’t liable for indirect or consequential losses, or for loss of content, and our total
+        liability to you is limited to <Operator value={OPERATOR_LIABILITY_CAP} />. Keep your own
+        copies of your originals. Nothing in these terms limits liability for death or personal
+        injury caused by negligence, for fraud, or any consumer rights the law doesn’t let us
+        exclude.
+      </p>
+
+      <h2>Law</h2>
+      <p>
+        These terms are governed by the law of <Operator value={OPERATOR_JURISDICTION} />, and its
+        courts deal with any dispute. If you use Panote as a consumer, you keep the protection of
+        the law where you live and can bring a claim in your local courts.
       </p>
 
       <h2>Changes and contact</h2>
@@ -263,7 +312,7 @@ export function Terms() {
 
 export function ContentPolicy() {
   return (
-    <LegalPage title="Content and copyright" updated="22 October 2026">
+    <LegalPage title="Content and copyright" updated="23 October 2026">
       <p>
         Panote hosts the panoramas and tours people upload. This page says what isn’t allowed, how
         to report a tour, and what we do when we get a report. It is part of our{' '}
@@ -271,7 +320,7 @@ export function ContentPolicy() {
       </p>
       <p>
         Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />.
-        Every report and notice below goes to <Mail />.
+        Every report and notice below goes to <Mail />, in English.
       </p>
 
       <h2>What isn’t allowed</h2>
@@ -293,8 +342,10 @@ export function ContentPolicy() {
 
       <h2>Copyright notices</h2>
       <p>
-        If you believe a tour uses your work without permission, email <Mail /> a notice that
-        includes:
+        If you believe a tour uses your work without permission, send a notice to our designated
+        copyright agent, <Operator value={DMCA_AGENT_NAME} />, at <Mail />, by post to{' '}
+        <Operator value={DMCA_AGENT_ADDRESS} />, or by phone on{' '}
+        <Operator value={DMCA_AGENT_PHONE} />. It must include:
       </p>
       <ul>
         <li>your name, postal address, phone number and email address;</li>
@@ -321,8 +372,12 @@ export function ContentPolicy() {
       <h2>What we do</h2>
       <p>
         When we get a complete notice we remove the content or disable access to it, usually by
-        taking the tour offline so its link stops working. We tell the owner what was removed and
-        why, and pass on the notice.
+        taking the tour offline so its link stops working, and pass the notice on to the owner.
+      </p>
+      <p>
+        Whenever we remove content or restrict an account, for any reason on this page, we tell the
+        owner what we did, why, and which rule or law it broke, unless the law stops us. If you
+        think we got it wrong, reply to that email and someone will look at it again.
       </p>
 
       <h2>Counter-notices</h2>
@@ -338,9 +393,9 @@ export function ContentPolicy() {
           mistake or because it was misidentified;
         </li>
         <li>
-          a statement that you consent to the jurisdiction of the courts of{' '}
-          <Operator value={OPERATOR_JURISDICTION} />, and will accept service of legal papers from
-          the person who sent the notice;
+          a statement that you consent to the jurisdiction of the US federal district court for your
+          address or, if you live outside the US, any judicial district in which we can be found,
+          and that you will accept service of legal papers from the person who sent the notice;
         </li>
         <li>your signature: typing your full name is enough.</li>
       </ul>

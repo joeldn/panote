@@ -138,7 +138,7 @@ describe('website routes', () => {
     const ips = await textOf('IP addresses and logs');
     expect(ips).toContain('We use it briefly to protect the service from abuse');
     expect(ips).toContain('We don’t store IP addresses with our analytics');
-    expect(ips).toContain('kept for a limited time and then deleted automatically');
+    expect(ips).toContain('at most 30 days, and then deleted automatically');
     const errors = await textOf('Error reports');
     expect(errors).toContain('no IP address, browser or country');
     const media = await textOf('Videos and media in tours');
@@ -161,6 +161,37 @@ describe('website routes', () => {
     expect(basis).toContain('our contract with you');
     expect(basis).toContain('legitimate interest');
     expect(basis).toContain('Legal obligations');
+  });
+
+  it('covers the minimum the law asks: rights, transfers, age, law and a US agent', async () => {
+    renderAt('/privacy');
+    await screen.findByRole('heading', { name: 'Your rights' });
+    const privacy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
+    expect(privacy).toContain('You can object at any time');
+    expect(privacy).toContain('complain to your local data protection authority');
+    expect(privacy).toContain('standard contractual clauses');
+    expect(privacy).toContain('isn’t for anyone under 16');
+    expect(privacy).toContain('Request logs and error reports: up to 30 days.');
+    expect(privacy).toContain('YOUR_EU_AND_UK_REPRESENTATIVES');
+
+    cleanup();
+    renderAt('/terms');
+    await screen.findByRole('heading', { name: 'Law' });
+    const terms = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
+    expect(terms).toContain('You must be 16 or older');
+    expect(terms).toContain('governed by the law of YOUR_GOVERNING_LAW_JURISDICTION');
+    expect(terms).toContain('limited to YOUR_LIABILITY_CAP');
+    expect(terms).toContain('death or personal injury');
+    expect(terms).toContain('we’ll tell you why');
+
+    cleanup();
+    renderAt('/content-policy');
+    await screen.findByRole('heading', { name: 'Counter-notices' });
+    const policy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
+    expect(policy).toContain('designated copyright agent, YOUR_DMCA_AGENT_NAME');
+    expect(policy).toContain('US federal district court for your address');
+    expect(policy).not.toContain('YOUR_GOVERNING_LAW_JURISDICTION');
+    expect(policy).toContain('which rule or law it broke');
   });
 
   it('privacy names no sign-in provider the app does not offer', async () => {
