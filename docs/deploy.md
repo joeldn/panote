@@ -1671,6 +1671,44 @@ Bulk re-tiling already has a script: `retile.ts` ("Re-tiling").
 
 ---
 
+## Tour editors
+
+An owner can invite other people to edit a tour (`services/admin-api/src/members.ts`,
+`packages/contracts/src/members.ts`; the reasoning is in `docs/decisions.md`, "Tour editors").
+Everything stays in the owner's account: an editor works on the owner's `tours/<owner>/` and
+`panos/<owner>/` keys, and nothing is copied into the editor's own prefix.
+
+- **Who's who.** `tours/<owner>/<tourId>/members.json` lists the editors and pending invites (at
+  most 10 together). An editor's access is checked on every request: the tour's owner pointer
+  (`tour-owners/<tourId>.json`) names the owner, and that owner's `members.json` must list the
+  caller. The owner's first invite makes sure the pointer exists, so older tours need no backfill.
+  `memberships/<editor>/<tourId>.json` is each editor's index for their dashboard ("Shared with
+  you", `GET /api/admin/shared-tours`); it is a hint, re-checked on every read, healed when the
+  editor opens the tour, and not backed up.
+- **What an editor can do.** Open and Save the tour (Save republishes a shared tour as the
+  owner's does), edit its scenes' configs, upload panoramas and a floor plan into it (with
+  `tourId` on `POST /api/upload-url`), and see its insights and its People list. Not: change the
+  share link, visibility or Stop sharing, invite or remove others (they can leave), delete the
+  tour, or delete the owner's panoramas. Pano routes take `?tourId=` for an editor and reach only
+  that tour's scenes, or a panorama an editor uploaded for that tour and Save hasn't added yet.
+- **Which panoramas an editor can add.** An editor's tour Save may keep or drop the tour's
+  scenes, and add only panoramas an editor uploaded for this tour: upload-api writes
+  `uploaded-for/<owner>/<panoId>.json` (`{ v, tourId, sub }`) before it hands an editor an upload
+  URL. Anything else gets a 403 (`pano not found`), so knowing the id of the owner's other
+  panoramas (they are public in shared tours) never reaches them through a tour someone edits.
+  The records go with the owner's account; a deleted panorama's record is left, and is harmless.
+- **Invites.** `POST /api/admin/tours/<tourId>/invites` with `{ "email" }` returns a link token
+  (`<tourId>.<secret>`) once; only its SHA-256 is stored. Panote sends no email: the owner copies
+  the link. It works for 7 days, once, and only for someone signed in with that address as their
+  verified email claim (`https://panote.io/email`, "Account linking"). Inviting the same address
+  again replaces the link; the owner can revoke it.
+- **Limits.** Uploads by an editor count against the owner's panorama and storage quotas, and
+  against both people's daily upload limit. One person can edit at most 50 shared tours.
+- **Deletion and takedown.** Deleting a tour (owner, operator or account deletion) removes its
+  editors' index entries; deleting an editor's account takes them off every tour they edit, and
+  what they uploaded stays with the owner. While the owner's account is marked for deletion its
+  editors get a 404, and while the operator has the owner disabled their editors can't write.
+
 ## Backups
 
 There is one bucket per environment and R2 keeps no versions, so a bug or a bad script that

@@ -688,8 +688,8 @@ describe('sweep: retention, budget and order', () => {
       new Date('2026-10-20T00:00:00.000Z'),
     );
     expect(listed.every((o) => o.limit === 1 && o.delimiter === undefined)).toBe(true);
-    // tours/, panos/ and upload-log/.
-    expect(listed).toHaveLength(3);
+    // tours/, panos/, upload-log/, memberships/ and uploaded-for/.
+    expect(listed).toHaveLength(5);
     expect(await marker(sub)).not.toBeNull();
   });
 

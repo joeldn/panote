@@ -13,3 +13,4 @@ export * from './publish.js';
 export * from './explore.js';
 export * from './client-error.js';
 export * from './ops.js';
+export * from './members.js';
