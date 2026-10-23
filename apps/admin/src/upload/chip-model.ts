@@ -29,15 +29,16 @@ export interface ActiveUpload {
   queued?: number;
   /** Files of its batch that never started: this one hit a limit or needs a sign-in. */
   skipped?: number;
-  /** The presign was refused by an account limit (`quota`) or the rate limit (`rate`). */
+  /** The presign was refused by a limit (see UploadLimit). */
   limited?: UploadLimit;
 }
 
 /**
  * Why a presign was refused: an account quota (`quota`), the per-minute rate limit
- * (`rate`), or an account that is disabled or deleted (`account`); null when it wasn't.
+ * (`rate`), an account that is disabled or deleted (`account`), or the service-wide
+ * daily ceiling (`paused`); null when it wasn't.
  */
-export type UploadLimit = 'quota' | 'rate' | 'account' | null;
+export type UploadLimit = 'quota' | 'rate' | 'account' | 'paused' | null;
 
 export type ChipActionId =
   'retry-upload' | 'retry-poll' | 'retry-finalize' | 'sign-in' | 'repick' | 'cancel-queue';
@@ -208,6 +209,10 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
           // Disabled or deleted: the server's message says which, and what to do.
           if (a.limited === 'account') {
             return failed('Uploads are off for this account', m.message + skippedNote(a, null), []);
+          }
+          // Every account at once, until 00:00 UTC: nothing to retry today.
+          if (a.limited === 'paused') {
+            return failed('Uploads paused', m.message + skippedNote(a, 'tomorrow'), []);
           }
           if (a.limited) {
             return failed(

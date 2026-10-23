@@ -360,6 +360,17 @@ describe('primes a live tour page', () => {
     expect(html).toContain('<meta name="robots" content="noindex">');
   });
 
+  it("marks a new account's tour noindex until its hold ends", async () => {
+    const until = new Date(Date.now() + 60_000).toISOString();
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ heldUntil: until }));
+    expect(await (await call('/s/new-name')).text()).toContain(
+      '<meta name="robots" content="noindex">',
+    );
+    const ended = new Date(Date.now() - 60_000).toISOString();
+    await putJson(`pub/tours/${TOUR}.json`, bundle({ heldUntil: ended }));
+    expect(await (await call('/s/new-name')).text()).not.toContain('name="robots"');
+  });
+
   it('escapes markup in the title, in the page and in the boot data', async () => {
     const title = '</script><script>alert(1)</script>';
     await putJson(`pub/tours/${TOUR}.json`, bundle({ title }));

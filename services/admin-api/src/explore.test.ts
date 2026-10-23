@@ -159,7 +159,7 @@ describe('Explore index: publish', () => {
     expect(after?.entry.slug).toBe('ex-rename-b');
   });
 
-  it('switching to Unlisted removes it; back to Public lists it again', async () => {
+  it('switching to Unlisted removes it; back to Public lists it again in its old place', async () => {
     const who = 'ex-vis';
     const { tourId } = await publishedTour(who, { visibility: 'public' });
     const first = await listed(tourId);
@@ -167,9 +167,31 @@ describe('Explore index: publish', () => {
     await api(who, 'PATCH', `/tours/${tourId}/visibility`, { visibility: 'unlisted' });
     expect(await listed(tourId)).toBeNull();
     expect(await indexKeys(tourId)).toEqual([]);
+    await new Promise((r) => setTimeout(r, 5));
     await api(who, 'PATCH', `/tours/${tourId}/visibility`, { visibility: 'public' });
-    expect((await listed(tourId))?.entry.tourId).toBe(tourId);
-    expect(await indexKeys(tourId)).toHaveLength(1);
+    const again = await listed(tourId);
+    // Not listed as new: a round trip through Unlisted can't bump a tour to the top.
+    expect(again?.key).toBe(first?.key);
+    expect(again?.entry.listedAt).toBe(first?.entry.listedAt);
+    expect(await indexKeys(tourId)).toEqual([first?.key]);
+  });
+
+  it("a new account's tour is filed at its heldUntil, and keeps that place", async () => {
+    const who = 'ex-held';
+    const { tourId, panoId } = await publishedTour(who, { visibility: 'public' });
+    const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
+    // As the bundle stands, unheld: filed now. Take it off, then list it as held.
+    await syncExploreQuietly(env.BUCKET, { ...bundle, visibility: 'unlisted' }, new Date());
+    await env.BUCKET.delete(exploreTourKey(tourId));
+    const now = new Date();
+    const heldUntil = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await syncExploreQuietly(env.BUCKET, { ...bundle, heldUntil }, now);
+    const held = await listed(tourId);
+    expect(held?.entry.listedAt).toBe(heldUntil);
+    expect(held?.entry.cover?.panoId).toBe(panoId);
+    // A later Save, once the hold is over, leaves it where it was filed.
+    await syncExploreQuietly(env.BUCKET, bundle, new Date(now.getTime() + 8 * 24 * 60 * 60 * 1000));
+    expect((await listed(tourId))?.key).toBe(held?.key);
   });
 
   it('a failed index write is logged and never fails the publish', async () => {
@@ -186,12 +208,21 @@ describe('Explore index: publish', () => {
 });
 
 describe('Explore index: every way off the list', () => {
-  it("the owner's Stop sharing", async () => {
+  it("the owner's Stop sharing, which keeps the tour's place for when it is shared again", async () => {
     const who = 'ex-stop';
     const { tourId } = await publishedTour(who, { visibility: 'public' });
     const { key } = (await listed(tourId))!;
     expect((await api(who, 'DELETE', `/tours/${tourId}/publish`)).status).toBe(204);
     expect(await has(key)).toBe(false);
+    expect(await indexKeys(tourId)).toEqual([]);
+    expect(await has(exploreTourKey(tourId))).toBe(true);
+    // Sharing it again lists it where it was, not as new.
+    const reshare = await api(who, 'POST', `/tours/${tourId}/publish`, { visibility: 'public' });
+    expect(reshare.status).toBe(200);
+    expect((await listed(tourId))?.key).toBe(key);
+    // Deleting it after a Stop sharing still takes the pointer.
+    expect((await api(who, 'DELETE', `/tours/${tourId}/publish`)).status).toBe(204);
+    expect((await api(who, 'DELETE', `/tours/${tourId}`)).status).toBe(204);
     expect(await has(exploreTourKey(tourId))).toBe(false);
   });
 
@@ -220,7 +251,9 @@ describe('Explore index: every way off the list', () => {
     const { key } = (await listed(tourId))!;
     expect((await takedown(subOf(who), tourId, action)).status).toBe(200);
     expect(await has(key)).toBe(false);
-    expect(await has(exploreTourKey(tourId))).toBe(false);
+    expect(await indexKeys(tourId)).toEqual([]);
+    // An unpublish keeps the tour, and with it its place; a delete takes both.
+    expect(await has(exploreTourKey(tourId))).toBe(action === 'unpublish');
   });
 
   it('a removal that fails throws and keeps publish.json, so the takedown can be retried', async () => {

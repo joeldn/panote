@@ -2,6 +2,7 @@ import { isHttpsMediaUrl } from '@internal/contracts';
 import { useState } from 'react';
 
 import { IFRAME_SANDBOX } from '../constants.js';
+import { USER_LINK_REL } from '../markdown.js';
 import type { ViewerMedia } from './types.js';
 
 const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';
@@ -29,7 +30,7 @@ function vimeoSrc(id: string, hash: string | undefined): string {
 
 function ExternalLink({ href, children }: { href: string; children: string }) {
   return (
-    <a className="pn-hspanel__medialink" href={href} target="_blank" rel="noopener noreferrer">
+    <a className="pn-hspanel__medialink" href={href} target="_blank" rel={USER_LINK_REL}>
       {children}
     </a>
   );

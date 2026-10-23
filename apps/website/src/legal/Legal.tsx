@@ -31,7 +31,7 @@ function LegalPage({
 
 export function Privacy() {
   return (
-    <LegalPage title="Privacy" updated="22 October 2026">
+    <LegalPage title="Privacy" updated="23 October 2026">
       <p>
         Panote is a free service for publishing 360° panoramas and tours. This page says what we
         collect, why, and who helps us run it. The short version: we keep what we need to run your
@@ -61,9 +61,11 @@ export function Privacy() {
         Panoramas, tour titles, hotspot text and other content you add are stored on Cloudflare and
         served from our content network. A tour you publish can be opened by anyone with its link; a
         public tour is also listed on Explore (its title, cover image and scene count, never your
-        name) and can appear in search. When you delete a tour or panorama we remove it from storage
-        and our caches, except for the private copies described under Backups and content held after
-        a report (see below).
+        name) and can appear in search, once your account is a week old. When you delete a tour or
+        panorama we remove it from storage and our caches, except for the private copies described
+        under Backups and content held after a report (see below). When you unpublish a tour, its
+        link and embeds stop working, but people who already viewed it may still be able to load its
+        panorama images until you delete them.
       </p>
 
       <h2>Visitors and analytics</h2>

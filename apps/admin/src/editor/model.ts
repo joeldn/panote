@@ -274,6 +274,17 @@ function placeOnMap(
   };
 }
 
+/** `tour` with `panoId` moved to index `to` (clamped); the same tour when nothing moves. */
+function moveScene(tour: TourDoc, panoId: string, to: number): TourDoc {
+  const from = tour.scenes.findIndex((s) => s.panoId === panoId);
+  if (from < 0 || !Number.isFinite(to)) return tour;
+  const at = Math.min(tour.scenes.length - 1, Math.max(0, Math.trunc(to)));
+  if (at === from) return tour;
+  const scenes = tour.scenes.filter((_, i) => i !== from);
+  scenes.splice(at, 0, tour.scenes[from]!);
+  return { ...tour, scenes };
+}
+
 export type TranslationPatch = Partial<{ title: string | null; body: string | null }>;
 
 export type EditorAction =
@@ -287,6 +298,12 @@ export type EditorAction =
   | { type: 'tour/settings'; settings: Partial<TourSettings> }
   | { type: 'tour/start'; panoId: string }
   | { type: 'tour/remove-scene'; panoId: string }
+  /**
+   * Moves a scene to index `to` of the scene list (clamped), the order visitors see it in.
+   * With no starred start scene the first one opens the tour, so moving a scene to the
+   * top makes it the start; a starred one stays the start wherever it goes.
+   */
+  | { type: 'tour/move-scene'; panoId: string; to: number }
   /** Puts a scene on the floor plan, or moves it: 0..1 fractions, clamped. */
   | { type: 'map/place'; panoId: string; x: number; y: number }
   | { type: 'map/remove'; panoId: string }
@@ -410,6 +427,8 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
           ? { ...rest, scenes }
           : { ...rest, scenes, startPanoId };
       });
+    case 'tour/move-scene':
+      return withTour(docs, (t) => moveScene(t, action.panoId, action.to));
     case 'map/place':
       return withTour(docs, (t) =>
         placeOnMap(t, new Map([[action.panoId, { x: action.x, y: action.y }]])),

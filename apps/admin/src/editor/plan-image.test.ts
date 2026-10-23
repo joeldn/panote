@@ -1,3 +1,4 @@
+import { ApiError } from '@internal/web-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeXhr } from '../__fixtures__/upload.js';
@@ -5,6 +6,7 @@ import {
   checkPlanFile,
   MAX_PLAN_INPUT_BYTES,
   PLAN_EDGE,
+  planErrorMessage,
   PlanImageError,
   planSize,
   uploadPlanImage,
@@ -12,6 +14,38 @@ import {
 
 afterEach(() => {
   FakeXhr.all = [];
+});
+
+describe('planErrorMessage', () => {
+  it('says which limit refused the image, in words', () => {
+    const refused = (status: number, error: string) => new ApiError(status, { error });
+    expect(planErrorMessage(refused(503, 'uploads paused'))).toBe(
+      'Uploads are paused for today. Try again tomorrow.',
+    );
+    expect(planErrorMessage(refused(403, 'plan storage limit reached'))).toBe(
+      'This tour has too many floor-plan images waiting. Save the tour, then try again in an hour.',
+    );
+    expect(planErrorMessage(refused(403, 'daily upload limit reached'))).toMatch(
+      /daily upload limit/,
+    );
+  });
+
+  it('keeps its own message for an image it couldn’t prepare, and a generic one otherwise', () => {
+    expect(planErrorMessage(new PlanImageError('This file is empty.'))).toBe('This file is empty.');
+    expect(planErrorMessage(new ApiError(502, { error: 'storage unavailable' }))).toBe(
+      'The image couldn’t be added. Try again.',
+    );
+    // A 503 from anything but the ceiling (a gateway, say) is no reason to wait a day.
+    expect(planErrorMessage(new ApiError(503, '<html>Service Unavailable</html>'))).toBe(
+      'The image couldn’t be added. Try again.',
+    );
+    expect(planErrorMessage(new ApiError(503, { error: 'overloaded' }))).toBe(
+      'The image couldn’t be added. Try again.',
+    );
+    expect(planErrorMessage(new TypeError('Failed to fetch'))).toBe(
+      'The image couldn’t be added. Try again.',
+    );
+  });
 });
 
 describe('planSize', () => {

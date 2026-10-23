@@ -1,4 +1,5 @@
 import {
+  isHeldBack,
   localizePublishedTour,
   pickLanguage,
   tourLanguageList,
@@ -130,6 +131,8 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
   const [shareLoading, setShareLoading] = useState(false);
   // Set once a scene is on screen; a view is only counted from then on.
   const [shown, setShown] = useState(false);
+  // A new account's tour stays noindex until its heldUntil; read the clock once, on open.
+  const [heldBack] = useState(() => isHeldBack(stored, Date.now()));
   const surface = embed ? 'embed' : 'page';
   const trackViewerEvent = useViewerAnalytics(tour.tourId, surface, shown);
 
@@ -247,7 +250,7 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
         if (!shown) setFailed(true);
       }}
     >
-      {tour.visibility === 'unlisted' && <meta name="robots" content="noindex" />}
+      {(tour.visibility === 'unlisted' || heldBack) && <meta name="robots" content="noindex" />}
       <title>{`${tour.title} · panote`}</title>
       {!embed && shareOpened && (
         <LazyShareSheet

@@ -7,6 +7,7 @@ import {
   MAX_PLAN_BYTES,
   originalKey,
   planKey,
+  planPrefix,
   tourKey,
   type PlanImageType,
 } from '@internal/contracts';
@@ -20,6 +21,13 @@ import {
 import { createR2S3Client, type R2HeadResult } from '@internal/worker-kit/r2-s3';
 
 import {
+  pausedResponse,
+  releaseLater,
+  reserveCeiling,
+  UploadCeiling,
+  type Held,
+} from './ceiling.js';
+import {
   checkDailyUploads,
   checkQuota,
   quotaLimits,
@@ -29,6 +37,10 @@ import {
 
 // Mirrors the MAX_ORIGINAL_BYTES wrangler var (services/tiler-consumer/wrangler.jsonc:55,92).
 const MAX_ORIGINAL_BYTES = 150 * 1024 * 1024;
+// Most bytes of plan images one tour's prefix may hold, counting the declared upload:
+// the live image, a replaced one the share link still shows, and a few uploaded but not
+// saved yet. admin-api sweeps unused ones (an hour old) on the tour's next save.
+export const MAX_PLAN_BYTES_PER_TOUR = 4 * MAX_PLAN_BYTES;
 // A HEAD that isn't a clean 404 (a transient 5xx, or a 403) must never be
 // read as "doesn't exist" - that would fail open during an R2 hiccup.
 const assertHeadIsDefinitive = (head: R2HeadResult): void => {
@@ -61,22 +73,32 @@ type R2 = ReturnType<typeof createR2S3Client>;
 
 // A tour's floor-plan image: a fresh key under the tour's public plan prefix, so a
 // replaced image is never served stale from a cache. Only the owner of the tour gets
-// one. It counts toward the daily upload limit (it is an upload URL), not toward the
-// storage quota: one live image per tour, at most MAX_PLAN_BYTES, and admin-api deletes
-// replaced ones and the prefix with the tour.
+// one. It counts toward the daily upload limit and the global ceiling (it is an upload
+// URL), and toward its tour's MAX_PLAN_BYTES_PER_TOUR, not the owner's storage quota:
+// the prefix is owner-free, so counting it per owner would list every tour's. The cap
+// is soft (see below): it keeps a tour near 16 MiB in normal use, but a client that
+// takes a day's URLs before uploading can get one tour to about 216 MiB, and an owner
+// to about 40 GiB across MAX_TOURS_PER_OWNER tours over many days (docs/deploy.md).
 async function planUrl(
   r2: R2,
   sub: string,
   tourId: string,
   contentType: PlanImageType,
   size: number,
-  { env, ctx }: { env: Env; ctx: ExecutionContext },
+  { env, ctx, reserved }: { env: Env; ctx: ExecutionContext; reserved: Reserved },
 ): Promise<Response> {
   const tour = await r2.head(tourKey(sub, tourId));
   assertHeadIsDefinitive(tour);
   if (!tour.ok) return Response.json({ error: 'tour not found' }, { status: 404 });
+  // Every page of the prefix (listObjects follows continuation tokens). Soft: it counts
+  // what is stored now, so parallel requests, and URLs issued but not yet PUT, can each
+  // pass and take the tour past the cap.
+  const stored = await r2.listObjects(planPrefix(tourId)).catch(unavailable);
+  if (stored.reduce((sum, o) => sum + o.size, size) > MAX_PLAN_BYTES_PER_TOUR) {
+    return Response.json({ error: 'plan storage limit reached' }, { status: 403 });
+  }
   const planId = crypto.randomUUID();
-  const refused = await dailyLimit(r2, sub, planId, env, ctx);
+  const refused = await dailyLimit(r2, sub, planId, size, { env, ctx, reserved });
   if (refused) return refused;
   const key = planKey(tourId, planId, contentType);
   const url = await r2.presignPut(key, {
@@ -87,20 +109,30 @@ async function planUrl(
   return Response.json({ planId, key, url });
 }
 
-// The daily upload limit for one more URL (named by `id`): a 403 once it's reached,
-// else null, with the URL logged first (no log entry, no URL).
+// The global ceiling's reservation for this request, once made: the Worker's catch gives
+// it back if anything fails before the URL is returned.
+interface Reserved {
+  held: Held | null;
+}
+
+// The daily upload limit and the global ceiling for one more URL (named by `id`, of
+// `size` bytes): a 403 or 503 once one is reached, else null, with the URL logged first
+// (no log entry, no URL).
 async function dailyLimit(
   r2: R2,
   sub: string,
   id: string,
-  env: Env,
-  ctx: ExecutionContext,
+  size: number,
+  { env, ctx, reserved }: { env: Env; ctx: ExecutionContext; reserved: Reserved },
 ): Promise<Response | null> {
   const { maxUploadsPerDay } = quotaLimits(env);
   const now = Date.now();
   const daily = await checkDailyUploads(r2, sub, maxUploadsPerDay, now).catch(unavailable);
   pruneLater(r2, daily.expired, ctx);
   if (daily.refused) return Response.json({ error: 'daily upload limit reached' }, { status: 403 });
+  const held = await reserveCeiling(env, size, now);
+  if (held === 'paused') return pausedResponse(now);
+  reserved.held = held;
   if (maxUploadsPerDay !== null) await recordUpload(r2, sub, id, now).catch(unavailable);
   return null;
 }
@@ -124,6 +156,7 @@ export default {
     if (req.method !== 'POST' || url.pathname !== '/api/upload-url') {
       return Response.json({ error: 'not found' }, { status: 404 });
     }
+    const reserved: Reserved = { held: null };
     try {
       const { sub } = await authenticate(req, env);
       // Per owner, before any R2 request: a runaway client can't run up S3 calls.
@@ -193,6 +226,7 @@ export default {
         return await planUrl(r2, sub, body.tourId as string, contentType as PlanImageType, size, {
           env,
           ctx,
+          reserved,
         });
       }
 
@@ -236,6 +270,10 @@ export default {
       if (daily.refused) {
         return Response.json({ error: 'daily upload limit reached' }, { status: 403 });
       }
+      // The global ceiling, once the owner's own limits pass: one DO call that reserves.
+      const held = await reserveCeiling(env, size, now);
+      if (held === 'paused') return pausedResponse(now);
+      reserved.held = held;
       // Logged before the URL exists, so every URL handed out is counted: no log
       // entry, no URL.
       if (limits.maxUploadsPerDay !== null) {
@@ -252,7 +290,11 @@ export default {
       });
       return Response.json({ panoId, key, url: putUrl });
     } catch (e) {
+      // No URL went out (the log write or the signing failed): give the slot back.
+      releaseLater(env, reserved.held, ctx);
       return toErrorResponse(e);
     }
   },
 };
+
+export { UploadCeiling };

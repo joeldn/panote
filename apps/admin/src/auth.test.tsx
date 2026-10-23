@@ -50,9 +50,7 @@ describe('route guard', () => {
     renderAdmin('/app/', { auth: fakeAuth({ isAuthenticated }) });
     expect((await screen.findByRole('alert')).textContent).toContain('chunk failed');
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(
-      await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
-    ).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /^Welcome.*Maya Larsson\.$/ })).toBeTruthy();
   });
 });
 
@@ -146,7 +144,7 @@ describe('callback', () => {
       );
       const { assign } = renderAdmin('/app/callback?code=c&state=s', { auth });
       expect(
-        await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
+        await screen.findByRole('heading', { name: /^Welcome.*Maya Larsson\.$/ }),
       ).toBeTruthy();
       expect(assign).not.toHaveBeenCalled();
     },

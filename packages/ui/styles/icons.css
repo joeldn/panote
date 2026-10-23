@@ -82,6 +82,9 @@
 .fa-arrow-up-from-bracket {
   --fa: '\e09a';
 }
+.fa-arrow-up-right-from-square {
+  --fa: '\f08e';
+}
 .fa-ban {
   --fa: '\f05e';
 }
@@ -199,6 +202,9 @@
 .fa-elevator {
   --fa: '\e16d';
 }
+.fa-ellipsis {
+  --fa: '\f141';
+}
 .fa-envelope {
   --fa: '\f0e0';
 }
@@ -234,6 +240,9 @@
 }
 .fa-graduation-cap {
   --fa: '\f19d';
+}
+.fa-grip-vertical {
+  --fa: '\f58e';
 }
 .fa-heart {
   --fa: '\f004';

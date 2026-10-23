@@ -21,8 +21,8 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
-| `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | `UPLOAD_CEILING` — Durable Object, class `UploadCeiling` (one instance, the global daily upload ceiling, see Owner quotas; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); otherwise none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
@@ -101,7 +101,8 @@ slug. For a live pointer it then reads `pub/tours/<tourId>.json` and the start s
 `tiles/<panoId>/manifest.json` (alongside the tour when `?pano=` names the scene), and streams
 the page through `HTMLRewriter`: the head up to `</head>` (module script, stylesheet, CDN
 preconnect) goes out at once, and at `</head>` it inserts, once the reads settle, the real `<title>`
-(`<tour> · panote`), `<meta name="robots" content="noindex">` for an unlisted tour, a
+(`<tour> · panote`), `<meta name="robots" content="noindex">` for an unlisted tour or one whose
+bundle's `heldUntil` is still ahead (a new account's, see Explore), a
 `<script type="application/json" id="pn-boot">` holding `{slug, record, tour}` (with `<`
 escaped), and `<link rel="preload" as="fetch" crossorigin>` for the manifest and the six level-0
 tiles. The start scene follows `TourView` (a valid `?pano=` wins; an embed pinned to an unknown
@@ -737,7 +738,11 @@ After a pano delete (tiles swept), a tour delete, or an unpublish, `admin-api` c
 A pano delete purges by prefix (`cdn.panote.dev/tiles/<panoId>/`); a tour delete batches every
 pano it removed into one prefix request (100 max each), and purges the tour's floor-plan images
 (`pub/plans/<tourId>/<planId>.<ext>`) by URL; unpublish purges `pub/tours/<tourId>.json`
-and the removed `slugs/<slug>.json` by URL. A tour save that leaves a plan image unused (replaced
+and the removed `slugs/<slug>.json` by URL. An unpublish leaves the tiles: they live owner-free at
+`tiles/<panoId>/` and stay public on the CDN, so anyone who already viewed the tour (and so knows the
+panoIds) can keep loading its images until the pano is deleted. That is by design (re-tiling on
+every unpublish would cost a full tiling job); the owner is told so in the Stop sharing confirm and
+on the privacy page. A tour save that leaves a plan image unused (replaced
 or removed, and no longer on the share link) deletes and purges it by URL too, once it is an hour
 old, and so does the daily sweep of plan images nobody saved ("Unsaved floor-plan images").
 A `429`, a `5xx`, a network error or the 5s timeout is retried twice in the request (after
@@ -1681,7 +1686,8 @@ account markers `accounts/<owner>/{deletion,disabled}.json`, and the tours' floo
 originals (large; a deleted one waits 30 days in `trash/` instead, see "Trash for deleted
 originals" below), tiles and manifests (rebuilt from the original by a re-tile, "Re-tiling"
 above), and the derived or operational prefixes `tile-gc/`, `upload-log/`, `quarantine/`,
-`trash/` and `ops/`. Each copy keeps the object's content type, cache control
+`trash/`, `ops/`, `slug-holds/` and the account-age record `accounts/<owner>/since.json`
+(worked out again from the originals if lost). Each copy keeps the object's content type, cache control
 and custom metadata (titles, visibility, an alias's expiry), since the app reads those.
 
 **Layout.** `backup/<YYYY-MM-DD>/<original key>`, with `backup/<YYYY-MM-DD>/complete.json`
@@ -1947,12 +1953,34 @@ scene count and link to `/s/<slug>`; nothing on them names the owner. Code:
 | Key | What | Written by |
 |---|---|---|
 | `explore/index/<rank>-<tourId>.json` | The card: `{ v, tourId, slug, title, sceneCount, cover, publishedAt, listedAt, updatedAt }`. `rank` is `9999999999999 - listedAt ms`, 13 digits, so an R2 list (ascending) is newest-listed first and a page is one `list` call. `cover` is `{ panoId, version, image: "og" \| "preview" }` (the start scene's `og.jpg` or `preview.webp`) or `null` | admin-api, inside the tour's `TourPublisher` |
-| `explore/tours/<tourId>.json` | Pointer `{ v, key }` to the tour's entry, so a removal needs only the tourId | same |
+| `explore/tours/<tourId>.json` | Pointer `{ v, key }` to the tour's entry, so a removal needs only the tourId. It outlives the entry while the tour exists (see below), so the key it names keeps the tour's listing time | same |
 | `explore/hidden/<tourId>.json` | Operator marker `{ v, hiddenAt }`: never list this tour | the takedown route (`hide` / `unhide`) |
 
 Every key is owner-free, like `pub/`. A tour keeps its `listedAt` (its place in the list) across
-Saves, renames and republishes for as long as it stays listed; switching to Unlisted and back
-lists it as new. The public bundle `pub/tours/<tourId>.json` now also carries
+Saves, renames and republishes, and also through a trip to Unlisted and back, a start scene that
+isn't ready, or the owner's Stop sharing and sharing again (and an operator `unpublish`): those
+delete the entry but keep the pointer, and listing the tour again reuses the key it names, so
+none of them can bump a tour to the top as new. A tour delete, an account delete, an operator
+`delete` or `hide`, and an unreadable pointer remove the pointer as well; after those (or an
+operator `unhide`) a tour is listed as new.
+
+**New accounts are held back.** A tour whose owner's account is younger than
+`NEW_ACCOUNT_HOLD_DAYS` (7, an `admin-api` var; `"0"` turns it off) is published and works by link
+as usual, but stays off Explore and is `noindex` until the account is that old. The account's age
+is worked out in `admin-api` from R2, never from the client (`src/account-age.ts`): on the owner's
+first publish it lists `panos/<owner>/` for the oldest `original` (R2's own upload time) and
+latches that time, create-only, in `accounts/<owner>/since.json` (`{ v, since }`, private like the
+other account markers; account deletion removes it). Every publish (each Save) then costs one
+`GET` of it and writes `heldUntil` (ISO, `since` + the hold) into the public bundle while that is
+still ahead; a later Save drops it. The website's script and the SPA add
+`<meta name="robots" content="noindex">` while `heldUntil` is in the future, so the tag goes
+without a Save. A held tour's first listing is filed at `heldUntil` instead of now, a time in the
+future; public-api starts every list at the current time (`startAfter` the rank of now, and a
+cursor can't point earlier) and drops any entry whose `listedAt` is later than now, so the tour
+appears on Explore, at the top as new, the moment its hold ends, with no Save needed. Deleting and
+re-uploading every pano resets nothing once `since.json` exists. The owner-facing copy says so:
+the share modal's Public option reads "once your account is a week old", as does the privacy
+page, so change both if the var changes. The public bundle `pub/tours/<tourId>.json` now also carries
 `customMetadata: { visibility, slug }`, so the read side checks a listed tour with a `HEAD`.
 
 **Writes.** Every publish (each Save), slug rename and visibility change rewrites the entry after
@@ -1962,7 +1990,8 @@ logged as `[explore] index update failed` and the publish still succeeds, so at 
 missing from Explore until its next Save (or the backfill below). Removal on unpublish is not best-effort: the owner's
 Stop sharing, tour delete, account delete (and its daily sweep), and the operator's `unpublish`
 and `delete` (so also any later takedown mode built on them) all go through `unpublish` in
-`publish.ts`, which deletes the bundle, then the entry and pointer, then `publish.json`. If the
+`publish.ts`, which deletes the bundle, then the entry and (except for a Stop sharing or operator
+`unpublish`, which keep the tour's place) the pointer, then `publish.json`. If the
 entry delete throws, the request fails and `publish.json` stays, so a retry finds the tour and
 finishes it.
 
@@ -1971,7 +2000,8 @@ finishes it.
 re-checks every entry before showing it: dropped if `pub/tours/<tourId>.json` is gone or not
 Public, if `explore/hidden/<tourId>.json` exists, or if the entry doesn't parse or has no scenes.
 So an entry that outlived its tour (a failed removal, a race with an operator hide) is never
-shown. Per page that is one `list` plus a `GET` and two `HEAD`s per entry, and at most three
+shown, and so is one filed later than now (a held tour). Per page that is one `list` plus a `GET`
+and two `HEAD`s per entry, and at most three
 `list` calls when many entries are dropped. Responses are `Cache-Control: public, max-age=60` and
 kept in the edge cache (Cache API, keyed by path plus `cursor` only), so a taken-down tour can
 linger on a cached Explore page for up to 60 s; its `/s/<slug>` link stops working at once. A bad
@@ -2122,8 +2152,15 @@ schema): anything else is a `400` in `admin-api` and `upload-api`, and `public-a
   it works again once the oldest alias expires (`SLUG_ALIAS_DAYS`). Moving back onto an alias and a
   bare republish still work. An alias past its expiry stops counting at once, before the daily
   sweep deletes it. Unpublish (Stop sharing, takedown, and so tour delete) releases the tour's
-  aliases as well as its live slug: an old shared URL then stops redirecting and its slug is free
-  for anyone to claim, as the live slug already was. A short list of support and sign-in words is
+  aliases as well as its live slug: an old shared URL then stops redirecting. Each released slug
+  (live or alias, and those account deletion releases) is first held for its owner for
+  `SLUG_HOLD_DAYS` (30, `src/slug-hold.ts`) in `slug-holds/<slug>.json` (`{ v, owner, expiresAt }`,
+  `owner` a SHA-256 of the owner segment, never the sub; private, outside the CDN's WAF prefixes):
+  until then a publish, rename or default slug from any other owner treats it as taken, so nobody
+  can take over an old share link, while the same owner may claim it again from any of their
+  tours (after an operator takedown, not even they can: see Takedown). A claim re-checks the hold after its create and gives the slug back if a release landed in
+  between, or if that re-check fails (the error then fails the publish). The daily cron deletes expired holds. A rename's old slug needs no hold: it stays this
+  tour's redirect alias for `SLUG_ALIAS_DAYS` (30) and is free for anyone once that ends. A short list of support and sign-in words is
   reserved (`RESERVED_SLUGS`, plus any slug starting `panote` or led by `login`/`signin`); a tour
   already live at a word reserved later keeps republishing at it.
 
@@ -2199,8 +2236,9 @@ auth, rate limit, body checks and the account markers. Three vars, set in both e
   counting the declared `size` of the upload; a replace frees the old original's bytes.
 - `MAX_UPLOADS_PER_OWNER_PER_DAY` (`50`): most upload URLs one owner may get in a rolling 24
   hours, new uploads and replaces alike (each is a tiling job), counting this one. It bounds
-  tiling compute per account (a job is about $0.01); the global backstops are the 60-per-minute
-  `UPLOAD_URL_LIMITER` and the tiler's `max_concurrency`.
+  tiling compute per account (a job is about $0.01); the per-minute backstop is the 60-per-minute
+  `UPLOAD_URL_LIMITER`, and across all accounts the global daily ceiling below and the tiler's
+  `max_concurrency`.
 
 Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
 limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
@@ -2230,6 +2268,78 @@ binding can't express a day (its period is 10 or 60 seconds), which is why the c
 
 To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
 (the vars are in the generated `env.d.ts`) and deploy.
+
+**Global daily ceiling (the kill switch).** Every limit above is per Auth0 sub, so many throwaway
+accounts would add up without bound. One `UploadCeiling` Durable Object (`src/ceiling.ts`,
+binding `UPLOAD_CEILING`, `idFromName('global')`) counts the upload URLs issued and their declared
+bytes per UTC day across every owner, pano originals and floor-plan images alike. Two vars, in both
+env blocks:
+
+- `MAX_UPLOADS_PER_DAY_GLOBAL` (`2000`): each URL is about one tiling job (about $0.01), so this
+  holds tiling to roughly $20 a day, under the roughly $45 a day the five tiler containers
+  (`max_concurrency: 5`) cost running flat out. It is 40 accounts' worth of the per-owner daily
+  limit.
+- `MAX_UPLOAD_BYTES_PER_DAY_GLOBAL` (`214748364800`, 200 GiB): at R2's $0.015 per GB-month, a full
+  day adds about $3 a month of originals (plus their tiles), so a month at the ceiling adds about
+  $90 a month of originals: slow enough for the billing alerts to catch.
+  Real panoramas are 10-40 MB, so the upload count binds first; this one binds when someone sends
+  near-150 MiB files.
+
+The check comes last, after the owner's own limits pass (a request they refuse costs no DO call),
+and is one RPC per URL: `reserve` reads today's count, and either counts the URL (one upload, its
+declared `size`) or refuses it, in one synchronous step (the SQLite-backed `storage.kv` API, no
+await between the read and the write), so parallel requests can't overshoot. If anything after
+it fails (the upload-log write, or signing the URL), no URL is issued and the reservation is given
+back (`release`, best-effort in `waitUntil`). It counts URLs issued, not PUTs, so it only bounds
+tiling cost once each URL is single-use (#138); until then one URL can be PUT to again and again.
+An upload that would pass either limit gets `503 {"error":"uploads paused"}` with `Retry-After` set to
+the seconds until 00:00 UTC, and nothing is logged against the owner; the admin app says "Uploads
+are paused for today. Try again tomorrow." and stops the rest of a multi-photo pick. Near the byte limit a large file can be refused while
+smaller ones still get through; the copy says "paused" either way. The first refusal of each day
+logs `upload ceiling reached` (a `console.warn` from the DO, visible in
+Workers Logs and `wrangler tail`); the health check doesn't alert on it.
+
+If the DO can't be reached, a single failure fails open (the per-owner limits still hold, so that
+is no worse than before the ceiling existed), but three failures in a row in one isolate fail
+closed with `502 {"error":"storage unavailable"}` until a call gets through. The count lives in
+the isolate, so each new isolate still lets its first couple of requests through during a lasting
+outage: this limits how far an outage lifts the ceiling rather than closing it outright. Empty vars lift a limit (both empty: no DO call at all); a
+non-integer refuses every upload (`500`), as for the owner quotas.
+
+The trade-off is deliberate: someone with enough accounts can use up the day's ceiling and pause
+uploads for everyone until 00:00 UTC. A day without uploads costs less than an unbounded bill, and
+it leaves time to disable the accounts (Takedown) and decide whether to raise the limit.
+
+Operator steps, all by editing `services/upload-api/wrangler.jsonc` in both env blocks and
+deploying (vars changed in the dashboard are overwritten by the next deploy):
+
+- **Raise it** (real traffic is close): raise either var. Today's count is kept, so a raised limit
+  reopens uploads at once if today's count is under it.
+- **Pause uploads now** (an attack, a runaway bill): set `MAX_UPLOADS_PER_DAY_GLOBAL` to `"0"`.
+  Every upload URL gets the 503 until it is set back.
+- **Reset it**: there is no reset route; the count starts again at 00:00 UTC on its own. To reopen
+  uploads earlier the same day, raise the limit above today's count.
+
+**Floor-plan images.** Plan images live under the owner-free `pub/plans/<tourId>/`, so counting
+them in `MAX_BYTES_PER_OWNER` would mean listing every tour's prefix on each request. Instead a plan
+upload lists only its own tour's prefix (one more `ListObjectsV2`) and is refused with
+`403 {"error":"plan storage limit reached"}` once the images there plus the declared size would pass
+`MAX_PLAN_BYTES_PER_TOUR` (16 MiB, four full-size plans, in `src/index.ts`). That covers the
+live image, the one a share link may still show, and a few uploaded but not saved; `admin-api`
+deletes unused ones an hour old on the tour's next save. The listing follows every page, but the
+cap is soft: it only sees images already uploaded, not URLs issued and not yet used. The admin
+uploads at once, so in normal use a tour stays near 16 MiB. A client that takes its URLs first and
+uploads after can get a day's worth through one check (the owner's 50 URLs at 4 MiB), so one tour
+can reach about 216 MiB, and over many days an owner's plan images across 200 tours about 40 GiB.
+Plan uploads also count toward the daily limit and the global ceiling, which bound how fast that
+can grow.
+
+**Not counted: tiles and JSON.** Tiles (`tiles/<panoId>/`) are derived from originals and grow with the
+original's pixels (capped by the tiler's pixel limit), so `MAX_BYTES_PER_OWNER` and the pano limit
+bound them indirectly; superseded tile versions are deleted by the daily
+`tile-gc/` sweep. There is no cheap exact per-owner signal (tiles sit under an owner-free prefix and
+are written by the container after the URL is issued), so they aren't counted. Configs, tours and
+bundles are small JSON capped by `admin-api`'s own limits.
 
 ### Report link
 
@@ -2265,7 +2375,9 @@ Two ways to stop abuse, usually together:
   owner's own delete it keeps no trash copy of the originals, and deletes the trash copies of the
 tour's originals the owner had already deleted ("Trash for deleted originals"). Both
   also take the tour off Explore, and so does every script mode built on them (`--quarantine`,
-  `--all-tours`, `--close-account`'s sweep). `hide` only takes it off Explore and keeps it off
+  `--all-tours`, `--close-account`'s sweep). Their released slugs (live and aliases) are held for
+  `SLUG_HOLD_DAYS` (30) for **no** owner (`owner: "takedown"` in `slug-holds/`), so not even the
+  owner taken down can republish at them until the hold ends. `hide` only takes it off Explore and keeps it off
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is
   still published and Public (see Explore). It answers `404` for a missing or wrong token, and
   always while the `OPERATOR_TOKEN` secret isn't set on that env, so the route doesn't exist until

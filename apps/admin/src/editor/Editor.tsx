@@ -38,9 +38,15 @@ import { InlineText } from './InlineText.js';
 import { FALLBACK_LANGUAGE, LanguageMenu } from './LanguageMenu.js';
 import { LibraryPicker } from './LibraryPicker.js';
 import { MapPanel } from './MapPanel.js';
+import { MoreMenu } from './MoreMenu.js';
 import { newId, pointSizeForDrag, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
 import { PointEditor } from './PointEditor.js';
-import { PlanImageError, preparePlanImage, uploadPlanImage } from './plan-image.js';
+import {
+  planErrorMessage,
+  PlanImageError,
+  preparePlanImage,
+  uploadPlanImage,
+} from './plan-image.js';
 import { PointerLayer, type LayerPoint } from './PointerLayer.js';
 import {
   isLanding,
@@ -510,9 +516,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       dispatch({ type: 'tour/plan', plan });
     } catch (e) {
       if (!(e instanceof PlanImageError)) console.error('plan image upload failed', e);
-      setPlanError(
-        e instanceof PlanImageError ? e.message : 'The image couldn’t be added. Try again.',
-      );
+      setPlanError(planErrorMessage(e));
     } finally {
       setPlanUploading(false);
     }
@@ -526,6 +530,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     : null;
 
   const missingName = scene?.kind === 'missing' ? 'Missing pano' : null;
+  const previewTo = `/t/${docs.tourId}/preview${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`;
   const conflictBusy = editor.saving;
 
   return (
@@ -617,9 +622,24 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               </Button>
             </div>
           ) : (
-            <p className="ed-missing" role="status">
-              Add a pano to start building this tour.
-            </p>
+            <div className="ed-missing ed-start" role="status">
+              <i className="fa-solid fa-panorama" aria-hidden="true" />
+              <h2>Start with a pano</h2>
+              <p>
+                Upload a 360° photo: a 2:1 equirectangular JPG, PNG or WebP. It opens here while it
+                processes.
+              </p>
+              <Button
+                variant="accent"
+                size="sm"
+                pill
+                icon="fa-solid fa-arrow-up-from-bracket"
+                aria-haspopup="dialog"
+                onClick={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
+              >
+                Upload a pano
+              </Button>
+            </div>
           )}
         </div>
       )}
@@ -658,107 +678,156 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           </p>
         )}
 
-      <header className="ed-bar">
-        <div className="ed-bar__left">
-          <Link to="/" className="ed-home" aria-label="Your tours">
-            <LogoMark size={30} />
-          </Link>
-          <nav className="ed-crumbs" aria-label="Tour">
-            <InlineText
-              className="ed-crumbs__tour"
-              label="Tour title"
-              {...(tr(tour.title, tour.i18n, 'title') ?? { value: tour.title })}
-              onCommit={(title) => dispatch({ type: 'tour/title', title, ...(lang && { lang }) })}
-            />
-            <i className="fa-solid fa-chevron-right ed-crumbs__sep" aria-hidden="true" />
-            {cfg && currentId ? (
+      {/* Bar, popovers and banners: one column that flows at phone width (editor.css). */}
+      <div className="ed-top">
+        <header className="ed-bar">
+          <div className="ed-bar__left">
+            <Link to="/" className="ed-home" aria-label="Your tours">
+              <LogoMark size={30} />
+            </Link>
+            <nav className="ed-crumbs" aria-label="Tour">
               <InlineText
-                className="ed-crumbs__pano"
-                label="Pano name"
-                {...(tr(cfg.title, cfg.i18n, 'title') ?? { value: cfg.title })}
-                disabled={lookOnly}
-                onCommit={(title) =>
-                  dispatch({ type: 'scene/title', panoId: currentId, title, ...(lang && { lang }) })
-                }
+                className="ed-crumbs__tour"
+                label="Tour title"
+                {...(tr(tour.title, tour.i18n, 'title') ?? { value: tour.title })}
+                onCommit={(title) => dispatch({ type: 'tour/title', title, ...(lang && { lang }) })}
               />
-            ) : (
-              <span className="ed-crumbs__pano">
-                {missingName ?? pendingCurrent?.fileName ?? '—'}
-              </span>
-            )}
-            <i className="fa-solid fa-pen ed-crumbs__pen" aria-hidden="true" />
-          </nav>
+              <i className="fa-solid fa-chevron-right ed-crumbs__sep" aria-hidden="true" />
+              {cfg && currentId ? (
+                <InlineText
+                  className="ed-crumbs__pano"
+                  label="Pano name"
+                  {...(tr(cfg.title, cfg.i18n, 'title') ?? { value: cfg.title })}
+                  disabled={lookOnly}
+                  onCommit={(title) =>
+                    dispatch({
+                      type: 'scene/title',
+                      panoId: currentId,
+                      title,
+                      ...(lang && { lang }),
+                    })
+                  }
+                />
+              ) : (
+                <span className="ed-crumbs__pano">
+                  {missingName ?? pendingCurrent?.fileName ?? '—'}
+                </span>
+              )}
+              <i className="fa-solid fa-pen ed-crumbs__pen" aria-hidden="true" />
+            </nav>
+          </div>
+          <div className="ed-bar__right">
+            <div className="ed-bar__tools">
+              <button
+                type="button"
+                className="ed-glass-btn ed-lang-btn"
+                aria-label={`Language: ${languageName(lang ?? defaultLang)}`}
+                aria-expanded={languagesOpen}
+                data-languages-toggle
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setLanguagesOpen((o) => !o);
+                }}
+              >
+                <i className="fa-solid fa-globe" aria-hidden="true" />
+                <span className="ed-lang-btn__tag">{lang ?? defaultLang}</span>
+              </button>
+              <button
+                type="button"
+                className="ed-glass-btn ed-glass-btn--icon"
+                aria-label="Tour settings"
+                aria-expanded={settingsOpen}
+                data-settings-toggle
+                onClick={() => {
+                  setLanguagesOpen(false);
+                  setSettingsOpen((o) => !o);
+                }}
+              >
+                <i className="fa-solid fa-sliders" aria-hidden="true" />
+              </button>
+              <Link className="ed-glass-btn" to="insights">
+                Insights
+              </Link>
+              <Link className="ed-glass-btn" to={previewTo}>
+                Preview
+              </Link>
+            </div>
+            <MoreMenu
+              lang={lang ?? defaultLang}
+              langName={languageName(lang ?? defaultLang)}
+              insightsTo="insights"
+              previewTo={previewTo}
+              onLanguages={() => {
+                setSettingsOpen(false);
+                setLanguagesOpen(true);
+              }}
+              onSettings={() => {
+                setLanguagesOpen(false);
+                setSettingsOpen(true);
+              }}
+            />
+            <SaveButton editor={editor} />
+            <Link className="pn-btn pn-btn--accent pn-btn--pill" to="share/link">
+              Share
+            </Link>
+            <OwnerAccountMenu session={session} />
+          </div>
+        </header>
+        {settingsOpen && (
+          <SettingsPopover
+            // A fresh draft per language.
+            key={lang ?? ''}
+            settings={settings}
+            description={lang ? (tour.i18n?.[lang]?.description ?? '') : (tour.description ?? '')}
+            {...(translation && {
+              translating: { name: translation.name, placeholder: tour.description ?? '' },
+            })}
+            onChange={(patch) => dispatch({ type: 'tour/settings', settings: patch })}
+            onDescription={(description) =>
+              dispatch({ type: 'tour/description', description, ...(lang && { lang }) })
+            }
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
+        {languagesOpen && (
+          <LanguageMenu
+            languages={tour.languages}
+            editing={lang ?? defaultLang}
+            onEdit={(l) => setEditLang(l === defaultLang ? null : l)}
+            onChange={(languages) => dispatch({ type: 'tour/languages', languages })}
+            onRemove={(l) => setConfirm({ kind: 'remove-language', lang: l })}
+            onClose={() => setLanguagesOpen(false)}
+          />
+        )}
+
+        <div className="ed-banners">
+          {editor.conflicts.length > 0 && (
+            <ConflictBanner
+              docs={docs}
+              conflicts={editor.conflicts}
+              busy={conflictBusy}
+              onReload={() => void editor.reloadConflicts()}
+              onOverwrite={() => void editor.overwriteConflicts()}
+            />
+          )}
+          <ErrorBanner
+            docs={docs}
+            failures={editor.failures}
+            busy={editor.saving}
+            blocked={editor.conflicts.length > 0}
+            onRetry={() => void editor.save()}
+          />
+          <Notices
+            notices={editor.notices}
+            onDismiss={editor.dismiss}
+            busy={editor.publishing}
+            onRepublish={() => void editor.republish()}
+            onDiscardDraft={() => void editor.discardDraft()}
+            saving={editor.saving}
+            failed={Object.keys(editor.failures).length > 0}
+          />
         </div>
-        <div className="ed-bar__right">
-          <button
-            type="button"
-            className="ed-glass-btn ed-lang-btn"
-            aria-label={`Language: ${languageName(lang ?? defaultLang)}`}
-            aria-expanded={languagesOpen}
-            data-languages-toggle
-            onClick={() => {
-              setSettingsOpen(false);
-              setLanguagesOpen((o) => !o);
-            }}
-          >
-            <i className="fa-solid fa-globe" aria-hidden="true" />
-            <span className="ed-lang-btn__tag">{lang ?? defaultLang}</span>
-          </button>
-          <button
-            type="button"
-            className="ed-glass-btn ed-glass-btn--icon"
-            aria-label="Tour settings"
-            aria-expanded={settingsOpen}
-            data-settings-toggle
-            onClick={() => {
-              setLanguagesOpen(false);
-              setSettingsOpen((o) => !o);
-            }}
-          >
-            <i className="fa-solid fa-sliders" aria-hidden="true" />
-          </button>
-          <Link className="ed-glass-btn" to="insights">
-            Insights
-          </Link>
-          <Link
-            className="ed-glass-btn"
-            to={`/t/${docs.tourId}/preview${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`}
-          >
-            Preview
-          </Link>
-          <SaveButton editor={editor} />
-          <Link className="pn-btn pn-btn--accent pn-btn--pill" to="share/link">
-            Share
-          </Link>
-          <OwnerAccountMenu session={session} />
-        </div>
-      </header>
-      {settingsOpen && (
-        <SettingsPopover
-          // A fresh draft per language.
-          key={lang ?? ''}
-          settings={settings}
-          description={lang ? (tour.i18n?.[lang]?.description ?? '') : (tour.description ?? '')}
-          {...(translation && {
-            translating: { name: translation.name, placeholder: tour.description ?? '' },
-          })}
-          onChange={(patch) => dispatch({ type: 'tour/settings', settings: patch })}
-          onDescription={(description) =>
-            dispatch({ type: 'tour/description', description, ...(lang && { lang }) })
-          }
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
-      {languagesOpen && (
-        <LanguageMenu
-          languages={tour.languages}
-          editing={lang ?? defaultLang}
-          onEdit={(l) => setEditLang(l === defaultLang ? null : l)}
-          onChange={(languages) => dispatch({ type: 'tour/languages', languages })}
-          onRemove={(l) => setConfirm({ kind: 'remove-language', lang: l })}
-          onClose={() => setLanguagesOpen(false)}
-        />
-      )}
+      </div>
 
       <aside className="ed-side" aria-label="Editor panels">
         <section className="ed-card ed-points" aria-labelledby="ed-points-title">
@@ -855,6 +924,23 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               </div>
             </div>
           )}
+          {cfg && !point && points.length === 0 && !lookOnly && (
+            <p className="ed-hint ed-empty" role="note">
+              {placingNow ? (
+                <>Click the pano where the point goes. Drag as you drop it to make it bigger.</>
+              ) : (
+                <>
+                  No points on this pano yet. Press <b>Add point</b> to put a label, text, a photo
+                  or a video on the spot it’s about.
+                </>
+              )}
+            </p>
+          )}
+          {!cfg && !pendingCurrent && sceneIds.length === 0 && (
+            <p className="ed-hint ed-empty" role="note">
+              Points sit on a pano. Add one to the tour first.
+            </p>
+          )}
           {point && currentId ? (
             <PointEditor
               key={`${point.id}:${lang ?? ''}`}
@@ -922,6 +1008,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           lookOnly={lookOnly}
           onSelect={select}
           onSetStart={(panoId) => dispatch({ type: 'tour/start', panoId })}
+          onMove={(panoId, to) => dispatch({ type: 'tour/move-scene', panoId, to })}
           onRemove={(panoId) => setConfirm({ kind: 'remove-pano', panoId })}
           onAim={(to, title) => {
             const v = view();
@@ -952,34 +1039,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           }}
         />
       </aside>
-
-      <div className="ed-banners">
-        {editor.conflicts.length > 0 && (
-          <ConflictBanner
-            docs={docs}
-            conflicts={editor.conflicts}
-            busy={conflictBusy}
-            onReload={() => void editor.reloadConflicts()}
-            onOverwrite={() => void editor.overwriteConflicts()}
-          />
-        )}
-        <ErrorBanner
-          docs={docs}
-          failures={editor.failures}
-          busy={editor.saving}
-          blocked={editor.conflicts.length > 0}
-          onRetry={() => void editor.save()}
-        />
-        <Notices
-          notices={editor.notices}
-          onDismiss={editor.dismiss}
-          busy={editor.publishing}
-          onRepublish={() => void editor.republish()}
-          onDiscardDraft={() => void editor.discardDraft()}
-          saving={editor.saving}
-          failed={Object.keys(editor.failures).length > 0}
-        />
-      </div>
 
       <ConfirmModal
         open={confirm?.kind === 'remove-pano'}

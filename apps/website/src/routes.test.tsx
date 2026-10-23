@@ -47,7 +47,15 @@ describe('website routes', () => {
     expect(text).toContain('as long as the law requires');
     expect(text).toContain('stays even if the account is deleted');
     expect(text).toContain('we keep your contact details');
-    expect(screen.getByRole('article').textContent).toContain('Last updated 22 October 2026');
+    expect(screen.getByRole('article').textContent).toContain('Last updated 23 October 2026');
+  });
+
+  it('privacy says past viewers may keep loading an unpublished tour’s images', async () => {
+    renderAt('/privacy');
+    const upload = await screen.findByRole('heading', { name: 'What you upload' });
+    const text = upload.nextElementSibling?.textContent ?? '';
+    expect(text).toContain('already viewed it may still be able to load its panorama images');
+    expect(text).toContain('once your account is a week old');
   });
 
   it('privacy is accurate about signed-in likes', async () => {

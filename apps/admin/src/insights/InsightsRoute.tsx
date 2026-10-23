@@ -32,8 +32,11 @@ type ViewsState = { status: 'loading' } | { status: 'ok'; views: number } | { st
 
 const DAYS = DEFAULT_INSIGHTS_DAYS;
 
-/** Insights modal over the editor at /app/t/:tourId/insights (screen 09). */
-export function InsightsRoute() {
+/**
+ * Insights modal (screen 09): over the editor at /app/t/:tourId/insights, or over the
+ * dashboard at /app/insights/:tourId (`over="dashboard"`). Closing goes back to whichever.
+ */
+export function InsightsRoute({ over = 'editor' }: { over?: 'editor' | 'dashboard' }) {
   const { tourId = '' } = useParams();
   const [search] = useSearchParams();
   const navigate = useNavigate();
@@ -103,7 +106,10 @@ export function InsightsRoute() {
   }, [api, publicApi, tourId, attempt]);
 
   const query = search.toString();
-  const close = () => void navigate({ pathname: `/t/${tourId}`, search: query ? `?${query}` : '' });
+  const close = () =>
+    void navigate(
+      over === 'dashboard' ? '/' : { pathname: `/t/${tourId}`, search: query ? `?${query}` : '' },
+    );
   const retry = () => {
     setInsights({ status: 'loading' });
     setViews({ status: 'loading' });

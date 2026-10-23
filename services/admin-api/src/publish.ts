@@ -28,7 +28,9 @@ import {
 } from '@internal/contracts';
 import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 
+import { heldUntil } from './account-age.js';
 import { removeFromExplore, syncExploreQuietly } from './explore.js';
+import { heldByOther, holdSlug, sweepExpiredHolds } from './slug-hold.js';
 
 export const DEFAULT_SLUG_ALIAS_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -109,7 +111,7 @@ const publicHotspots = (
 export const buildBundle = (
   tour: TourDoc,
   configs: Map<string, SceneConfig>,
-  state: { slug: string; visibility: Visibility; publishedAt: string },
+  state: { slug: string; visibility: Visibility; publishedAt: string; heldUntil?: string | null },
 ): PublishedTour => {
   const sceneIds = new Set(tour.scenes.map((s) => s.panoId));
   const firstPanoId = tour.scenes[0]?.panoId ?? '';
@@ -133,6 +135,7 @@ export const buildBundle = (
     ...(i18n && { i18n }),
     startPanoId,
     ...(tour.plan && { plan: tour.plan }),
+    ...(state.heldUntil ? { heldUntil: state.heldUntil } : {}),
     scenes: tour.scenes.map((s) => ({
       panoId: s.panoId,
       ...(s.mapX !== undefined ? { mapX: s.mapX } : {}),
@@ -161,9 +164,11 @@ const pointerMetadata = { kind: 'tour' };
 type ClaimResult = 'created' | 'ours' | 'taken';
 
 // Makes `slug` a live pointer at `tourId`, create-only. Also ours: a live pointer
-// here, or an unexpired alias of this tour that redirects to its current slug.
+// here, or an unexpired alias of this tour that redirects to its current slug. A
+// slug another owner released less than SLUG_HOLD_DAYS ago is taken (slug-hold.ts).
 export const claimSlug = async (
   bucket: R2Bucket,
+  sub: string,
   slug: string,
   tourId: string,
   currentSlug: string | null,
@@ -173,10 +178,25 @@ export const claimSlug = async (
   // (RESERVED_SLUGS) must not stop it republishing. A new slug is checked in full.
   const key = slug === currentSlug ? storedSlugKey(slug) : slugKey(slug);
   if (!key) return 'taken';
+  // The tour's current slug needs no hold check (it is ours, or lost): a Save stays one GET cheaper.
+  if (slug !== currentSlug && (await heldByOther(bucket, sub, slug, Date.now()))) return 'taken';
   // Bounded retry: each loop only repeats after the key changed under us.
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const created = await putJson(bucket, key, pointer, { etagDoesNotMatch: '*' }, pointerMetadata);
-    if (created.ok) return 'created';
+    if (created.ok) {
+      // A release can land between the check above and the create: give it back. So
+      // must a re-check that fails, or the pointer would block the slug's rightful owner.
+      let held: boolean;
+      try {
+        held = await heldByOther(bucket, sub, slug, Date.now());
+      } catch (e) {
+        await bucket.delete(key);
+        throw e;
+      }
+      if (!held) return 'created';
+      await bucket.delete(key);
+      return 'taken';
+    }
     const existing = await readSlug(bucket, slug);
     if (!existing) continue;
     const { record } = existing;
@@ -199,11 +219,12 @@ export const claimSlug = async (
 /** Default-slug path for a first publish: the first candidate this tour can claim. */
 const claimDefaultSlug = async (
   bucket: R2Bucket,
+  sub: string,
   tourId: string,
   title: string,
 ): Promise<{ slug: string; result: ClaimResult } | null> => {
   for (const candidate of defaultSlugCandidates(title)) {
-    const result = await claimSlug(bucket, candidate, tourId, null);
+    const result = await claimSlug(bucket, sub, candidate, tourId, null);
     if (result !== 'taken') return { slug: candidate, result };
   }
   return null;
@@ -330,7 +351,8 @@ const commit = async (
   return { ok: true, expiries };
 };
 
-export type Clock = { now: Date; aliasDays: number };
+// holdDays: NEW_ACCOUNT_HOLD_DAYS (account-age.ts); 0 turns the new-account hold off.
+export type Clock = { now: Date; aliasDays: number; holdDays: number };
 
 const freshExpiry = ({ now, aliasDays }: Clock): string =>
   new Date(now.getTime() + aliasDays * DAY_MS).toISOString();
@@ -382,10 +404,10 @@ export const publishTour = async (
   let slug: string;
   let result: ClaimResult;
   if (target !== undefined) {
-    result = await claimSlug(bucket, target, tourId, cur?.slug ?? null);
+    result = await claimSlug(bucket, sub, target, tourId, cur?.slug ?? null);
     slug = target;
   } else {
-    const claimed = await claimDefaultSlug(bucket, tourId, tour.value.title);
+    const claimed = await claimDefaultSlug(bucket, sub, tourId, tour.value.title);
     if (!claimed) return SLUG_TAKEN;
     ({ slug, result } = claimed);
   }
@@ -395,6 +417,8 @@ export const publishTour = async (
   // Cleared before the commit: a crash between the two leaves the tour unshared
   // with no marker, and the owner asked to share it, so the next Save may publish.
   if (!req.afterSave) await bucket.delete(stopped);
+  // Worked out on every publish, so a tour picks up the hold, and loses it, at a Save.
+  const held = await heldUntil(bucket, sub, clock.now, clock.holdDays);
   const record: PublishRecord = {
     slug,
     visibility: req.visibility ?? cur?.visibility ?? DEFAULT_VISIBILITY,
@@ -405,7 +429,7 @@ export const publishTour = async (
     current,
     record,
     plan,
-    bundle: buildBundle(tour.value, configs, record),
+    bundle: buildBundle(tour.value, configs, { ...record, heldUntil: held }),
     freshExpiresAt: freshExpiry(clock),
   });
   if (!done.ok) return failed(done.status);
@@ -449,7 +473,7 @@ export const renameSlug = async (
   const cur = loaded.current.value;
   const plan = await planAliases(bucket, tourId, cur, target);
   if (overAliasCap(plan, cur.slug, target)) return TOO_MANY_RENAMES;
-  const result = await claimSlug(bucket, target, tourId, cur.slug);
+  const result = await claimSlug(bucket, sub, target, tourId, cur.slug);
   if (result === 'taken') return SLUG_TAKEN;
   const record: PublishRecord = { ...cur, slug: target, aliases: plan.map((a) => a.slug) };
   const done = await commit(bucket, sub, tourId, {
@@ -494,14 +518,17 @@ export const setVisibility = async (
 // Idempotent; needs tour.json or publish.json as proof (pub/ is owner-free). Deletes the
 // slug only if it's a live pointer here, and the tracked aliases still naming this tour:
 // they redirect to a slug that is gone, and left in place they would hold their names
-// for SLUG_ALIAS_DAYS after every publish, rename, unpublish cycle. Returns the public
-// keys to purge (B6). `stopSharing` (the owner's "Stop sharing", or a takedown) also
+// for SLUG_ALIAS_DAYS after every publish, rename, unpublish cycle. Each slug it releases
+// is held for this owner first (slug-hold.ts), so for SLUG_HOLD_DAYS nobody else can take
+// over an old share link. Returns the public keys to purge (B6). `stopSharing` (the owner's "Stop sharing", or a takedown) also
 // leaves the sharing-stopped marker, so the editor's next Save doesn't publish it again.
+// `takedown` (the operator route): the released slugs are held for no owner, so the owner
+// taken down can't claim them back either until the hold ends.
 export const unpublish = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
-  { stopSharing = false }: { stopSharing?: boolean } = {},
+  { stopSharing = false, takedown = false }: { stopSharing?: boolean; takedown?: boolean } = {},
 ): Promise<string[]> => {
   const [stored, tour] = await Promise.all([
     readPublishRecord(bucket, sub, tourId),
@@ -513,10 +540,12 @@ export const unpublish = async (
     await putJson(bucket, sharingStoppedKey(sub, tourId), { stoppedAt: new Date().toISOString() });
   }
   const removed: string[] = [];
+  const now = new Date();
   if (stored) {
     const existing = await readSlug(bucket, stored.value.slug);
     const key = storedSlugKey(stored.value.slug);
     if (key && existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
+      await holdSlug(bucket, sub, stored.value.slug, now, { takedown });
       await bucket.delete(key);
       removed.push(key);
     }
@@ -526,6 +555,7 @@ export const unpublish = async (
         const aliasKey = storedSlugKey(alias);
         const record = aliasKey ? (await readSlug(bucket, alias))?.record : null;
         if (!aliasKey || record?.kind !== 'redirect' || record.tourId !== tourId) return null;
+        await holdSlug(bucket, sub, alias, now, { takedown });
         await bucket.delete(aliasKey);
         return aliasKey;
       }),
@@ -534,12 +564,16 @@ export const unpublish = async (
   }
   await bucket.delete(pubTourKey(tourId));
   // Not best-effort: an error leaves publish.json, so a retry still finds the tour.
-  await removeFromExplore(bucket, tourId);
+  // Stop sharing keeps the tour's Explore pointer, so sharing it again doesn't list it as new.
+  await removeFromExplore(bucket, tourId, { keepPlace: stopSharing && !!tour });
   await bucket.delete(publishKey(sub, tourId));
   return [pubTourKey(tourId), ...removed];
 };
 
-/** Daily cron: deletes every redirect alias past its expiresAt (Q6). */
+/**
+ * Daily cron: deletes every redirect alias past its expiresAt (Q6), then every expired
+ * slug hold (slug-hold.ts). Returns the aliases deleted, for the CDN.
+ */
 export const sweepExpiredAliases = async (bucket: R2Bucket, now: Date): Promise<string[]> => {
   const expired = (meta: Record<string, string> | undefined): boolean =>
     meta?.kind === 'redirect' && !!meta.expiresAt && Date.parse(meta.expiresAt) <= now.getTime();
@@ -561,5 +595,6 @@ export const sweepExpiredAliases = async (bucket: R2Bucket, now: Date): Promise<
     }
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
+  await sweepExpiredHolds(bucket, now);
   return deleted;
 };

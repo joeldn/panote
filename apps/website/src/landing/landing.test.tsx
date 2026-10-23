@@ -19,6 +19,11 @@ import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 import { StageFactoryContext } from '../tour/stage-factory.js';
 
+// Each test renders the whole site router, which is quick alone but ran past 5 s in CI's
+// Coverage job, where every package's suite runs at once under V8 coverage (three
+// different tests here, on two PRs). The work is the same; the runner is that much slower.
+vi.setConfig({ testTimeout: 15_000 });
+
 type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 const stash = vi.hoisted(() => vi.fn<(file: File) => Promise<boolean>>(async () => true));
@@ -75,7 +80,7 @@ describe('landing', () => {
     expect(dropTarget().getAttribute('href')).toBe(href);
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(href);
     expect(
-      screen.getByRole('link', { name: /Upload your first tour — free/ }).getAttribute('href'),
+      screen.getByRole('link', { name: /Upload your first tour, free/ }).getAttribute('href'),
     ).toBe(href);
 
     fireEvent.click(dropTarget());
@@ -119,12 +124,18 @@ describe('landing', () => {
     expect(stash).toHaveBeenCalledTimes(1);
   });
 
-  it('sends a signed-in upload straight to the admin app', async () => {
+  it('sends a signed-in upload straight to the admin app, as a new tour, not a first', async () => {
     renderSite('/', signedIn());
     await screen.findByRole('button', { name: 'Account: Maya Larsson' });
     const admin = `${LOCAL.admin}${RESUME}`;
-    expect(dropTarget().getAttribute('href')).toBe(admin);
+    const drop = screen.getByRole('link', { name: /^Upload a new tour free/ });
+    expect(drop.getAttribute('href')).toBe(admin);
+    expect(drop.textContent).toContain('free, opens in your dashboard');
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(admin);
+    expect(screen.getByRole('link', { name: 'Upload a new tour' }).getAttribute('href')).toBe(
+      admin,
+    );
+    expect(screen.queryByText(/your first tour/)).toBeNull();
   });
 
   it('links the section nav and keeps one FAQ answer open at a time', async () => {

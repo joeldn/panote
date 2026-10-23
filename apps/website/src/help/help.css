@@ -1,0 +1,137 @@
+/* Help pages (B12): the legal pages' reading column, with the help pages listed beside it. */
+.help {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 680px);
+  justify-content: center;
+  gap: 48px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 48px 30px 80px;
+}
+
+.help__nav {
+  position: sticky;
+  top: 96px;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 10px;
+}
+
+.help__nav-link {
+  padding: 7px 12px;
+  border-radius: var(--r-chip);
+  font: 500 14px var(--fbody);
+  color: var(--ink-62);
+  text-decoration: none;
+}
+
+.help__nav-link:hover {
+  color: var(--ink);
+  background: var(--ink-06);
+}
+
+.help__nav-link.active {
+  color: var(--ink);
+  background: var(--ink-08);
+}
+
+.help__body {
+  min-width: 0;
+  font: 400 16px/1.65 var(--fbody);
+  color: var(--ink-82);
+}
+
+.help__body h1 {
+  font-family: var(--fdisp);
+  font-weight: 400;
+  font-size: clamp(36px, 5vw, 54px);
+  line-height: 1;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0 0 16px;
+}
+
+.help__lede {
+  font-size: 18px;
+  line-height: 1.55;
+  color: var(--ink-70);
+  margin: 0 0 32px;
+}
+
+.help__body h2 {
+  font: 600 21px var(--fbody);
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  margin: 40px 0 10px;
+}
+
+.help__body h3 {
+  font: 600 16.5px var(--fbody);
+  color: var(--ink);
+  margin: 26px 0 6px;
+}
+
+.help__body p,
+.help__body ul,
+.help__body ol {
+  margin: 0 0 14px;
+}
+
+.help__body ul,
+.help__body ol {
+  padding-left: 22px;
+}
+
+.help__body li + li {
+  margin-top: 8px;
+}
+
+.help__body a {
+  color: var(--accent);
+}
+
+.help__code {
+  font: 400 0.88em var(--fmono);
+  padding: 1px 5px;
+  border-radius: var(--r-xs);
+  background: var(--ink-06);
+}
+
+.help__pre {
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  border-radius: var(--r-field);
+  background: var(--dark-panel);
+  color: var(--code-text);
+  font: 400 12.5px/1.55 var(--fmono);
+}
+
+.help__body .help__contact {
+  margin-top: 40px;
+  padding-top: 18px;
+  border-top: 1px solid var(--ink-08);
+  font-size: 14.5px;
+  color: var(--ink-62);
+}
+
+@media (max-width: 760px) {
+  .help {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+    padding: 28px 16px 56px;
+  }
+
+  .help__nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-top: 0;
+  }
+
+  .help__body {
+    font-size: 15.5px;
+  }
+}

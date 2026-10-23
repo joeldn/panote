@@ -28,6 +28,7 @@ export const routes: RouteObject[] = [
             children: [
               { index: true, element: null },
               { path: 'new', element: <UploadOverlay /> },
+              { path: 'insights/:tourId', element: <InsightsModal over="dashboard" /> },
             ],
           },
           { path: 'panos/unused', element: <UnusedPanos /> },

@@ -634,11 +634,17 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
       : [];
   const purge =
     action === 'delete'
-      ? await deleteTour(meter.bucket, sub, tourId, () => stub.unpublish(sub, tourId), {
-          trash: false,
-          tilesByUrl: true,
-        })
-      : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
+      ? await deleteTour(
+          meter.bucket,
+          sub,
+          tourId,
+          () => stub.unpublish(sub, tourId, false, true),
+          {
+            trash: false,
+            tilesByUrl: true,
+          },
+        )
+      : { prefixes: [], files: await stub.unpublish(sub, tourId, true, true) };
   if (scenes.length) {
     const originals = new Set(scenes.map((s) => originalKey(sub, s.panoId)));
     await deleteFromTrash(meter.bucket, userPanosPrefix(sub), (k) => originals.has(k));

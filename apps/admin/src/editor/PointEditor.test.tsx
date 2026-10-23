@@ -137,7 +137,7 @@ describe('PointEditor media picker', () => {
 
     renderMedia({ kind: 'link', url: 'https://example.org/history' });
     const link = screen.getByRole('link', { name: 'Visit example.org ↗' });
-    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.getAttribute('rel')).toBe('nofollow ugc noopener noreferrer');
   });
 });
 
