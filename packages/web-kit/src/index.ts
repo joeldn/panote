@@ -38,6 +38,7 @@ export {
   ApiError,
   ApiSchemaError,
   ConflictError,
+  ReauthRequiredError,
   type FetchLike,
   type TokenGetter,
 } from './api/http.js';

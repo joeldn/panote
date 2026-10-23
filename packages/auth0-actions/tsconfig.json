@@ -12,5 +12,5 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["src/**/*.cjs"]
+  "include": ["src/**/*.cjs", "scripts/**/*.cjs"]
 }

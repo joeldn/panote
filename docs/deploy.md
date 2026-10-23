@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
@@ -409,6 +409,14 @@ beside it). Why it links automatically, against Auth0's advice to re-authenticat
 - **Concurrent first logins.** A `400` or `409` from the link call means the picture went stale
   (another login linked or created a user a moment ago): it looks the users up once more and
   retries once, unless the deadline has passed.
+- **Token claims.** On every login and token refresh it also sets two custom claims on the access
+  token (names in `packages/contracts/src/jwt.ts`, which `admin-api` reads):
+  `https://panote.io/auth_time`, the latest of the session's authentication method timestamps in
+  epoch seconds (not
+  on a refresh-token exchange; account delete wants a recent one, see "Account deletion"), and
+  `https://panote.io/linked_subs`, the user ids of the identities linked into the user (at most
+  10; on the login that links, the primary's plus the one just linked). These need neither the
+  Management API nor its secrets, so they work even while linking itself isn't configured.
 - **Never in the way.** It skips refresh-token exchanges and users that already have linked
   identities (merging two primaries is an operator job). Every Management API call has a 5 s
   timeout, the whole run (retries included) has one 10 s deadline, after which the login goes on
@@ -425,7 +433,10 @@ Setting it up, once per tenant (**Needs you**, all in the Auth0 dashboard):
 
 1. **M2M application.** Applications → Create Application → Machine to Machine, name it
    `link-accounts action`, authorise it for the *Auth0 Management API* with only `read:users` and
-   `update:users`. Copy its client id and secret. It is used by nothing else.
+   `update:users`. Copy its client id and secret. It is used by nothing else. Never authorise it,
+   or any M2M application, for Panote's own API audience: the Workers refuse a client-credentials
+   token anyway (`gty: client-credentials` or a sub ending `@clients`, `contracts/src/jwt.ts`),
+   but such a token stands for no user.
 2. **The Action.** Actions → Library → Create Action → Build from scratch, trigger *Login /
    Post Login*, runtime Node 22 (the newest offered), name `Link accounts by verified email`. Replace
    the editor's code with the whole of `packages/auth0-actions/src/link-accounts.cjs` as it is on
@@ -447,11 +458,51 @@ Nothing on the API side changes. Workers only check the JWT, and owner keys are
 and the `delete-account.ts --sub` CLI. After linking, the token's sub is always the primary's, so
 the R2 owner prefix of an existing account doesn't move. **Known gap:** a user who already had
 Panote data under their own sub before being linked into an older account (only possible for
-sign-ins made before the Action was deployed, or while it was failing) keeps that data under the
-old sub, which no token carries any more. It is not moved. Pre-launch there are no real users, so
-nothing needs doing; later, the `[link-accounts] linked <secondary> into <primary>` log line names
-both ids, and the operator can check `panos/<base64url(secondary)>/` and
-`tours/<base64url(secondary)>/` for anything left behind.
+sign-ins made before the Action was deployed, or while it was failing, since a failed link lets the
+sign-in go on unlinked) keeps that data under the old sub, which no token carries any more. It is
+not moved, and the editor doesn't list it: the owner can't edit those tours, and any that were
+published stay up. Account deletion does reach it, through the `linked_subs` claim (see "Account
+deletion"). Failing the sign-in instead of continuing unlinked was considered and rejected: a
+Management API hiccup would lock people out of their own account, and the orphaned data is rare
+and now deleted with the account. Showing linked subs' tours in the editor is left for later. To
+find such data by hand, the `[link-accounts] linked <secondary> into <primary>` log line names both
+ids; check `panos/<base64url(secondary)>/` and `tours/<base64url(secondary)>/`.
+
+**Email ban list.** A takedown's `--disable-owner` blocks one Auth0 user id; a second post-login
+Action, `packages/auth0-actions/src/ban-list.cjs` (tests beside it), refuses any sign-in, or token
+refresh, whose user carries a banned email address (the root email or a linked identity's,
+verified or not) with `api.access.deny`, which the admin app's callback page shows as "Sign-in was
+cancelled, or this account isn't allowed to sign in." The list is the Action secret
+`BANNED_EMAIL_SHA256`: SHA-256 hashes (hex) of normalised addresses, separated by commas, spaces or
+newlines, so no plaintext address sits in the tenant config. Normalised means trimmed, lower case,
+any `+tag` dropped, and for `gmail.com`/`googlemail.com` the dots dropped too (so
+`J.Doe+x@googlemail.com` and `jdoe@gmail.com` are one entry). Missing or empty, nobody is refused.
+The log line is `[ban-list] sign-in refused` with neither the address nor the user id; entries
+that aren't 64 hex digits (a pasted address, a cut-off hash) are ignored and logged as a count
+only (`[ban-list] N BANNED_EMAIL_SHA256 entries are not SHA-256 hashes, ignored`). The hashes are
+unsalted SHA-256: they keep addresses out of plain sight in the dashboard, but anyone who can read
+the secret can check whether a given address is on the list, so treat the secret as private.
+
+Setting it up, once per tenant (**Needs you**, Auth0 dashboard): Actions → Library → Create Action
+→ Build from scratch, trigger *Login / Post Login*, runtime Node 22, name `Block banned emails`.
+Paste the whole of `ban-list.cjs` as it is on `main`, add the secret `BANNED_EMAIL_SHA256` (empty
+is fine to start), Deploy, and in Actions → Triggers → post-login put it **first**, before "Link
+accounts by verified email", then Apply.
+
+Banning someone: look up the address on the Auth0 user (User Management → Users → search the
+sub `takedown.ts` printed → its email; a linked user shows each identity's), then
+
+```bash
+node packages/auth0-actions/scripts/ban-email.cjs 'person@example.com'
+# stderr: hashed as person@example.com   stdout: the 64-hex hash
+```
+
+and add the printed hash to `BANNED_EMAIL_SHA256` (Action → Secrets → edit; keep the existing
+hashes, comma-separated), then Deploy the Action. Keep which case each hash belongs to in the case
+log, not in the secret. To lift a ban, remove that hash and Deploy. `takedown.ts --disable-owner`
+prints this step after it disables an owner, since it has no Auth0 access to read the email
+itself. A ban list only raises the cost of coming back: a person with a different address still
+signs up.
 
 **Local dev.** `pnpm --filter @app/admin dev` serves `http://localhost:5173/app/` (the port the
 Auth0 dev SPA app's callback allows) and `pnpm --filter @app/website dev` serves
@@ -1276,9 +1327,64 @@ on `admin-api` with the body `{"confirm":"delete my account"}` (`ACCOUNT_DELETE_
 `@internal/contracts`; any other body is a `400` and touches nothing). The code is
 `services/admin-api/src/delete-account.ts`.
 
+**A recent sign-in (step-up).** Tokens live in localStorage, so a token alone (stolen through
+some future XSS, or left in a shared browser) must not be able to wipe an account. The route also
+wants the access token's sign-in time, the custom claim `https://panote.io/auth_time` that the
+Auth0 post-login Action adds (see "Account linking"; `AUTH_TIME_CLAIM` in `contracts/src/jwt.ts`),
+to be at most `RECENT_AUTH_MAX_AGE_SECONDS` (600 s) old, with a minute of clock skew allowed the
+other way. Otherwise, or when the token doesn't carry the claim, it answers
+`403 {"error":"reauthentication required"}` and touches nothing (the phrase is checked first). The
+Action leaves the claim off tokens minted by a refresh-token exchange, so a stolen refresh token
+can't mint a "just signed in" token either.
+
+The admin app handles that `403` by asking the owner to sign in again: a sign-in dialog ("Sign in
+again to delete your account") whose buttons call `loginWithRedirect` with `prompt=login` and
+`max_age=600`, so Auth0 makes them actually sign in even with a live Auth0 session. They come back
+to the same page with `?delete-account=reauthenticated`, the delete dialog opens again, and they
+type the phrase once more. The sign-in sends the owner's email as `login_hint`, and the dialog
+keeps the sub that asked in `sessionStorage` across the redirect: if they come back signed in as
+a different account (or the tab lost that record), it refuses and deletes nothing, so a re-auth
+with the wrong Google account can't delete that other account. If the server still refuses right after that sign-in (the Action isn't
+deployed, so no token has the claim), the dialog says it couldn't confirm the sign-in and names
+the contact address instead of looping. With Google, `prompt=login` makes Auth0 itself
+re-authenticate; Google may sign the person straight back in if their Google session is live,
+which still proves they hold that Google session, not just a Panote token.
+
+`REQUIRE_RECENT_AUTH` (an `admin-api` var, `"true"` in both envs in `wrangler.jsonc`) turns the
+check off when it is exactly `"false"`. It is the escape hatch for an env whose tenant doesn't add
+the claim yet; while it is off, account delete is back to the typed phrase only.
+
+**Rollout order** (once per tenant, dev and later production). Merging this auto-deploys
+`admin-api` to dev with the check on, so until the Action change below is live on the dev
+tenant, Delete account on dev fails closed with the "couldn't confirm your sign-in" message.
+Nothing else is affected.
+
+1. Paste the new `packages/auth0-actions/src/link-accounts.cjs` into the "Link accounts by
+   verified email" Action and Deploy (see "Account linking"; it needs no new secret). It now adds
+   the sign-in time and the linked subs to every access token, whether or not linking is set up.
+2. Check it: sign out and in on dev, then Delete account on a throwaway account: it should go
+   straight through, or, if the last sign-in was more than 10 minutes ago, ask once for a fresh
+   sign-in and then go through.
+3. Production: do step 1 on the production tenant **before** the first production deploy that
+   contains this, or deploy with `REQUIRE_RECENT_AUTH` set to `"false"` under `env.production` and
+   set it back once the Action is live. If both are missed, nothing is deleted by mistake: Delete
+   account just refuses until the Action is deployed.
+
+**Linked identities.** The marker also records the token's linked subs (`linkedSubs`, the
+`https://panote.io/linked_subs` claim, at most 10): every identity linked into this Auth0 user, as
+the user id it had before the link. Their `tours/`, `panos/` and `upload-log/` prefixes are deleted
+exactly like the account's own, by the route and by the daily sweep until the delete completes,
+so data made under a sign-in before it was linked (see "Account linking", **Known gap**) goes with
+the account. After `completedAt` the sweep's late-data pass covers the account's own sub only:
+data under a linked sub from then on can only belong to a new, separate user with that provider
+id (the Auth0 user was removed and they signed up again, or the operator unlinked it), which the
+marker doesn't block, so it isn't deleted. A retry whose
+token names more linked subs adds them to the marker. The operator's `delete-account.ts --sub`
+marks the primary sub only; to cover a linked sub there, mark that sub too.
+
 **Order, and why a retry finishes the job.**
 
-1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt? }`), is
+1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt?, linkedSubs? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
    under `/api/admin/*`, except the account route itself and the operator routes) and `upload-api`'s
    `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing

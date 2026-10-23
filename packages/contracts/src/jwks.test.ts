@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { makeJwksLoader, verifyWithRotation } from './jwks.js';
+import { AUTH_TIME_CLAIM, LINKED_SUBS_CLAIM } from './jwt.js';
 
 const b64url = (bytes: Uint8Array): string =>
   btoa(String.fromCharCode(...bytes))
@@ -138,6 +139,32 @@ describe('verifyWithRotation', () => {
     expect(res.sub).toBe('auth0|me');
     expect(get).toHaveBeenCalledTimes(2);
     expect(get).toHaveBeenLastCalledWith(true);
+  });
+
+  it("returns the Action's claims from a signed token, and refuses a signed M2M token", async () => {
+    const claims = { iss: 'https://issuer/', aud: 'api', exp: 9999999999 };
+    const user = await makeSignedToken({
+      ...claims,
+      sub: 'google-oauth2|1',
+      [AUTH_TIME_CLAIM]: 1_800_000_000,
+      [LINKED_SUBS_CLAIM]: ['email|abc'],
+    });
+    expect(
+      await verifyWithRotation(user.token, {
+        issuer: 'https://issuer/',
+        audience: 'api',
+        loader: { get: vi.fn().mockResolvedValue([user.jwk]) },
+      }),
+    ).toEqual({ sub: 'google-oauth2|1', authTime: 1_800_000_000, linkedSubs: ['email|abc'] });
+
+    const m2m = await makeSignedToken({ ...claims, sub: 'cid@clients', gty: 'client-credentials' });
+    await expect(
+      verifyWithRotation(m2m.token, {
+        issuer: 'https://issuer/',
+        audience: 'api',
+        loader: { get: vi.fn().mockResolvedValue([m2m.jwk]) },
+      }),
+    ).rejects.toThrow('client-credentials token');
   });
 
   it('does not refetch on a non-kid failure (e.g. bad audience)', async () => {
