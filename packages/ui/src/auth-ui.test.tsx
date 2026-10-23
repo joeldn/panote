@@ -173,34 +173,48 @@ describe('AccountMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
   });
 
-  it('runs an action item, drawn as danger, and closes', () => {
+  it('runs an action item and closes', () => {
     const onSelect = vi.fn();
     render(
       <AccountMenu
         user={user}
         items={[
-          { label: 'Home page', icon: 'fa-solid fa-house', href: '/' },
-          { label: 'Delete account', icon: 'fa-solid fa-trash', onSelect, danger: true },
+          { label: 'My tours', icon: 'fa-solid fa-layer-group', href: '/' },
+          { label: 'Account…', icon: 'fa-solid fa-user', onSelect },
         ]}
         onSignOut={() => {}}
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /Account/ }));
-    const item = screen.getByRole('menuitem', { name: 'Delete account' });
+    const item = screen.getByRole('menuitem', { name: 'Account…' });
     expect(item.tagName).toBe('BUTTON');
-    expect(item.className).toContain('pn-account__item--danger');
     fireEvent.click(item);
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('signs out and closes', () => {
+  it('signs out, drawn like any other item, and closes', () => {
     const onSignOut = vi.fn();
     render(<AccountMenu user={user} onSignOut={onSignOut} />);
     fireEvent.click(screen.getByRole('button', { name: /Account/ }));
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+    const signOut = screen.getByRole('menuitem', { name: 'Sign out' });
+    expect(signOut.className).toBe('pn-account__item');
+    fireEvent.click(signOut);
     expect(onSignOut).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('calls onOpen each time it opens, not when it closes', () => {
+    const onOpen = vi.fn();
+    render(<AccountMenu user={user} onSignOut={() => {}} onOpen={onOpen} />);
+    const avatar = screen.getByRole('button', { name: /Account/ });
+    fireEvent.click(avatar);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.click(avatar);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.click(avatar);
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
   it('closes on Escape and on an outside click', () => {
