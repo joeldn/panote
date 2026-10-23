@@ -22,6 +22,7 @@ import {
   PublishRequestSchema,
   REAUTH_REQUIRED_ERROR,
   SceneConfigSchema,
+  SUPPORT_USERS_PATH,
   signInOf,
   TOUR_TRANSFERRING_ERROR,
   type TransferFinishing,
@@ -91,6 +92,7 @@ import {
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { isOperatorSub, requireOperator } from './ops-gate.js';
 import { sweepUnsavedPlans } from './plan-sweep.js';
+import { supportRoutes } from './support.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
@@ -1021,6 +1023,9 @@ app.post(OPERATOR_BACKFILL_PATH, async (c) => {
   );
   return c.json(out);
 });
+
+// The operator's support pages (support.ts), behind the operator gate.
+app.route(SUPPORT_USERS_PATH, supportRoutes);
 
 app.onError(errorHandler);
 

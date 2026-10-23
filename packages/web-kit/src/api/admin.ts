@@ -1,5 +1,10 @@
 import {
   AccountDeleteOkSchema,
+  SUPPORT_USERS_PATH,
+  SupportLookupOkSchema,
+  SupportUserViewSchema,
+  type SupportLookupOk,
+  type SupportUserView,
   DEFAULT_INSIGHTS_DAYS,
   InsightsOkSchema,
   InsightsUnavailableSchema,
@@ -190,6 +195,16 @@ export interface AdminApi {
   listSharedTours(): Promise<SharedToursOk>;
   /** The signed-in user's email and sign-in methods, for the account page. */
   getAccount(): Promise<AccountView>;
+  /** Operator only: which account a query (account ID, share link, slug, tourId) names; null if none. */
+  supportLookup(q: string): Promise<SupportLookupOk | null>;
+  /** Operator only: one account on one page. */
+  supportUser(sub: string): Promise<SupportUserView>;
+  /**
+   * Operator only: one of the support writes (`disable`, `enable`, `restore`, `close`,
+   * `tours/<tourId>`), answered with the account as it is now. Needs a recent sign-in:
+   * throws ReauthRequiredError when the last one is too old.
+   */
+  supportAction(sub: string, action: string, body?: unknown): Promise<SupportUserView>;
   /**
    * Offers the tour to one of its editors, owner only. Needs a recent sign-in: throws
    * ReauthRequiredError when the last one is too old, as deleteAccount does.
@@ -445,6 +460,24 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
     },
     listSharedTours: async () => getJson('/api/admin/shared-tours', SharedToursOkSchema),
     getAccount: async () => getJson('/api/admin/account', AccountViewSchema),
+    supportLookup: async (q) => {
+      const path = `${SUPPORT_USERS_PATH}/lookup?q=${encodeURIComponent(q)}`;
+      const { res, url, body } = await send('GET', path);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new ApiError(res.status, body);
+      return parseWith(SupportLookupOkSchema, url, body);
+    },
+    supportUser: async (sub) =>
+      getJson(`${SUPPORT_USERS_PATH}/${encodeURIComponent(sub)}`, SupportUserViewSchema),
+    supportAction: async (sub, action, body = {}) => {
+      const path = `${SUPPORT_USERS_PATH}/${encodeURIComponent(sub)}/${action}`;
+      const res = await send('POST', path, { body });
+      if (res.res.status === 403 && ReauthRequiredSchema.safeParse(res.body).success) {
+        throw new ReauthRequiredError(res.body);
+      }
+      if (!res.res.ok) throw new ApiError(res.res.status, res.body);
+      return parseWith(SupportUserViewSchema, res.url, res.body);
+    },
     offerTransfer: async (tourId, memberId) => {
       const { res, url, body } = await send('POST', `${tourPath(tourId)}/transfer`, {
         body: { memberId },

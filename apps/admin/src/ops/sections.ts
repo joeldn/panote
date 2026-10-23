@@ -5,4 +5,7 @@ export interface OpsSection {
   label: string;
 }
 
-export const OPS_SECTIONS: OpsSection[] = [{ path: '', label: 'Overview' }];
+export const OPS_SECTIONS: OpsSection[] = [
+  { path: '', label: 'Overview' },
+  { path: 'users', label: 'Users' },
+];
