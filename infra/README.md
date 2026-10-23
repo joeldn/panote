@@ -283,7 +283,7 @@ Machine, name `pulumi` (and `pulumi-read`), authorise it for the *Auth0 Manageme
 |---|---|---|
 | `read:clients` | yes | yes |
 | `create:clients`, `update:clients`, `delete:clients` | yes | no |
-| `read:client_keys` | yes (the link-accounts client's secret, which its Action gets) | no |
+| `read:client_keys` | yes (the link-accounts client's secret, which its Action gets) | **never**: a preview takes that secret from the state and doesn't check it |
 | `update:client_keys` | yes (*unverified*: setting a client's authentication method) | no |
 | `read:client_grants` | yes | yes |
 | `create:client_grants`, `update:client_grants`, `delete:client_grants` | yes | no |
@@ -299,6 +299,10 @@ Machine, name `pulumi` (and `pulumi-read`), authorise it for the *Auth0 Manageme
 *(unverified)* This list follows each resource's API. A refusal names the scope it wanted
 (`Insufficient scope, expected any of: …`); add it here. Never authorise either client for
 Panote's own API. The program doesn't manage these two (a client can't safely manage itself).
+`pulumi-read` stays without `read:client_keys`, so the pull request's program it runs in CI can't
+read any client's secret from the tenant. Don't `pulumi preview --refresh` with it: the refresh
+would read the link-accounts secret back as empty and show a change to the Action's
+`MGMT_CLIENT_SECRET` (an `up` stops on an empty one).
 
 Pulumi reads the client from the environment; the tenant always comes from the stack. Keep
 `AUTH0_DOMAIN` unset:
@@ -491,7 +495,11 @@ steps, but that doesn't change this, so before adding the secrets (manual, once)
 - give the `infra-preview` environment **required reviewers** (Settings → Environments →
   `infra-preview`), or a deployment-branch rule, so a run only gets them once approved;
 - make `CLOUDFLARE_API_TOKEN` the read token, never one that can edit, and the Auth0 pairs the
-  `pulumi-read` clients;
+  `pulumi-read` clients (no write scope, no `read:client_keys`);
+- reviewers of the `infra-preview` environment read the pull request's diff of `infra/**` and
+  `packages/auth0-actions/src/**` before approving a run: the job holds the passphrase, so the
+  program can decrypt every secret in the state and config, the link-accounts client's secret and
+  the ban list included;
 - scope the R2 key to `panote-pulumi-state` only.
 
 A fork's pull request gets no secrets.

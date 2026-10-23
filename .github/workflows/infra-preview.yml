@@ -15,8 +15,12 @@ name: Infra preview
 # `pulumi preview` runs the pull request's own program with these secrets, so
 # the environment must have required reviewers (or a deployment-branch rule),
 # the Cloudflare token must be read-only and the R2 key scoped to the state
-# bucket (infra/README.md, CI preview), and so must the Auth0 clients. They
-# are set only on the steps below that need them, never on install or build.
+# bucket (infra/README.md, CI preview), and so must the Auth0 clients (no
+# write scope and no read:client_keys: a preview never reads a client's
+# secret from the tenant). The job still holds the passphrase, which decrypts
+# every secret in the state, so a reviewer reads the infra/** and
+# packages/auth0-actions/src/** diff before approving. The secrets are set
+# only on the steps below that need them, never on install or build.
 #
 #   PULUMI_BACKEND_URL        s3://panote-pulumi-state?endpoint=...  (the CLI reads this)
 #   AWS_ACCESS_KEY_ID         R2 token for the state bucket (Object Read & Write:

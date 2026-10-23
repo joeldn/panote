@@ -12,6 +12,8 @@ import { RESOURCES, type ResourceKey } from './names.js';
 import { stackSettings } from './test-support.js';
 
 const SPA = 'DEXWa49LnwVmX8flff1kcxHpj8G0d9d2';
+const CLIENTS_PAGE = (page: number) =>
+  `/clients?app_type=non_interactive&fields=client_id,name&per_page=100&page=${page}`;
 const MGMT = encodeURIComponent('https://panote-dev.au.auth0.com/api/v2/');
 
 /** A read-only API double: path → response body, anything else 404s. */
@@ -29,7 +31,7 @@ const DEV_API = {
   [`/clients/${SPA}?fields=client_id,app_type`]: { client_id: SPA, app_type: 'spa' },
   '/connections?strategy=google-oauth2&name=google-oauth2': [{ id: 'con_google' }],
   '/connections?name=Username-Password-Authentication': [{ id: 'con_db' }],
-  '/clients?app_type=non_interactive&fields=client_id,name&per_page=100': [
+  [CLIENTS_PAGE(0)]: [
     { client_id: 'm2m_pulumi', name: 'pulumi' },
     { client_id: 'm2m_link', name: 'link-accounts action' },
   ],
@@ -77,6 +79,34 @@ describe('buildAuth0ImportPlan', () => {
     expect(plan.missing).toEqual([]);
   });
 
+  it('finds the linking client on a later page', async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      client_id: `c${i}`,
+      name: `m2m ${i}`,
+    }));
+    const api = fakeApi({
+      ...DEV_API,
+      [CLIENTS_PAGE(0)]: fullPage,
+      [CLIENTS_PAGE(1)]: [{ client_id: 'm2m_link', name: 'link-accounts action' }],
+    });
+    const plan = await buildAuth0ImportPlan(dev.zone, devAuth0, SPA, api);
+    expect(plan.resources).toContainEqual(entry('linkingClient', 'm2m_link'));
+    expect(plan.missing).toEqual([]);
+    expect(api.paths.filter((path) => path.startsWith('/clients?'))).toEqual([
+      CLIENTS_PAGE(0),
+      CLIENTS_PAGE(1),
+    ]);
+  });
+
+  it('encodes the SPA client id in the path', async () => {
+    const api = fakeApi({ ...DEV_API });
+    await buildAuth0ImportPlan(dev.zone, devAuth0, SPA, api).catch(() => undefined);
+    expect(api.paths).toContain(`/clients/${encodeURIComponent(SPA)}?fields=client_id,app_type`);
+    const odd = fakeApi({});
+    await expect(buildAuth0ImportPlan(dev.zone, devAuth0, 'a/b?c', odd)).rejects.toThrow();
+    expect(odd.paths).toContain('/clients/a%2Fb%3Fc?fields=client_id,app_type');
+  });
+
   it('on a fresh tenant, imports only what every tenant has', async () => {
     const plan = await buildAuth0ImportPlan(
       dev.zone,
@@ -85,7 +115,7 @@ describe('buildAuth0ImportPlan', () => {
       fakeApi({
         '/connections?strategy=google-oauth2&name=google-oauth2': [],
         '/connections?name=Username-Password-Authentication': [{ id: 'con_db' }],
-        '/clients?app_type=non_interactive&fields=client_id,name&per_page=100': [],
+        [CLIENTS_PAGE(0)]: [],
         [`/actions/actions?actionName=${encodeURIComponent('Block banned emails')}`]: {
           actions: [],
         },
@@ -127,7 +157,7 @@ describe('buildAuth0ImportPlan', () => {
     [
       'two clients share the linking name',
       {
-        '/clients?app_type=non_interactive&fields=client_id,name&per_page=100': [
+        [CLIENTS_PAGE(0)]: [
           { client_id: 'a', name: 'link-accounts action' },
           { client_id: 'b', name: 'link-accounts action' },
         ],
@@ -179,6 +209,13 @@ describe('spaClientIdFromEnv', () => {
       spaClientIdFromEnv('VITE_AUTH0_CLIENT_ID=a\n', 'VITE_AUTH0_CLIENT_ID=b\n'),
     ).toThrow(/different/);
     expect(() => spaClientIdFromEnv('', '')).toThrow(/different/);
+  });
+
+  it('refuses a value that is not a client id', () => {
+    for (const value of ['abc/def', 'abc?x=1', '../clients', 'a b']) {
+      const env = `VITE_AUTH0_CLIENT_ID=${value}\n`;
+      expect(() => spaClientIdFromEnv(env, env)).toThrow(/not a client id/);
+    }
   });
 });
 

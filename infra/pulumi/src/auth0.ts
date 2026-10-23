@@ -120,6 +120,15 @@ export function requireClientSecret(secret: string | undefined): string {
   return secret;
 }
 
+/**
+ * The same at preview, which never deploys: the secret is whatever the state
+ * holds, unchecked, so the CI preview client needs no `read:client_keys`
+ * (infra/README.md, step 11). `up` still stops on an empty one.
+ */
+export function managementSecret(secret: string | undefined, dryRun: boolean): string {
+  return dryRun ? (secret ?? '') : requireClientSecret(secret);
+}
+
 /** Values that live in the stack's config as secrets, never in the repo. */
 export interface Auth0Secrets {
   /** The Google OAuth client's secret; only with `googleClientId`. */
@@ -311,7 +320,11 @@ export function createAuth0(
       { name: 'MGMT_CLIENT_ID', value: linking.clientId },
       {
         name: 'MGMT_CLIENT_SECRET',
-        value: pulumi.secret(linkingCredentials.clientSecret.apply(requireClientSecret)),
+        value: pulumi.secret(
+          linkingCredentials.clientSecret.apply((secret) =>
+            managementSecret(secret, pulumi.runtime.isDryRun()),
+          ),
+        ),
       },
     ],
   };

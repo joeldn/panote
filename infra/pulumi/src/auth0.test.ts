@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { normaliseBanList, requireClientSecret } from './auth0.js';
+import { managementSecret, normaliseBanList, requireClientSecret } from './auth0.js';
 import { RESOURCES, type ResourceKey } from './names.js';
 import type { Settings } from './settings.js';
 import {
@@ -292,5 +292,18 @@ describe('requireClientSecret', () => {
     expect(requireClientSecret('s3cret')).toBe('s3cret');
     expect(() => requireClientSecret('')).toThrow(/read:client_keys/);
     expect(() => requireClientSecret(undefined)).toThrow(/read:client_keys/);
+  });
+});
+
+describe('managementSecret', () => {
+  it('takes the state as it is at preview, so the preview client needs no read:client_keys', () => {
+    expect(managementSecret('', true)).toBe('');
+    expect(managementSecret(undefined, true)).toBe('');
+    expect(managementSecret('s3cret', true)).toBe('s3cret');
+  });
+
+  it('still stops an up on an empty secret', () => {
+    expect(managementSecret('s3cret', false)).toBe('s3cret');
+    expect(() => managementSecret('', false)).toThrow(/read:client_keys/);
   });
 });

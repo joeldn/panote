@@ -47,6 +47,12 @@ function one(where: string, matches: Record<string, unknown>[], key: string): st
   return value as string | undefined;
 }
 
+/** What an Auth0 client id looks like; anything else never reaches a URL. */
+const CLIENT_ID = /^[A-Za-z0-9]+$/;
+
+/** The Management API's largest page of clients. */
+export const CLIENTS_PER_PAGE = 100;
+
 /**
  * The SPA's client id, from the two apps' committed `.env.<stack>`
  * (`VITE_AUTH0_CLIENT_ID`). They must agree; a `YOUR_` placeholder means
@@ -59,7 +65,9 @@ export function spaClientIdFromEnv(adminEnv: string, websiteEnv: string): string
   if (!admin || admin !== website) {
     throw new Error('apps/admin and apps/website name different VITE_AUTH0_CLIENT_IDs');
   }
-  return admin.startsWith('YOUR_') ? undefined : admin;
+  if (admin.startsWith('YOUR_')) return undefined;
+  if (!CLIENT_ID.test(admin)) throw new Error(`VITE_AUTH0_CLIENT_ID "${admin}" is not a client id`);
+  return admin;
 }
 
 export async function buildAuth0ImportPlan(
@@ -82,8 +90,9 @@ export async function buildAuth0ImportPlan(
 
   let spa: string | undefined;
   if (spaClientId !== undefined) {
-    const client = (await get(`/clients/${spaClientId}?fields=client_id,app_type`)) as
-      { app_type?: unknown } | undefined;
+    const client = (await get(
+      `/clients/${encodeURIComponent(spaClientId)}?fields=client_id,app_type`,
+    )) as { app_type?: unknown } | undefined;
     if (client === undefined)
       throw new Error(`the apps' client ${spaClientId} is not in the tenant`);
     if (client.app_type !== 'spa') throw new Error(`client ${spaClientId} is not a SPA`);
@@ -108,10 +117,19 @@ export async function buildAuth0ImportPlan(
 
   add('attackProtection', ATTACK_PROTECTION_ID);
 
-  const clients = list(
-    'clients',
-    await get('/clients?app_type=non_interactive&fields=client_id,name&per_page=100'),
-  );
+  // Every page: a linking client missed on a later one would be planned as new,
+  // and `up` would make a second one.
+  const clients: Record<string, unknown>[] = [];
+  for (let page = 0; ; page++) {
+    const batch = list(
+      'clients',
+      await get(
+        `/clients?app_type=non_interactive&fields=client_id,name&per_page=${CLIENTS_PER_PAGE}&page=${page}`,
+      ),
+    );
+    clients.push(...batch);
+    if (batch.length < CLIENTS_PER_PAGE) break;
+  }
   const linking = one(
     `client "${LINKING_CLIENT_NAME}"`,
     clients.filter((c) => c.name === LINKING_CLIENT_NAME),
