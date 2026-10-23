@@ -3025,6 +3025,7 @@ still loads.
 | Section | Source |
 |---|---|
 | Health | What's already recorded in the content bucket: `ops/health/state.json` (failing checks, last alert), the daily cron and tile sweep status, the CDN purge failure marker, a count of `ops/cdn-purge/pending/` and `dead/` (capped at 1,000), and the newest backup set with `complete.json` |
+| Pipeline | The operator event stream (`OPS_EVENTS_DATASET`, below): upload links issued and their declared size, panoramas tiled, failed (dead-lettered), average and p95 tiling time, refusals and retries by reason, tours created, shared, republished, unshared and deleted, pano and account deletes, invites, rate-limit refusals by Worker and limiter, client error reports by app. Sampled |
 | Viewers | Analytics Engine (`AE_DATASET`) across every tour: views, scenes, hotspots, average dwell, views over time, the ten most viewed tours (titles from `pub/tours/`), page against embed. Sampled |
 | Workers | GraphQL `workersInvocationsAdaptive` for the Workers listed in `OPS_RESOURCES`: requests, errors, subrequests, CPU p50/p99 per Worker, outcomes other than `success`, and requests and errors over time |
 | Storage | GraphQL `r2StorageAdaptiveGroups` and `r2OperationsAdaptiveGroups` for the env's bucket: objects, size, Class A/B operations, busiest operations |
@@ -3040,14 +3041,38 @@ still loads.
 - **`OPS_RESOURCES`** (var, both env blocks of `services/admin-api/wrangler.jsonc`) names this env's
   Workers, buckets and queues, since dev and production share one account. Add a Worker there when a
   new one ships.
-- **Cost.** An uncached load is 11 GraphQL requests, 5 Analytics Engine queries, a Queues API call
+- **Cost.** An uncached load is 11 GraphQL requests, 8 Analytics Engine queries, a Queues API call
   and up to about 20 R2 reads. Each range's answer is cached for 60 s in the Worker's location, and the
   route shares tour insights' limit (`INSIGHTS_LIMITER`, 30 a minute per operator). Cloudflare allows
   300 GraphQL queries per 5 minutes per user.
-- **Not here yet.** Zone traffic (cache hit ratio, status codes, bandwidth) and WAF or rate-limit
-  blocks need a token with Zone Analytics: Read. Uploads, tiling time and failures, publishes and
-  sign-ups aren't recorded anywhere yet. Client error reports are only in `public-api`'s Workers Logs
-  (Error reporting).
+- **Not here yet.** Zone traffic (cache hit ratio, status codes, bandwidth) and WAF blocks need a
+  token with Zone Analytics: Read. Sign-ups happen in Auth0, so they need its logs; an account's
+  first admin-api request isn't a reliable stand-in.
+
+#### Operator event stream
+
+Every Worker that does pipeline work writes one Analytics Engine data point per event through its
+`OPS_EVENTS` binding (`recordOps` in `packages/worker-kit/src/ops-events.ts`; the event names and
+what each detail means are in `packages/contracts/src/ops-events.ts`). The dataset is
+`panote_ops_dev` in dev and `panote_ops` in production. Analytics Engine creates it on the first
+write, so there's nothing to set up. admin-api reads it back through `OPS_EVENTS_DATASET`.
+
+| Worker | Events |
+|---|---|
+| upload-api | `upload-url` (detail `new`, `replace` or `plan`, value the declared bytes), `upload-refused` (detail the refusal) |
+| tiler-consumer | `tile-ok` (value ms), `tile-retry` (detail the container's status, or `threw`), `tile-refused` (`oversize`, `unsupported`, `unprocessable-key`), `tile-dead`, `tile-skipped` |
+| admin-api | `tour-created`, `tour-published` (`share` or `save`), `tour-unpublished`, `tour-deleted`, `pano-deleted`, `account-deleted` (`deleted` or `pending`), `invite-created`, `invite-accepted` |
+| public-api | `client-error` (detail the app) |
+| all four | `rate-limited` (detail the limiter's binding name) |
+
+- **Nothing personal.** No sub, email, IP, tour or pano id: the event, a detail from a fixed
+  vocabulary, the Worker and one number. The per-person view stays in each owner's own records.
+- **Never in the way.** A write that fails, or a Worker without the binding, loses the data point
+  and serves the request as before.
+- **Schema version.** Each point carries `o1` in blob4, and the dashboard reads only that version.
+  Change the layout by bumping it, never by reusing a blob for something else.
+- **New events.** Add the name to `OPS_EVENT_NAMES` first; the dashboard leaves out names it
+  doesn't know, so a Worker deployed ahead of admin-api doesn't break the section.
 
 ---
 

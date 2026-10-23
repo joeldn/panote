@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { OPS_EVENT_NAMES } from './ops-events.js';
+
 // GET /api/admin/ops/metrics: the operator dashboard (admin-api ops-metrics/, the admin
 // app's /app/ops). Each section comes from its own source and fails on its own: one
 // Cloudflare dataset that refuses a query leaves the rest of the page standing.
@@ -167,6 +169,24 @@ export const OpsProductSchema = z.object({
 });
 export type OpsProduct = z.infer<typeof OpsProductSchema>;
 
+/** The operator event stream (ops-events.ts) over the range. Sampled, like the viewer events. */
+export const OpsPipelineSchema = z.object({
+  /** Every event, detail and Worker seen, with its count and the sum of its values. */
+  events: z.array(
+    z.object({
+      event: z.enum(OPS_EVENT_NAMES),
+      detail: z.string(),
+      service: z.string(),
+      n: count(),
+      value: count(),
+    }),
+  ),
+  /** 95th percentile tiling time; null with no tiles, or if Analytics Engine can't say. */
+  tileP95Ms: count().nullable(),
+  series: z.array(point({ uploads: count(), tiled: count(), failed: count() })),
+});
+export type OpsPipeline = z.infer<typeof OpsPipelineSchema>;
+
 export const OpsMetricsSchema = z.object({
   range: z.enum(OPS_RANGES),
   from: iso(),
@@ -179,6 +199,7 @@ export const OpsMetricsSchema = z.object({
   containers: section(OpsContainersSchema),
   usage: section(OpsUsageSchema),
   product: section(OpsProductSchema),
+  pipeline: section(OpsPipelineSchema),
 });
 export type OpsMetrics = z.infer<typeof OpsMetricsSchema>;
 export type OpsSection<T> = { status: 'ok'; data: T } | { status: 'unavailable'; reason: string };

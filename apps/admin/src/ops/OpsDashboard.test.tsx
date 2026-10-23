@@ -127,6 +127,28 @@ const METRICS: OpsMetrics = {
       surfaces: [{ surface: 'page', views: 40 }],
     },
   },
+  pipeline: {
+    status: 'ok',
+    data: {
+      events: [
+        { event: 'upload-url', detail: 'new', service: 'upload-api', n: 4, value: 8e7 },
+        { event: 'tile-ok', detail: '', service: 'tiler-consumer', n: 4, value: 100_000 },
+        { event: 'tile-dead', detail: '', service: 'tiler-consumer', n: 1, value: 0 },
+        { event: 'tile-refused', detail: 'oversize', service: 'tiler-consumer', n: 2, value: 0 },
+        { event: 'tour-published', detail: 'share', service: 'admin-api', n: 3, value: 0 },
+        { event: 'tour-published', detail: 'save', service: 'admin-api', n: 7, value: 0 },
+        { event: 'rate-limited', detail: 'WRITE_LIMITER', service: 'admin-api', n: 2, value: 0 },
+        { event: 'client-error', detail: 'website', service: 'public-api', n: 6, value: 0 },
+      ],
+      tileP95Ms: 41_000,
+      series: hours(24, (i) => (i === 22 ? 4 : 0)).map(({ t, v }) => ({
+        t,
+        uploads: v,
+        tiled: v,
+        failed: 0,
+      })),
+    },
+  },
 };
 
 const server = (metrics: OpsMetrics | null) => {
@@ -168,6 +190,17 @@ describe('the operator dashboard', () => {
     expect(
       within(health).getByText(/2026-10-23 being written \(1,234 objects so far\)/),
     ).toBeTruthy();
+
+    const pipeline = panel('Pipeline');
+    expect(within(pipeline).getByText('25 s')).toBeTruthy();
+    expect(within(pipeline).getByText('41 s')).toBeTruthy();
+    expect(within(pipeline).getByText(/Tours shared: 3 · Republished on save: 7/)).toBeTruthy();
+    expect(within(pipeline).getByText('oversize')).toBeTruthy();
+    expect(within(pipeline).getByText('WRITE_LIMITER')).toBeTruthy();
+    expect(within(pipeline).getByText('website')).toBeTruthy();
+    expect(
+      within(pipeline).getByRole('list', { name: 'Panoramas tiled per hour' }).children,
+    ).toHaveLength(24);
 
     const viewers = panel('Viewers');
     expect(within(viewers).getByText('Old Town')).toBeTruthy();
