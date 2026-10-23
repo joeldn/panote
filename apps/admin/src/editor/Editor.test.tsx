@@ -1028,6 +1028,53 @@ describe('editor: map', () => {
     expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
   });
 
+  it('suggests positions for the unplaced panos from their links, as one tour edit', async () => {
+    server.setTour({
+      tourId: 't1',
+      title: 'Old town',
+      scenes: [
+        { panoId: 'square', mapX: 0.2, mapY: 0.5 },
+        { panoId: 'church' },
+        { panoId: 'hall' },
+      ],
+      startPanoId: 'square',
+    });
+    // The square's north is set, and its link to the church points due east.
+    server.setConfig('square', {
+      title: 'Square',
+      north: 0.3,
+      hotspots: [
+        {
+          id: 'l1',
+          type: 'link',
+          yaw: 0.3 + Math.PI / 2,
+          pitch: -0.4,
+          title: 'Church',
+          targetPanoId: 'church',
+        },
+      ],
+    });
+    const { ui } = openTab();
+    await loaded(ui);
+    fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
+    expect(ui.queryByRole('button', { name: /^Church,/ })).toBeNull();
+    fireEvent.click(ui.getByRole('button', { name: 'Suggest positions' }));
+    expect(ui.getByRole('status').textContent).toBe(
+      'Placed 2 panos from their links. Drag any that are off.',
+    );
+    const church = ui.getByRole('button', { name: /^Church, \d+% across, 50% down/ });
+    expect(parseFloat(church.style.left)).toBeGreaterThan(20);
+    expect(ui.getByRole('button', { name: /^Missing pano,/ })).toBeTruthy();
+    expect(ui.getByRole('button', { name: /^Square, 20% across, 50% down/ })).toBeTruthy();
+    expect(ui.getByRole('button', { name: /^Map/ }).textContent).toContain('3 of 3 placed');
+    expect(ui.getByRole('button', { name: 'Suggest positions' })).toHaveProperty('disabled', true);
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    const scenes = (tourPut()?.body as { scenes: { panoId: string; mapX?: number }[] }).scenes;
+    expect(scenes[0]).toEqual({ panoId: 'square', mapX: 0.2, mapY: 0.5 });
+    expect(scenes.every((s) => s.mapX !== undefined)).toBe(true);
+  });
+
   it('a click on a dot opens that pano', async () => {
     server.setTour({
       tourId: 't1',

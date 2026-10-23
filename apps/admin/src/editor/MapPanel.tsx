@@ -11,6 +11,7 @@ import {
   type PointerEvent,
 } from 'react';
 
+import { suggestForTour } from './map-suggest.js';
 import { mapPositions, type EditorDocs } from './model.js';
 
 // The plan's shape without an image: the viewer's map box is 220×140 px (packages/ui
@@ -39,6 +40,8 @@ export interface MapPanelProps {
   planError?: string | null;
   onPlace: (panoId: string, x: number, y: number) => void;
   onRemove: (panoId: string) => void;
+  /** Puts the unplaced panos where "Suggest positions" worked out, as one edit. */
+  onSuggest: (positions: Record<string, MapPoint>) => void;
   /** Opens a pano in the editor. */
   onSelect: (panoId: string) => void;
   onPlanFile: (file: File) => void;
@@ -80,11 +83,14 @@ export function MapPanel({
   planError = null,
   onPlace,
   onRemove,
+  onSuggest,
   onSelect,
   onPlanFile,
   onRemovePlan,
 }: MapPanelProps) {
   const [open, setOpen] = useState(false);
+  // What the last "Suggest positions" did, for the line under the button.
+  const [suggested, setSuggested] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const focusDot = useRef<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -190,6 +196,20 @@ export function MapPanel({
   const placedCount = tour.scenes.filter((s) => positions.has(s.panoId)).length;
   const ratio = plan ? plan.width / plan.height : BARE_RATIO;
 
+  const suggest = () => {
+    const out = suggestForTour(docs, ratio);
+    const n = out.positions.size;
+    if (!n) return;
+    onSuggest(Object.fromEntries(out.positions));
+    const panos = n === 1 ? '1 pano' : `${n} panos`;
+    const lines = [
+      out.fromLinks > 0 ? `Placed ${panos} from their links.` : `Placed ${panos}.`,
+      n === 1 ? 'Drag it if it’s off.' : 'Drag any that are off.',
+    ];
+    if (out.noDirection > 0) lines.push('Set North is here on more panos for better suggestions.');
+    setSuggested(lines.join(' '));
+  };
+
   return (
     <section
       className={cx('ed-card ed-map', open && 'ed-map--open')}
@@ -202,7 +222,10 @@ export function MapPanel({
             className="ed-map__toggle"
             aria-expanded={open}
             aria-controls={bodyId}
-            onClick={() => setOpen((o) => !o)}
+            onClick={() => {
+              setOpen((o) => !o);
+              setSuggested(null);
+            }}
           >
             Map{' '}
             <span className="ed-card__count">
@@ -269,6 +292,21 @@ export function MapPanel({
                 );
               })}
             </div>
+          </div>
+          <div className="ed-map__suggest">
+            <Button
+              variant="ghost"
+              size="sm"
+              pill
+              icon="fa-solid fa-diagram-project"
+              disabled={placedCount === tour.scenes.length}
+              onClick={suggest}
+            >
+              Suggest positions
+            </Button>
+            <p className="ed-hint ed-map__suggested" role="status">
+              {suggested}
+            </p>
           </div>
           {current && (
             <div className="ed-map__row" role="group" aria-label="Open pano on the map">

@@ -1,9 +1,10 @@
 import type { TourWithConfigsOk } from '@internal/contracts';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MapPanel, type MapPanelProps } from './MapPanel.js';
-import { fromServer } from './model.js';
+import { editorReducer, fromServer, type EditorAction, type EditorDocs } from './model.js';
 
 afterEach(() => {
   cleanup();
@@ -35,6 +36,7 @@ function setup(
     plan: null,
     onPlace: vi.fn(),
     onRemove: vi.fn(),
+    onSuggest: vi.fn(),
     onSelect: vi.fn(),
     onPlanFile: vi.fn(),
     onRemovePlan: vi.fn(),
@@ -229,5 +231,123 @@ describe('MapPanel', () => {
     open();
     expect(dot('Square').style.left).toBe('8%');
     expect(parseFloat(dot('Hall').style.left)).toBeCloseTo(92);
+  });
+
+  describe('Suggest positions', () => {
+    const linked = (): TourWithConfigsOk => {
+      const res = server([{ panoId: 'a', mapX: 0.2, mapY: 0.3 }, { panoId: 'b' }, { panoId: 'c' }]);
+      // The square faces north at yaw 0: the church is due east of it, the hall south.
+      res.configs.a = {
+        config: {
+          panoId: 'a',
+          title: 'Square',
+          north: 0,
+          hotspots: [
+            {
+              id: 'l1',
+              type: 'link',
+              yaw: Math.PI / 2,
+              pitch: -0.4,
+              title: 'B',
+              targetPanoId: 'b',
+            },
+            { id: 'l2', type: 'link', yaw: Math.PI, pitch: -0.4, title: 'C', targetPanoId: 'c' },
+          ],
+        },
+        etag: 'ea',
+      };
+      return res;
+    };
+
+    /** The panel over the real editor model, with an undo that steps back one edit. */
+    function Harness({ initial }: { initial: EditorDocs }) {
+      const [past, setPast] = useState<EditorDocs[]>([]);
+      const [docs, setDocs] = useState(initial);
+      const apply = (action: EditorAction) => {
+        setPast((p) => [...p, docs]);
+        setDocs(editorReducer(docs, action)!);
+      };
+      return (
+        <>
+          <button type="button" onClick={() => setDocs(past.at(-1) ?? docs)}>
+            Undo
+          </button>
+          <MapPanel
+            docs={docs}
+            currentId={null}
+            plan={null}
+            onPlace={(panoId, x, y) => apply({ type: 'map/place', panoId, x, y })}
+            onRemove={(panoId) => apply({ type: 'map/remove', panoId })}
+            onSuggest={(positions) => apply({ type: 'map/suggest', positions })}
+            onSelect={vi.fn()}
+            onPlanFile={vi.fn()}
+            onRemovePlan={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    it('places every unplaced pano from its links in one edit that one undo takes back', () => {
+      render(<Harness initial={fromServer(linked())} />);
+      open();
+      const status = screen.getByRole('status');
+      expect(status.textContent).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
+      expect(status.textContent).toBe('Placed 2 panos from their links. Drag any that are off.');
+      expect(dot('Square').getAttribute('aria-label')).toBe('Square, 20% across, 30% down');
+      const church = dot('Church');
+      const hall = dot('Hall');
+      expect(parseFloat(church.style.left)).toBeGreaterThan(20);
+      expect(church.style.top).toBe('30%');
+      expect(hall.style.left).toBe('20%');
+      expect(parseFloat(hall.style.top)).toBeGreaterThan(30);
+      expect(screen.getByRole('button', { name: 'Suggest positions' })).toHaveProperty(
+        'disabled',
+        true,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+      expect(plan().queryByRole('button', { name: /^Church,/ })).toBeNull();
+      expect(plan().queryByRole('button', { name: /^Hall,/ })).toBeNull();
+      expect(dot('Square').getAttribute('aria-label')).toBe('Square, 20% across, 30% down');
+    });
+
+    it('asks for north when a link has no direction', () => {
+      setup({ onSuggest: vi.fn() }, [{ panoId: 'a' }, { panoId: 'b' }]);
+      // No links at all here, then links with no north.
+      open();
+      fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
+      expect(screen.getByRole('status').textContent).toBe('Placed 2 panos. Drag any that are off.');
+      cleanup();
+
+      const res = server([{ panoId: 'a' }, { panoId: 'b' }]);
+      res.configs.a = {
+        config: {
+          panoId: 'a',
+          title: 'Square',
+          hotspots: [
+            { id: 'l1', type: 'link', yaw: 1, pitch: -0.4, title: 'B', targetPanoId: 'b' },
+          ],
+        },
+        etag: 'ea',
+      };
+      const onSuggest = vi.fn<MapPanelProps['onSuggest']>();
+      setup({ docs: fromServer(res), onSuggest });
+      open();
+      fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
+      expect(Object.keys(onSuggest.mock.calls[0]![0]).sort()).toEqual(['a', 'b']);
+      expect(screen.getByRole('status').textContent).toBe(
+        'Placed 2 panos. Drag any that are off. Set North is here on more panos for better suggestions.',
+      );
+    });
+
+    it('is off when every pano is placed', () => {
+      const { onSuggest } = setup({}, [{ panoId: 'a', mapX: 0.2, mapY: 0.3 }]);
+      open();
+      const button = screen.getByRole('button', { name: 'Suggest positions' });
+      expect(button).toHaveProperty('disabled', true);
+      fireEvent.click(button);
+      expect(onSuggest).not.toHaveBeenCalled();
+    });
   });
 });
