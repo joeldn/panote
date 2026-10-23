@@ -125,7 +125,10 @@ export type InviteAcceptResult =
 
 /** Taking over a tour: done, or why not (an offer gone, a limit of the new owner's). */
 export type TransferAcceptResult =
-  { status: 'ok'; data: TransferAcceptOk } | { status: 'refused'; refusal: TransferRefused };
+  | { status: 'ok'; data: TransferAcceptOk }
+  | { status: 'refused'; refusal: TransferRefused }
+  /** Accepted, but a large tour is still moving: accept again to finish it. */
+  | { status: 'finishing' };
 
 export interface AdminApiOptions {
   getToken: TokenGetter;
@@ -460,6 +463,7 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
         if (refused.success) return { status: 'refused', refusal: refused.data };
         throw new ApiError(res.status, body);
       }
+      if (res.status === 202) return { status: 'finishing' };
       return { status: 'ok', data: parseWith(TransferAcceptOkSchema, url, body) };
     },
     getInsights: async (tourId, days = DEFAULT_INSIGHTS_DAYS) => {

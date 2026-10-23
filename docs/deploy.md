@@ -1726,10 +1726,19 @@ Everything stays in the owner's account: an editor works on the owner's `tours/<
   the tour and its panoramas into the new owner's prefix, rewrites the owner pointer and deletes
   the old keys. A panorama the old owner's other tours still use is copied under a new id and
   tiled again from its original; any other one moves with its tiles. The old owner stays on as an
-  editor. While the record exists every write to the tour (admin-api and upload-api) gets a 409
-  (`tour is changing owner`); accepting again resumes it, and the daily cron finishes any left
-  behind. Until the new owner next publishes, the live tour keeps using the old copies of shared
-  panoramas, and a copied panorama can only be published once its tiles are ready.
+  editor. While the record exists every write to the tour (admin-api and upload-api, tour
+  delete, share link, visibility and Stop sharing) gets a 409 (`tour is changing owner`). A
+  large tour can outrun one request: accept then answers 202 (`finishing`), accepting again
+  carries on, and the daily cron finishes any left behind.
+- **Panoramas the old owner keeps using.** `lent-panos/<old owner>/<tourId>.json` lists the
+  old owner's ids of every panorama the tour used. While the transfer runs, and afterwards while
+  the tour's live bundle still names them (it keeps the old ids of copied panoramas until the
+  new owner publishes again, and a copy can be published once its tiles are ready), they count
+  as in use for the old owner: deleting the panorama, another tour or the account doesn't take
+  their tiles. Account deletion still deletes the original and config but leaves those tiles,
+  which then stay until an operator removes them. The daily cron drops records that protect
+  nothing. A panorama the old owner puts in another tour while it is moving becomes a copy
+  instead.
 
 ## Backups
 

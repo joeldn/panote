@@ -9,7 +9,7 @@ import {
   storedSlugKey,
   tilesPrefix,
   tourKey,
-  tourOwnerKey,
+  userLentPanosPrefix,
   userPanosPrefix,
   userToursPrefix,
   userMembershipsPrefix,
@@ -21,13 +21,14 @@ import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-k
 
 import { deletePano } from './delete-pano.js';
 import { forgetMembers, leaveAllTours } from './members.js';
-import { isAccountDisabled } from './operator.js';
+import { forgetTourOwner, isAccountDisabled } from './operator.js';
 import { deleteFromTrash } from './trash.js';
 import { deletePlans } from './plans.js';
 import { readPublishRecord } from './publish.js';
 import { mergePurges, type CdnPurge } from './purge.js';
-import { REFERENCE_CONCURRENCY } from './references.js';
+import { lentPanoIds, REFERENCE_CONCURRENCY } from './references.js';
 import { holdSlug } from './slug-hold.js';
+import { readTransfer, runTransfer } from './transfer.js';
 
 // How long a finished deletion's marker stays: the account stays read-only and
 // the daily sweep keeps catching late writes (a presigned upload lives 600s).
@@ -245,7 +246,8 @@ const deleteOwnedTour = async (
     // While tour.json exists a retry lists this tour again, so stats go before it.
     await deps.clearStats(tourId);
     await bucket.delete(tourKey(sub, tourId));
-    await bucket.delete(tourOwnerKey(tourId));
+    // Only while it names them: after a change of owner it is the new owner's.
+    await forgetTourOwner(bucket, sub, tourId);
     // As tour delete does: a publish queued behind the first unpublish still saw
     // tour.json and republished. Any publish after this sees no tour.json and
     // unpublishes itself (publish.ts commit).
@@ -276,8 +278,25 @@ export const deleteAccountData = async (
   // Tours first: a published tour comes down before any of its images do.
   const tourIds = await listChildren(bucket, userToursPrefix(sub));
   const tours = take(tourIds, budget);
-  await inBatches(tours, (tourId) => deleteOwnedTour(deps, sub, tourId, purge));
-  if (tours.length < tourIds.length) return false;
+  // A change of owner they are part of is finished first: one they handed on leaves with
+  // the new owner, one they took over is then theirs to delete. One that fails waits for
+  // the next run, as anything this run doesn't reach does.
+  let finished = true;
+  await inBatches(tours, async (tourId) => {
+    const transfer = PANO_PATTERN.test(tourId) ? await readTransfer(bucket, tourId) : null;
+    if (transfer) {
+      try {
+        await runTransfer(bucket, tourId, transfer);
+      } catch (e) {
+        console.error(`${LOG_PREFIX} transfer failed:`, errorName(e));
+        finished = false;
+        return;
+      }
+      if (transfer.from === sub) return;
+    }
+    await deleteOwnedTour(deps, sub, tourId, purge);
+  });
+  if (!finished || tours.length < tourIds.length) return false;
 
   // Originals go to the trash, as for any other delete, unless the operator disabled the
   // owner: that is a takedown (takedown.ts --close-account needs --disable-owner), whose
@@ -286,12 +305,14 @@ export const deleteAccountData = async (
   const panosRoot = userPanosPrefix(sub);
   const panoIds = await listChildren(bucket, panosRoot);
   const panos = take(panoIds, budget);
+  const lent = await lentPanoIds(bucket, sub);
   await inBatches(panos, async (panoId) => {
     if (!PANO_PATTERN.test(panoId)) {
       await deletePrefix(bucket, `${panosRoot}${panoId}/`);
       return;
     }
-    if ((await deletePano(bucket, sub, panoId, options)).tilesDeleted) {
+    const keepTiles = lent.has(panoId);
+    if ((await deletePano(bucket, sub, panoId, { ...options, keepTiles })).tilesDeleted) {
       purge.prefixes.push(tilesPrefix(panoId));
     }
   });
@@ -300,6 +321,8 @@ export const deleteAccountData = async (
   if (!options.trash) await deleteFromTrash(bucket, panosRoot);
   // Off every tour they edit for someone else; at most MAX_MEMBERSHIPS, so not budgeted.
   await leaveAllTours(bucket, sub);
+  // At most one per tour they handed on: not counted against the budget.
+  await deletePrefix(bucket, userLentPanosPrefix(sub));
   // Small records, one per pano an editor uploaded here: not counted against the budget.
   await deletePrefix(bucket, userUploadedForPrefix(sub));
   // Empty objects, at most about a day's worth: not counted against the budget.

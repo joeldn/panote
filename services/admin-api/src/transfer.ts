@@ -1,6 +1,7 @@
 import {
   configKey,
   isContentId,
+  lentPanosKey,
   MAX_TOURS_PER_OWNER,
   membersKey,
   membershipKey,
@@ -22,6 +23,7 @@ import {
   type TourDoc,
   type TourMember,
   type TourMembers,
+  type LentPanos,
   type TourOwnerRecord,
   type TourTransferOffer,
   type TourTransferRecord,
@@ -60,7 +62,7 @@ export type OfferOutcome =
 /** POST …/transfer, owner only: offers the tour to one of its editors. Replaces an earlier offer. */
 export const offerTransfer = (
   bucket: R2Bucket,
-  owner: string,
+  { sub: owner, email }: { sub: string; email: string | null },
   tourId: string,
   memberId: string,
   now: Date,
@@ -74,8 +76,9 @@ export const offerTransfer = (
       offeredAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + TRANSFER_OFFER_DAYS * DAY_MS).toISOString(),
     };
+    // The owner's email as of now, so once they are an editor their row names them.
     return {
-      members: { ...current, transfer },
+      members: { ...current, ownerEmail: email ?? current.ownerEmail, transfer },
       result: { status: 201, body: { transfer: { memberId, expiresAt: transfer.expiresAt } } },
     };
   });
@@ -238,6 +241,11 @@ export const startTransfer = async (
     startedAt: now.toISOString(),
     panos,
   };
+  // Before the record: from then on these count as in use for the old owner
+  // (references.ts), so no delete of theirs takes one while it moves, nor after while the
+  // live bundle still names it.
+  const lent: LentPanos = { v: 1, panoIds: Object.keys(panos) };
+  await putJson(bucket, lentPanosKey(from, tourId), lent);
   // Create-only: from here on every write to the tour is refused (members.ts).
   const created = await putJson(bucket, tourTransferKey(tourId), record, {
     etagDoesNotMatch: '*',
@@ -329,6 +337,37 @@ const copyPano = async (
   }
 };
 
+/** Moving panos the old owner's other tours use now (they weren't when the map was made). */
+const reclaimed = async (
+  bucket: R2Bucket,
+  tourId: string,
+  rec: TourTransferRecord,
+): Promise<string[]> => {
+  const moving = Object.entries(rec.panos).filter(([o, n]) => o === n);
+  if (moving.length === 0) return [];
+  const inUse = await referencedPanoIds(bucket, rec.from, tourId);
+  return moving.map(([id]) => id).filter((id) => inUse.has(id));
+};
+
+/** Turns moves into copies: a fresh id each, the record rewritten, the moved keys dropped. */
+const asCopies = async (
+  bucket: R2Bucket,
+  tourId: string,
+  rec: TourTransferRecord,
+  ids: readonly string[],
+): Promise<TourTransferRecord> => {
+  const panos = { ...rec.panos };
+  for (const id of ids) panos[id] = crypto.randomUUID();
+  const next = { ...rec, panos };
+  await putJson(bucket, tourTransferKey(tourId), next);
+  for (const id of ids) {
+    // Only the new owner's prefix: tiles/<id>/ are the old owner's again.
+    await deletePrefix(bucket, panoPrefix(rec.to, id));
+    await bucket.delete(uploadedForKey(rec.to, id));
+  }
+  return next;
+};
+
 const remapTour = (tour: TourDoc, panos: Record<string, string>): TourDoc => ({
   ...tour,
   scenes: tour.scenes.map((s) => ({ ...s, panoId: panos[s.panoId] ?? s.panoId })),
@@ -363,12 +402,13 @@ const handOver = (members: TourMembers, rec: TourTransferRecord, now: Date): Tou
 export const runTransfer = async (
   bucket: R2Bucket,
   tourId: string,
-  rec: TourTransferRecord,
+  started: TourTransferRecord,
   now: Date = new Date(),
 ): Promise<void> => {
+  let rec = started;
   const oldPrefix = tourPrefix(rec.from, tourId);
   const newPrefix = tourPrefix(rec.to, tourId);
-  for (let round = 1; ; round++) {
+  for (let round = 1; ;) {
     const tourObj = await bucket.get(tourKey(rec.from, tourId));
     if (!tourObj) break;
     const tour = await tourObj.json<TourDoc>();
@@ -394,16 +434,23 @@ export const runTransfer = async (
     await putJson(bucket, tourOwnerKey(tourId), pointer);
     // A save that passed its check just before the record was written: copy again.
     const after = await bucket.head(tourKey(rec.from, tourId));
-    if (after?.etag === tourObj.etag || round >= TOUR_COPY_ROUNDS) {
-      if (after?.etag !== tourObj.etag) {
-        throw new Error('tour.json kept changing during its transfer');
-      }
-      // tour.json last: while it is there a resumed run copies everything again.
-      const rest = (await listKeys(bucket, oldPrefix)).filter((k) => !own.has(k));
-      await Promise.all([...rest, membersKey(rec.from, tourId)].map((k) => bucket.delete(k)));
-      await bucket.delete(tourKey(rec.from, tourId));
-      break;
+    if (after?.etag !== tourObj.etag) {
+      if (round >= TOUR_COPY_ROUNDS) throw new Error('tour.json kept changing during its transfer');
+      round += 1;
+      continue;
     }
+    // A moving pano the old owner has since put in another tour stays theirs: it becomes a
+    // copy, and this round runs again with the new map.
+    const taken = await reclaimed(bucket, tourId, rec);
+    if (taken.length > 0) {
+      rec = await asCopies(bucket, tourId, rec, taken);
+      continue;
+    }
+    // tour.json last: while it is there a resumed run copies everything again.
+    const rest = (await listKeys(bucket, oldPrefix)).filter((k) => !own.has(k));
+    await Promise.all([...rest, membersKey(rec.from, tourId)].map((k) => bucket.delete(k)));
+    await bucket.delete(tourKey(rec.from, tourId));
+    break;
   }
 
   if (!(await bucket.head(tourKey(rec.to, tourId)))) {
@@ -419,9 +466,12 @@ export const runTransfer = async (
     ),
     bucket.delete(membershipKey(rec.to, tourId)),
   ]);
-  // The panos that moved leave the old owner's account; copies stay theirs.
+  // The panos that moved leave the old owner's account; copies stay theirs. Checked once
+  // more: one put in another tour since the check above stays (in both accounts, until
+  // either deletes it) rather than vanish from that tour.
+  const inUse = await referencedPanoIds(bucket, rec.from, tourId);
   for (const [oldId, newId] of Object.entries(rec.panos)) {
-    if (oldId !== newId) continue;
+    if (oldId !== newId || inUse.has(oldId)) continue;
     await deletePrefix(bucket, panoPrefix(rec.from, oldId));
     await bucket.delete(uploadedForKey(rec.from, oldId));
   }

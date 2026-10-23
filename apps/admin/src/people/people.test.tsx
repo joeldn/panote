@@ -299,6 +299,33 @@ describe('handing the tour over', () => {
     await waitFor(() => expect(cancelTransfer).toHaveBeenCalledWith('tour-1'));
   });
 
+  it('says a large tour is still moving, and stays put', async () => {
+    renderAt('/app/t/tour-1/people', {
+      getMembers: async () => asEditor(),
+      acceptTransfer: async () => ({ status: 'finishing' }),
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Become the owner' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toContain(
+      'still moving into your account',
+    );
+    expect(within(dialog).getByRole('button', { name: 'Become the owner' })).toBeTruthy();
+  });
+
+  it('names a former owner with no verified email', async () => {
+    renderAt('/app/t/tour-1/people', {
+      getMembers: async () =>
+        owned({
+          members: [
+            { id: 'm9', email: '', role: 'editor', addedAt: '2026-10-20T00:00:00Z', you: false },
+          ],
+        }),
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    expect(await within(dialog).findByText('Former owner')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Remove Former owner' })).toBeTruthy();
+  });
+
   it('shows another editor no offer', async () => {
     renderAt('/app/t/tour-1/people', {
       getMembers: async () =>

@@ -24,6 +24,7 @@ import {
   SceneConfigSchema,
   signInOf,
   TOUR_TRANSFERRING_ERROR,
+  type TransferFinishing,
   TransferOfferRequestSchema,
   SlugPutRequestSchema,
   tilesPrefix,
@@ -104,7 +105,7 @@ import {
   type CdnPurge,
 } from './purge.js';
 import { runDailyCron } from './cron-status.js';
-import { referencedPanoIds } from './references.js';
+import { dropSpentLoans, referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
 import {
   configCustomMetadata,
@@ -590,11 +591,9 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   // Counts like a pano delete: it sweeps every pano only this tour used.
   const limited = await rateLimit(c.env.PANO_DELETE_LIMITER, sub, PANO_DELETE_RATE_PERIOD_SECONDS);
   if (limited) return limited;
-  if (await isTransferring(c.env.BUCKET, tourId)) {
-    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
-  }
-  const stub = publisher(c.env, tourId);
-  purgeLater(c, await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId)));
+  const purge = await publisher(c.env, tourId).deleteTour(sub, tourId);
+  if (!purge) return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  purgeLater(c, purge);
   return c.body(null, 204);
 });
 
@@ -642,6 +641,9 @@ app.put('/api/admin/tours/:tourId/slug', async (c) => {
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = slugError(body.data.slug);
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
+  if (await isTransferring(c.env.BUCKET, tourId)) {
+    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  }
   const out = await publisher(c.env, tourId).rename(sub, tourId, body.data.slug);
   return c.json(out.body, out.status);
 });
@@ -653,6 +655,9 @@ app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
   if (idError) return c.json({ error: idError }, 400);
   const body = VisibilityPatchRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
+  if (await isTransferring(c.env.BUCKET, tourId)) {
+    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  }
   const out = await publisher(c.env, tourId).setVisibility(sub, tourId, body.data.visibility);
   return c.json(out.body, out.status);
 });
@@ -662,6 +667,9 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
+  if (await isTransferring(c.env.BUCKET, tourId)) {
+    return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
+  }
   // The owner's "Stop sharing": the editor's later Saves leave it offline.
   const files = await publisher(c.env, tourId).unpublish(sub, tourId, true);
   purgeLater(c, { prefixes: [], files });
@@ -763,7 +771,13 @@ app.post('/api/admin/tours/:tourId/transfer', async (c) => {
   if (requiresRecentAuth(c.env) && !isRecentAuth(auth.authTime, Date.now())) {
     return c.json({ error: REAUTH_REQUIRED_ERROR }, 403);
   }
-  const out = await offerTransfer(c.env.BUCKET, auth.sub, tourId, body.data.memberId, new Date());
+  const out = await offerTransfer(
+    c.env.BUCKET,
+    { sub: auth.sub, email: auth.email ?? null },
+    tourId,
+    body.data.memberId,
+    new Date(),
+  );
   return c.json(out.body, out.status);
 });
 
@@ -787,18 +801,34 @@ app.post('/api/admin/tours/:tourId/transfer/accept', async (c) => {
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
   const stub = publisher(c.env, tourId);
+  // A large tour can outrun one request (R2 calls, time). What it did stays done, so the
+  // caller hears it is still finishing, and accepting again (or the daily sweep) goes on.
+  const finishing = async (e: unknown) => {
+    const rec = await readTransfer(c.env.BUCKET, tourId);
+    if (rec?.to !== auth.sub) throw e;
+    console.error('transfer did not finish:', e instanceof Error ? e.name : 'unknown error');
+    return c.json({ tourId, finishing: true } satisfies TransferFinishing, 202);
+  };
   const underWay = await readTransfer(c.env.BUCKET, tourId);
   if (underWay) {
     if (underWay.to !== auth.sub) return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
-    await stub.finishTransfer(tourId);
+    try {
+      await stub.finishTransfer(tourId);
+    } catch (e) {
+      return finishing(e);
+    }
     return c.json({ tourId });
   }
   const access = await tourAccessFor(c.env.BUCKET, auth.sub, tourId, { write: true });
   if (isRefusal(access)) return refuse(c, access);
   // Already theirs (an earlier accept finished): the same answer.
   if (access.role === 'owner') return c.json({ tourId });
-  const out = await stub.transfer(access.owner, auth.sub, auth.email ?? null, tourId);
-  return c.json(out.body, out.status);
+  try {
+    const out = await stub.transfer(access.owner, auth.sub, auth.email ?? null, tourId);
+    return c.json(out.body, out.status);
+  } catch (e) {
+    return finishing(e);
+  }
 });
 
 app.get('/api/admin/shared-tours', async (c) => {
@@ -832,11 +862,17 @@ app.get(ACCOUNT_PATH, async (c) => {
   } satisfies AccountView);
 });
 
-// The daily sweep's part: finishes every transfer an interrupted request left.
+// The daily sweep's part: finishes every transfer an interrupted request left (one that
+// fails again doesn't stop the rest), then drops the lent-panos records that protect nothing.
 const finishTransfers = async (env: Env): Promise<void> => {
   for (const tourId of await transfersToFinish(env.BUCKET)) {
-    await publisher(env, tourId).finishTransfer(tourId);
+    await publisher(env, tourId)
+      .finishTransfer(tourId)
+      .catch((e: unknown) => {
+        console.error('transfer sweep failed:', e instanceof Error ? e.name : 'unknown error');
+      });
   }
+  await dropSpentLoans(env.BUCKET);
 };
 
 app.delete(ACCOUNT_PATH, async (c) => {

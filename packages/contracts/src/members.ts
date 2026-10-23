@@ -254,3 +254,14 @@ export const TourTransferRecordSchema = z.object({
   panos: z.record(IdSchema, IdSchema),
 });
 export type TourTransferRecord = z.infer<typeof TourTransferRecordSchema>;
+
+/** lent-panos/<owner>/<tourId>.json: the old owner's ids of every pano the tour used. */
+export const LentPanosSchema = z.object({ v: z.literal(1), panoIds: z.array(IdSchema) });
+export type LentPanos = z.infer<typeof LentPanosSchema>;
+
+/**
+ * 202 from accept: the move started but didn't finish in this request (a large tour).
+ * The tour stays locked until it does; accepting again carries on from where it stopped.
+ */
+export const TransferFinishingSchema = z.object({ tourId: z.string(), finishing: z.literal(true) });
+export type TransferFinishing = z.infer<typeof TransferFinishingSchema>;

@@ -94,8 +94,11 @@ function changeMessage(e: unknown): string {
   return 'Something went wrong. Try again.';
 }
 
+// A former owner with no verified email joins as an editor with none.
+const nameOf = (m: { email: string }): string => m.email || 'Former owner';
+
 const confirmBody = (confirming: Confirming | null): string => {
-  const email = confirming?.member.email ?? '';
+  const email = confirming ? nameOf(confirming.member) : '';
   switch (confirming?.kind) {
     case 'leave':
       return 'You won’t be able to open or edit it any more. The owner can invite you again.';
@@ -262,6 +265,10 @@ export function PeopleRoute() {
         reload();
         return;
       }
+      if (res.status === 'finishing') {
+        setOfferError('This tour is still moving into your account. Try again in a minute.');
+        return;
+      }
       // The tour is theirs now: their dashboard lists it with their own tours.
       void navigate('/');
     } catch (err) {
@@ -376,7 +383,7 @@ export function PeopleRoute() {
             {members.map((m) => (
               <li key={m.id} className="ppl__row">
                 <span className="ppl__who">
-                  {m.email}
+                  {nameOf(m)}
                   {m.you && <span className="ppl__you"> (you)</span>}
                 </span>
                 <span className="ppl__role">
@@ -388,7 +395,7 @@ export function PeopleRoute() {
                   <button
                     type="button"
                     className="ppl__action"
-                    aria-label={`Withdraw the offer to ${m.email}`}
+                    aria-label={`Withdraw the offer to ${nameOf(m)}`}
                     onClick={() => void onWithdraw()}
                   >
                     Withdraw
@@ -398,7 +405,7 @@ export function PeopleRoute() {
                   <button
                     type="button"
                     className="ppl__action"
-                    aria-label={`Make ${m.email} the owner`}
+                    aria-label={`Make ${nameOf(m)} the owner`}
                     onClick={() => setConfirming({ kind: 'offer', member: m })}
                   >
                     Make owner
@@ -408,7 +415,7 @@ export function PeopleRoute() {
                   <button
                     type="button"
                     className="ppl__action"
-                    aria-label={`Remove ${m.email}`}
+                    aria-label={`Remove ${nameOf(m)}`}
                     onClick={() => setConfirming({ kind: 'remove', member: m })}
                   >
                     Remove

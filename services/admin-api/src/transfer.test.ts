@@ -1,9 +1,11 @@
 import {
   configKey,
+  lentPanosKey,
   manifestKey,
   membersKey,
   membershipKey,
   originalKey,
+  PANO_DELETE_CONFLICTS,
   publishKey,
   tourKey,
   tourOwnerKey,
@@ -23,6 +25,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import uploadWrangler from '../../upload-api/wrangler.jsonc?raw';
 import wrangler from '../wrangler.jsonc?raw';
+import { dropSpentLoans, referencedPanoIds } from './references.js';
 
 // Storage is shared across it() cases in this file, so every case uses its own people,
 // panos and tours.
@@ -273,6 +276,15 @@ describe('changing a tour’s owner', () => {
       email: 'x@example.com',
     });
     expect(invite.status).toBe(409);
+    // Nor the publish-state routes, which go straight to the TourPublisher.
+    expect((await api('tr-m', 'PUT', `/tours/${tourId}/slug`, { slug: 'tr-m-x' })).status).toBe(
+      409,
+    );
+    const visibility = await api('tr-m', 'PATCH', `/tours/${tourId}/visibility`, {
+      visibility: 'unlisted',
+    });
+    expect(visibility.status).toBe(409);
+    expect((await api('tr-m', 'DELETE', `/tours/${tourId}/publish`)).status).toBe(409);
     // Someone else can't finish it.
     expect((await take('tr-m', tourId)).status).toBe(409);
 
@@ -282,6 +294,75 @@ describe('changing a tour’s owner', () => {
     expect(await env.BUCKET.head(originalKey(subOf('tr-n'), 'tr-m-p1'))).not.toBeNull();
     expect(await env.BUCKET.head(tourTransferKey(tourId))).toBeNull();
     expect((await api('tr-n', 'PUT', `/tours/${tourId}`, tour)).status).toBe(200);
+  });
+});
+
+describe('panos the old owner still holds', () => {
+  it('stay while the handed-on tour’s live bundle uses them', async () => {
+    await readyPano('tr-o', 'tr-o-shared');
+    const tourId = await newTour('tr-o', ['tr-o-shared']);
+    const otherId = await newTour('tr-o', ['tr-o-shared']);
+    expect((await api('tr-o', 'POST', `/tours/${tourId}/publish`, {})).status).toBe(200);
+    const memberId = await share('tr-o', 'tr-p', tourId);
+    expect((await offer('tr-o', tourId, memberId)).status).toBe(201);
+    expect((await take('tr-p', tourId)).status).toBe(200);
+    const copyId = (await stored<TourDoc>(tourKey(subOf('tr-p'), tourId)))!.scenes[0]!.panoId;
+    expect(copyId).not.toBe('tr-o-shared');
+
+    // The live bundle still serves the old id until the new owner publishes, so neither
+    // deleting the old owner's other tour nor the pano itself takes its tiles.
+    expect((await api('tr-o', 'DELETE', `/tours/${otherId}`)).status).toBe(204);
+    const refused = await api('tr-o', 'DELETE', '/panos/tr-o-shared');
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: PANO_DELETE_CONFLICTS['in-use'] });
+    expect(await env.BUCKET.head(manifestKey('tr-o-shared'))).not.toBeNull();
+    expect(await env.BUCKET.head(originalKey(subOf('tr-o'), 'tr-o-shared'))).not.toBeNull();
+
+    // Once the copy is tiled and published, the loan is spent.
+    await env.BUCKET.put(manifestKey(copyId), JSON.stringify({ pano: copyId, version: 't1-a' }));
+    expect((await api('tr-p', 'POST', `/tours/${tourId}/publish`, {})).status).toBe(200);
+    await dropSpentLoans(env.BUCKET);
+    expect(await env.BUCKET.head(lentPanosKey(subOf('tr-o'), tourId))).toBeNull();
+    expect(await referencedPanoIds(env.BUCKET, subOf('tr-o'))).not.toContain('tr-o-shared');
+  });
+
+  it('a pano put in another tour while it was moving is copied instead', async () => {
+    await readyPano('tr-q', 'tr-q-p1');
+    const tourId = await newTour('tr-q', ['tr-q-p1']);
+    await share('tr-q', 'tr-r', tourId);
+    // An interrupted run that planned to move it; the old owner then used it elsewhere.
+    const record: TourTransferRecord = {
+      v: 1,
+      from: subOf('tr-q'),
+      to: subOf('tr-r'),
+      fromEmail: null,
+      toEmail: emailOf('tr-r'),
+      startedAt: new Date().toISOString(),
+      panos: { 'tr-q-p1': 'tr-q-p1' },
+    };
+    await env.BUCKET.put(tourTransferKey(tourId), JSON.stringify(record));
+    await newTour('tr-q', ['tr-q-p1']);
+
+    expect((await take('tr-r', tourId)).status).toBe(200);
+    const copyId = (await stored<TourDoc>(tourKey(subOf('tr-r'), tourId)))!.scenes[0]!.panoId;
+    expect(copyId).not.toBe('tr-q-p1');
+    expect(await env.BUCKET.head(originalKey(subOf('tr-q'), 'tr-q-p1'))).not.toBeNull();
+    expect(await env.BUCKET.head(originalKey(subOf('tr-r'), copyId))).not.toBeNull();
+    expect(await env.BUCKET.head(originalKey(subOf('tr-r'), 'tr-q-p1'))).toBeNull();
+    expect(await env.BUCKET.head(tourTransferKey(tourId))).toBeNull();
+  });
+
+  it('the old owner joins under the email they had when they offered', async () => {
+    await readyPano('tr-s', 'tr-s-p1');
+    const tourId = await newTour('tr-s', ['tr-s-p1']);
+    const memberId = await share('tr-s', 'tr-t', tourId);
+    const key = membersKey(subOf('tr-s'), tourId);
+    const members = (await stored<TourMembers>(key))!;
+    await env.BUCKET.put(key, JSON.stringify({ ...members, ownerEmail: null }));
+    expect((await offer('tr-s', tourId, memberId)).status).toBe(201);
+    expect((await take('tr-t', tourId)).status).toBe(200);
+    const after = await stored<TourMembers>(membersKey(subOf('tr-t'), tourId));
+    expect(after?.members.find((m) => m.sub === subOf('tr-s'))?.email).toBe(emailOf('tr-s'));
   });
 });
 

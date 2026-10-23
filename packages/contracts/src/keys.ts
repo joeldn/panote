@@ -159,6 +159,14 @@ export const uploadedForKey = (u: string, p: string): string =>
 export const TOUR_TRANSFERS_ROOT = 'tour-transfers/';
 export const tourTransferKey = (t: string): string =>
   `${TOUR_TRANSFERS_ROOT}${assertValidId(t, 'tourId')}.json`;
+// lent-panos/<owner>/<tourId>.json: panos of `owner`'s that a tour they handed to someone
+// else uses (admin-api's transfer.ts, LentPanosSchema). While the transfer runs, or while
+// that tour's live bundle still names them, they count as in use, so deleting a pano,
+// another tour or the account can't pull them from under the new owner.
+export const LENT_PANOS_ROOT = 'lent-panos/';
+export const userLentPanosPrefix = (u: string): string => `${LENT_PANOS_ROOT}${encodeId(u)}/`;
+export const lentPanosKey = (u: string, t: string): string =>
+  `${userLentPanosPrefix(u)}${assertValidId(t, 'tourId')}.json`;
 // Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
 // kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
 // public prefixes, and nothing in the Workers reads, lists or deletes it.
@@ -193,6 +201,7 @@ export const OWNER_ROOTS = [
   UPLOAD_LOG_ROOT,
   MEMBERSHIPS_ROOT,
   UPLOADED_FOR_ROOT,
+  LENT_PANOS_ROOT,
 ] as const;
 const ownerRootAlternation = OWNER_ROOTS.map((r) => r.slice(0, -1)).join('|');
 // `<root>/<owner>/` anywhere in free text: an R2 key in an error, an S3 URL, a backup or

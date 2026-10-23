@@ -9,7 +9,10 @@ import { getJson } from '@internal/worker-kit/r2-binding';
 import { DurableObject } from 'cloudflare:workers';
 
 import { parseHoldDays } from './account-age.js';
+import { deleteTour } from './delete-tour.js';
 import { setExploreHidden, syncExplore } from './explore.js';
+import { isTransferring } from './members.js';
+import type { CdnPurge } from './purge.js';
 import {
   NOT_FOUND,
   parseAliasDays,
@@ -95,6 +98,16 @@ export class TourPublisher extends DurableObject<Env> {
   ): Promise<string[]> {
     if (!(await this.owns(sub, tourId, true))) return [];
     return this.serial(() => unpublish(this.env.BUCKET, sub, tourId, { stopSharing, takedown }));
+  }
+
+  // The owner's tour delete, in this queue so a change of owner can't start half way
+  // through it. Null while one is under way.
+  async deleteTour(sub: string, tourId: string): Promise<CdnPurge | null> {
+    return this.serial(async () => {
+      const bucket = this.env.BUCKET;
+      if (await isTransferring(bucket, tourId)) return null;
+      return deleteTour(bucket, sub, tourId, () => unpublish(bucket, sub, tourId));
+    });
   }
 
   // The operator's backfill (backfill.ts): re-syncs the tour's Explore entry from its live

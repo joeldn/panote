@@ -514,6 +514,7 @@ describe('tour members', () => {
       new Response(null, { status: 204 }),
       json({ tourId: 't1' }),
       json({ error: 'pano limit reached' }, 403),
+      json({ tourId: 't1', finishing: true }, 202),
       json({ error: 'boom' }, 500),
     );
     await expect(api.offerTransfer('t1', 'm1')).resolves.toEqual({ transfer });
@@ -531,6 +532,7 @@ describe('tour members', () => {
       status: 'refused',
       refusal: { error: 'pano limit reached' },
     });
+    await expect(api.acceptTransfer('t1')).resolves.toEqual({ status: 'finishing' });
     await expect(api.acceptTransfer('t1')).rejects.toBeInstanceOf(ApiError);
   });
 
