@@ -647,6 +647,16 @@
   border-bottom: 1px solid var(--ink-08);
 }
 
+.ed-pano-settings__description {
+  padding: 4px 0 8px;
+}
+
+.ed-pano-settings__hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-50);
+}
+
 .ed-pano-settings__row {
   display: grid;
   grid-template-columns: 1fr auto auto;
