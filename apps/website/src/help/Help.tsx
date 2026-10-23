@@ -80,8 +80,9 @@ export function Help() {
         you go, so a closed tab doesn’t lose them, but nobody sees them until you save.
       </p>
       <p>
-        On a narrow screen the language, settings, Insights and Preview buttons move into the{' '}
-        <em>More</em> menu (<span aria-hidden="true">•••</span>) in the top bar.
+        The top bar keeps to <em>Preview</em>, <em>Save</em> (only while there is something to
+        save), <em>Share</em> for the tour’s owner, and the tour menu{' '}
+        <span aria-hidden="true">(•••)</span> with Tour settings, Languages, People and Insights.
       </p>
       <p>
         Beside the pano are four cards: <em>Panos</em>, <em>This pano</em>, <em>Points</em> and{' '}
