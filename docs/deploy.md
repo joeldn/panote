@@ -2458,7 +2458,7 @@ bundles are small JSON capped by `admin-api`'s own limits.
 The admin app's account menu and Account page (`/app/account`, "Help") have a **Contact support**
 link: a `mailto:hello@panote.io` whose body starts with `Account ID: <Auth0 user id>`, the same id
 the page shows. Panote stores no emails, so that line is how you find the account a message is
-about; it is the `--sub` every operator script takes. A message without it (written from the
+about; it is the `--sub` that `delete-account.ts`, `restore-backup.ts` and `takedown.ts` take. A message without it (written from the
 website footer, say) needs the user's tour link, or a search by email in the Auth0 dashboard.
 
 ### Report link
