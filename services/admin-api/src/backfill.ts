@@ -98,17 +98,20 @@ const backfillTour = async (
   }
   if (!parsed?.success) return { tourId: tourId!, changes, skipped: 'tour.json unreadable' };
 
+  let skipped: string | undefined;
   const metadata = tourCustomMetadata(parsed.data);
   if (!sameMetadata(metadata, obj.customMetadata)) {
-    changes.push('cover');
-    // Only over the body just read: a save since then already wrote the right metadata.
-    if (apply) {
-      await bucket.put(key, body, {
+    // Only over the body just read: a save since then already wrote the right metadata, and
+    // the put returns null without writing.
+    const written =
+      !apply ||
+      (await bucket.put(key, body, {
         httpMetadata: obj.httpMetadata ?? { contentType: 'application/json' },
         customMetadata: { ...obj.customMetadata, ...metadata },
         onlyIf: { etagMatches: obj.etag },
-      });
-    }
+      })) !== null;
+    if (written) changes.push('cover');
+    else skipped = 'tour.json changed since read';
   }
   if (!(await bucket.head(tourOwnerKey(tourId!)))) {
     changes.push('owner-pointer');
@@ -121,7 +124,7 @@ const backfillTour = async (
     changes.push('explore');
     if (apply) await refreshExplore(tourId!);
   }
-  return { tourId: tourId!, changes };
+  return { tourId: tourId!, changes, ...(skipped !== undefined ? { skipped } : {}) };
 };
 
 /**

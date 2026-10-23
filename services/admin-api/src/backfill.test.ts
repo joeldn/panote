@@ -17,6 +17,7 @@ import { env, SELF } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runBackfill } from '../scripts/backfill-covers-lib.ts';
+import { backfillTours } from './backfill.js';
 
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
@@ -167,6 +168,44 @@ describe('POST /api/admin/operator/backfill', () => {
       tours: [{ tourId: t.tourId, changes: [] }],
       cursor: null,
     });
+  });
+
+  it('skips the cover, not reporting it, when a save lands between the read and the write', async () => {
+    const t = await oldTour('bf-race');
+    const saved = { title: 'Saved since', sceneCount: '2', coverPanoId: t.p2 };
+    // The owner saves right after the backfill reads tour.json, so its conditional put misses.
+    const racing = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop) as unknown;
+        if (prop === 'get') {
+          return async (key: string) => {
+            const obj = await target.get(key);
+            if (key !== t.key || !obj) return obj;
+            const body = await obj.text();
+            const doc = { ...(JSON.parse(body) as object), title: 'Saved since' };
+            await target.put(key, JSON.stringify(doc), { customMetadata: saved });
+            return {
+              etag: obj.etag,
+              httpMetadata: obj.httpMetadata,
+              customMetadata: obj.customMetadata,
+              text: async () => body,
+            };
+          };
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const out = await backfillTours(racing, { limit: 10, apply: true }, async () => true);
+
+    expect(out.tours).toEqual([
+      {
+        tourId: t.tourId,
+        changes: ['owner-pointer', 'explore'],
+        skipped: 'tour.json changed since read',
+      },
+    ]);
+    expect((await env.BUCKET.head(t.key))!.customMetadata).toEqual(saved);
   });
 
   it('refreshes an Explore cover a re-tile left on an old version', async () => {

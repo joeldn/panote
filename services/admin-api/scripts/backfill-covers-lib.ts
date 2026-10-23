@@ -108,8 +108,8 @@ export async function runBackfill(args: BackfillArgs, deps: BackfillDeps): Promi
       if (t.skipped) {
         totals.skipped += 1;
         deps.log(`skip ${t.tourId}: ${t.skipped}`);
-        continue;
       }
+      // A tour whose cover fix lost a race with a save can still have got its other changes.
       if (t.changes.length === 0) continue;
       totals.changed += 1;
       for (const c of t.changes) totals[c] += 1;
