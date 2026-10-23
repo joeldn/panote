@@ -200,11 +200,11 @@ export interface AdminApi {
   /** Operator only: one account on one page. */
   supportUser(sub: string): Promise<SupportUserView>;
   /**
-   * Operator only: one of the support writes (`disable`, `enable`, `restore`, `close`,
-   * `tours/<tourId>`), answered with the account as it is now. Needs a recent sign-in:
+   * Operator only: one of the support writes (`disable`, `enable`, `restore`, `close`, or
+   * `{ tour }` for a tour action), answered with the account as it is now. Needs a recent sign-in:
    * throws ReauthRequiredError when the last one is too old.
    */
-  supportAction(sub: string, action: string, body?: unknown): Promise<SupportUserView>;
+  supportAction(sub: string, action: SupportAction, body?: unknown): Promise<SupportUserView>;
   /**
    * Offers the tour to one of its editors, owner only. Needs a recent sign-in: throws
    * ReauthRequiredError when the last one is too old, as deleteAccount does.
@@ -304,6 +304,9 @@ const listPath = (path: string, q: PanoListQuery = {}): string => {
   const qs = params.toString();
   return qs ? `${path}?${qs}` : path;
 };
+
+/** A support write: one of the account's, or `{ tour }` for the actions on one of its tours. */
+export type SupportAction = 'disable' | 'enable' | 'restore' | 'close' | { tour: string };
 
 export function createAdminApi(opts: AdminApiOptions): AdminApi {
   const base = (opts.baseUrl ?? '').replace(/\/+$/, '');
@@ -470,7 +473,8 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
     supportUser: async (sub) =>
       getJson(`${SUPPORT_USERS_PATH}/${encodeURIComponent(sub)}`, SupportUserViewSchema),
     supportAction: async (sub, action, body = {}) => {
-      const path = `${SUPPORT_USERS_PATH}/${encodeURIComponent(sub)}/${action}`;
+      const what = typeof action === 'string' ? action : `tours/${assertId(action.tour, 'tourId')}`;
+      const path = `${SUPPORT_USERS_PATH}/${encodeURIComponent(sub)}/${what}`;
       const res = await send('POST', path, { body });
       if (res.res.status === 403 && ReauthRequiredSchema.safeParse(res.body).success) {
         throw new ReauthRequiredError(res.body);

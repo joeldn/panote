@@ -1,6 +1,6 @@
 import type { SupportTour, SupportUserView } from '@internal/contracts';
 import { Button, ConfirmModal, SignInModal } from '@internal/ui';
-import { ReauthRequiredError, type ConnectionId } from '@internal/web-kit';
+import { ReauthRequiredError, type ConnectionId, type SupportAction } from '@internal/web-kit';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useSearchParams } from 'react-router';
 
@@ -87,7 +87,7 @@ export function SupportRoute() {
   };
 
   /** One change; the answer is the account as it is now. */
-  const act = async (action: string, body?: unknown): Promise<void> => {
+  const act = async (action: SupportAction, body?: unknown): Promise<void> => {
     if (!sub) return;
     setFailed(null);
     try {
@@ -103,7 +103,7 @@ export function SupportRoute() {
       throw e;
     }
   };
-  const tryAct = (action: string, body?: unknown) => void act(action, body).catch(() => {});
+  const tryAct = (action: SupportAction, body?: unknown) => void act(action, body).catch(() => {});
 
   return (
     <div className="support">
@@ -164,7 +164,7 @@ export function SupportRoute() {
           onEnable={() => tryAct('enable')}
           onClose={() => setClosing(true)}
           onTour={(tourId, action) =>
-            action === 'unpublish' ? setUnpublishing(tourId) : tryAct(`tours/${tourId}`, { action })
+            action === 'unpublish' ? setUnpublishing(tourId) : tryAct({ tour: tourId }, { action })
           }
           onRestore={(date, panoId) => tryAct('restore', { date, panoId })}
         />
@@ -205,7 +205,7 @@ export function SupportRoute() {
         }
         confirmLabel="Unpublish"
         onConfirm={async () => {
-          if (unpublishing) await act(`tours/${unpublishing}`, { action: 'unpublish' });
+          if (unpublishing) await act({ tour: unpublishing }, { action: 'unpublish' });
           setUnpublishing(null);
         }}
         onCancel={() => setUnpublishing(null)}

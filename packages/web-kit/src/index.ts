@@ -48,6 +48,7 @@ export {
   publishErrorOf,
   type AdminApi,
   type AdminApiOptions,
+  type SupportAction,
   type ConditionalQuery,
   type GetResult,
   type InsightsResult,

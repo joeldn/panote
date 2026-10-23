@@ -3,6 +3,7 @@ import {
   accountDisabledKey,
   exploreHiddenKey,
   originalKey,
+  publishKey,
   RECENT_AUTH_MAX_AGE_SECONDS,
   REAUTH_REQUIRED_ERROR,
   SUPPORT_USERS_PATH,
@@ -13,7 +14,7 @@ import {
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env, SELF } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 // Storage is shared between it() cases in this file, so each case uses its own owner.
 // `good:<who>` signed in just now; `stale:<who>` too long ago.
@@ -104,6 +105,10 @@ describe('one account', () => {
   it('shows tours, usage, trash and state', async () => {
     const sub = subOf('view');
     const tourId = await createTour('view');
+    // Published (as the list reads it, from publish.json's metadata) and hidden from Explore.
+    await env.BUCKET.put(publishKey(sub, tourId), '{}', {
+      customMetadata: { slug: 'old-town-view', visibility: 'public' },
+    });
     await env.BUCKET.put(exploreHiddenKey(tourId), '{}');
     await env.BUCKET.put(originalKey(sub, 'p1'), new Uint8Array(10));
     await env.BUCKET.put(uploadLogKey(sub, new Date(), 'p1'), '');
@@ -121,7 +126,7 @@ describe('one account', () => {
       expect.objectContaining({
         tourId,
         title: 'Old town',
-        publish: null,
+        publish: { slug: 'old-town-view', visibility: 'public' },
         hiddenFromExplore: true,
         editors: 0,
         transferring: false,
@@ -143,7 +148,12 @@ describe('writes', () => {
   it('disables and enables an account, which blocks and unblocks its writes', async () => {
     const sub = subOf('ban');
     expect((await post(userPath(sub, '/disable'), {})).status).toBe(400);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const r = await post(userPath(sub, '/disable'), { reason: 'case 3' });
+    // Attributable to the operator (their sub's hash, as OPERATOR_SUB_SHA256 lists it),
+    // never naming the account.
+    expect(warn).toHaveBeenCalledWith('[support] operator disabled an account by 9b411d3d5389');
+    warn.mockRestore();
     expect(r.status).toBe(200);
     expect((await r.json<SupportUserView>()).disabled).toMatchObject({ reason: 'case 3' });
     const blocked = await post('https://x/api/admin/tours', { title: 'x', scenes: [] }, 'good:ban');
@@ -164,6 +174,11 @@ describe('writes', () => {
     expect(await env.BUCKET.head(exploreHiddenKey(tourId))).toBeNull();
     expect((await act('unpublish')).status).toBe(200);
     expect((await act('delete')).status).toBe(400);
+  });
+
+  it('refuses a malformed tourId before it reaches R2 or a Durable Object', async () => {
+    const r = await post(userPath(subOf('tour'), '/tours/not%20an%20id'), { action: 'hide' });
+    expect(r.status).toBe(404);
   });
 
   it('refuses a tour the account does not own', async () => {

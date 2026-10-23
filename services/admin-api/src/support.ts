@@ -4,7 +4,7 @@ import {
   accountDisabledKey,
   AccountDisabledRecordSchema,
   accountSinceKey,
-  EXPLORE_ROOT,
+  exploreHiddenKey,
   isContentId,
   isOriginalKey,
   MAX_TOURS_PER_OWNER,
@@ -17,7 +17,6 @@ import {
   SupportDisableRequestSchema,
   SupportRestoreRequestSchema,
   SupportTourActionRequestSchema,
-  TOUR_TRANSFERS_ROOT,
   tourOwnerKey,
   TourOwnerRecordSchema,
   TRASH_RETENTION_DAYS,
@@ -39,8 +38,9 @@ import { Hono, type Context } from 'hono';
 import { markAccountForDeletion } from './delete-account.js';
 import { jsonBody } from './limits.js';
 import { listTourSummaries } from './lists.js';
-import { readMembers } from './members.js';
+import { isTransferring, readMembers } from './members.js';
 import { tourExists } from './operator.js';
+import { subHash } from './ops-gate.js';
 import { purgeCdn } from './purge.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
 import { holdings, ownerLimits } from './transfer.js';
@@ -176,15 +176,6 @@ const trashOf = async (bucket: R2Bucket, sub: string, now: Date): Promise<Suppor
   return days.flat();
 };
 
-/** The `<id>.json` names directly under `prefix`. */
-const idsUnder = async (bucket: R2Bucket, prefix: string): Promise<Set<string>> =>
-  new Set(
-    (await listAll(bucket, prefix))
-      .map((o) => o.key.slice(prefix.length))
-      .filter((name) => name.endsWith('.json') && !name.includes('/'))
-      .map((name) => name.slice(0, -'.json'.length)),
-  );
-
 const toursOf = async (bucket: R2Bucket, sub: string): Promise<SupportTour[]> => {
   const summaries = [];
   let cursor: string | undefined;
@@ -193,25 +184,29 @@ const toursOf = async (bucket: R2Bucket, sub: string): Promise<SupportTour[]> =>
     summaries.push(...page.tours);
     cursor = page.cursor ?? undefined;
   } while (cursor && summaries.length < MAX_TOURS_PER_OWNER);
-  // Both markers are rare and global, so one listing each beats a HEAD per tour.
-  const [hidden, transferring] = await Promise.all([
-    idsUnder(bucket, `${EXPLORE_ROOT}hidden/`),
-    idsUnder(bucket, TOUR_TRANSFERS_ROOT),
-  ]);
   const out: SupportTour[] = [];
   for (let i = 0; i < summaries.length; i += PER_TOUR_CONCURRENCY) {
     out.push(
       ...(await Promise.all(
-        summaries.slice(i, i + PER_TOUR_CONCURRENCY).map(async (t) => ({
-          tourId: t.tourId,
-          title: t.title,
-          sceneCount: t.sceneCount,
-          updatedAt: t.updatedAt,
-          publish: t.publish,
-          hiddenFromExplore: hidden.has(t.tourId),
-          editors: (await readMembers(bucket, sub, t.tourId)).members.members.length,
-          transferring: transferring.has(t.tourId),
-        })),
+        summaries.slice(i, i + PER_TOUR_CONCURRENCY).map(async (t) => {
+          // Per tour, so the cost follows the account (at most 3 calls a tour, 200 tours),
+          // never the size of a global prefix. Only a published tour can be on Explore.
+          const [hidden, members, transferring] = await Promise.all([
+            t.publish ? bucket.head(exploreHiddenKey(t.tourId)) : null,
+            readMembers(bucket, sub, t.tourId),
+            isTransferring(bucket, t.tourId),
+          ]);
+          return {
+            tourId: t.tourId,
+            title: t.title,
+            sceneCount: t.sceneCount,
+            updatedAt: t.updatedAt,
+            publish: t.publish,
+            hiddenFromExplore: !!hidden,
+            editors: members.members.members.length,
+            transferring,
+          };
+        }),
       )),
     );
   }
@@ -258,6 +253,13 @@ export const userView = async (env: Env, sub: string, now: Date): Promise<Suppor
 const staleSignIn = (c: C): boolean =>
   requiresRecentAuth(c.env) && !isRecentAuth(c.get('auth')?.authTime, Date.now());
 
+/**
+ * Who acted, for the audit lines: the first 12 hex of the operator's own sub hash (as
+ * OPERATOR_SUB_SHA256 lists it), so a line is attributable without naming anyone.
+ */
+const by = async (c: C): Promise<string> =>
+  `by ${(await subHash(c.get('sub') ?? '')).slice(0, 12)}`;
+
 /** Answers a write with the account as it is now. */
 const viewNow = async (c: C, sub: string) => {
   c.header('Cache-Control', NO_STORE);
@@ -288,7 +290,10 @@ supportRoutes.get('/:sub', async (c) => {
 });
 
 // Disable: the same marker scripts/takedown.ts --disable-owner writes. Every owner write
-// and upload URL answers 403 while it exists; reads still work.
+// and upload URL answers 403 while it exists; reads still work. Allowed for an ID that
+// holds nothing yet, on purpose, like the script: it blocks a known Auth0 user (one named
+// in a report) before they upload. Auth0 ids are random, so a mistyped one won't later
+// belong to someone; Enable removes it either way.
 supportRoutes.post('/:sub/disable', async (c) => {
   const sub = subParam(c);
   if (!sub) return c.json({ error: 'invalid account ID' }, 400);
@@ -300,7 +305,7 @@ supportRoutes.post('/:sub/disable', async (c) => {
     reason: body.data.reason,
   };
   await putJson(c.env.BUCKET, accountDisabledKey(sub), record);
-  console.warn('[support] operator disabled an account');
+  console.warn(`[support] operator disabled an account ${await by(c)}`);
   return viewNow(c, sub);
 });
 
@@ -308,7 +313,7 @@ supportRoutes.post('/:sub/enable', async (c) => {
   const sub = subParam(c);
   if (!sub) return c.json({ error: 'invalid account ID' }, 400);
   await c.env.BUCKET.delete(accountDisabledKey(sub));
-  console.warn('[support] operator enabled an account');
+  console.warn(`[support] operator enabled an account ${await by(c)}`);
   return viewNow(c, sub);
 });
 
@@ -318,6 +323,8 @@ supportRoutes.post('/:sub/tours/:tourId', async (c) => {
   const sub = subParam(c);
   const tourId = c.req.param('tourId');
   if (!sub) return c.json({ error: 'invalid account ID' }, 400);
+  // Checked before it names an R2 key or a Durable Object.
+  if (!isContentId(tourId)) return c.json({ error: 'tour not found' }, 404);
   const body = SupportTourActionRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   if (!(await tourExists(c.env.BUCKET, sub, tourId))) {
@@ -331,7 +338,7 @@ supportRoutes.post('/:sub/tours/:tourId', async (c) => {
   } else if (!(await stub.setExploreHidden(sub, tourId, action === 'hide'))) {
     return c.json({ error: 'tour not found' }, 404);
   }
-  console.warn(`[support] operator ${action} of tour ${tourId} done`);
+  console.warn(`[support] operator ${action} of tour ${tourId} done ${await by(c)}`);
   return viewNow(c, sub);
 });
 
@@ -353,7 +360,9 @@ supportRoutes.post('/:sub/restore', async (c) => {
   if (out.existing.length) return c.json({ error: 'already restored' }, 409);
   if (out.refused.length) return c.json({ error: 'account deleted' }, 410);
   if (out.failed.length) return c.json({ error: 'restore failed' }, 500);
-  console.warn(`[support] operator restored pano ${body.data.panoId} from the trash`);
+  console.warn(
+    `[support] operator restored pano ${body.data.panoId} from the trash ${await by(c)}`,
+  );
   return viewNow(c, sub);
 });
 
@@ -367,6 +376,6 @@ supportRoutes.post('/:sub/close', async (c) => {
     return c.json({ error: 'confirm must repeat the account ID' }, 400);
   }
   await markAccountForDeletion(c.env.BUCKET, sub, new Date());
-  console.warn('[support] operator marked an account for deletion');
+  console.warn(`[support] operator marked an account for deletion ${await by(c)}`);
   return viewNow(c, sub);
 });
