@@ -120,6 +120,27 @@ describe('TourPanel: reordering', () => {
     expect(document.querySelector('.ed-scene--dragging')).toBeNull();
   });
 
+  it('Esc drops a drag where it started', () => {
+    layout();
+    const { onMove } = setup();
+    const grip = handle('Hall');
+    fireEvent.pointerDown(grip, { pointerId: 4, button: 0, clientY: 100 });
+    fireEvent.pointerMove(grip, { pointerId: 4, clientY: 10 });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.querySelector('.ed-scene--dragging')).toBeNull();
+    fireEvent.pointerUp(grip, { pointerId: 4, clientY: 10 });
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it('says the same move twice as new text each time', () => {
+    setup();
+    fireEvent.keyDown(handle('Square'), { key: 'ArrowDown' });
+    const first = screen.getByText('Square moved to position 2 of 3.');
+    fireEvent.keyDown(handle('Square'), { key: 'ArrowDown' });
+    const second = screen.getByText('Square moved to position 2 of 3.');
+    expect(second).not.toBe(first);
+  });
+
   it('moves a pano from the keyboard and says where it went', () => {
     const { onMove } = setup();
     fireEvent.keyDown(handle('Square'), { key: 'ArrowDown' });

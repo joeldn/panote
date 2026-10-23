@@ -1,5 +1,6 @@
 import { Button, cx } from '@internal/ui';
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -96,7 +97,8 @@ export function TourPanel({
   const list = useRef<HTMLUListElement>(null);
   const handles = useRef(new Map<string, HTMLButtonElement>());
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [said, setSaid] = useState('');
+  // Numbered, so the same line twice in a row is new content the live region reads again.
+  const [said, setSaid] = useState({ text: '', n: 0 });
   // A moved row is a moved DOM node, which drops focus: put it back on the row's handle.
   const refocus = useRef<string | null>(null);
   useLayoutEffect(() => {
@@ -112,7 +114,7 @@ export function TourPanel({
   const move = (panoId: string, to: number) => {
     if (!reorder) return;
     reorder(panoId, to);
-    setSaid(movedLine(nameAt(panoId), to, scenes.length));
+    setSaid((s) => ({ text: movedLine(nameAt(panoId), to, scenes.length), n: s.n + 1 }));
   };
   // The rows' vertical middles, in list order (pending uploads aren't rows that move).
   const rowMids = (): number[] =>
@@ -137,6 +139,16 @@ export function TourPanel({
     setDrag(null);
     if (to !== drag.from) move(drag.panoId, to);
   };
+  // Esc drops a drag where it started.
+  const dragging = drag !== null;
+  useEffect(() => {
+    if (!dragging) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setDrag(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [dragging]);
   const keyMove = (e: KeyboardEvent<HTMLButtonElement>, panoId: string, index: number) => {
     const to = keyMoveIndex(e.key, index, scenes.length);
     if (to === null) return;
@@ -189,7 +201,7 @@ export function TourPanel({
         </p>
       )}
       <p className="ed-sr" aria-live="polite">
-        {said}
+        <span key={said.n}>{said.text}</span>
       </p>
       <ul ref={list} className="ed-scenes">
         {scenes.map(({ panoId }, index) => {
