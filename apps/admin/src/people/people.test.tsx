@@ -136,10 +136,10 @@ describe('People', () => {
       removeMember,
     });
     const dialog = await screen.findByRole('dialog', { name: 'People' });
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Cancel' }));
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Cancel the invite for kim@example.com' }));
     await waitFor(() => expect(revokeInvite).toHaveBeenCalledWith('tour-1', 'i1'));
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove ed@example.com' }));
     const confirm = await screen.findByRole('dialog', { name: 'Remove this editor?' });
     fireEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(removeMember).toHaveBeenCalledWith('tour-1', 'm1'));
@@ -167,7 +167,7 @@ describe('People', () => {
     const dialog = await screen.findByRole('dialog', { name: 'People' });
     expect(await within(dialog).findByText('maya@example.com')).toBeTruthy();
     expect(within(dialog).queryByLabelText('Invite an editor')).toBeNull();
-    expect(within(dialog).queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /^Remove/ })).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Leave' }));
     const confirm = await screen.findByRole('dialog', { name: 'Leave this tour?' });
     fireEvent.click(within(confirm).getByRole('button', { name: 'Leave' }));

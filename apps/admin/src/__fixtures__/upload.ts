@@ -114,7 +114,7 @@ export function fakeBackend() {
       state.tour = { ...(body as typeof state.tour), tourId: 'tour-1' };
       return json({ tourId: 'tour-1' }, 201);
     }
-    if (method === 'GET' && /^\/api\/admin\/panos\/[^/?]+\?status=1(&tourId=[^&]+)?$/.test(path)) {
+    if (method === 'GET' && /^\/api\/admin\/panos\/[^/?]+\?status=1&tourId=[^&]+$/.test(path)) {
       if (state.statusStatus !== 200) return json({ error: 'nope' }, state.statusStatus);
       return json({
         status: {

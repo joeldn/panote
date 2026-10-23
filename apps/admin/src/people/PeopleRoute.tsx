@@ -236,6 +236,7 @@ export function PeopleRoute() {
                   <button
                     type="button"
                     className="ppl__action"
+                    aria-label={`Remove ${m.email}`}
                     onClick={() => setConfirming({ kind: 'remove', member: m })}
                   >
                     Remove
@@ -264,7 +265,12 @@ export function PeopleRoute() {
                 <li key={i.id} className="ppl__row">
                   <span className="ppl__who">{i.email}</span>
                   <span className="ppl__role">Until {formatDate(i.expiresAt)}</span>
-                  <button type="button" className="ppl__action" onClick={() => void onRevoke(i.id)}>
+                  <button
+                    type="button"
+                    className="ppl__action"
+                    aria-label={`Cancel the invite for ${i.email}`}
+                    onClick={() => void onRevoke(i.id)}
+                  >
                     Cancel
                   </button>
                 </li>
