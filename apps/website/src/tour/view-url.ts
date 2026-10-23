@@ -8,19 +8,29 @@ export const VIEW_PARAMS = ['yaw', 'pitch', 'fov'] as const;
 
 const DEG = 180 / Math.PI;
 
+/** Degrees wrapped into (−180, 180]. */
+export function wrapDegrees(deg: number): number {
+  const w = ((deg % 360) + 360) % 360;
+  return w > 180 ? w - 360 : w;
+}
+
 const num = (raw: string | null): number | null => {
   if (raw === null || raw.trim() === '') return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 };
 
-/** The view a link asks for, in radians; null when it asks for none. Out-of-range axes are dropped. */
+/**
+ * The view a link asks for, in radians; null when it asks for none. A yaw any number of
+ * turns round is wrapped into (−180°, 180°]; a pitch or fov out of range, or anything
+ * that isn't a finite number, is dropped.
+ */
 export function viewFromParams(params: URLSearchParams): Partial<View> | null {
   const yaw = num(params.get('yaw'));
   const pitch = num(params.get('pitch'));
   const fov = num(params.get('fov'));
   const view: Partial<View> = {
-    ...(yaw !== null && { yaw: yaw / DEG }),
+    ...(yaw !== null && { yaw: wrapDegrees(yaw) / DEG }),
     ...(pitch !== null && Math.abs(pitch) <= 90 && { pitch: pitch / DEG }),
     ...(fov !== null && fov > 0 && fov < 180 && { fov }),
   };
@@ -29,11 +39,12 @@ export function viewFromParams(params: URLSearchParams): Partial<View> | null {
 
 /** `view` as whole degrees, yaw in (−180, 180]. */
 export function roundView(view: View): { yaw: number; pitch: number; fov: number } {
-  let yaw = Math.round(view.yaw * DEG) % 360;
-  if (yaw > 180) yaw -= 360;
-  if (yaw <= -180) yaw += 360;
   // `|| 0` turns a -0 into 0, so it never reads "-0".
-  return { yaw: yaw || 0, pitch: Math.round(view.pitch * DEG) || 0, fov: Math.round(view.fov) };
+  return {
+    yaw: wrapDegrees(Math.round(view.yaw * DEG)) || 0,
+    pitch: Math.round(view.pitch * DEG) || 0,
+    fov: Math.round(view.fov),
+  };
 }
 
 /** `params` with the scene and, when given, the camera; a scene without a view drops it. */

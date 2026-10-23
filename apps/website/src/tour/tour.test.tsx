@@ -757,6 +757,20 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
 describe('the scene and view in the URL', () => {
   const SETTLED = { timeout: 2000 };
   const deg = Math.PI / 180;
+  /**
+   * Draws a frame and runs the clock past the viewer's settle wait (on fake timers, so no
+   * real wait), then lets the router's navigation, if any, finish.
+   */
+  const rest = async () => {
+    vi.useFakeTimers();
+    try {
+      lastViewer().draw();
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => {});
+  };
   const settle = async (router: ReturnType<typeof renderAt>, search: string) => {
     lastViewer().draw();
     await waitFor(() => expect(router.state.location.search).toBe(search), SETTLED);
@@ -790,8 +804,7 @@ describe('the scene and view in the URL', () => {
     const router = renderAt('/s/old-town?lang=en');
     await shown('square');
     // Where the scene opened: nothing to write.
-    lastViewer().draw();
-    await new Promise((r) => setTimeout(r, 600));
+    await rest();
     expect(router.state.location.search).toBe('?lang=en');
     lastViewer().view = { yaw: 12.4 * deg, pitch: -5.2 * deg, fov: 59.6 };
     await settle(router, '?lang=en&pano=square&yaw=12&pitch=-5&fov=60');
@@ -822,8 +835,7 @@ describe('the scene and view in the URL', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
     await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', { yaw: 1 }));
     lastViewer().view = { yaw: 1, pitch: 0.1, fov: 60 };
-    lastViewer().draw();
-    await new Promise((r) => setTimeout(r, 600));
+    await rest();
     expect(router.state.location.search).toBe('');
     expect(router.state.historyAction).toBe('POP');
   });
@@ -952,9 +964,14 @@ describe('visitor share', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
     await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', { yaw: 1 }));
     lastViewer().view = { yaw: Math.PI / 4, pitch: 0, fov: 65 };
-    lastViewer().draw();
-    // The camera comes to rest a moment after the last frame.
-    await new Promise((r) => setTimeout(r, 600));
+    // The camera comes to rest a moment after the last frame (on fake timers: no real wait).
+    vi.useFakeTimers();
+    try {
+      lastViewer().draw();
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     const dialog = await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY);
     const link = within(dialog).getByLabelText('Share link');

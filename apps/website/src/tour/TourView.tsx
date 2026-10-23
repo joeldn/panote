@@ -135,6 +135,9 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
 
   if (!start || failed || (single && !requestedOk)) return <Unavailable embed={embed} />;
 
+  // `panoId` and `view` always belong together: TourViewer reports no rest while a scene
+  // change is in flight, which covers the frames where the viewer has already cut to the
+  // next scene's camera but the scene shown has not followed yet.
   const viewSettled = (panoId: string, view: View) => {
     setHere({ panoId, view });
     // Only for the scene the URL names: on Back, the old scene can settle before the
