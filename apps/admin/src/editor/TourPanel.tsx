@@ -410,7 +410,22 @@ export function TourPanel({
         })}
       </ul>
       {scenes.length === 0 && pending.length === 0 && (
-        <p className="ed-hint">This tour has no panos yet.</p>
+        <p className="ed-hint ed-empty" role="note">
+          This tour has no panos yet. <b>Add pano</b> uploads a 360° photo
+          {onAddFromLibrary ? (
+            <>
+              , and <b>From library</b> reuses one you’ve already uploaded.
+            </>
+          ) : (
+            '.'
+          )}
+        </p>
+      )}
+      {scenes.length === 1 && pending.length === 0 && (
+        <p className="ed-hint ed-empty" role="note">
+          Add a second pano to make a tour: visitors walk between connected panos with arrows on the
+          floor.
+        </p>
       )}
     </section>
   );

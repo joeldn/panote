@@ -637,7 +637,20 @@
   white-space: nowrap;
 }
 
-.ed-map__image .ed-label {
+.ed-map__image /* What to do next, in an empty panel or stage (B12). */
+.ed-empty {
+  margin: 12px 16px;
+  padding: 10px 12px;
+  border: 1px dashed var(--ink-13);
+  border-radius: var(--r-card);
+  color: var(--ink-62);
+}
+
+.ed-start p {
+  margin: 0 0 14px;
+}
+
+.ed-label {
   margin-right: auto;
 }
 

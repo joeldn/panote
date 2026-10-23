@@ -617,9 +617,24 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               </Button>
             </div>
           ) : (
-            <p className="ed-missing" role="status">
-              Add a pano to start building this tour.
-            </p>
+            <div className="ed-missing ed-start" role="status">
+              <i className="fa-solid fa-panorama" aria-hidden="true" />
+              <h2>Start with a pano</h2>
+              <p>
+                Upload a 360° photo: a 2:1 equirectangular JPG, PNG or WebP. It opens here while it
+                processes.
+              </p>
+              <Button
+                variant="accent"
+                size="sm"
+                pill
+                icon="fa-solid fa-arrow-up-from-bracket"
+                aria-haspopup="dialog"
+                onClick={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
+              >
+                Upload a pano
+              </Button>
+            </div>
           )}
         </div>
       )}
@@ -885,6 +900,23 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 </button>
               </div>
             </div>
+          )}
+          {cfg && !point && points.length === 0 && !lookOnly && (
+            <p className="ed-hint ed-empty" role="note">
+              {placingNow ? (
+                <>Click the pano where the point goes. Drag as you drop it to make it bigger.</>
+              ) : (
+                <>
+                  No points on this pano yet. Press <b>Add point</b> to put a label, text, a photo
+                  or a video on the spot it’s about.
+                </>
+              )}
+            </p>
+          )}
+          {!cfg && !pendingCurrent && sceneIds.length === 0 && (
+            <p className="ed-hint ed-empty" role="note">
+              Points sit on a pano. Add one to the tour first.
+            </p>
           )}
           {point && currentId ? (
             <PointEditor
