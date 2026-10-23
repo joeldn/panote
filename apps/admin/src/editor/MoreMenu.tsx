@@ -1,31 +1,25 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 
-/**
- * Below this width the editor's top bar has no room for every control: language, tour
- * settings, People, Insights and Preview fold into this menu (editor.css hides one or the other at
- * the same width; `editor-layout.test.ts` keeps the two in step).
- */
-export const BAR_MENU_MAX_WIDTH = 860;
-
 export interface MoreMenuProps {
   /** The language being edited, as its tag (`en`). */
   lang: string;
   langName: string;
   peopleTo: string;
   insightsTo: string;
-  previewTo: string;
   onLanguages: () => void;
   onSettings: () => void;
 }
 
-/** The top bar's overflow menu at narrow widths (C9): the controls the bar can't fit. */
+/**
+ * The top bar's menu: what a tour needs now and then (its settings, languages, people and
+ * insights), so the bar itself keeps to Preview, Save and Share.
+ */
 export function MoreMenu({
   lang,
   langName,
   peopleTo,
   insightsTo,
-  previewTo,
   onLanguages,
   onSettings,
 }: MoreMenuProps) {
@@ -82,7 +76,7 @@ export function MoreMenu({
         ref={button}
         type="button"
         className="ed-glass-btn ed-glass-btn--icon"
-        aria-label="More"
+        aria-label="Tour menu"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -99,24 +93,9 @@ export function MoreMenu({
           id={menuId}
           className="ed-more__menu"
           role="menu"
-          aria-label="More"
+          aria-label="Tour menu"
           onKeyDown={onKey}
         >
-          <button
-            type="button"
-            role="menuitem"
-            className="ed-more__item"
-            data-languages-toggle
-            aria-label={`Language: ${langName}`}
-            onClick={() => {
-              setOpen(false);
-              onLanguages();
-            }}
-          >
-            <i className="fa-solid fa-globe" aria-hidden="true" />
-            Language
-            <span className="ed-more__tag">{lang}</span>
-          </button>
           <button
             type="button"
             role="menuitem"
@@ -129,6 +108,21 @@ export function MoreMenu({
           >
             <i className="fa-solid fa-sliders" aria-hidden="true" />
             Tour settings
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="ed-more__item"
+            data-languages-toggle
+            aria-label={`Languages, editing ${langName}`}
+            onClick={() => {
+              setOpen(false);
+              onLanguages();
+            }}
+          >
+            <i className="fa-solid fa-globe" aria-hidden="true" />
+            Languages
+            <span className="ed-more__tag">{lang}</span>
           </button>
           <Link
             role="menuitem"
@@ -147,15 +141,6 @@ export function MoreMenu({
           >
             <i className="fa-solid fa-chart-line" aria-hidden="true" />
             Insights
-          </Link>
-          <Link
-            role="menuitem"
-            className="ed-more__item"
-            to={previewTo}
-            onClick={() => close(false)}
-          >
-            <i className="fa-solid fa-eye" aria-hidden="true" />
-            Preview
           </Link>
         </div>
       )}

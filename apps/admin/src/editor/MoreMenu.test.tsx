@@ -19,14 +19,13 @@ function setup() {
             langName="German"
             peopleTo="people"
             insightsTo="insights"
-            previewTo="/t/t1/preview?lang=de"
             onLanguages={onLanguages}
             onSettings={onSettings}
           />
         ),
       },
       { path: '/t/t1/insights', element: <p>Insights</p> },
-      { path: '/t/t1/preview', element: <p>Preview</p> },
+      { path: '/t/t1/people', element: <p>People</p> },
     ],
     { initialEntries: ['/t/t1'] },
   );
@@ -34,29 +33,28 @@ function setup() {
   return { onLanguages, onSettings, router };
 }
 
-const more = () => screen.getByRole('button', { name: 'More' });
+const more = () => screen.getByRole('button', { name: 'Tour menu' });
 const item = (name: RegExp | string) => screen.getByRole('menuitem', { name });
 
 describe('MoreMenu', () => {
-  it('opens on the bar’s controls that don’t fit, focusing the first', () => {
+  it('opens on the tour’s occasional controls, focusing the first', () => {
     setup();
     expect(screen.queryByRole('menu')).toBeNull();
     fireEvent.click(more());
     expect(more().getAttribute('aria-expanded')).toBe('true');
     expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
-      'Languagede',
       'Tour settings',
+      'Languagesde',
       'People',
       'Insights',
-      'Preview',
     ]);
-    expect(document.activeElement).toBe(item('Language: German'));
+    expect(document.activeElement).toBe(item('Tour settings'));
   });
 
   it('opens the language and settings popovers, closing itself', () => {
     const { onLanguages, onSettings } = setup();
     fireEvent.click(more());
-    fireEvent.click(item('Language: German'));
+    fireEvent.click(item('Languages, editing German'));
     expect(onLanguages).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('menu')).toBeNull();
     fireEvent.click(more());
@@ -65,13 +63,13 @@ describe('MoreMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('links to Insights and to Preview in the language being edited', () => {
+  it('links to Insights and People over the editor', () => {
     const { router } = setup();
     fireEvent.click(more());
     expect(item('Insights').getAttribute('href')).toBe('/t/t1/insights');
-    fireEvent.click(item('Preview'));
-    expect(router.state.location.pathname).toBe('/t/t1/preview');
-    expect(router.state.location.search).toBe('?lang=de');
+    fireEvent.click(item('People'));
+    expect(router.state.location.pathname).toBe('/t/t1/people');
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
   it('walks its items with the arrow keys and closes on Escape, back to its button', () => {
@@ -79,12 +77,12 @@ describe('MoreMenu', () => {
     fireEvent.click(more());
     const menu = screen.getByRole('menu');
     fireEvent.keyDown(menu, { key: 'ArrowDown' });
-    expect(document.activeElement).toBe(item('Tour settings'));
+    expect(document.activeElement).toBe(item('Languages, editing German'));
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
     fireEvent.keyDown(menu, { key: 'ArrowUp' });
-    expect(document.activeElement).toBe(item('Preview'));
+    expect(document.activeElement).toBe(item('Insights'));
     fireEvent.keyDown(menu, { key: 'Home' });
-    expect(document.activeElement).toBe(item('Language: German'));
+    expect(document.activeElement).toBe(item('Tour settings'));
     fireEvent.keyDown(menu, { key: 'Escape' });
     expect(screen.queryByRole('menu')).toBeNull();
     expect(document.activeElement).toBe(more());

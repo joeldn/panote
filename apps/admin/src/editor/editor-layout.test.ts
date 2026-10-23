@@ -3,8 +3,6 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { BAR_MENU_MAX_WIDTH } from './MoreMenu.js';
-
 // No browser runs these styles in CI, so the layout rules the editor depends on at narrow
 // widths (C9) are checked as text: which media query holds them, and that they come after
 // the rules they override.
@@ -27,11 +25,15 @@ function mediaBlock(px: number): { at: number; body: string } {
 const baseRule = (selector: string) => css.indexOf(`\n${selector} {`);
 
 describe('editor layout CSS', () => {
-  it('folds the bar’s tools into the More menu at the width MoreMenu names', () => {
-    const { body } = mediaBlock(BAR_MENU_MAX_WIDTH);
-    expect(body).toMatch(/\.ed-bar__tools\s*{\s*display:\s*none;/);
-    expect(body).toMatch(/\.ed-more\s*{\s*display:\s*block;/);
-    expect(css).toMatch(/\n\.ed-more\s*{\s*display:\s*none;/);
+  it('keeps the bar to one row at every width: the title gives way, not the controls', () => {
+    expect(css).toMatch(/\n\.ed-bar__left\s*{\s*flex:\s*1;/);
+    expect(css).toMatch(/\n\.ed-bar__right\s*{\s*flex:\s*none;/);
+    // Wide, the controls never wrap under the popovers' fixed offsets (a phone's column may).
+    expect(css.slice(0, mediaBlock(600).at)).not.toMatch(
+      /\.ed-bar__right\s*{[^}]*flex-wrap:\s*wrap/,
+    );
+    // The menu is the bar's at every width, never hidden by a media query.
+    expect(css).not.toMatch(/\.ed-more\s*{[^}]*display:\s*none/);
   });
 
   it('flows the bar, popovers and banners in one column at phone width, no fixed offset', () => {
@@ -46,9 +48,9 @@ describe('editor layout CSS', () => {
   });
 
   it('puts each narrow-width block after the rules it overrides', () => {
-    const narrow = mediaBlock(BAR_MENU_MAX_WIDTH).at;
+    const narrow = mediaBlock(860).at;
     const phone = mediaBlock(600).at;
-    for (const sel of ['.ed-inline', '.ed-save-hint', '.ed-crumbs']) {
+    for (const sel of ['.ed-inline', '.ed-glass-btn']) {
       expect(baseRule(sel)).toBeGreaterThan(-1);
       expect(baseRule(sel)).toBeLessThan(narrow);
     }

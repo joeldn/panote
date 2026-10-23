@@ -309,7 +309,7 @@ describe('useEditor autoRepublish', () => {
     const put = deferred<{ etag: string }>();
     api.putTour.mockReturnValueOnce(put.promise);
     act(() => result.current.dispatch({ type: 'tour/title', title: 'Again' }));
-    let saving!: Promise<void>;
+    let saving!: Promise<boolean>;
     act(() => {
       saving = result.current.save();
     });
@@ -345,7 +345,7 @@ describe('useEditor autoRepublish', () => {
     await waitFor(() => expect(publishTour).toHaveBeenCalledTimes(2));
     // The user saves while that publish is out: the save's PUT waits for it.
     act(() => result.current.dispatch({ type: 'tour/title', title: 'Again' }));
-    let saving!: Promise<void>;
+    let saving!: Promise<boolean>;
     act(() => {
       saving = result.current.save();
     });
@@ -636,7 +636,7 @@ describe('useEditor draft autosave', () => {
     const put = deferred<{ etag: string }>();
     api.putTour.mockImplementationOnce(() => put.promise);
     let discarding!: Promise<void>;
-    let saving!: Promise<void>;
+    let saving!: Promise<boolean>;
     act(() => {
       discarding = result.current.discardDraft();
       saving = result.current.save();

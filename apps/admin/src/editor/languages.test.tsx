@@ -46,7 +46,13 @@ type UI = ReturnType<typeof openTab>;
 const openMenu = async (ui: UI) => {
   const open = ui.queryByRole('dialog', { name: 'Languages' });
   if (open) return open;
-  fireEvent.click(await ui.findByRole('button', { name: /^Language:/ }));
+  // A translated tour has the language chip in the bar; otherwise it's in the tour menu.
+  const chip = ui.queryByRole('button', { name: /^Language:/ });
+  if (chip) fireEvent.click(chip);
+  else {
+    fireEvent.click(await ui.findByRole('button', { name: 'Tour menu' }));
+    fireEvent.click(ui.getByRole('menuitem', { name: /^Languages, editing/ }));
+  }
   return ui.getByRole('dialog', { name: 'Languages' });
 };
 
@@ -75,7 +81,8 @@ describe('editor: languages', () => {
     const squareEtag = server.configs.get('square')!.etag;
     const ui = openTab();
     await ui.findByRole('button', { name: /Tour title: Old town/ });
-    expect(ui.getByRole('button', { name: 'Language: English' })).toBeTruthy();
+    // One language: nothing to choose between, so no language chip in the bar.
+    expect(ui.queryByRole('button', { name: /^Language:/ })).toBeNull();
 
     const menu = await addLanguage(ui, 'de');
     // Switched straight to editing the new language.
@@ -248,17 +255,21 @@ describe('editor: languages', () => {
     expect(server.writes().filter((w) => w.path.includes('/panos/'))).toEqual([]);
   });
 
-  it('the Preview link carries the language being edited', async () => {
+  it('the Preview link carries the pano and language being edited, and comes back to them', async () => {
     server.setTour({ ...server.tour!.body, languages: { default: 'en', others: ['de'] } });
     const ui = openTab();
     await ui.findByRole('button', { name: /Tour title: Old town/ });
     expect(ui.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
-      '/app/t/t1/preview',
+      '/app/t/t1/preview?pano=square',
     );
     fireEvent.click(within(await openMenu(ui)).getByRole('button', { name: 'Deutsch' }));
     expect(ui.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
-      '/app/t/t1/preview?lang=de',
+      '/app/t/t1/preview?pano=square&lang=de',
     );
+    fireEvent.click(ui.getByRole('link', { name: 'Preview' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Back to editor' }));
+    // Still translating into German, not typing German into the English text.
+    expect(await ui.findByRole('button', { name: 'Language: Deutsch' })).toBeTruthy();
   });
 });
 

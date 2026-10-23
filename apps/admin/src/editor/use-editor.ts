@@ -450,14 +450,18 @@ export function useEditor(
     }
   }, [api, tourId, dispatch]);
 
-  /** `resolving` is only for the conflict banner's overwrite; otherwise a conflict blocks saving. */
-  const save = useCallback(
-    async ({ resolving = false } = {}) => {
+  /**
+   * `resolving` is only for the conflict banner's overwrite; otherwise a conflict blocks saving.
+   * Resolves true once everything is saved (or there was nothing to save); false when this
+   * save failed in part, couldn't start, or another one was already under way.
+   */
+  const saveNow = useCallback(
+    async ({ resolving = false } = {}): Promise<boolean> => {
       const current = docsRef.current;
-      if (!current || savingRef.current) return;
-      if (!resolving && hasConflict()) return;
+      if (!current || savingRef.current) return false;
+      if (!resolving && hasConflict()) return false;
       const plan = planSave(current);
-      if (isEmptyPlan(plan)) return;
+      if (isEmptyPlan(plan)) return true;
       savingRef.current = true;
       setSaving(true);
       // A new attempt: whatever the last publish waited on or said, this save's publish
@@ -484,12 +488,13 @@ export function useEditor(
           if (retry?.failures.tour) out.failures.tour = retry.failures.tour;
         }
         setFailures(out.failures);
-        if (Object.keys(out.failures).length > 0) return;
+        if (Object.keys(out.failures).length > 0) return false;
         setSavedAt(new Date());
         dismiss('draft');
         if (storage) clearDraft(storage, user, tourId);
         // Publish failures never turn a successful save into a failed one.
         await republishWith(current);
+        return true;
       } finally {
         savingRef.current = false;
         setSaving(false);
@@ -511,6 +516,17 @@ export function useEditor(
       setAwaiting,
       foldAppends,
     ],
+  );
+  // The save under way, so a second caller (Share) can wait on it rather than give up.
+  const inflightRef = useRef<Promise<boolean> | null>(null);
+  const save = useCallback(
+    (opts: { resolving?: boolean } = {}): Promise<boolean> => {
+      if (savingRef.current && inflightRef.current) return inflightRef.current;
+      const run = saveNow(opts);
+      inflightRef.current = run;
+      return run;
+    },
+    [saveNow],
   );
 
   /**
