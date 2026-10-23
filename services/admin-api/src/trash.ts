@@ -28,7 +28,7 @@ export type DiscardOptions = { trash: boolean; now: Date };
 /**
  * Moves `key` to today's trash: copies it (the body streamed, never buffered, with both
  * kinds of metadata), then deletes it. False if there was nothing to move. A copy that
- * fails throws before anything is deleted. A second delete of the same key on the same
+ * fails throws before the original is deleted, and a short copy is removed first. A second delete of the same key on the same
  * day replaces the first copy, which is the older bytes of the same pano.
  */
 export const moveToTrash = async (bucket: R2Bucket, key: string, now: Date): Promise<boolean> => {
@@ -38,7 +38,11 @@ export const moveToTrash = async (bucket: R2Bucket, key: string, now: Date): Pro
     httpMetadata: obj.httpMetadata ?? {},
     customMetadata: obj.customMetadata ?? {},
   });
-  if (copy.size !== obj.size) throw new Error('trash copy is incomplete');
+  if (copy.size !== obj.size) {
+    // The original stays, so the partial copy is only clutter that would read as a restore.
+    await bucket.delete(copy.key);
+    throw new Error('trash copy is incomplete');
+  }
   await bucket.delete(key);
   return true;
 };

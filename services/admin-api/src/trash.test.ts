@@ -113,6 +113,30 @@ describe('moveToTrash', () => {
 
     expect(await env.BUCKET.head(originalKey(SUB, 'p1'))).not.toBeNull();
   });
+
+  it('removes a short copy and keeps the original', async () => {
+    await putOriginal(SUB, 'p1');
+    // The copy lands, but cut short.
+    const short = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'put') {
+          return async (key: string, body: ReadableStream, opts: R2PutOptions) => {
+            const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+            return target.put(key, bytes.slice(0, Math.floor(bytes.length / 2)), opts);
+          };
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    await expect(moveToTrash(short, originalKey(SUB, 'p1'), NOW)).rejects.toThrow(
+      'trash copy is incomplete',
+    );
+
+    expect(await env.BUCKET.head(originalKey(SUB, 'p1'))).not.toBeNull();
+    expect(await keysUnder(TRASH_ROOT)).toEqual([]);
+  });
 });
 
 describe('every delete of an original goes through the trash', () => {
