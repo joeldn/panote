@@ -10,3 +10,6 @@ config:
   panote-infra:cacheRulesFile: cache-rules.dev.json
   panote-infra:noindexAllResponses: true
   panote-infra:wwwRedirect: false
+  # Auth0 (src/auth0.ts): nothing is declared until the import names the
+  # tenant here with `auth0:domain` (infra/README.md, step 13).
+  panote-infra:auth0LocalDevCallbacks: true

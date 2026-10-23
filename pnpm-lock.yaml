@@ -40,6 +40,9 @@ catalogs:
     '@fortawesome/fontawesome-free':
       specifier: 6.7.2
       version: 6.7.2
+    '@pulumi/auth0':
+      specifier: 3.55.1
+      version: 3.55.1
     '@pulumi/cloudflare':
       specifier: 6.22.0
       version: 6.22.0
@@ -335,6 +338,9 @@ importers:
 
   infra/pulumi:
     dependencies:
+      '@pulumi/auth0':
+        specifier: 'catalog:'
+        version: 3.55.1(supports-color@10.2.2)(typescript@6.0.3)
       '@pulumi/cloudflare':
         specifier: 'catalog:'
         version: 6.22.0(supports-color@10.2.2)(typescript@6.0.3)
@@ -2153,6 +2159,9 @@ packages:
 
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
+
+  '@pulumi/auth0@3.55.1':
+    resolution: {integrity: sha512-40resB/P4T1LaBsYUHnsBj2rFb4r2raZ8Ycs+2Mojxu6ycTGN3pNHTU+7n3LPmZhy+P11KPCZTARA/F7G3sDRQ==}
 
   '@pulumi/cloudflare@6.22.0':
     resolution: {integrity: sha512-ljJpS3vhIaTNzTvoNURkUfXnzDlBS0gx2nxvg84JmH6kuYoCmsLiQ1afOdhXly4+G/JIgYqjdxo2QNliVUWYDw==}
@@ -5528,6 +5537,14 @@ snapshots:
   '@protobufjs/pool@1.1.0': {}
 
   '@protobufjs/utf8@1.1.2': {}
+
+  '@pulumi/auth0@3.55.1(supports-color@10.2.2)(typescript@6.0.3)':
+    dependencies:
+      '@pulumi/pulumi': 3.268.0(supports-color@10.2.2)(typescript@6.0.3)
+    transitivePeerDependencies:
+      - supports-color
+      - ts-node
+      - typescript
 
   '@pulumi/cloudflare@6.22.0(supports-color@10.2.2)(typescript@6.0.3)':
     dependencies:

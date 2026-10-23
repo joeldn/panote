@@ -4,11 +4,11 @@
 /*
  * Auth0 post-login Action "Link accounts by verified email".
  *
- * Paste this whole file into the Action's code editor (docs/deploy.md, "Account linking").
- * It needs no npm dependency: the Management API is called with the runtime's `fetch`.
+ * infra/pulumi deploys this whole file as it is (src/auth0.ts; docs/deploy.md, "Account
+ * linking"). It needs no npm dependency: the Management API is called with the runtime's `fetch`.
  *
- * Secrets (Action → Secrets), from a Machine to Machine application authorised for the
- * Auth0 Management API with `read:users` and `update:users`:
+ * Secrets, set by infra/pulumi from the Machine to Machine application it manages, authorised
+ * for the Auth0 Management API with `read:users` and `update:users` only:
  *   AUTH0_DOMAIN         the tenant's own domain, e.g. panote-dev.au.auth0.com
  *   MGMT_CLIENT_ID       that M2M application's client id
  *   MGMT_CLIENT_SECRET   that M2M application's client secret

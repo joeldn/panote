@@ -1,7 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { buildImportPlan, cloudflareGet, parseStackConfig } from './import-file.js';
-import { readSettings } from './settings.js';
+import { buildImportPlan, cloudflareGet, settingsFromStackFile } from './import-file.js';
 
 /**
  * Writes `import.<stack>.json` for `pulumi import --file` (infra/README.md).
@@ -24,16 +23,10 @@ if (!token) {
 }
 
 const packageDir = new URL('../', import.meta.url);
-const values = parseStackConfig(readFileSync(new URL(`Pulumi.${stack}.yaml`, packageDir), 'utf8'));
-const settings = readSettings(stack, {
-  get: (key) => values.get(key),
-  require: (key) => {
-    const value = values.get(key);
-    if (value === undefined) throw new Error(`Pulumi.${stack}.yaml: no panote-infra:${key}`);
-    return value;
-  },
-  getBoolean: (key) => (values.has(key) ? values.get(key) === 'true' : undefined),
-});
+const settings = settingsFromStackFile(
+  stack,
+  readFileSync(new URL(`Pulumi.${stack}.yaml`, packageDir), 'utf8'),
+);
 
 const plan = await buildImportPlan(settings, cloudflareGet(token));
 const out = new URL(`import.${stack}.json`, packageDir);

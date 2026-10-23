@@ -3,7 +3,7 @@
 # `pnpm --filter @internal/infra build` before any pulumi command.
 # Setup and the import of dev: infra/README.md.
 name: panote-infra
-description: panote's Cloudflare account - R2, queues, zone rulesets and settings (Workers are deployed by wrangler)
+description: panote's Cloudflare account (R2, queues, zone rulesets and settings) and Auth0 tenants; Workers are deployed by wrangler
 runtime:
   name: nodejs
   options:

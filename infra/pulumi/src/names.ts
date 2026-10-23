@@ -33,6 +33,39 @@ export const RESOURCES = {
   },
   apexRecord: { name: 'apex-aaaa', type: 'cloudflare:index/dnsRecord:DnsRecord' },
   wwwRecord: { name: 'www-aaaa', type: 'cloudflare:index/dnsRecord:DnsRecord' },
+
+  // --- Auth0 (src/auth0.ts) ---
+  spaClient: { name: 'auth0-spa', type: 'auth0:index/client:Client' },
+  spaCredentials: {
+    name: 'auth0-spa-credentials',
+    type: 'auth0:index/clientCredentials:ClientCredentials',
+  },
+  api: { name: 'auth0-api', type: 'auth0:index/resourceServer:ResourceServer' },
+  googleConnection: { name: 'auth0-google', type: 'auth0:index/connection:Connection' },
+  googleConnectionClients: {
+    name: 'auth0-google-clients',
+    type: 'auth0:index/connectionClients:ConnectionClients',
+  },
+  databaseConnectionClients: {
+    name: 'auth0-database-clients',
+    type: 'auth0:index/connectionClients:ConnectionClients',
+  },
+  attackProtection: {
+    name: 'auth0-attack-protection',
+    type: 'auth0:index/attackProtection:AttackProtection',
+  },
+  linkingClient: { name: 'auth0-link-accounts-client', type: 'auth0:index/client:Client' },
+  linkingCredentials: {
+    name: 'auth0-link-accounts-credentials',
+    type: 'auth0:index/clientCredentials:ClientCredentials',
+  },
+  linkingGrant: { name: 'auth0-link-accounts-grant', type: 'auth0:index/clientGrant:ClientGrant' },
+  banListAction: { name: 'auth0-ban-list-action', type: 'auth0:index/action:Action' },
+  linkAccountsAction: { name: 'auth0-link-accounts-action', type: 'auth0:index/action:Action' },
+  postLoginActions: {
+    name: 'auth0-post-login-actions',
+    type: 'auth0:index/triggerActions:TriggerActions',
+  },
 } as const;
 
 export type ResourceKey = keyof typeof RESOURCES;

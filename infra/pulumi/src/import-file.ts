@@ -1,5 +1,5 @@
 import { RESOURCES, RULESET_PHASES, type ResourceKey } from './names.js';
-import type { Settings } from './settings.js';
+import { readSettings, type Settings } from './settings.js';
 
 /**
  * Builds the `pulumi import --file` document for resources that already exist
@@ -133,15 +133,34 @@ export function cloudflareGet(token: string, fetchImpl: typeof fetch = fetch): C
 }
 
 /**
- * Reads the flat `panote-infra:key: value` lines of a `Pulumi.<stack>.yaml`
- * (all this project's stack files hold), so the script needs neither a
- * backend login nor a YAML dependency.
+ * Reads the flat `panote-infra:key: value` lines of a `Pulumi.<stack>.yaml`,
+ * and the Auth0 provider's `auth0:domain` (as that key), so the scripts need
+ * neither a backend login nor a YAML dependency. A secret's line has no value
+ * on it (the ciphertext is on the next line, under `secure:`), so secrets are
+ * never read.
  */
 export function parseStackConfig(yaml: string): Map<string, string> {
   const values = new Map<string, string>();
   for (const line of yaml.split('\n')) {
-    const match = /^\s+panote-infra:([A-Za-z]+):\s*(.*?)\s*$/.exec(line);
-    if (match?.[1] && match[2] !== undefined) values.set(match[1], match[2].replace(/^"|"$/g, ''));
+    const match = /^\s+(panote-infra|auth0):([A-Za-z0-9]+):\s*(.*?)\s*$/.exec(line);
+    const [, namespace, key, raw] = match ?? [];
+    if (!namespace || !key || !raw) continue;
+    if (namespace === 'auth0' && key !== 'domain') continue;
+    values.set(namespace === 'auth0' ? `auth0:${key}` : key, raw.replace(/^"|"$/g, ''));
   }
   return values;
+}
+
+/** A stack's settings from the text of its `Pulumi.<stack>.yaml`, as the program reads them. */
+export function settingsFromStackFile(stack: 'dev' | 'production', yaml: string): Settings {
+  const values = parseStackConfig(yaml);
+  return readSettings(stack, {
+    require: (key) => {
+      const value = values.get(key);
+      if (value === undefined) throw new Error(`Pulumi.${stack}.yaml: no panote-infra:${key}`);
+      return value;
+    },
+    get: (key) => values.get(key),
+    getBoolean: (key) => (values.has(key) ? values.get(key) === 'true' : undefined),
+  });
 }

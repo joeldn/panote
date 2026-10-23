@@ -43,8 +43,91 @@ describe('readSettings', () => {
     expect(stackSettings('dev').bucketLocation).toBeUndefined();
   });
 
+  it('declares no Auth0 until the stack names its tenant', () => {
+    expect(
+      readSettings('dev', mapConfig({ ...DEV, auth0LocalDevCallbacks: 'true' })).auth0,
+    ).toBeUndefined();
+    expect(
+      readSettings(
+        'dev',
+        mapConfig({
+          ...DEV,
+          auth0LocalDevCallbacks: 'true',
+          'auth0:domain': 'panote-dev.auth0.com',
+        }),
+      ).auth0,
+    ).toEqual({ domain: 'panote-dev.auth0.com', localDevCallbacks: true });
+  });
+
+  it('reads an Auth0 tenant and its Google client', () => {
+    expect(
+      readSettings(
+        'production',
+        mapConfig({
+          ...PRODUCTION,
+          'auth0:domain': 'panote.us.auth0.com',
+          googleClientId: '1234-abc.apps.googleusercontent.com',
+        }),
+      ).auth0,
+    ).toEqual({
+      domain: 'panote.us.auth0.com',
+      googleClientId: '1234-abc.apps.googleusercontent.com',
+      localDevCallbacks: false,
+    });
+    expect(
+      readSettings('dev', mapConfig({ ...DEV, 'auth0:domain': 'panote-dev.auth0.com' })).auth0,
+    ).toEqual({ domain: 'panote-dev.auth0.com', localDevCallbacks: false });
+  });
+
   it.each([
     ['an unknown stack', 'staging', DEV, /unknown stack/],
+    [
+      'a custom domain as the tenant',
+      'dev',
+      { ...DEV, 'auth0:domain': 'login.panote.dev' },
+      /tenant domain/,
+    ],
+    [
+      'the placeholder tenant',
+      'dev',
+      { ...DEV, 'auth0:domain': 'YOUR_PROD_TENANT.auth0.com' },
+      /tenant domain/,
+    ],
+    [
+      'a production tenant on dev',
+      'dev',
+      { ...DEV, 'auth0:domain': 'panote.auth0.com' },
+      /-dev tenant/,
+    ],
+    [
+      'the dev tenant on production',
+      'production',
+      { ...PRODUCTION, 'auth0:domain': 'panote-dev.au.auth0.com' },
+      /dev tenant/,
+    ],
+    [
+      "Auth0's developer keys on production",
+      'production',
+      { ...PRODUCTION, 'auth0:domain': 'panote.auth0.com' },
+      /own Google OAuth client/,
+    ],
+    [
+      'a bad Google client id',
+      'dev',
+      { ...DEV, 'auth0:domain': 'panote-dev.auth0.com', googleClientId: 'GOCSPX-x' },
+      /googleClientId/,
+    ],
+    [
+      'localhost callbacks on production',
+      'production',
+      {
+        ...PRODUCTION,
+        'auth0:domain': 'panote.auth0.com',
+        googleClientId: '1-a.apps.googleusercontent.com',
+        auth0LocalDevCallbacks: 'true',
+      },
+      /localhost/,
+    ],
     ['a missing key', 'dev', { ...DEV, bucket: undefined }, /bucket/],
     ['a bad account id', 'dev', { ...DEV, accountId: 'YOUR_ACCOUNT' }, /accountId/],
     ['a bad zone', 'dev', { ...DEV, zone: 'panote' }, /zone/],

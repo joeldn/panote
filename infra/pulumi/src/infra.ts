@@ -1,6 +1,7 @@
 import * as cloudflare from '@pulumi/cloudflare';
 import type * as pulumi from '@pulumi/pulumi';
 
+import { createAuth0, type Auth0Outputs, type Auth0Secrets } from './auth0.js';
 import { RESOURCES, RULESET_PHASES, type ResourceKey } from './names.js';
 import {
   loadCacheRules,
@@ -50,13 +51,16 @@ export interface Infra {
   uploadsQueueId: pulumi.Output<string>;
   deadLetterQueueId: pulumi.Output<string>;
   cdnHost: string;
+  /** Absent while the stack names no Auth0 tenant. */
+  auth0?: Auth0Outputs;
 }
 
 /**
- * Declares one environment's Cloudflare resources. Workers, their routes and
+ * Declares one environment's Cloudflare resources and, once the stack names
+ * its tenant, its Auth0 tenant (src/auth0.ts). Workers, their routes and
  * bindings are not here: wrangler deploys those (`deploy.yml`).
  */
-export function createInfra(settings: Settings): Infra {
+export function createInfra(settings: Settings, auth0Secrets: Auth0Secrets = {}): Infra {
   const { accountId, zone } = settings;
   const resources: Infra['resources'] = {};
   const track = <T extends pulumi.CustomResource>(key: ResourceKey, resource: T): T => {
@@ -196,6 +200,8 @@ export function createInfra(settings: Settings): Infra {
     ruleset('redirectRuleset', wwwRedirectRules(zone));
   }
 
+  const auth0 = settings.auth0 && createAuth0(zone, settings.auth0, auth0Secrets, track);
+
   return {
     resources,
     zoneId,
@@ -203,5 +209,6 @@ export function createInfra(settings: Settings): Infra {
     uploadsQueueId: uploadsQueue.queueId,
     deadLetterQueueId: deadLetterQueue.queueId,
     cdnHost,
+    ...(auth0 ? { auth0 } : {}),
   };
 }

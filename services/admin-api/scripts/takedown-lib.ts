@@ -779,7 +779,7 @@ export interface TakedownDeps {
 
 /** Printed after --disable-owner: how to ban the owner's email too (docs/deploy.md, "Email ban list"). */
 export const BAN_EMAIL_HINT = (sub: string): string =>
-  `to stop a new sign-up with the same email: in Auth0, User Management → Users, search for ${sub}, copy its email, run \`node packages/auth0-actions/scripts/ban-email.cjs <email>\` and append the printed hash to the "Block banned emails" Action's BANNED_EMAIL_SHA256 secret (docs/deploy.md, "Email ban list")`;
+  `to stop a new sign-up with the same email: in Auth0, User Management → Users, search for ${sub}, copy its email, run \`node packages/auth0-actions/scripts/ban-email.cjs <email>\`, add the printed hash to the stack's bannedEmailSha256 Pulumi secret, then \`pulumi up\` (docs/deploy.md, "Email ban list")`;
 
 /**
  * The whole CLI run (takedown.ts only parses and wires it): find the tour(s) and owner,
