@@ -16,6 +16,7 @@ const PRODUCTION = {
   ...DEV,
   zone: 'panote.io',
   bucket: 'pano-content',
+  bucketLocation: 'enam',
   uploadsQueue: 'pano-uploads',
   deadLetterQueue: 'pano-uploads-dlq',
   cacheRulesFile: 'cache-rules.production.json',
@@ -38,6 +39,10 @@ describe('readSettings', () => {
     });
   });
 
+  it('leaves dev on its existing bucket location', () => {
+    expect(stackSettings('dev').bucketLocation).toBeUndefined();
+  });
+
   it.each([
     ['an unknown stack', 'staging', DEV, /unknown stack/],
     ['a missing key', 'dev', { ...DEV, bucket: undefined }, /bucket/],
@@ -51,6 +56,13 @@ describe('readSettings', () => {
       { ...PRODUCTION, bucket: 'pano-content-dev' },
       /dev name/,
     ],
+    [
+      'production without a bucket location',
+      'production',
+      { ...PRODUCTION, bucketLocation: undefined },
+      /needs a bucketLocation/,
+    ],
+    ['an unknown location', 'dev', { ...DEV, bucketLocation: 'eu' }, /not one of/],
     ['a path as a file', 'dev', { ...DEV, corsFile: '../cors.json' }, /JSON file name/],
     [
       'cors.dev.json on production',

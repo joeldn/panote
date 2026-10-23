@@ -3150,7 +3150,9 @@ the account has the resources the config names.
    The apex itself answers with a Cloudflare error page until step 12 deploys.
    **Status: outstanding.**
 
-8. **Production Auth0 tenant.** A new tenant (not `panote-dev`), with:
+8. **Production Auth0 tenant.** A new tenant (not `panote-dev`), created in the **US** region:
+   the region can't be changed later, and US is closest to the R2 bucket (`enam`, see
+   `infra/pulumi/Pulumi.production.yaml`). With:
    - an API, identifier `https://api.panote.io` (must match `OAUTH_AUDIENCE` and
      `VITE_AUTH0_AUDIENCE`), offline access allowed;
    - a Single Page Application: callback `https://panote.io/app/callback`, logout URLs

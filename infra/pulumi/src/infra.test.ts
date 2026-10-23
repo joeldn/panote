@@ -103,6 +103,12 @@ describe.each([
     expect(inputsOf(resources, 'cdnDomain').zoneId).toBe(ZONE_IDS[zone]);
   });
 
+  it('creates the bucket with its location hint (production only)', () => {
+    expect(inputsOf(resources, 'bucket').location).toBe(
+      stack === 'production' ? 'enam' : undefined,
+    );
+  });
+
   it('keeps messages for the maximum 14 days', () => {
     for (const key of ['uploadsQueue', 'deadLetterQueue'] as const) {
       expect(inputsOf(resources, key).settings).toEqual({ messageRetentionPeriod: 1209600 });

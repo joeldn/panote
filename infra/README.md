@@ -246,6 +246,10 @@ pulumi stack output zoneId --stack production                  # CDN_ZONE_ID for
 pulumi stack export --stack production --file <somewhere safe>/panote-production-state.json
 ```
 
+The preview must show `location: "enam"` on `content-bucket`. R2 reads the hint only when the
+bucket is created and never moves it afterwards, so check it before the first `up`. Afterwards,
+`wrangler r2 bucket info pano-content` shows where the bucket ended up (the hint is best effort).
+
 The custom domain waits for the WAF rules in the code (`dependsOn`), so `cdn.panote.io` is never
 reachable without them. Then run runbook step 6's checks and the rest of the runbook (Auth0,
 secrets, placeholders, deploy).

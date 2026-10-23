@@ -12,6 +12,9 @@ export function stackSettings(stack: 'dev' | 'production'): Settings {
 /** A `ConfigSource` over a plain map, as `pulumi.Config` would read it. */
 export function mapConfig(values: Record<string, string>) {
   return {
+    get(key: string): string | undefined {
+      return values[key];
+    },
     require(key: string): string {
       const value = values[key];
       if (value === undefined) throw new Error(`Missing required configuration variable ${key}`);

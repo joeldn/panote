@@ -73,10 +73,10 @@ export function createInfra(settings: Settings): Infra {
     'bucket',
     new cloudflare.R2Bucket(
       RESOURCES.bucket.name,
-      { accountId, name: settings.bucket },
+      { accountId, name: settings.bucket, location: settings.bucketLocation },
       // Every pano lives here. A replacement would delete the bucket, so it is
-      // protected, and the location hint (fixed at creation, not set here)
-      // never forces one.
+      // protected, and the location hint (only read at creation) never forces
+      // one.
       { protect: true, ignoreChanges: ['location', 'storageClass'] },
     ),
   );
