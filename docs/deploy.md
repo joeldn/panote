@@ -2129,7 +2129,9 @@ is `413`. The caps: `public-api`'s beacons and error reports 8 KiB (`MAX_BODY_BY
 `admin-api`'s scene config `PUT` 14 MiB (`MAX_CONFIG_BODY_BYTES`), every other `admin-api`
 write 256 KiB (`MAX_WRITE_BODY_BYTES`; a tour at its caps is under 50 KiB), and `upload-api`'s
 `POST /api/upload-url` 8 KiB. A config at every schema cap is about 4.5 MiB in ASCII and 12.6 MiB
-written entirely in 3-byte characters, so every config the schema allows fits. One over the
+written entirely in 3-byte characters, so every config the schema allows fits as long as JSON
+writes its text as itself: characters JSON escapes as `\uXXXX` (control characters, lone
+surrogates) take 6 bytes each, and text made mostly of them can pass the cap (a `413`). One over the
 backup's per-object limit (`BACKUP_MAX_OBJECT_BYTES`, 8 MiB) is stored but left out of the
 backup, which reports it (see Backups).
 

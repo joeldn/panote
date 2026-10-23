@@ -292,7 +292,8 @@ app.get('/api/admin/panos/:panoId', async (c) => {
     c.header('Cache-Control', NO_STORE);
     return c.json({ error: contentIdError('panoId') }, 400);
   }
-  // Cheap polling path (the upload chip's failure detection, every 15s):
+  // Cheap polling path (the upload chip's failure detection, every 15s, and the
+  // editor's tiling watch, every 10s; both every 30s once a pano is slow):
   // skips reading config.json entirely, unlike the full GET below.
   if (c.req.query('status') === '1') {
     c.header('Cache-Control', NO_STORE);

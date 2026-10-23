@@ -118,10 +118,12 @@ jobs:
               core.notice('coverage-comment.md does not start with the expected heading; not posting it.');
               return;
             }
-            if (body.length > limit) body = `${body.slice(0, limit)}\n\n_(truncated)_\n`;
             // A zero-width joiner after every @ so the PR's text can't ping
-            // anyone or a team through the bot.
-            body = body.replace(/@(?=[A-Za-z0-9])/g, '@\u200d');
+            // anyone or a team through the bot, and every & escaped so an
+            // entity (&#64;, &#x40;, &commat;) can't spell an @ that skips it.
+            // The generator writes neither entities nor an & of its own.
+            body = body.replace(/&/g, '&amp;').replace(/@(?=[A-Za-z0-9])/g, '@\u200d');
+            if (body.length > limit) body = `${body.slice(0, limit)}\n\n_(truncated)_\n`;
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
