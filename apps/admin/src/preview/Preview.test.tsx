@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
@@ -84,6 +84,36 @@ describe('owner preview', () => {
     const picker = screen.getByRole('combobox', { name: 'Language' });
     fireEvent.change(picker, { target: { value: 'en' } });
     expect(await within(crumbs).findByText('Old town')).toBeTruthy();
+  });
+
+  it("shows the tour's and the pano's descriptions under About, in the ?lang= language", async () => {
+    server.setTour({
+      ...server.tour!.body,
+      description: 'A walk round the old town.',
+      languages: { default: 'en', others: ['de'] },
+      i18n: { de: { description: 'Ein Rundgang.' } },
+    });
+    server.setConfig('church', {
+      ...server.configs.get('church')!.body,
+      description: 'From 1702.',
+    });
+    open('/app/t/t1/preview?lang=de');
+    await shown();
+    fireEvent.click(screen.getByRole('button', { name: 'About this tour' }));
+    const about = screen.getByRole('complementary', { name: 'About this tour' });
+    expect(within(about).getByText('Ein Rundgang.')).toBeTruthy();
+    // No German text for the pano: its default shows.
+    expect(within(about).getByText('From 1702.')).toBeTruthy();
+  });
+
+  it('says so when the graphics memory runs out, rather than going black', async () => {
+    open();
+    await shown();
+    await waitFor(() => expect(lastViewer().load).toHaveBeenCalled());
+    act(() => lastViewer().emit('context-lost'));
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The viewer ran out of graphics memory.',
+    );
   });
 
   it('honours the tour settings', async () => {

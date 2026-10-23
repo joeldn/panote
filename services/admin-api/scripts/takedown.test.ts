@@ -22,6 +22,10 @@ import {
   assertOwnsTour,
   BAN_EMAIL_HINT,
   caseRecordKey,
+  cdnOriginFromEnv,
+  checkCdn,
+  describePurge,
+  sampleCdnKeys,
   copyToQuarantine,
   decodeOwner,
   describeOwner,
@@ -446,6 +450,8 @@ describe('requestTourTakedown', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', [OPERATOR_TOKEN_HEADER]: 'op-token' },
       body: JSON.stringify(body),
+      // A hung admin-api fails the run rather than holding it.
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -756,7 +762,7 @@ describe('runTakedown', () => {
       action: 'hide',
     });
     expect(t.events.filter((e) => e.startsWith('put '))).toEqual([]);
-    expect(t.lines).toContain('tour tour-1 hidden from Explore; 0 CDN purge target(s) queued');
+    expect(t.lines).toContain('tour tour-1 hidden from Explore');
   });
 
   it('never asks for a delete when a copy fails', async () => {
@@ -806,5 +812,146 @@ describe('runTakedown', () => {
     expect(t.fetchFn).not.toHaveBeenCalled();
     expect(t.lines.at(-1)).toMatch(/^DRY RUN: would disable owner, then copy everything/);
     expect(t.lines).not.toContain(BAN_EMAIL_HINT(SUB));
+  });
+});
+
+describe('CDN check', () => {
+  it("knows each bucket's CDN, takes CDN_ORIGIN, and has none for another bucket", () => {
+    expect(cdnOriginFromEnv({}, 'pano-content-dev')).toBe('https://cdn.panote.dev');
+    expect(cdnOriginFromEnv({}, 'pano-content')).toBe('https://cdn.panote.io');
+    expect(cdnOriginFromEnv({}, 'other')).toBeUndefined();
+    expect(cdnOriginFromEnv({ CDN_ORIGIN: 'https://cdn.x' }, 'other')).toBe('https://cdn.x');
+    expect(() => cdnOriginFromEnv({ CDN_ORIGIN: 'http://cdn.x/a' }, 'other')).toThrow(/https/);
+    expect(parseTakedownArgs(['--slug', 'x', '--unpublish'], ENV).cdn).toBe(
+      'https://cdn.panote.dev',
+    );
+    expect(parseTakedownArgs(['--slug', 'x'], ENV).cdn).toBeUndefined();
+  });
+
+  it('samples the bundle, and per pano the manifest and one tile, only what exists', async () => {
+    const { store } = memoryStore({
+      [pubTourKey('tour-1')]: '{}',
+      [manifestKey('p-1')]: '{}',
+      'tiles/p-1/t1-x/f/0/0.webp': 't',
+      'tiles/p-1/t1-x/f/0/1.webp': 't',
+      'tiles/p-2/t1-x/f/0/0.webp': 't',
+    });
+    expect(await sampleCdnKeys(store, ['tour-1', 'tour-2'], ['p-1', 'p-2', 'p-3'], true)).toEqual([
+      { key: pubTourKey('tour-1') },
+      { key: manifestKey('p-1'), panoId: 'p-1' },
+      { key: 'tiles/p-1/t1-x/f/0/0.webp', panoId: 'p-1' },
+      { key: 'tiles/p-2/t1-x/f/0/0.webp', panoId: 'p-2' },
+    ]);
+    expect(await sampleCdnKeys(store, ['tour-1'], ['p-1'], false)).toEqual([
+      { key: pubTourKey('tour-1') },
+    ]);
+  });
+
+  it('names the URLs still served, and skips panos whose tiles were kept', async () => {
+    const fetchFn = vi.fn(async (url: string) =>
+      url.endsWith('served.webp') ? new Response('img') : new Response('', { status: 404 }),
+    );
+    const out = await checkCdn(
+      fetchFn,
+      'https://cdn.panote.dev',
+      [
+        { key: 'pub/tours/t.json' },
+        { key: 'tiles/a/served.webp', panoId: 'a' },
+        { key: 'tiles/b/x.webp', panoId: 'b' },
+        { key: 'tiles/kept/served.webp', panoId: 'kept' },
+      ],
+      new Set(['kept']),
+    );
+    expect(out).toEqual({
+      checked: 3,
+      served: ['https://cdn.panote.dev/tiles/a/served.webp'],
+      unreachable: [],
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
+  it('describes each purge outcome', () => {
+    const base = { action: 'delete' as const, purged: 5 };
+    const of = (status: 'none' | 'purged' | 'pending' | 'failed' | 'skipped', n = {}) =>
+      describePurge({ ...base, purge: { status, purged: 3, pending: 2, failed: 0, ...n } });
+    expect(describePurge(base)).toBe('5 CDN purge target(s) planned (outcome not reported)');
+    expect(of('purged')).toBe('CDN purge done (3 URL(s))');
+    expect(of('pending')).toMatch(/2 queued \(admin-api retries them every 15 minutes\)/);
+    expect(of('failed', { failed: 1 })).toMatch(/^CDN purge FAILED for 1 URL/);
+    expect(of('skipped')).toMatch(/^CDN purge SKIPPED/);
+    expect(of('none')).toBe('nothing to purge from the CDN');
+  });
+});
+
+describe('runTakedown CDN check', () => {
+  const seed = (cdnStatus: number, purgeStatus = 'purged') => {
+    const m = memoryStore({
+      [storedSlugKey('live')!]: JSON.stringify({ v: 1, kind: 'tour', tourId: 'tour-1' }),
+      [tourOwnerKey('tour-1')]: JSON.stringify({ v: 1, sub: SUB }),
+      [tourKey(SUB, 'tour-1')]: JSON.stringify({ scenes: [{ panoId: 'p-1' }] }),
+      [pubTourKey('tour-1')]: '{}',
+      [originalKey(SUB, 'p-1')]: 'original',
+      [manifestKey('p-1')]: '{}',
+      'tiles/p-1/t1-x/f/0/0.webp': 't',
+    });
+    const calls: string[] = [];
+    const fetchFn = vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url.includes(OPERATOR_TAKEDOWN_PATH)) {
+        // What the route does: the tour, its pano and its tiles go.
+        for (const key of [...m.objects.keys()]) {
+          if (key !== storedSlugKey('live') && !key.startsWith('accounts/')) m.objects.delete(key);
+        }
+        return Response.json({
+          action: 'delete',
+          purged: 3,
+          purge: { status: purgeStatus, purged: 3, pending: 0, failed: 0 },
+        });
+      }
+      return new Response('', { status: cdnStatus });
+    });
+    const lines: string[] = [];
+    const deps = {
+      store: m.store,
+      fetch: fetchFn,
+      log: (line: string) => lines.push(line),
+      now: () => new Date('2026-10-22T09:00:00.000Z'),
+    };
+    return { calls, lines, deps };
+  };
+  const ARGV = ['--slug', 'live', '--delete', '--nothing-to-preserve'];
+
+  it('after a delete, fetches the bundle, manifest and a tile back from the CDN', async () => {
+    const t = seed(404);
+    const result = await runTakedown(parseTakedownArgs(ARGV, ENV), t.deps);
+    expect(result.cdnStillServed).toEqual([]);
+    expect(t.calls.slice(1)).toEqual([
+      `https://cdn.panote.dev/${pubTourKey('tour-1')}`,
+      `https://cdn.panote.dev/${manifestKey('p-1')}`,
+      'https://cdn.panote.dev/tiles/p-1/t1-x/f/0/0.webp',
+    ]);
+    expect(t.lines).toContain('tour tour-1 deleted; CDN purge done (3 URL(s))');
+    expect(t.lines.at(-1)).toMatch(/none of 3 URL\(s\) checked is served any more/);
+  });
+
+  it('says so, and returns them, when the CDN still serves them', async () => {
+    const t = seed(200, 'pending');
+    const result = await runTakedown(parseTakedownArgs(ARGV, ENV), t.deps);
+    expect(result.cdnStillServed).toHaveLength(3);
+    expect(t.lines.at(-1)).toMatch(/^CDN STILL SERVES 3 of 3 URL\(s\) checked/);
+  });
+
+  it('checks nothing on a dry run, or for a bucket with no known CDN', async () => {
+    const dry = seed(200);
+    await runTakedown(parseTakedownArgs([...ARGV, '--dry-run'], ENV), dry.deps);
+    expect(dry.calls).toEqual([]);
+    const other = seed(200);
+    const env = { ...ENV, R2_BUCKET: 'scratch-dev', ADMIN_API_ORIGIN: 'https://x.example' };
+    const result = await runTakedown(
+      parseTakedownArgs([...ARGV, '--allow-bucket', 'scratch-dev'], env),
+      other.deps,
+    );
+    expect(result.cdnStillServed).toEqual([]);
+    expect(other.calls).toEqual([`https://x.example${OPERATOR_TAKEDOWN_PATH}`]);
   });
 });

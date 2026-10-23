@@ -115,6 +115,7 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
     [doc, configs, lang, cdnBase],
   );
   const title = translated(doc.title, doc.i18n, lang, 'title');
+  const description = translated(doc.description, doc.i18n, lang, 'description');
   const [sharing, setSharing] = useState(false);
   // The scene whose tiles failed to load, e.g. one still processing.
   const [notReady, setNotReady] = useState<string | null>(null);
@@ -134,6 +135,7 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
     <TourViewer
       data={vt}
       title={title}
+      description={description}
       lang={lang}
       languages={tourLanguageList(doc.languages)}
       onLanguageChange={(l) => setParams({ lang: l }, { replace: true })}

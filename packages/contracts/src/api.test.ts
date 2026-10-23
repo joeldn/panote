@@ -7,6 +7,7 @@ import {
   TourOwnerRecordSchema,
   QuarantineCaseRecordSchema,
   CLIENT_ID_PATTERN,
+  OperatorTakedownOkSchema,
   OperatorTakedownRequestSchema,
   OPERATOR_RESTORE_MAX_KEY_LENGTH,
   OperatorRestoreRequestSchema,
@@ -178,6 +179,25 @@ describe('OperatorTakedownRequestSchema', () => {
     ['another action', { ...ok, action: 'disable' }],
   ])('refuses %s', (_label, body) => {
     expect(OperatorTakedownRequestSchema.safeParse(body).success).toBe(false);
+  });
+});
+
+describe('OperatorTakedownOkSchema', () => {
+  it('reads the purge outcome, and an answer from before it was reported', () => {
+    const purge = { status: 'pending', purged: 100, pending: 20, failed: 0 };
+    expect(OperatorTakedownOkSchema.parse({ action: 'delete', purged: 120, purge })).toEqual({
+      action: 'delete',
+      purged: 120,
+      purge,
+    });
+    expect(OperatorTakedownOkSchema.safeParse({ action: 'delete', purged: 1 }).success).toBe(true);
+    expect(
+      OperatorTakedownOkSchema.safeParse({
+        action: 'delete',
+        purged: 1,
+        purge: { ...purge, status: 'maybe' },
+      }).success,
+    ).toBe(false);
   });
 });
 

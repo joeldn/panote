@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
@@ -739,12 +739,53 @@ pano it removed into one prefix request (100 max each), and purges the tour's fl
 (`pub/plans/<tourId>/<planId>.<ext>`) by URL; unpublish purges `pub/tours/<tourId>.json`
 and the removed `slugs/<slug>.json` by URL. A tour save that leaves a plan image unused (replaced
 or removed, and no longer on the share link) deletes and purges it by URL too, once it is an hour
-old, and so does the daily sweep of plan images nobody saved ("Unsaved floor-plan images"). It's best-effort: a non-2xx, a network error or the 5s
-timeout is logged (`cdn purge failed …`, status and Cloudflare error codes only) and nothing is
-retried. With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs
-`cdn purge skipped` and does nothing. Free plan limits are per account: 5 prefix requests/min,
-bucket 25, so a burst of single-pano deletes past that gets `429`s and those tiles stay cached
-until their TTL. Dev and production share that one account-wide prefix-purge budget.
+old, and so does the daily sweep of plan images nobody saved ("Unsaved floor-plan images").
+A `429`, a `5xx`, a network error or the 5s timeout is retried twice in the request (after
+1s and 4s, or the `Retry-After`, capped at 10s), and a purge stops starting requests 20s after
+it began (`DEFAULT_DEADLINE_MS`), so one in `waitUntil` always has time left to queue the rest
+and record the failure. Each failure is logged (`cdn purge failed …`,
+status and Cloudflare error codes only). A batch that still fails after its retries stops the
+rest of the purge, since that is a rate limit or an outage rather than the batch: a `429` stops
+only its own kind (prefix or URL, which have separate budgets), anything else stops both. What
+failed or wasn't sent is queued, as R2 keys, in `ops/cdn-purge/pending/<ISO time>-<uuid>.json`
+(`{ v, firstAt, prefixes, files }`, at most 1,000 items a record); an operator takedown's go
+under `ops/cdn-purge/pending/0-op/`, which lists first, so they are retried first. A batch Cloudflare refuses
+outright (a `4xx` other than `401`, `403` or `429`, such as a `400`, which would fail the same way
+again) is not queued but dead-lettered to `ops/cdn-purge/dead/` (same shape, plus `reason`). A
+`401`/`403` is the token (`CF_PURGE_TOKEN` expired or revoked), not the batch: it is not retried in
+the request, stops the rest of the purge, and everything is queued, so the queue drains on its own
+once the token is replaced; meanwhile every run fails one request and the `cdn purge` check keeps
+alerting. The 15-minute cron (the
+backup's, `*/15 * * * *`) retries the queue: it reads the 20 oldest records, merges them (so a
+burst of pano deletes becomes one prefix request per 100 panos), sends at most 30 requests with no
+in-run retry, then deletes a record once everything in it went through, moves one that failed
+this run to the back of the queue (a new key, so it can't hold up the records behind it), and
+trims one in place to what wasn't tried. What Cloudflare refuses outright, and a record still
+failing after 7 days (`cdn purge given up after 7 days`), go to `ops/cdn-purge/dead/` and alert.
+The queue is capped at 1,000 records: past that, each run drops the 200 oldest owner records
+after its own (never a takedown's) in one batch delete, logs `cdn purge queue over 1000 records`
+and alerts; those edge copies stay until their TTL. A run makes at most 97 subrequests
+(`RETRY_RUN_MAX_SUBREQUESTS`). It runs first in the 15-minute invocation; the backup, the tile
+sweep and the sweep's status then share the other 803 (`FIFTEEN_MINUTE_RUN_OPS`, passed to
+`runBackupThenTileGc` as `totalOps`), so the invocation makes at most 900
+(`BACKUP_RUN_BUDGET`), under the 1,000 per-invocation limit: the cap holds because every part is
+capped. Anything else that comes to share the invocation must come out of those 900, not add to them.
+With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs `cdn purge skipped`, does
+nothing and queues nothing (the cron leaves the queue alone too).
+
+**Dead letters.** Anything under `ops/cdn-purge/dead/` was never purged: list it
+(`wrangler r2 object` or the dashboard), purge the URLs by hand (the zone → Caching →
+Configuration → Custom Purge; a key `k` is `https://cdn.<host>/k`, a prefix `cdn.<host>/k`), fix
+the cause (`reason`), and delete the record.
+
+Free plan limits (Cloudflare's purge-cache docs): prefix, tag and host purges are 5 requests a
+minute, bucket 25, **per account**, so dev and production share them; single-file (URL) purges
+are a separate, far larger budget (800 URLs a second); both take at most 100 items a request.
+So a pano delete purges its tiles by prefix, and a burst past the budget gets `429`s, which the
+queue absorbs. The operator takedown purges every tile **by URL** instead (see Takedown), so no
+one's deletes can stand between a takedown and its purge. `PANO_DELETE_LIMITER` (10 pano or tour
+deletes a minute per owner, Rate limits) is only a cost cap: one owner, or a few, can still use
+up the prefix budget, and that is what the queue and the URL purge are for.
 
 Ops steps, per environment:
 
@@ -1200,18 +1241,19 @@ any check fails:
 
 A pano whose original is gone has been deleted; its record and dir just go.
 
-**Limits.** The sweep shares the 15-minute invocation with the backup, and the two together, with
-the sweep's status record, make at most `BACKUP_RUN_BUDGET` (900) R2 operations, the figure the
-backup was already sized to keep under the per-invocation subrequest limit: the backup gets that
-total less 2, and the sweep whatever the backup run left (`runBackupThenTileGc` in
-`services/admin-api/src/tile-gc.ts`, which takes the total as `totalOps`, so another task on the
-same cron can spend part of it first and pass what is left). Once a day's backup set is
-complete a backup run costs 2 operations, so most runs give the sweep about 900. A record costs 3
+**Limits.** The sweep shares the 15-minute invocation with the queued CDN purge retry and the
+backup. The invocation makes at most `BACKUP_RUN_BUDGET` (900) R2 operations and purge requests,
+the figure the backup was already sized to keep under the per-invocation subrequest limit: the
+purge retry runs first and may spend 97 (CDN purge on delete), and the backup, the sweep and the
+sweep's status share the other 803 (`runBackupThenTileGc` in `services/admin-api/src/tile-gc.ts`,
+called with `totalOps: FIFTEEN_MINUTE_RUN_OPS`): the backup gets that less 2, and the sweep
+whatever the backup run left. Once a day's backup set is complete a backup run costs 2
+operations, so most runs give the sweep about 800. A record costs 3
 operations to check, plus one list per 1,000 objects in the dir to look for newer writes and one
 list and one delete per 1,000 to delete it: about 7 for a typical pano, 31 at most (a full
 16,384 px pyramid, 8,192 objects). A run starts a record only with 31 operations left, and also
-stops after acting on 200 records or looking at 500. That is roughly 125 typical records a run,
-about 12,000 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
+stops after acting on 200 records or looking at 500. That is roughly 110 typical records a run,
+about 10,500 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
 `tile-gc/`, moving on each quarter hour, and wraps round, so kept records listed early can't take
 every run's budget. Kept ones are checked again on a later run. CPU is not a constraint (a record
 is a few small JSON parses).
@@ -1448,13 +1490,23 @@ so data made under a sign-in before it was linked (see "Account linking", **Know
 the account. After `completedAt` the sweep's late-data pass covers the account's own sub only:
 data under a linked sub from then on can only belong to a new, separate user with that provider
 id (the Auth0 user was removed and they signed up again, or the operator unlinked it), which the
-marker doesn't block, so it isn't deleted. A retry whose
-token names more linked subs adds them to the marker. The operator's `delete-account.ts --sub`
-marks the primary sub only; to cover a linked sub there, mark that sub too.
+marker doesn't block, so it isn't deleted. A retry whose token names more linked subs adds them
+to the marker, up to `MARKER_MAX_LINKED_SUBS` (40) in all, so the marker always parses; any past
+that are left out and logged (`more linked subs than a marker holds`). If the delete had completed, that reopens it: `completedAt` comes off and the subs
+already done move to `completedLinkedSubs`, so the reopened delete (the route and the sweep)
+covers the account's own sub and the new subs only, never a sub an earlier run finished (it may
+have been unlinked since and belong to someone else). The next completion stamps `completedAt`
+again, so the 30-day marker retention runs from the reopen's completion rather than the first
+one. That is fine: the account only stays read-only (and swept) that much longer, and the Auth0
+removal due date `--list` shows runs from `requestedAt`, which a reopen keeps, so it doesn't move.
+Otherwise a retry on a completed delete deletes only the subs
+its own token names. `completedAt` is stamped only when every pending sub on the marker was among
+what that run deleted, so a linked sub added while a run was going waits for the next one. The
+operator's `delete-account.ts --sub` marks the primary sub only; to cover a linked sub there, mark that sub too.
 
 **Order, and why a retry finishes the job.**
 
-1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt?, linkedSubs? }`), is
+1. A marker, `accounts/<owner>/deletion.json` (`{ v, sub, requestedAt, completedAt?, linkedSubs?, completedLinkedSubs? }`), is
    written create-only. From then on every `admin-api` write route (`POST`/`PUT`/`PATCH`/`DELETE`
    under `/api/admin/*`, except the account route itself and the operator routes) and `upload-api`'s
    `POST /api/upload-url` answer `410 {"error":"account deleted"}` (one R2 HEAD each, failing
@@ -1645,7 +1697,8 @@ including a deleted account's, until its set ages out, at most 31 days.
 **Schedule and retention.** Its own Cron Trigger, `*/15 * * * *` (`BACKUP_CRON`, in both env
 blocks of `wrangler.jsonc` beside the daily `17 3 * * *`), so it gets an invocation, and a
 subrequest budget, of its own. The first run after 00:00 UTC starts that day's set. Each run makes
-at most `BACKUP_RUN_BUDGET` (900) R2 operations, records how far it got in `progress.json`, and
+at most `BACKUP_RUN_BUDGET` (900) R2 operations less the 97 the queued CDN purge retry may
+spend first and the tile sweep's status's 2 (so 801; the sweep gets what it leaves), records how far it got in `progress.json`, and
 the next run carries on from there; a set that runs past midnight is finished before the next
 day's starts, so sets are never left half-done by the calendar. Once a day's set is complete, a
 run costs one GET and one HEAD. A run saves its progress every 100 objects and after every
@@ -1671,7 +1724,7 @@ behind` when a set is more than a day old: that is the signal for the scaling st
 **Limits and when to move it.** A copy is a GET and a PUT (2 operations); listing is one per
 1,000 keys under a source prefix (all of `panos/` is listed, originals included, to find the
 configs); the lease is one per run, and a progress write one per 100 objects or page. So a run
-copies about 440 objects, and at 96 runs a day the backup keeps up with roughly **40,000 backed-up objects** in all. One account at today's
+copies about 400 objects, and at 96 runs a day the backup keeps up with roughly **38,000 backed-up objects** in all. One account at today's
 caps (500 panos, 200 tours, each published with a slug and up to 5 aliases, on Explore) is about
 500 configs + 400 tour records + 2,000 public keys, about 3,000 objects or 6,000 operations: 7
 runs. A typical account is a few dozen objects. Past ~40,000 objects (the "falling behind" log, or
@@ -2009,6 +2062,7 @@ errors the request goes through and `rate limiter unavailable` is logged.
 | `admin-api` | `READ_LIMITER` | every `GET`/`HEAD` under `/api/admin/*` | owner (Auth0 sub), checked after the JWT, before any R2 read | 1200/min | `1302` / `2302` |
 | `admin-api` | `INSIGHTS_LIMITER` | `GET /api/admin/tours/:id/insights`, on top of `READ_LIMITER` | owner (Auth0 sub) | 30/min | `1303` / `2303` |
 | `admin-api` | `OPERATOR_LIMITER` | the operator routes (takedown, restore), every request counted before the token check | client IP (IPv6 per /64) | 120/min | `1304` / `2304` |
+| `admin-api` | `PANO_DELETE_LIMITER` | `DELETE /api/admin/panos/:panoId` and `DELETE /api/admin/tours/:tourId` (which sweeps the panos only that tour used), on top of `WRITE_LIMITER`; a cost cap on the R2 sweeps and CDN prefix purge each one makes, not a guard of the purge budget (CDN purge on delete). A delete that 404s still counts | owner (Auth0 sub) | 10/min | `1305` / `2305` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
@@ -2021,8 +2075,9 @@ to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). 
 the same id share counters, so every binding and every env has its own. The dashboard doesn't show
 these limits: watch for `429`s in Workers Logs. To change a limit, edit `simple.limit` in both env
 blocks; `period` may only be `10` or `60`, and if it changes, change the matching constant
-(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS` in
-`services/admin-api/src/limits.ts`, which every admin-api limiter shares) too. The per-IP keys are coarse: an
+(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, and in
+`services/admin-api/src/limits.ts` `WRITE_RATE_PERIOD_SECONDS`, which every other admin-api limiter
+shares, and `PANO_DELETE_RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
 office or a carrier NAT shares one IP, which is why those limits are well above what one browser
 sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
 the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
@@ -2192,7 +2247,18 @@ Two ways to stop abuse, usually together:
 - **Take a tour down.** admin-api's operator-only route `POST /api/admin/operator/takedown`
   (`{ sub, tourId, action: "unpublish" | "delete" | "hide" | "unhide" }`, header `X-Operator-Token`) runs exactly what
   the owner's own unpublish or tour delete runs, through the tour's `TourPublisher`, with the CDN
-  purge. `unpublish` removes the share link, bundle and slug and keeps the tour and panos (their
+  purge, except that a `delete` lists every tile key it deletes and purges them **by URL** (100 a
+  request), never by prefix, so it doesn't depend on the account's prefix-purge budget. The purge
+  runs before the route answers, bounded to 100 requests (retries included; 10,000 URLs), 20
+  seconds, and the subrequests the delete's own R2 calls left of the invocation's 1,000 (it
+  counts them), and stops at the first batch that still fails; the rest is queued for the cron,
+  ahead of everything else. A takedown with more than the route's first 10,000 URLs drains the
+  rest at about 3,000 URLs per 15-minute cron run. The script gives the route 2 minutes. The
+  answer says what it did: `{ action, purged, purge: { status, purged, pending, failed } }`. The
+  top-level `purged` is a misnomer kept for older scripts: it is the number of purge targets
+  **planned**; `purge.purged` is what went through. `status` is `none`, `purged`, `pending`
+  (queued, retried every 15 minutes), `failed` (dead-lettered or not queued; see Dead letters) or
+  `skipped` (no `CF_PURGE_TOKEN`/`CDN_ZONE_ID`). `unpublish` removes the share link, bundle and slug and keeps the tour and panos (their
   tiles under `tiles/<panoId>/` and the tour's floor-plan image under `pub/plans/<tourId>/` stay
   reachable by anyone who has the URL); `delete` also deletes the tour, its floor-plan images and
   every pano no other tour of that owner uses, tiles included, purged from the CDN. Unlike the
@@ -2247,6 +2313,17 @@ tour's originals the owner had already deleted ("Trash for deleted originals"). 
 
 After a quarantine the script `HEAD`s each pano's manifest and names any whose tiles are still
 public: a pano another of the owner's tours still uses. `--all-tours` takes those down too.
+
+The script prints the route's purge outcome for each tour, then checks it: before an `unpublish`
+or a delete it notes each tour's public bundle and, for a delete, each pano's manifest and one tile
+(up to 20 panos, only keys that exist), and afterwards fetches them from the bucket's CDN
+(`https://cdn.panote.dev` for `pano-content-dev`, `https://cdn.panote.io` for `pano-content`, or
+`CDN_ORIGIN`; no check for another bucket), skipping panos whose tiles were kept. It ends with
+`CDN check: none of N URL(s) checked is served any more`, or `CDN STILL SERVES …` with the URLs and
+**exit code 2**. Then: if the purge was `pending`, rerun a check after the next 15-minute cron (a
+plain `curl -sI <url>` will do); if it persists, purge those URLs by hand (dashboard: the zone →
+Caching → Configuration → Custom Purge) and look at `admin-api`'s `cdn purge failed` logs. The
+check only sees the edge nearest you.
 
 It runs like the account-delete script: Node 24 straight from TypeScript, a built workspace, the
 same R2 S3 credentials, and the same rule that anything but a `-dev` bucket is named twice with
@@ -2634,10 +2711,12 @@ change alone leaves it as it is; CI checks for drift).
   count: only a task that throws.
 - **CDN purge.** A failed purge already logs `cdn purge failed (…)`. It now also overwrites
   `ops/cdn-purge/last-failure.json` (`{ at, detail }`, the same status and error codes as the log
-  line), from both request handlers and the cron. The `cdn purge` check fails for an hour after
-  the latest one, so a failure emails (twice-in-a-row rule: from about 5 minutes after) and
-  recovers on its own. A burst of deletes past the Free plan's 5 prefix purges a minute (`429`)
-  alerts too, since those tiles do stay cached until their TTL. A skipped purge (token or zone id
+  line), from both request handlers and the crons, after its in-request retries. The `cdn purge`
+  check fails for an hour after the latest one, so a failure emails (twice-in-a-row rule: from
+  about 5 minutes after) and recovers on its own. A burst of deletes past the Free plan's 5 prefix
+  purges a minute (`429`) alerts too; those purges are queued and retried every 15 minutes (CDN
+  purge on delete), and each retry that still fails records the marker again, so the check keeps
+  failing until the queue drains. A skipped purge (token or zone id
   not configured, production today) records nothing.
 
 ### Not covered

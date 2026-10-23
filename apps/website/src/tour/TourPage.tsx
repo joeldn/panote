@@ -80,6 +80,10 @@ export function TourPage({ embed = false }: { embed?: boolean }) {
   return (
     <div className="tour-page tour-page--loading" aria-busy="true">
       <meta name="robots" content="noindex" />
+      <div className="tour-loading" role="status">
+        <span className="tour-loading__spinner" aria-hidden="true" />
+        <span className="tour-loading__label">Loading tour…</span>
+      </div>
     </div>
   );
 }

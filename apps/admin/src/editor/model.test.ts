@@ -66,6 +66,37 @@ describe('editor model', () => {
     expect(sameValue({ a: 1, b: undefined }, { a: 1 })).toBe(true);
   });
 
+  it('sets a scene description trimmed, and removes a blank one', () => {
+    let docs = run({
+      type: 'scene/description',
+      panoId: 'a',
+      description: '  Busy.\nQuiet at night. ',
+    });
+    expect(configOf(docs, 'a').current.description).toBe('Busy.\nQuiet at night.');
+    expect(dirtyKeys(docs)).toEqual(['pano:a']);
+    docs = editorReducer(docs, { type: 'scene/description', panoId: 'a', description: ' \n ' })!;
+    expect('description' in configOf(docs, 'a').current).toBe(false);
+    expect(dirtyKeys(docs)).toEqual([]);
+  });
+
+  it('translates a scene description beside the title, and drops an emptied one', () => {
+    let docs = run(
+      { type: 'scene/title', panoId: 'a', title: 'Platz', lang: 'de' },
+      { type: 'scene/description', panoId: 'a', description: ' Belebt. ', lang: 'de' },
+    );
+    expect(configOf(docs, 'a').current.i18n).toEqual({
+      de: { title: 'Platz', description: 'Belebt.' },
+    });
+    expect(configOf(docs, 'a').current.description).toBeUndefined();
+    docs = editorReducer(docs, {
+      type: 'scene/description',
+      panoId: 'a',
+      description: '',
+      lang: 'de',
+    })!;
+    expect(configOf(docs, 'a').current.i18n).toEqual({ de: { title: 'Platz' } });
+  });
+
   it('aims, nudges and removes a connection as a link hotspot', () => {
     let docs = run({ type: 'link/set', from: 'a', to: 'b', yaw: 1, title: 'Church' });
     const link = findLink(configOf(docs, 'a').current, 'b');
