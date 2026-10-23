@@ -15,6 +15,7 @@ import {
   type PanoUploadedFor,
   type PlanImageType,
   type TourDoc,
+  type UploadUsage,
 } from '@internal/contracts';
 import {
   authenticate,
@@ -35,6 +36,8 @@ import {
 import {
   checkDailyUploads,
   checkQuota,
+  countHoldings,
+  countRecentUploads,
   quotaLimits,
   recordUpload,
   UPLOAD_LOG_PRUNE_MAX,
@@ -215,6 +218,35 @@ async function tourHasScene(r2: R2, owner: string, tourId: string, panoId: strin
   return Array.isArray(tour?.scenes) && tour.scenes.some((s) => s.panoId === panoId);
 }
 
+const r2Client = (env: Env): R2 =>
+  createR2S3Client({
+    accountId: env.R2_ACCOUNT_ID,
+    bucket: env.R2_BUCKET,
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    // A persistent 5xx must surface as a 502 in a few requests, not
+    // after aws4fetch's default 10 retries (~30s of backoff).
+    retries: 2,
+  });
+
+// GET: the account page's usage, counted as the limits count it (quota.ts), with the limits.
+// Two listings, whatever the limits are. Storage is the caller's own account's, not the
+// tours they edit for someone else.
+async function usage(r2: R2, sub: string, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const [held, uploads] = await Promise.all([
+    countHoldings(r2, sub).catch(unavailable),
+    countRecentUploads(r2, sub, Date.now()).catch(unavailable),
+  ]);
+  pruneLater(r2, uploads.expired, ctx);
+  const body: UploadUsage = {
+    panos: held.panos,
+    bytes: held.bytes,
+    uploadsToday: uploads.recent,
+    limits: quotaLimits(env),
+  };
+  return Response.json(body, { headers: { 'Cache-Control': 'no-store' } });
+}
+
 // A failed listing or write is no answer either: fail closed, as for the HEADs.
 const unavailable = (): never => {
   throw new WorkerError('storage unavailable', 502);
@@ -231,7 +263,7 @@ const pruneLater = (r2: R2, expired: readonly string[], ctx: ExecutionContext): 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
-    if (req.method !== 'POST' || url.pathname !== '/api/upload-url') {
+    if (url.pathname !== '/api/upload-url' || (req.method !== 'POST' && req.method !== 'GET')) {
       return Response.json({ error: 'not found' }, { status: 404 });
     }
     const reserved: Reserved = { held: null };
@@ -240,6 +272,7 @@ export default {
       // Per owner, before any R2 request: a runaway client can't run up S3 calls.
       const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS);
       if (limited) return limited;
+      if (req.method === 'GET') return await usage(r2Client(env), sub, env, ctx);
       // Read at most MAX_BODY_BYTES (worker-kit's body.ts). Not JSON reads as {}: the field
       // checks below answer the 400.
       const read = await readJsonBody(req, MAX_BODY_BYTES);
@@ -278,15 +311,7 @@ export default {
         return Response.json({ error: contentIdError('tourId') }, { status: 400 });
       }
 
-      const r2 = createR2S3Client({
-        accountId: env.R2_ACCOUNT_ID,
-        bucket: env.R2_BUCKET,
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-        // A persistent 5xx must surface as a 502 in a few requests, not
-        // after aws4fetch's default 10 retries (~30s of backoff).
-        retries: 2,
-      });
+      const r2 = r2Client(env);
 
       // An account marked for deletion (410) or disabled by the operator (403) gets
       // no new upload URL, as admin-api refuses its writes. Fails closed like the

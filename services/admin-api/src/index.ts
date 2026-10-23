@@ -22,6 +22,7 @@ import {
   PublishRequestSchema,
   REAUTH_REQUIRED_ERROR,
   SceneConfigSchema,
+  signInOf,
   SlugPutRequestSchema,
   tilesPrefix,
   TourDocSchema,
@@ -29,6 +30,7 @@ import {
   tourOwnerKey,
   userPanosPrefix,
   VisibilityPatchRequestSchema,
+  type AccountView,
   type CdnPurgeOutcome,
   type SceneConfig,
   type TourConfigEntry,
@@ -233,10 +235,11 @@ app.use(OPERATOR_BACKFILL_PATH, operatorLimit);
 // Auth0 user; their own secret guards them.
 app.use('/api/admin/*', async (c, next) => {
   if (READ_METHODS.has(c.req.method)) {
-    const { sub } = await authenticate(c.req.raw, c.env);
-    const limited = await rateLimit(c.env.READ_LIMITER, sub, WRITE_RATE_PERIOD_SECONDS);
+    const auth = await authenticate(c.req.raw, c.env);
+    const limited = await rateLimit(c.env.READ_LIMITER, auth.sub, WRITE_RATE_PERIOD_SECONDS);
     if (limited) return limited;
-    c.set('sub', sub);
+    c.set('sub', auth.sub);
+    c.set('auth', auth);
     return next();
   }
   if (!WRITE_METHODS.has(c.req.method)) return next();
@@ -746,6 +749,17 @@ const accountDeps = (env: Env): AccountDeps => ({
     });
     if (!res.ok) throw new Error(`stats reset failed: ${res.status}`);
   },
+});
+
+// The account page's sign-in details, straight from the verified token: nothing stored.
+app.get(ACCOUNT_PATH, async (c) => {
+  const auth = await authOf(c);
+  const signIns = [auth.sub, ...(auth.linkedSubs ?? [])].map(signInOf).filter(Boolean);
+  c.header('Cache-Control', NO_STORE);
+  return c.json({
+    email: auth.email ?? null,
+    signIns: [...new Set(signIns)],
+  } satisfies AccountView);
 });
 
 app.delete(ACCOUNT_PATH, async (c) => {

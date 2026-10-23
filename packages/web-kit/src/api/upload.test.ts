@@ -179,6 +179,26 @@ describe('createUploadApi', () => {
   });
 });
 
+describe('createUploadApi getUsage', () => {
+  it('reads the usage with a GET on the same route', async () => {
+    const usage = {
+      panos: 2,
+      bytes: 10,
+      uploadsToday: 1,
+      limits: { maxPanos: 500, maxBytes: null, maxUploadsPerDay: 50 },
+    };
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => json(usage));
+    await expect(createUploadApi({ fetch, getToken: async () => 't' }).getUsage()).resolves.toEqual(
+      usage,
+    );
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/upload-url');
+    expect(fetch.mock.calls[0]?.[1]).toEqual({
+      method: 'GET',
+      headers: { Authorization: 'Bearer t' },
+    });
+  });
+});
+
 describe('createUploadApi auth', () => {
   it('maps a 401 to AuthRequiredError', async () => {
     const fetch = vi.fn(async () => json({ error: 'unauthorized' }, 401));

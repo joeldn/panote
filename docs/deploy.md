@@ -2298,6 +2298,15 @@ log write that fails is a `502` with no URL, and a value that isn't a non-negati
 every upload (`500`), so a typo can't silently lift a limit. They are soft caps: concurrent
 requests can each pass, since each counts what is stored when it reads.
 
+**Usage read.** `GET /api/upload-url` (same route, so no new Worker route) answers the account
+page (`/app/account`) with what the caller holds and the three limits: `{panos, bytes,
+uploadsToday, limits}`, counted as above from the caller's own prefixes, never a tour they edit.
+It lists `panos/<owner>/` and `upload-log/<owner>/` whatever the limits are, spends the same
+`UPLOAD_URL_LIMITER` budget, and `uploadsToday` stays 0 while the daily limit is unset (no log is
+written then). Sign-in details come from `GET /api/admin/account`, read from the verified token.
+"Sign out everywhere" is not offered: it needs an Auth0 Management API secret the Workers don't
+hold.
+
 **Upload log.** The daily limit counts URLs, not stored originals, so uploading and then deleting,
 or asking for URLs and never using them, doesn't get round it. Before it returns a URL,
 `upload-api` writes one empty object, `upload-log/<owner>/<issued, basic ISO 8601>-<panoId>`

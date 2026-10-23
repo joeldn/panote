@@ -1,6 +1,6 @@
 import { AccountMenu } from '@internal/ui';
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 
 import { useAuthEnv } from '../auth-context.js';
 import type { Session } from '../session.js';
@@ -12,9 +12,10 @@ import {
   readDeletingSub,
 } from './delete-account-resume.js';
 
-/** The account menu every admin page shows: home link, Delete account, sign out. */
+/** The account menu every admin page shows: Account, home link, Delete account, sign out. */
 export function OwnerAccountMenu({ session }: { session: Session }) {
   const { origins } = useAuthEnv();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const resuming = params.get(DELETE_ACCOUNT_PARAM) === DELETE_ACCOUNT_RESUME;
   const [deleting, setDeleting] = useState(resuming);
@@ -41,6 +42,7 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
       <AccountMenu
         user={session.user}
         items={[
+          { label: 'Account', icon: 'fa-solid fa-user', onSelect: () => void navigate('/account') },
           { label: 'Home page', icon: 'fa-solid fa-house', href: `${origins.website}/` },
           {
             label: 'Delete account',

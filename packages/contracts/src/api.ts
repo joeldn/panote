@@ -302,6 +302,32 @@ export const TileGcRecordSchema = z.object({
 });
 export type TileGcRecord = z.infer<typeof TileGcRecordSchema>;
 
+// --- The account page ---
+
+// GET /api/admin/account: who is signed in, from the verified token. `signIns` is the
+// Auth0 connection of the user and of every identity linked into it (the part of each
+// user id before the `|`: `google-oauth2`, `email`, ...), the user's own first.
+export const AccountViewSchema = z.object({
+  email: z.string().nullable(),
+  signIns: z.array(z.string().min(1)),
+});
+export type AccountView = z.infer<typeof AccountViewSchema>;
+
+/** The Auth0 connection a user id was made by: `google-oauth2|123` is `google-oauth2`. */
+export const signInOf = (sub: string): string => sub.slice(0, Math.max(0, sub.indexOf('|')));
+
+// GET /api/upload-url: what the caller holds against the upload limits (services/upload-api
+// quota.ts). A null limit is unlimited. `uploadsToday` counts upload URLs from the past 24
+// hours, as the daily limit does.
+const limit = () => z.number().int().nonnegative().nullable();
+export const UploadUsageSchema = z.object({
+  panos: z.number().int().nonnegative(),
+  bytes: z.number().int().nonnegative(),
+  uploadsToday: z.number().int().nonnegative(),
+  limits: z.object({ maxPanos: limit(), maxBytes: limit(), maxUploadsPerDay: limit() }),
+});
+export type UploadUsage = z.infer<typeof UploadUsageSchema>;
+
 // --- Operator takedown (abuse groundwork) ---
 
 // 403 from every owner write (and upload-url) while the operator has the account disabled.

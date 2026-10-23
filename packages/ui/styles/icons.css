@@ -430,6 +430,9 @@
 .fa-triangle-exclamation {
   --fa: '\f071';
 }
+.fa-user {
+  --fa: '\f007';
+}
 .fa-user-group {
   --fa: '\f500';
 }

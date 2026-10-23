@@ -505,6 +505,13 @@ describe('tour members', () => {
     expect(call().url).toBe('https://panote.test/api/admin/shared-tours');
   });
 
+  it('reads the account', async () => {
+    const account = { email: 'maya@example.com', signIns: ['google-oauth2', 'email'] };
+    const { api, call } = setup(json(account));
+    await expect(api.getAccount()).resolves.toEqual(account);
+    expect(call().url).toBe('https://panote.test/api/admin/account');
+  });
+
   it('scopes pano calls to a tour', async () => {
     const { api, call } = setup(
       json({ status }),

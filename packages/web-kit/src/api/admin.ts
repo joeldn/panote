@@ -26,6 +26,7 @@ import {
   SlugPutOkSchema,
   SlugTakenSchema,
   SharedToursOkSchema,
+  AccountViewSchema,
   TourNotFoundSchema,
   TourOkSchema,
   ToursListOkSchema,
@@ -45,6 +46,7 @@ import {
   type PublishRequest,
   type SceneConfigSchema,
   type SharedToursOk,
+  type AccountView,
   type SlugPutOk,
   type TourDocSchema,
   type ToursListOk,
@@ -173,6 +175,8 @@ export interface AdminApi {
   acceptInvite(token: string): Promise<InviteAcceptResult>;
   /** Tours other people shared with the signed-in user. */
   listSharedTours(): Promise<SharedToursOk>;
+  /** The signed-in user's email and sign-in methods, for the account page. */
+  getAccount(): Promise<AccountView>;
 }
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
@@ -418,6 +422,7 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       return { status: 'ok', data: parseWith(InviteAcceptOkSchema, url, body) };
     },
     listSharedTours: async () => getJson('/api/admin/shared-tours', SharedToursOkSchema),
+    getAccount: async () => getJson('/api/admin/account', AccountViewSchema),
     getInsights: async (tourId, days = DEFAULT_INSIGHTS_DAYS) => {
       const { res, url, body } = await send('GET', `${tourPath(tourId)}/insights?days=${days}`);
       if (res.status === 404) {
