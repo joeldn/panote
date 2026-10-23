@@ -457,13 +457,13 @@ export function useEditor(
       if (isEmptyPlan(plan)) return;
       savingRef.current = true;
       setSaving(true);
-      // A new attempt: whatever the last publish waited on, this save's publish decides
-      // again, and a publish still out (an automatic one) can't apply its stale result.
+      // A new attempt: whatever the last publish waited on or said, this save's publish
+      // decides again, and a publish still out (an automatic one) can't apply its stale
+      // result. The old notice's Try again goes too: pressed mid-save, or after some PUTs
+      // failed, it would publish a mix of new and old documents.
       publishSeq.current++;
-      if (awaitingRef.current) {
-        setAwaiting(null);
-        dismiss('publish');
-      }
+      setAwaiting(null);
+      dismiss('publish');
       // A sync whose GET is already out could answer with the pre-save tour: drop it and rerun.
       syncSeq.current++;
       if (syncInFlight.current !== null) syncAfterSave.current = true;
@@ -570,8 +570,12 @@ export function useEditor(
     [dismiss, setAwaiting],
   );
 
-  /** The publish notice's "Try again": publishes the already-saved tour. */
+  /**
+   * The publish notice's "Try again": publishes the already-saved tour. Never mid-save or
+   * after a save that failed in part: the server would hold a mix of new and old documents.
+   */
   const republish = useCallback(async () => {
+    if (savingRef.current || Object.keys(failuresRef.current).length > 0) return;
     if (docsRef.current) await republishWith(docsRef.current);
   }, [republishWith]);
 
