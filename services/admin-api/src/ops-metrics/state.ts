@@ -43,10 +43,20 @@ const countUnder = async (
   return { n: page.objects.length, capped: page.truncated };
 };
 
-/** The newest day under backup/ whose set has its complete marker, checking at most 3. */
-const lastCompleteBackup = async (bucket: R2Bucket): Promise<string | null> => {
-  const page = await bucket.list({ prefix: BACKUP_ROOT, delimiter: '/' });
-  const dates = page.delimitedPrefixes
+/**
+ * The newest day under backup/ whose set has its complete marker, checking at most 3.
+ * Lists only this month and last (R2 lists oldest first, one page at a time), so the
+ * answer doesn't depend on how many years of sets are kept.
+ */
+const lastCompleteBackup = async (bucket: R2Bucket, now: Date): Promise<string | null> => {
+  const months = [0, 1].map((back) =>
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1)).toISOString().slice(0, 7),
+  );
+  const pages = await Promise.all(
+    months.map((m) => bucket.list({ prefix: `${BACKUP_ROOT}${m}-`, delimiter: '/' })),
+  );
+  const dates = pages
+    .flatMap((page) => page.delimitedPrefixes)
     .map((p) => p.slice(BACKUP_ROOT.length, -1))
     .filter((d) => BACKUP_DATE_PATTERN.test(d))
     .sort()
@@ -69,7 +79,7 @@ export const healthSection = async (bucket: R2Bucket, now: Date): Promise<OpsHea
     readJson(bucket, CDN_PURGE_FAILURE_KEY),
     countUnder(bucket, CDN_PURGE_PENDING_PREFIX),
     countUnder(bucket, CDN_PURGE_DEAD_PREFIX),
-    lastCompleteBackup(bucket),
+    lastCompleteBackup(bucket, now),
     readJson(bucket, BACKUP_PROGRESS_KEY),
   ]);
   // tiler-consumer owns this shape (health.ts); read it loosely.

@@ -432,8 +432,8 @@ type Tone = 'ok' | 'warn' | 'bad' | 'none';
 const TONE_ICON: Record<Tone, string> = {
   ok: 'fa-solid fa-circle-check',
   warn: 'fa-solid fa-triangle-exclamation',
-  bad: 'fa-solid fa-circle-xmark',
-  none: 'fa-regular fa-circle',
+  bad: 'fa-solid fa-circle-exclamation',
+  none: 'fa-solid fa-minus',
 };
 const TONE_TEXT: Record<Tone, string> = {
   ok: 'OK',

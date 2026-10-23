@@ -320,15 +320,20 @@ export const INCLUDED = {
 type UsageItem = OpsUsage['items'][number];
 
 /** One usage line: its own query, so a dataset that refuses only blanks its own lines. */
-const usageLines = async (
+export const usageLines = async (
   run: () => Promise<Omit<UsageItem, 'reason'>[]>,
   fallback: Omit<UsageItem, 'reason' | 'used'>[],
 ): Promise<UsageItem[]> => {
   try {
     return (await run()).map((item) => ({ ...item, reason: null }));
   } catch (err) {
-    if (!(err instanceof OpsUnavailable)) throw err;
-    return fallback.map((item) => ({ ...item, used: null, reason: err.message }));
+    // Anything else (an answer in a shape this code doesn't expect) blanks only these
+    // lines too, logged the way settle() logs a section.
+    if (!(err instanceof OpsUnavailable)) {
+      console.error('ops metrics: usage line failed', err instanceof Error ? err.name : 'unknown');
+    }
+    const reason = err instanceof OpsUnavailable ? err.message : 'internal error';
+    return fallback.map((item) => ({ ...item, used: null, reason }));
   }
 };
 

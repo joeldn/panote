@@ -16,7 +16,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import worker from '../index.js';
 import { getOpsMetrics, opsResources, parseRange } from './index.js';
-import { INCLUDED, r2ClassOf } from './platform.js';
+import { INCLUDED, r2ClassOf, usageLines } from './platform.js';
 import { buildProductQueries } from './product.js';
 import { healthSection } from './state.js';
 import { bucketOf, opsWindow } from './window.js';
@@ -258,6 +258,25 @@ describe('r2ClassOf', () => {
   });
 });
 
+describe('usageLines', () => {
+  const line = {
+    key: 'k',
+    label: 'K',
+    included: 1,
+    unit: 'count' as const,
+    scope: 'account' as const,
+  };
+
+  it('blanks only its own lines on an unexpected error, and logs it', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const out = await usageLines(async () => {
+      throw new TypeError('odd shape');
+    }, [line]);
+    expect(out).toEqual([{ ...line, used: null, reason: 'internal error' }]);
+    expect(log).toHaveBeenCalledWith('ops metrics: usage line failed', 'TypeError');
+  });
+});
+
 describe('buildProductQueries', () => {
   it('reads every tour in the window, and refuses a bad dataset name', () => {
     const q = buildProductQueries('panote_events_dev', opsWindow('24h', NOW));
@@ -446,6 +465,8 @@ describe('healthSection', () => {
       put(`${CDN_PURGE_PENDING_PREFIX}b.json`, {}),
       put(`${CDN_PURGE_DEAD_PREFIX}c.json`, {}),
       put(backupCompleteKey('2026-10-19'), {}),
+      // Older than last month: never listed, however many sets are kept.
+      put(backupCompleteKey('2026-08-30'), {}),
       put(backupCompleteKey('2026-10-21'), {}),
       put('backup/2026-10-22/tours/x.json', {}),
       put('backup/progress.json', {
@@ -481,6 +502,15 @@ describe('healthSection', () => {
       lastCompleteDaysAgo: 2,
       inProgress: { date: '2026-10-22', objects: 1234, runs: 2 },
     });
+  });
+});
+
+describe('the last complete backup', () => {
+  it('finds last month’s set early in a month', async () => {
+    await env.BUCKET.put(backupCompleteKey('2026-11-30'), '{}');
+    const h = await healthSection(env.BUCKET, new Date('2026-12-01T01:00:00Z'));
+    expect(h.backup.lastCompleteDate).toBe('2026-11-30');
+    expect(h.backup.lastCompleteDaysAgo).toBe(1);
   });
 });
 
