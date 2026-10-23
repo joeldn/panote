@@ -19,6 +19,14 @@ const routes: RouteObject[] = [
       { path: 'insights', element: <InsightsRoute /> },
     ],
   },
+  {
+    path: '/',
+    element: <Outlet />,
+    children: [
+      { index: true, element: <p>Dashboard</p> },
+      { path: 'insights/:tourId', element: <InsightsRoute over="dashboard" /> },
+    ],
+  },
 ];
 
 const dates = Array.from({ length: 14 }, (_, i) => `2026-09-${String(18 + i).padStart(2, '0')}`)
@@ -211,5 +219,17 @@ describe('insights route', () => {
     expect(router.state.location.pathname).toBe('/app/t/tour-1');
     expect(router.state.location.search).toBe('?pano=pano-2');
     expect(screen.getByText('Editor')).toBeTruthy();
+  });
+
+  it('opened from a dashboard card, closes back to the dashboard', async () => {
+    const { router } = renderInsights(
+      fakeApi(async () => ({ status: 'ok', data: INSIGHTS })),
+      statsFetch(3),
+      '/app/insights/tour-1',
+    );
+    expect(await screen.findByText('Old Town · last 14 days')).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Close' })));
+    expect(router.state.location.pathname).toBe('/app');
+    expect(screen.getByText('Dashboard')).toBeTruthy();
   });
 });

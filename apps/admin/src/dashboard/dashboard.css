@@ -267,8 +267,10 @@
 
 .dash-card__foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 6px 10px;
   margin-top: 14px;
   padding-top: 13px;
   border-top: 1px solid var(--ink-08);
@@ -284,6 +286,8 @@
   z-index: 2;
   display: flex;
   gap: 3px;
+  /* On a narrow card the five actions take their own line, still at the right. */
+  margin-left: auto;
 }
 
 .dash-card__action {
@@ -299,6 +303,15 @@
   color: var(--ink-55);
   font-size: 13px;
   cursor: pointer;
+}
+
+.dash-card__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .dash-card__action:hover {

@@ -47,6 +47,12 @@ describe('admin routes', () => {
     expect(await screen.findByRole('heading', { name: 'Nothing to preview yet' })).toBeTruthy();
   });
 
+  it('opens insights over the dashboard too', async () => {
+    renderAt('/app/insights/tour-1');
+    expect(await screen.findByRole('dialog', { name: 'Insights' })).toBeTruthy();
+    expect(screen.getByText('Your tours')).toBeTruthy();
+  });
+
   it('404s an unknown share tab and unknown paths', async () => {
     renderAt('/app/t/tour-1/share/bogus');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();

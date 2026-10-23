@@ -105,6 +105,44 @@ describe('Dashboard', () => {
     expect(totals.textContent).toContain('panos1');
   });
 
+  describe('card actions', () => {
+    it('opens a published tour live, copies its link and opens its insights', async () => {
+      const writeText = vi.fn(async () => {});
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      const { fetch } = server(lists([tour()]));
+      const { router } = renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const actions = within(card('St Lawrence Jewry'));
+
+      const live = actions.getByRole('link', { name: 'View “St Lawrence Jewry” live' });
+      expect(live.getAttribute('href')).toBe('https://panote.dev/s/st-lawrence');
+      expect(live.getAttribute('target')).toBe('_blank');
+
+      fireEvent.click(
+        actions.getByRole('button', { name: 'Copy the link to “St Lawrence Jewry”' }),
+      );
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith('https://panote.dev/s/st-lawrence'),
+      );
+      expect(await actions.findByText('Copied ✓')).toBeTruthy();
+
+      const insights = actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' });
+      expect(insights.getAttribute('href')).toBe('/app/insights/t1');
+      fireEvent.click(insights);
+      await waitFor(() => expect(router.state.location.pathname).toBe('/app/insights/t1'));
+    });
+
+    it('offers no live link for a tour that isn’t shared, but still its insights', async () => {
+      const { fetch } = server(lists([tour({ publish: null })]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const actions = within(card('St Lawrence Jewry'));
+      expect(actions.queryByRole('link', { name: /live/ })).toBeNull();
+      expect(actions.queryByRole('button', { name: /Copy the link/ })).toBeNull();
+      expect(actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' })).toBeTruthy();
+    });
+  });
+
   it('builds covers from the pano manifest and falls back when one is missing', async () => {
     const { fetch } = server(
       lists(

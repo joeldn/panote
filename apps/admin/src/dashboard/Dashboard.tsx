@@ -163,6 +163,7 @@ export function Dashboard() {
                 views={dash.views[tour.tourId]}
                 current={tour.tourId === currentTour}
                 now={now}
+                siteOrigin={config.siteOrigin}
                 onVisibility={dash.setVisibility}
                 onDuplicate={dash.duplicate}
                 onDelete={setConfirm}
