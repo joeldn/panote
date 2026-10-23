@@ -543,6 +543,35 @@ describe('tour members', () => {
     expect(call().url).toBe('https://panote.test/api/admin/account');
   });
 
+  it('reads the operator metrics, 24h by default, and 404s like any API error', async () => {
+    const off = { status: 'unavailable', reason: 'not configured' };
+    const metrics = {
+      range: '24h',
+      from: '2026-10-22T11:00:00.000Z',
+      to: '2026-10-23T10:20:00.000Z',
+      health: off,
+      workers: off,
+      storage: off,
+      queues: off,
+      durableObjects: off,
+      containers: off,
+      usage: off,
+      product: off,
+    };
+    const { api, call } = setup(
+      json(metrics),
+      json({ ...metrics, range: '7d' }),
+      json({ ...metrics, workers: { status: 'ok' } }),
+      new Response('404 Not Found', { status: 404 }),
+    );
+    await expect(api.getOpsMetrics()).resolves.toEqual(metrics);
+    expect(call(0).url).toBe('https://panote.test/api/admin/ops/metrics?range=24h');
+    await api.getOpsMetrics('7d');
+    expect(call(1).url).toBe('https://panote.test/api/admin/ops/metrics?range=7d');
+    await expect(api.getOpsMetrics()).rejects.toBeInstanceOf(ApiSchemaError);
+    await expect(api.getOpsMetrics()).rejects.toBeInstanceOf(ApiError);
+  });
+
   it('scopes pano calls to a tour', async () => {
     const { api, call } = setup(
       json({ status }),

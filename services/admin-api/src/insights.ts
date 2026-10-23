@@ -75,10 +75,10 @@ export const buildInsightsQueries = (
   };
 };
 
-type Row = Record<string, unknown>;
+export type Row = Record<string, unknown>;
 
 // FORMAT JSON returns { meta, data, rows }; 64-bit ints may come back quoted.
-const runSql = async (env: Env, sql: string): Promise<Row[]> => {
+export const runSql = async (env: Env, sql: string): Promise<Row[]> => {
   const url = `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/analytics_engine/sql`;
   const res = await fetch(url, {
     method: 'POST',
@@ -94,13 +94,13 @@ const runSql = async (env: Env, sql: string): Promise<Row[]> => {
   return body.data as Row[];
 };
 
-const num = (v: unknown): number => {
+export const num = (v: unknown): number => {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : Number.NaN;
   if (!Number.isFinite(n)) throw new AnalyticsUnavailable(`SQL API: non-numeric ${String(v)}`);
   return n;
 };
 
-const str = (v: unknown): string => {
+export const str = (v: unknown): string => {
   if (typeof v !== 'string') throw new AnalyticsUnavailable('SQL API: non-string column');
   return v;
 };

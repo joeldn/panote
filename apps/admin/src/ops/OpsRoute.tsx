@@ -48,8 +48,3 @@ export function OpsRoute() {
     </section>
   );
 }
-
-/** The overview until the metrics dashboard lands in it. */
-export function OpsOverview() {
-  return <p className="ops__empty">Nothing to show here yet.</p>;
-}

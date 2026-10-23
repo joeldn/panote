@@ -35,6 +35,10 @@ import {
   SlugTakenSchema,
   SharedToursOkSchema,
   AccountViewSchema,
+  DEFAULT_OPS_RANGE,
+  OpsMetricsSchema,
+  type OpsMetrics,
+  type OpsRange,
   TourNotFoundSchema,
   TourOkSchema,
   ToursListOkSchema,
@@ -205,6 +209,8 @@ export interface AdminApi {
    * throws ReauthRequiredError when the last one is too old.
    */
   supportAction(sub: string, action: SupportAction, body?: unknown): Promise<SupportUserView>;
+  /** The operator dashboard (operators only: anyone else gets an ApiError 404). */
+  getOpsMetrics(range?: OpsRange): Promise<OpsMetrics>;
   /**
    * Offers the tour to one of its editors, owner only. Needs a recent sign-in: throws
    * ReauthRequiredError when the last one is too old, as deleteAccount does.
@@ -482,6 +488,8 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       if (!res.res.ok) throw new ApiError(res.res.status, res.body);
       return parseWith(SupportUserViewSchema, res.url, res.body);
     },
+    getOpsMetrics: async (range = DEFAULT_OPS_RANGE) =>
+      getJson(`/api/admin/ops/metrics?range=${range}`, OpsMetricsSchema),
     offerTransfer: async (tourId, memberId) => {
       const { res, url, body } = await send('POST', `${tourPath(tourId)}/transfer`, {
         body: { memberId },
