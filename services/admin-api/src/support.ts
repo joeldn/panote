@@ -52,7 +52,7 @@ import { restoreFromTrash } from './trash.js';
 // need a recent sign-in as well, so a session left open somewhere can't change accounts.
 // Every write logs an audit line with the action and the tour or pano, never the sub.
 
-type SupportEnv = {
+export type SupportEnv = {
   Bindings: Env;
   Variables: { sub: string | undefined; auth?: AuthContext };
 };
@@ -250,14 +250,14 @@ export const userView = async (env: Env, sub: string, now: Date): Promise<Suppor
 };
 
 /** The operator's sign-in must be recent for a write (REQUIRE_RECENT_AUTH, as account delete). */
-const staleSignIn = (c: C): boolean =>
+export const staleSignIn = (c: C): boolean =>
   requiresRecentAuth(c.env) && !isRecentAuth(c.get('auth')?.authTime, Date.now());
 
 /**
  * Who acted, for the audit lines: the first 12 hex of the operator's own sub hash (as
  * OPERATOR_SUB_SHA256 lists it), so a line is attributable without naming anyone.
  */
-const by = async (c: C): Promise<string> =>
+export const by = async (c: C): Promise<string> =>
   `by ${(await subHash(c.get('sub') ?? '')).slice(0, 12)}`;
 
 /** Answers a write with the account as it is now. */

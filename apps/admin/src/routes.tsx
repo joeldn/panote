@@ -10,6 +10,7 @@ import {
   NotFound,
   Ops,
   OpsOverview,
+  OpsExplore,
   OpsUsers,
   PeopleModal,
   Preview,
@@ -45,6 +46,7 @@ export const routes: RouteObject[] = [
             element: <Ops />,
             children: [
               { index: true, element: <OpsOverview /> },
+              { path: 'explore', element: <OpsExplore /> },
               { path: 'users', element: <OpsUsers /> },
             ],
           },

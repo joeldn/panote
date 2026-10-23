@@ -154,10 +154,11 @@ export function Help() {
       </p>
       <p>
         The <em>Privacy</em> tab has two choices. <strong>Public</strong> tours are listed on{' '}
-        <Link to="/explore">Explore</Link> and can appear in search. <strong>Unlisted</strong> tours
-        open only for people who have the link. <em>Stop sharing</em> takes the link and every embed
-        offline until you share the tour again. The <em>Embed</em> tab gives you code for your own
-        site; see <Link to="/help/embedding">embedding a tour</Link>.
+        <Link to="/explore">Explore</Link> once reviewed and can appear in search.{' '}
+        <strong>Unlisted</strong> tours open only for people who have the link.{' '}
+        <em>Stop sharing</em> takes the link and every embed offline until you share the tour again.
+        The <em>Embed</em> tab gives you code for your own site; see{' '}
+        <Link to="/help/embedding">embedding a tour</Link>.
       </p>
 
       <h2>Your dashboard and insights</h2>

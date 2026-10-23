@@ -1,6 +1,7 @@
 import {
   EXPLORE_PATH,
   EXPLORE_ROOT,
+  exploreApprovedKey,
   exploreEntryKey,
   exploreHiddenKey,
   ExplorePageSchema,
@@ -34,10 +35,14 @@ type Seed = {
   slug?: string;
   bundleMetadata?: boolean;
   bundle?: boolean;
+  approved?: boolean;
   entry?: Partial<ExploreEntry> & Record<string, unknown>;
 };
 
-/** One listed tour: its index entry (listed `day` days after T0) and its public bundle. */
+/**
+ * One listed tour: its index entry (listed `day` days after T0), the operator's approval
+ * and its public bundle.
+ */
 const seed = async (tourId: string, s: Seed) => {
   const slug = s.slug ?? `${tourId}-slug`;
   const visibility = s.visibility ?? 'public';
@@ -55,6 +60,12 @@ const seed = async (tourId: string, s: Seed) => {
     ...s.entry,
   };
   await env.BUCKET.put(exploreEntryKey(listedAt, tourId), JSON.stringify(entry));
+  if (s.approved !== false) {
+    await env.BUCKET.put(
+      exploreApprovedKey(tourId),
+      JSON.stringify({ v: 1, approvedAt: entry.listedAt, fingerprint: 'f' }),
+    );
+  }
   if (s.bundle === false) return;
   await env.BUCKET.put(pubTourKey(tourId), JSON.stringify({ v: 1, tourId, slug, visibility }), {
     ...(s.bundleMetadata === false ? {} : { customMetadata: { visibility, slug } }),
@@ -89,6 +100,12 @@ describe('listExplore', () => {
     await seed('ok', { day: 4 });
     const page = await listExplore(env.BUCKET, undefined);
     expect(page.tours.map((t) => t.tourId)).toEqual(['ok']);
+  });
+
+  it('drops an entry the operator has not approved, or whose approval was withdrawn', async () => {
+    await seed('waiting', { day: 1, approved: false });
+    await seed('ok', { day: 2 });
+    expect((await listExplore(env.BUCKET, undefined)).tours.map((t) => t.tourId)).toEqual(['ok']);
   });
 
   it('drops an entry with no ready scene, one that does not parse, or one filed under another tour', async () => {

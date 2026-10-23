@@ -96,6 +96,8 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     supportLookup: fail,
     supportUser: fail,
     supportAction: fail,
+    exploreQueue: fail,
+    exploreDecide: fail,
     getOpsMetrics: fail,
     offerTransfer: fail,
     cancelTransfer: fail,

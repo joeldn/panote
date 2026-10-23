@@ -1,5 +1,9 @@
 import {
   AccountDeleteOkSchema,
+  EXPLORE_QUEUE_PATH,
+  ExploreQueueSchema,
+  type ExploreDecision,
+  type ExploreQueue,
   SUPPORT_USERS_PATH,
   SupportLookupOkSchema,
   SupportUserViewSchema,
@@ -209,6 +213,18 @@ export interface AdminApi {
    * throws ReauthRequiredError when the last one is too old.
    */
   supportAction(sub: string, action: SupportAction, body?: unknown): Promise<SupportUserView>;
+  /** Operator only: the tours waiting for approval to be listed on Explore, oldest first. */
+  exploreQueue(): Promise<ExploreQueue>;
+  /**
+   * Operator only: approves or rejects one waiting tour as it was seen (`fingerprint`),
+   * answered with the queue as it is now. An ApiError 409 when the tour changed since;
+   * ReauthRequiredError when the last sign-in is too old.
+   */
+  exploreDecide(
+    tourId: string,
+    action: ExploreDecision,
+    fingerprint: string,
+  ): Promise<ExploreQueue>;
   /** The operator dashboard (operators only: anyone else gets an ApiError 404). */
   getOpsMetrics(range?: OpsRange): Promise<OpsMetrics>;
   /**
@@ -487,6 +503,16 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       }
       if (!res.res.ok) throw new ApiError(res.res.status, res.body);
       return parseWith(SupportUserViewSchema, res.url, res.body);
+    },
+    exploreQueue: async () => getJson(EXPLORE_QUEUE_PATH, ExploreQueueSchema),
+    exploreDecide: async (tourId, action, fingerprint) => {
+      const path = `${EXPLORE_QUEUE_PATH}/${assertId(tourId, 'tourId')}`;
+      const res = await send('POST', path, { body: { action, fingerprint } });
+      if (res.res.status === 403 && ReauthRequiredSchema.safeParse(res.body).success) {
+        throw new ReauthRequiredError(res.body);
+      }
+      if (!res.res.ok) throw new ApiError(res.res.status, res.body);
+      return parseWith(ExploreQueueSchema, res.url, res.body);
     },
     getOpsMetrics: async (range = DEFAULT_OPS_RANGE) =>
       getJson(`/api/admin/ops/metrics?range=${range}`, OpsMetricsSchema),

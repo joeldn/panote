@@ -65,3 +65,53 @@ export const ExplorePageSchema = z.object({
   cursor: z.string().regex(EXPLORE_CURSOR_PATTERN).nullable(),
 });
 export type ExplorePage = z.infer<typeof ExplorePageSchema>;
+
+// The operator's approval queue (admin app /app/ops/explore): a Public tour is listed
+// only once the operator approves it, and again after any change to what it shows.
+
+// explore/approved/<tourId>.json: the bundle the operator approved, by fingerprint.
+export const ExploreApprovalSchema = z.object({
+  v: z.literal(1),
+  approvedAt: z.string(),
+  fingerprint: z.string(),
+});
+export type ExploreApproval = z.infer<typeof ExploreApprovalSchema>;
+
+// explore/pending/<tourId>.json: a tour waiting for approval, as the queue shows it.
+export const ExplorePendingSchema = z.object({
+  v: z.literal(1),
+  tourId: publicId(),
+  slug: z.string(),
+  title: z.string(),
+  sceneCount: z.number().int().nonnegative(),
+  cover: ExploreCoverSchema.nullable(),
+  // Of the bundle waiting; an approval must name it, so a tour changed since it was
+  // looked at isn't approved unseen.
+  fingerprint: z.string(),
+  // 'changed': it was approved before, and has changed since.
+  reason: z.enum(['new', 'changed']),
+  // When it first joined the queue; kept while it waits.
+  queuedAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ExplorePending = z.infer<typeof ExplorePendingSchema>;
+
+/** admin-api's queue route, behind the operator gate: GET lists it, POST /:tourId decides. */
+export const EXPLORE_QUEUE_PATH = '/api/admin/ops/explore';
+
+/** GET {EXPLORE_QUEUE_PATH}: every tour waiting, oldest first. */
+export const ExploreQueueSchema = z.object({ tours: z.array(ExplorePendingSchema) });
+export type ExploreQueue = z.infer<typeof ExploreQueueSchema>;
+
+/**
+ * POST {EXPLORE_QUEUE_PATH}/:tourId. `approve` lists the tour; `reject` hides it from
+ * Explore (the Users page's hide), and it stays live by link. Answers the queue as it is now.
+ */
+export const EXPLORE_DECISIONS = ['approve', 'reject'] as const;
+export type ExploreDecision = (typeof EXPLORE_DECISIONS)[number];
+export const ExploreDecisionRequestSchema = z.object({
+  action: z.enum(EXPLORE_DECISIONS),
+  fingerprint: z.string().min(1).max(128),
+});
+/** 409 when the tour changed (or left the queue) since the operator looked. */
+export const EXPLORE_STALE_ERROR = 'tour changed since you looked';

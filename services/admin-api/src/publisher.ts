@@ -10,7 +10,13 @@ import { DurableObject } from 'cloudflare:workers';
 
 import { parseHoldDays } from './account-age.js';
 import { deleteTour } from './delete-tour.js';
-import { setExploreHidden, syncExplore } from './explore.js';
+import {
+  approveForExplore,
+  rejectForExplore,
+  setExploreHidden,
+  syncExplore,
+  type DecisionOutcome,
+} from './explore.js';
 import { isTransferring } from './members.js';
 import type { CdnPurge } from './purge.js';
 import {
@@ -153,6 +159,22 @@ export class TourPublisher extends DurableObject<Env> {
       await runTransfer(this.env.BUCKET, tourId, rec);
       return true;
     });
+  }
+
+  // The operator's approval for Explore of the bundle they saw (explore.ts), in this queue
+  // so a publish can't change the tour between the check and the listing.
+  async approveExplore(tourId: string, fingerprint: string): Promise<DecisionOutcome> {
+    return this.serial(async () => {
+      const bucket = this.env.BUCKET;
+      const got = await getJson<PublishedTour>(bucket, pubTourKey(tourId));
+      return approveForExplore(bucket, got?.value ?? null, fingerprint, new Date());
+    });
+  }
+
+  // The operator's rejection from the approval queue: the hide below, with no owner to
+  // name (the queue is owner-free). The tour stays live by link.
+  async rejectExplore(tourId: string, fingerprint: string): Promise<DecisionOutcome> {
+    return this.serial(() => rejectForExplore(this.env.BUCKET, tourId, fingerprint, new Date()));
   }
 
   // The operator's hide from (or unhide on) Explore; the tour stays live by link.

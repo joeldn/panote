@@ -125,3 +125,28 @@
   font: 500 15px var(--fbody);
   color: var(--ink);
 }
+
+/* Explore queue (ExploreQueueRoute.tsx): one row per tour waiting, its cover first. */
+.queue__row {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+
+.queue__row .support__row-main {
+  flex: 1;
+}
+
+.queue__cover {
+  flex: none;
+  width: 120px;
+  aspect-ratio: 1200 / 630;
+  border-radius: 6px;
+  background: var(--ink-13);
+  object-fit: cover;
+}
+
+@media (max-width: 560px) {
+  .queue__row {
+    flex-wrap: wrap;
+  }
+}

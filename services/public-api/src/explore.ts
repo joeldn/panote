@@ -3,6 +3,7 @@ import {
   EXPLORE_PAGE_SIZE,
   exploreCursorKey,
   exploreCursorOf,
+  exploreApprovedKey,
   ExploreEntrySchema,
   exploreHiddenKey,
   exploreRank,
@@ -13,8 +14,9 @@ import {
 
 // GET /api/explore: one page of the Explore index (admin-api's explore.ts writes
 // it). The index is a hint, not the truth: each entry is checked against the
-// tour's public bundle and the operator's hidden marker before it is shown, so
-// an entry that outlived its tour (a failed removal, a race) is never listed.
+// tour's public bundle, the operator's hidden marker and the operator's approval
+// before it is shown, so an entry that outlived its tour or its approval (a failed
+// removal, a race, a change since it was approved) is never listed.
 // An entry filed at a future listedAt (a new account's tour, held until then) is
 // skipped by the listing itself: the index is newest first, so every page starts
 // at the current time and never reads one.
@@ -55,12 +57,13 @@ const checkEntry = async (
 ): Promise<ExploreTour | null> => {
   const tourId = tourIdOf(key);
   if (tourId === null) return null;
-  const [obj, bundle, hidden] = await Promise.all([
+  const [obj, bundle, hidden, approved] = await Promise.all([
     bucket.get(key),
     readBundle(bucket, tourId),
     bucket.head(exploreHiddenKey(tourId)),
+    bucket.head(exploreApprovedKey(tourId)),
   ]);
-  if (!obj || !bundle || bundle.visibility !== 'public' || hidden) return null;
+  if (!obj || !bundle || bundle.visibility !== 'public' || hidden || !approved) return null;
   const parsed = ExploreEntrySchema.safeParse(await obj.json().catch(() => null));
   if (!parsed.success || parsed.data.tourId !== tourId || parsed.data.sceneCount < 1) return null;
   if (!(Date.parse(parsed.data.listedAt) <= nowMs)) return null;

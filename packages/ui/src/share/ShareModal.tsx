@@ -81,7 +81,7 @@ export interface ShareModalProps {
 const VISIBILITY_OPTIONS: ReadonlyArray<{ value: Visibility; desc: string }> = [
   {
     value: 'public',
-    desc: 'Listed on Explore and can appear in search, once your account is a week old.',
+    desc: 'Listed on Explore once reviewed, and can appear in search once your account is a week old.',
   },
   { value: 'unlisted', desc: 'Only people with the link.' },
 ];

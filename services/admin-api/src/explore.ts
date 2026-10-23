@@ -1,15 +1,22 @@
 import {
+  ExploreApprovalSchema,
+  exploreApprovedKey,
   EXPLORE_INDEX_ROOT,
+  EXPLORE_PENDING_ROOT,
   EXPLORE_RANK_MAX,
   ExploreCoverSchema,
   exploreCursorOf,
   exploreEntryKey,
   exploreHiddenKey,
+  explorePendingKey,
+  ExplorePendingSchema,
   ExplorePointerSchema,
   exploreTourKey,
   manifestKey,
+  type ExploreApproval,
   type ExploreCover,
   type ExploreEntry,
+  type ExplorePending,
   type ExplorePointer,
   type PublishedTour,
 } from '@internal/contracts';
@@ -21,6 +28,11 @@ import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 // TourPublisher, after the bundle it describes. public-api reads it, and
 // re-checks each entry against pub/ and the hidden marker, so a write that
 // fails here can at worst leave a tour off the list, never on it.
+//
+// A tour is listed only with the operator's approval (explore/approved/), which names
+// the fingerprint of the bundle approved. A listable tour without a matching one waits
+// in the queue (explore/pending/) instead, so any change to what a listed tour shows
+// takes it off the list until the operator has looked again.
 
 type StoredPointer = { pointer: ExplorePointer | null };
 
@@ -82,14 +94,104 @@ const deleteEntriesByScan = async (bucket: R2Bucket, tourId: string): Promise<vo
 export const removeFromExplore = async (
   bucket: R2Bucket,
   tourId: string,
-  { keepPlace = false }: { keepPlace?: boolean } = {},
+  {
+    keepPlace = false,
+    keepApproval = keepPlace,
+  }: { keepPlace?: boolean; keepApproval?: boolean } = {},
 ): Promise<void> => {
+  // Out of the queue either way. A tour leaving for good (delete, takedown) loses its
+  // approval too; one only paused (Unlisted, Stop sharing, a scene not ready) keeps it, so
+  // the same content listed again needs no second look.
+  await bucket.delete(
+    keepApproval
+      ? explorePendingKey(tourId)
+      : [explorePendingKey(tourId), exploreApprovedKey(tourId)],
+  );
+  await removeEntry(bucket, tourId, keepPlace);
+};
+
+// The entry and (unless keepPlace) its pointer; removeFromExplore's second half.
+const removeEntry = async (bucket: R2Bucket, tourId: string, keepPlace: boolean) => {
   const stored = await readPointer(bucket, tourId);
   if (!stored) return;
   if (stored.pointer) await bucket.delete(stored.pointer.key);
   else await deleteEntriesByScan(bucket, tourId);
   if (keepPlace && stored.pointer) return;
   await bucket.delete(exploreTourKey(tourId));
+};
+
+/** JSON with object keys sorted at every level, so equal content always reads the same. */
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+
+/**
+ * What the operator approves: SHA-256 (hex) of everything a visitor sees in the bundle.
+ * Left out: Public or Unlisted (only decides whether it is listed), the first publish
+ * time, and the new-account hold, none of which change the content.
+ */
+export const bundleFingerprint = async (bundle: PublishedTour): Promise<string> => {
+  const { visibility: _v, publishedAt: _p, heldUntil: _h, ...content } = bundle;
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(canonicalJson(content)),
+  );
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
+const readApproval = async (bucket: R2Bucket, tourId: string): Promise<ExploreApproval | null> => {
+  const got = await getJson<unknown>(bucket, exploreApprovedKey(tourId));
+  const parsed = got ? ExploreApprovalSchema.safeParse(got.value) : null;
+  return parsed?.success ? parsed.data : null;
+};
+
+/**
+ * Deletes the tour's approval unless it names this bundle. Publish runs it before writing
+ * the bundle, and lets an error fail the publish: public-api lists any tour with an
+ * approval, so one for other content must be gone before the new content goes live.
+ */
+export const revokeStaleApproval = async (
+  bucket: R2Bucket,
+  bundle: PublishedTour,
+): Promise<boolean> => {
+  const key = exploreApprovedKey(bundle.tourId);
+  const got = await getJson<unknown>(bucket, key);
+  if (!got) return false;
+  const parsed = ExploreApprovalSchema.safeParse(got.value);
+  if (parsed.success && parsed.data.fingerprint === (await bundleFingerprint(bundle))) return false;
+  await bucket.delete(key);
+  return true;
+};
+
+// Puts the tour in the operator's queue, or refreshes its place there; queuedAt is kept.
+const queueForApproval = async (
+  bucket: R2Bucket,
+  bundle: PublishedTour,
+  cover: ExploreCover | null,
+  fingerprint: string,
+  reason: ExplorePending['reason'],
+  now: Date,
+): Promise<void> => {
+  const key = explorePendingKey(bundle.tourId);
+  const got = await getJson<unknown>(bucket, key).catch(() => null);
+  const prior = got ? ExplorePendingSchema.safeParse(got.value) : null;
+  const pending: ExplorePending = {
+    v: 1,
+    tourId: bundle.tourId,
+    slug: bundle.slug,
+    title: bundle.title,
+    sceneCount: bundle.scenes.length,
+    cover,
+    fingerprint,
+    // A tour already waiting as changed stays changed: it was approved once.
+    reason: prior?.success && prior.data.reason === 'changed' ? 'changed' : reason,
+    queuedAt: prior?.success ? prior.data.queuedAt : now.toISOString(),
+    updatedAt: now.toISOString(),
+  };
+  await putJson(bucket, key, pending);
 };
 
 /**
@@ -101,17 +203,47 @@ export const removeFromExplore = async (
  * entries filed at or before the current time, so the tour shows up, as new, once
  * the hold ends, with no Save needed.
  */
-export const syncExplore = async (bucket: R2Bucket, bundle: PublishedTour, now: Date) => {
+export const syncExplore = async (
+  bucket: R2Bucket,
+  bundle: PublishedTour,
+  now: Date,
+  // The caller has just revoked an approval for other content (revokeStaleApproval).
+  { revoked = false }: { revoked?: boolean } = {},
+) => {
   const { tourId } = bundle;
   const listable =
     bundle.visibility === 'public' &&
     bundle.scenes.length > 0 &&
     !(await bucket.head(exploreHiddenKey(tourId)));
-  const ready = listable ? await readCover(bucket, bundle.startPanoId) : null;
-  if (!ready) {
+  if (!listable) {
     await removeFromExplore(bucket, tourId, { keepPlace: true });
     return;
   }
+  const ready = await readCover(bucket, bundle.startPanoId);
+  if (!ready) {
+    // Only paused until its start scene is ready: it keeps its approval, or its place in
+    // the queue.
+    await removeEntry(bucket, tourId, true);
+    return;
+  }
+  const fingerprint = await bundleFingerprint(bundle);
+  const approval = await readApproval(bucket, tourId);
+  if (approval?.fingerprint !== fingerprint) {
+    // The approval goes first: public-api lists nothing without one, so the tour is off
+    // the list even if removing its entry fails below.
+    if (approval) await bucket.delete(exploreApprovedKey(tourId));
+    await removeEntry(bucket, tourId, true);
+    await queueForApproval(
+      bucket,
+      bundle,
+      ready.cover,
+      fingerprint,
+      approval || revoked ? 'changed' : 'new',
+      now,
+    );
+    return;
+  }
+  await bucket.delete(explorePendingKey(tourId));
   const stored = await readPointer(bucket, tourId);
   // An unreadable pointer can't name its entry: drop whatever is filed under the tour first.
   if (stored && !stored.pointer) await deleteEntriesByScan(bucket, tourId);
@@ -148,9 +280,10 @@ export const syncExploreQuietly = async (
   bucket: R2Bucket,
   bundle: PublishedTour,
   now: Date,
+  opts: { revoked?: boolean } = {},
 ): Promise<void> => {
   try {
-    await syncExplore(bucket, bundle, now);
+    await syncExplore(bucket, bundle, now, opts);
   } catch (e) {
     // The name only: R2 error messages can carry keys.
     console.error('[explore] index update failed:', e instanceof Error ? e.name : 'unknown');
@@ -176,4 +309,70 @@ export const setExploreHidden = async (
   }
   await bucket.delete(exploreHiddenKey(tourId));
   if (bundle) await syncExplore(bucket, bundle, now);
+};
+
+/** The operator's queue: every tour waiting for approval, oldest first. */
+export const listApprovalQueue = async (bucket: R2Bucket): Promise<ExplorePending[]> => {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix: EXPLORE_PENDING_ROOT, ...(cursor ? { cursor } : {}) });
+    keys.push(...page.objects.map((o) => o.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  const read = await Promise.all(
+    keys.map(async (key) => {
+      const got = await getJson<unknown>(bucket, key).catch(() => null);
+      const parsed = got ? ExplorePendingSchema.safeParse(got.value) : null;
+      return parsed?.success ? parsed.data : null;
+    }),
+  );
+  return read
+    .filter((p): p is ExplorePending => p !== null)
+    .sort((a, b) => (a.queuedAt < b.queuedAt ? -1 : a.queuedAt > b.queuedAt ? 1 : 0));
+};
+
+export type DecisionOutcome = 'done' | 'stale';
+
+/** Whether the tour waits in the queue as the operator saw it (`fingerprint`). */
+const waitsAs = async (bucket: R2Bucket, tourId: string, fingerprint: string) => {
+  const got = await getJson<unknown>(bucket, explorePendingKey(tourId));
+  const parsed = got ? ExplorePendingSchema.safeParse(got.value) : null;
+  return parsed?.success === true && parsed.data.fingerprint === fingerprint;
+};
+
+/**
+ * The operator's approval of the version they looked at (`fingerprint`): recorded, then
+ * the tour listed from it. Stale when the tour no longer waits as that version (changed,
+ * hidden, unpublished) or its live bundle differs. Runs in the tour's TourPublisher, so
+ * no publish or hide lands between the checks and the write.
+ */
+export const approveForExplore = async (
+  bucket: R2Bucket,
+  bundle: PublishedTour | null,
+  fingerprint: string,
+  now: Date,
+): Promise<DecisionOutcome> => {
+  if (!bundle || !(await waitsAs(bucket, bundle.tourId, fingerprint))) return 'stale';
+  if ((await bundleFingerprint(bundle)) !== fingerprint) return 'stale';
+  const approval: ExploreApproval = { v: 1, approvedAt: now.toISOString(), fingerprint };
+  await putJson(bucket, exploreApprovedKey(bundle.tourId), approval);
+  await syncExplore(bucket, bundle, now);
+  return 'done';
+};
+
+/**
+ * The operator's rejection of the version they looked at: the hide (setExploreHidden).
+ * Stale, and nothing hidden, when the tour no longer waits as that version. In the
+ * TourPublisher, like approve.
+ */
+export const rejectForExplore = async (
+  bucket: R2Bucket,
+  tourId: string,
+  fingerprint: string,
+  now: Date,
+): Promise<DecisionOutcome> => {
+  if (!(await waitsAs(bucket, tourId, fingerprint))) return 'stale';
+  await setExploreHidden(bucket, tourId, true, now, null);
+  return 'done';
 };
