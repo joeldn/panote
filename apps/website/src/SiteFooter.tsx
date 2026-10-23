@@ -1,6 +1,7 @@
 import { Logo } from '@internal/ui';
 import { Link } from 'react-router';
 
+import { HELP_PAGES } from './help/pages.js';
 import { CONTACT_EMAIL, NAV_SECTIONS } from './landing/content.js';
 
 export function SiteFooter() {
@@ -19,6 +20,14 @@ export function SiteFooter() {
           {NAV_SECTIONS.map((s) => (
             <Link key={s.id} to={`/#${s.id}`}>
               {s.label}
+            </Link>
+          ))}
+        </nav>
+        <nav aria-label="Resources">
+          <div className="site-footer__label">Resources</div>
+          {HELP_PAGES.map((p) => (
+            <Link key={p.path} to={p.path}>
+              {p.label}
             </Link>
           ))}
         </nav>
