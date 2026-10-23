@@ -47,3 +47,32 @@ export const recordSupersededVersions = async (
   }
   return recorded;
 };
+
+/**
+ * Records `version`, the dir a failed job was writing, for the same sweep. The
+ * sweep keeps it while the pano's original still tiles into it, so a retry is
+ * never cut short, and deletes it after the grace period once the original has
+ * changed or gone. A later successful swap would record it too; this covers a
+ * pano that never tiles again. Same record shape, overwritten on every attempt.
+ */
+export const recordFailedVersion = async (
+  store: Pick<SupersededStore, 'put'>,
+  params: {
+    panoId: string;
+    version: string;
+    originalKey: string;
+    tilerVersion: number;
+    now: Date;
+  },
+): Promise<void> => {
+  const { panoId, version, originalKey, tilerVersion, now } = params;
+  const record: TileGcRecord = {
+    v: 1,
+    originalKey,
+    tilerVersion,
+    supersededAt: now.toISOString(),
+  };
+  await store.put(tileGcKey(panoId, version), JSON.stringify(record), {
+    contentType: 'application/json',
+  });
+};

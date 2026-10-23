@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
+import { deflateSync } from 'node:zlib';
 import { build } from './build.js';
+import { SourceRejectedError } from './errors.js';
 
 // Real sharp, real files: the kinds of image cameras and phones save, built in-test.
 // build.test.ts covers the orchestration with sharp mocked.
@@ -116,4 +118,55 @@ describe('build with real sources', { timeout: 30_000 }, () => {
     const pole = await pixel(join(dir, 'preview.webp'), 512, 505);
     for (const c of pole) expect(c).toBeGreaterThan(240);
   });
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="grey"/></svg>`;
+  it.each([
+    ['a TIFF', 'tiff', (src: string) => flat(W, H, [120, 120, 120]).tiff().toFile(src)],
+    ['a GIF', 'gif', (src: string) => flat(W, H, [120, 120, 120]).gif().toFile(src)],
+    ['an SVG', 'svg', (src: string) => writeFile(src, svg)],
+  ])('refuses %s, whatever the file is called', async (_name, kind, write) => {
+    // Saved under a .jpg name: build() goes by the bytes, not the name.
+    const src = join(work, `${kind}.jpg`);
+    await write(src);
+    const err = await tile(src, `rejected-${kind}`).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SourceRejectedError);
+    expect((err as Error).message).toMatch(/is not one of jpeg, png, webp/);
+  });
+
+  it('refuses a PNG whose header claims more pixels than the cap, without decoding it', async () => {
+    // A valid signature and IHDR for 20,000 x 10,000 (200 MP), then one tiny
+    // IDAT: a few hundred bytes that would decode to 600 MB.
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length);
+      const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(body));
+      return Buffer.concat([len, body, crc]);
+    };
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(20_000, 0);
+    ihdr.writeUInt32BE(10_000, 4);
+    ihdr.set([8, 2, 0, 0, 0], 8);
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', ihdr),
+      chunk('IDAT', deflateSync(Buffer.alloc(1))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+    const src = join(work, 'huge-header.png');
+    await writeFile(src, png);
+    const err = await tile(src, 'huge-header').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SourceRejectedError);
+  });
 });
+
+/** CRC-32 as PNG chunks use it. */
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (const byte of buf) {
+    c ^= byte;
+    for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xedb88320 : c >>> 1;
+  }
+  return ~c >>> 0;
+}

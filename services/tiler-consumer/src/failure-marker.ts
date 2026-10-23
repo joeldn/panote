@@ -7,7 +7,7 @@ import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { putJson } from '@internal/worker-kit/r2-binding';
 import { errorText, panoIdForLog } from './upload-prefix.js';
 
-export type FailureReason = 'dlq' | 'oversize' | 'unprocessable-key';
+export type FailureReason = 'dlq' | 'oversize' | 'unprocessable-key' | 'unsupported';
 export type MarkerOutcome = 'written' | 'skipped' | 'failed';
 
 // R2 event etags may arrive quoted (S3-style) or bare; R2Object.etag is
@@ -45,9 +45,11 @@ export const writeFailureMarker = async (
   try {
     head = await bucket.head(originalNotificationKey);
   } catch (e) {
-    // An R2 error here must not read as "original is gone" - skip, don't write.
+    // An R2 error here must not read as "original is gone": don't write, and
+    // report 'failed', not 'skipped', so a caller that acks only once the
+    // marker is settled (the 422 path) retries instead of dropping the failure.
     console.warn(`skip tile-failed marker pano=${pano}: HEAD failed (${errorText(e)})`);
-    return 'skipped';
+    return 'failed';
   }
   if (!head) {
     console.warn(`skip tile-failed marker pano=${pano}: original no longer exists`);

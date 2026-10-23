@@ -10,7 +10,8 @@ import {
   tilesPerEdge,
 } from '@panote/core';
 import { renderFace, type RgbImage } from './remap.js';
-import { fillBands, planEquirect } from './equirect.js';
+import { fillBands, MAX_ASPECT_RATIO, planEquirect } from './equirect.js';
+import { SourceRejectedError } from './errors.js';
 import { equirectSampler, OG_FILE, ogImage } from './og.js';
 import {
   assertPyramidBounds,
@@ -19,6 +20,26 @@ import {
   MAX_INPUT_PIXELS,
 } from './pyramid.js';
 import { TILER_OUTPUT_VERSION } from './version.js';
+
+/**
+ * The formats build() tiles, as sharp's metadata() names them. The upload's
+ * content-type is pinned, but nothing checks the bytes before here, and sharp
+ * would otherwise decode whatever libvips can open (SVG, TIFF, HEIF, PDF...)
+ * inside a container that holds bucket-wide R2 credentials.
+ */
+export const SOURCE_FORMATS: readonly string[] = ['jpeg', 'png', 'webp'];
+
+/**
+ * Input options for every sharp() that opens the source. limitInputPixels makes
+ * libvips itself refuse a header over the cap, so the cap holds even if the
+ * check after metadata() below were ever moved. failOn 'warning' is sharp's
+ * default and its strictest level (it implies 'error' and 'truncated'), spelled
+ * out so a corrupt or truncated source fails instead of tiling half-decoded.
+ */
+const SOURCE_INPUT: sharp.SharpOptions = {
+  limitInputPixels: MAX_INPUT_PIXELS,
+  failOn: 'warning',
+};
 
 /**
  * Sets the libvips worker-thread count for every sharp op in this process and
@@ -84,8 +105,21 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
   if (opts.version !== undefined && !PANO_PATTERN.test(opts.version))
     throw new Error(`version must match ${PANO_PATTERN} (got ${opts.version})`);
 
-  const meta = await sharp(opts.src).metadata();
-  if (!meta.width || !meta.height) throw new Error('source has no dimensions');
+  let meta: sharp.Metadata;
+  try {
+    meta = await sharp(opts.src, SOURCE_INPUT).metadata();
+  } catch (e) {
+    // Only the header is read here, from a local file: a failure means these
+    // bytes aren't an image sharp can open (or are over limitInputPixels).
+    throw new SourceRejectedError(
+      `source could not be read as an image: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  if (!SOURCE_FORMATS.includes(meta.format))
+    throw new SourceRejectedError(
+      `source format ${String(meta.format)} is not one of ${SOURCE_FORMATS.join(', ')}`,
+    );
+  if (!meta.width || !meta.height) throw new SourceRejectedError('source has no dimensions');
   // Enforced before the raw RGB decode below, not after: MAX_FACE_SIZE (via
   // computeFaceSize/assertPyramidBounds) only bounds the pyramid's *output*
   // face size, not this decode. sharp(opts.src).removeAlpha().raw() decodes
@@ -94,8 +128,14 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
   // See MAX_INPUT_PIXELS's doc comment in pyramid.ts for why this is a real
   // check rather than relying on the deployed backend's byte-based cap.
   if (meta.width * meta.height > MAX_INPUT_PIXELS)
-    throw new Error(
+    throw new SourceRejectedError(
       `source is ${meta.width}x${meta.height} (${meta.width * meta.height} px), which exceeds the ${MAX_INPUT_PIXELS}px decode cap`,
+    );
+  // See MAX_ASPECT_RATIO in equirect.ts: nothing a camera saves is this far
+  // from square, and planEquirect already bounds the work either way.
+  if (meta.width > MAX_ASPECT_RATIO * meta.height || meta.height > MAX_ASPECT_RATIO * meta.width)
+    throw new SourceRejectedError(
+      `source is ${meta.width}x${meta.height}, more than ${MAX_ASPECT_RATIO}:1 on its long side`,
     );
 
   // Partial panoramas (wider than 2:1) are padded to 2:1 so they aren't
@@ -115,7 +155,7 @@ export async function build(opts: BuildOptions): Promise<Manifest> {
   // Load the equirect as raw 8-bit sRGB once. toColourspace('srgb') makes the
   // conversion explicit for greyscale, CMYK and 16-bit sources (removeAlpha()
   // only strips an alpha band), so remap.ts's fixed 3-channel stride holds.
-  let decode = sharp(opts.src).toColourspace('srgb').removeAlpha();
+  let decode = sharp(opts.src, SOURCE_INPUT).toColourspace('srgb').removeAlpha();
   if (plan.scaled) decode = decode.resize(plan.width, plan.contentHeight, { fit: 'fill' });
   if (plan.height !== plan.contentHeight)
     decode = decode.extend({

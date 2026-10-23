@@ -206,13 +206,13 @@ describe('writeFailureMarker', () => {
   });
 
   describe('R2 errors around the HEAD calls must not escape (should-fix)', () => {
-    it('a rejecting pre-write HEAD skips the write and logs, without throwing', async () => {
+    it('a rejecting pre-write HEAD writes nothing, logs, and reports failed (so a caller can retry)', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const key = 'panos/ae-_vTXvv70/p-head-rejects/original';
       await env.BUCKET.put(key, 'original bytes');
       const headSpy = vi.spyOn(env.BUCKET, 'head').mockRejectedValue(new Error('head boom'));
 
-      await expect(writeFailureMarker(env.BUCKET, key, 'dlq', 'whatever')).resolves.toBe('skipped');
+      await expect(writeFailureMarker(env.BUCKET, key, 'dlq', 'whatever')).resolves.toBe('failed');
 
       expect(await env.BUCKET.get(tileFailedKeyFromOriginalKey(key))).toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('HEAD failed'));

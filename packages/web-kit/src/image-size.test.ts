@@ -1,6 +1,12 @@
+import { MAX_ASPECT_RATIO } from '@panote/core';
 import { describe, expect, it } from 'vitest';
 
-import { MAX_UPLOAD_PIXELS, readImageSize, validateUploadImage } from './image-size.js';
+import {
+  ASPECT_MESSAGE,
+  MAX_UPLOAD_PIXELS,
+  readImageSize,
+  validateUploadImage,
+} from './image-size.js';
 
 const bytes = (...parts: Array<number[] | string>): Uint8Array<ArrayBuffer> =>
   new Uint8Array(
@@ -98,6 +104,21 @@ describe('validateUploadImage', () => {
     const over = await validateUploadImage(blob(png(20000, 10000), 'image/png'));
     expect(over).toMatchObject({ code: 'pixels' });
     expect(over?.message).toContain(`${MAX_UPLOAD_PIXELS / 1e6}`);
+  });
+
+  it('rejects a source more than 16:1 either way, as the tiler would', async () => {
+    expect(await validateUploadImage(blob(png(16_000, 1000), 'image/png'))).toBeNull();
+    expect(await validateUploadImage(blob(png(1000, 16_000), 'image/png'))).toBeNull();
+    for (const [w, h] of [
+      [16_001, 1000],
+      [1000, 16_001],
+    ] as const) {
+      expect(await validateUploadImage(blob(png(w, h), 'image/png'))).toEqual({
+        code: 'aspect',
+        message: ASPECT_MESSAGE,
+      });
+    }
+    expect(ASPECT_MESSAGE).toContain(`${MAX_ASPECT_RATIO} times`);
   });
 
   it('runs the type and byte checks first, and passes an unreadable header', async () => {

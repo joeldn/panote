@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { build, setVipsConcurrency, TILER_OUTPUT_VERSION } from '@internal/tiler';
+import { SourceRejectedError } from '@internal/tiler/errors';
 import { createR2S3Client } from '@internal/worker-kit/r2-s3';
 import {
   manifestKey,
@@ -13,7 +14,7 @@ import {
 } from '@internal/contracts';
 import { deriveUploadTarget, errorText } from './upload-prefix.js';
 import { uploadDir, type PutFn } from './r2io.js';
-import { recordSupersededVersions } from './superseded.js';
+import { recordFailedVersion, recordSupersededVersions } from './superseded.js';
 
 // The Tiler DO (src/consumer.ts) forwards these through `Container.envVars`
 // (src/container-env.ts) because wrangler's `[[containers]]` block only
@@ -131,6 +132,13 @@ createServer((req, res) => {
       if (!PANO_PATTERN.test(version))
         throw new Error(`derived tile version must match ${PANO_PATTERN} (got ${version})`);
       const work = await mkdtemp(join(tmpdir(), 'pano-'));
+      // Set once the first tile PUT may have landed: from then on a failure can
+      // leave a partial version dir behind. Cleared once the manifest PUT has
+      // succeeded: a failure after that leaves the manifest naming this dir, and
+      // the swap's own path handles it (the retry, or the orphan cleanup). A failed
+      // manifest PUT still records it; the sweep never deletes a dir the manifest
+      // names or the current original tiles into.
+      let partialDir = false;
       try {
         // Written outside build()'s output tree, under a name a valid
         // panoId can never take ("." is outside PANO_PATTERN's charset).
@@ -156,6 +164,7 @@ createServer((req, res) => {
         const tileCount = tileKeysOf().length;
         logPhase(panoId, `build done in ${secsSince(buildT0)}; upload start, ${tileCount} file(s)`);
         const uploadT0 = performance.now();
+        partialDir = true;
         await uploadDir(files, tilePrefix, put);
         logPhase(panoId, `upload done: ${tileCount} file(s) in ${secsSince(uploadT0)}`);
 
@@ -182,6 +191,7 @@ createServer((req, res) => {
             await put(manifestKey(panoId), files['manifest.json'], 'application/json');
             logPhase(panoId, `manifest written in ${secsSince(manifestT0)}`);
           }
+          partialDir = false;
           // A DELETE can land between the pre-swap HEAD and the manifest PUT;
           // this catches it - a retry won't, since r2.get(key) 404s first.
           const postHead = await r2.head(key);
@@ -229,12 +239,33 @@ createServer((req, res) => {
         }
         logPhase(panoId, `job done in ${secsSince(jobT0)}`);
         res.writeHead(200).end('ok');
+      } catch (e) {
+        // A failed job can leave part of a version dir. Recorded for admin-api's
+        // sweep, which keeps it while the original still tiles into it (a retry
+        // may be writing there) and deletes it once the original has changed or
+        // gone. Best-effort: the job has failed either way.
+        if (partialDir) {
+          await recordFailedVersion(r2, {
+            panoId,
+            version,
+            originalKey: key,
+            tilerVersion: TILER_OUTPUT_VERSION,
+            now: new Date(),
+          }).catch((recordError: unknown) => {
+            console.warn(
+              `failed to record partial version pano=${panoId}: ${errorText(recordError)}`,
+            );
+          });
+        }
+        throw e;
       } finally {
         await rm(work, { recursive: true, force: true });
       }
     } catch (e) {
-      // The consumer logs this body, so it goes through errorText too.
-      res.writeHead(500).end(errorText(e));
+      // The consumer logs this body, so it goes through errorText too. 422 tells
+      // it the source itself was refused (wrong format, over a cap), so the same
+      // bytes would fail again: it acks and marks the pano failed, no retry.
+      res.writeHead(e instanceof SourceRejectedError ? 422 : 500).end(errorText(e));
     }
   });
 }).listen(8080);

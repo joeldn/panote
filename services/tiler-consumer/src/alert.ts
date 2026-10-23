@@ -99,7 +99,7 @@ const send = async (
       ...earlier,
       '',
       'Marker: written = tile-failed marker stored; skipped = original gone, superseded or',
-      'unparseable (see the Worker logs); failed = the marker write errored.',
+      'unparseable (see the Worker logs); failed = R2 errored checking or writing it.',
     ].join('\n');
     const count = held.held > 0 ? `${items.length} + ${held.held} earlier` : `${items.length}`;
     const result = await env.ALERT_EMAIL.send({

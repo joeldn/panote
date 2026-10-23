@@ -77,6 +77,14 @@ export const ALLOWED_TILE_SIZES = [512, 1024] as const;
 export const MAX_FACE_SIZE = 16384;
 export const MAX_LEVEL_CAP = 5;
 
+// The most a source image's long side may be over its short side. A 16:1 strip
+// is a full 360 sweep with a 22.5 degree vertical field of view, narrower than
+// any phone or camera panorama mode; a vertical sweep is rarely past 1:4. The
+// tiler refuses anything past it (packages/tiler/src/build.ts) and the admin
+// refuses it before upload (@internal/web-kit validateUploadImage), both from
+// this one value.
+export const MAX_ASPECT_RATIO = 16;
+
 // Mirrors the write-time check the tiler enforces on opts.pano (see
 // packages/tiler/src/build.ts, commit 6b8c363). Every legitimate pano is a
 // developer-typed slug or a generated id and already satisfies this, so

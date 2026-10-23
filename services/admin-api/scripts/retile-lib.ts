@@ -116,7 +116,10 @@ export async function currentEtag(
  * The message an R2 object-create notification would have put on the queue
  * for this original, so tiler-consumer handles it exactly like a fresh upload:
  * the same size guard, the same key checks, and the same ETag the failure
- * marker and the manifest swap are checked against.
+ * marker and the manifest swap are checked against. Plus `force: true`, which R2
+ * never sends: tiler-consumer skips an original whose manifest already names its
+ * version, and a re-tile must run anyway (to repair missing tiles, or to rewrite
+ * an old version dir after a tiler rollback).
  */
 export function notificationFor(
   target: RetileTarget,
@@ -130,6 +133,7 @@ export function notificationFor(
     action: 'PutObject',
     object: { key: target.key, size: target.size, eTag: etag },
     eventTime: now.toISOString(),
+    force: true,
   };
 }
 

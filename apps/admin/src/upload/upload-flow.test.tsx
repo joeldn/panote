@@ -145,7 +145,7 @@ describe('fresh upload from /app/new', () => {
     expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
   });
 
-  it('rejects a wrong type, an oversized file and too many pixels before any request', async () => {
+  it('rejects a wrong type, an oversized file, too many pixels and a thin strip before any request', async () => {
     const { backend } = setup();
     await tick();
     await pick(new File(['GIF89a'], 'a.gif', { type: 'image/gif' }));
@@ -158,6 +158,12 @@ describe('fresh upload from /app/new', () => {
 
     await pick(pngFile('huge.png', 20_000, 10_000));
     expect(screen.getByRole('alert').textContent).toContain('200 megapixels');
+
+    // Past 16:1 the tiler refuses it, so the admin does too, instead of promising padding.
+    await pick(pngFile('strip.png', 40_000, 2000));
+    expect(screen.getByRole('alert').textContent).toBe(
+      'This photo is too long and thin to show as a panorama: one side is more than 16 times the other.',
+    );
 
     expect(backend.state.calls).toEqual([]);
     expect(FakeXhr.all).toEqual([]);

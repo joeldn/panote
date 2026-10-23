@@ -110,6 +110,20 @@ describe('computeTilingStatus', () => {
     ).toBe('ready');
   });
 
+  it('is failed for an unsupported marker (a source the tiler refused) on the current original', () => {
+    const status = (originalEtag: string) =>
+      computeTilingStatus({
+        hasManifest: false,
+        manifestVersion: undefined,
+        originalEtag,
+        tileFailedOriginalEtag: 'etag-a',
+        tileFailedReason: 'unsupported',
+      });
+    expect(status('etag-a')).toBe('failed');
+    // A newer upload since the refusal: that one is still pending.
+    expect(status('etag-b')).toBe('pending');
+  });
+
   it('is failed when an oversize marker is all that is left (tiler-consumer deleted the original)', () => {
     expect(
       computeTilingStatus({

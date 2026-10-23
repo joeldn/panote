@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fillBands, planEquirect } from './equirect.js';
-import { MAX_INPUT_PIXELS } from './pyramid.js';
+import { computeFaceSize, MAX_INPUT_PIXELS } from './pyramid.js';
 
 describe('planEquirect', () => {
   it('leaves a 2:1 source as it is', () => {
@@ -66,6 +66,28 @@ describe('planEquirect', () => {
   it('keeps the cap with a small one too', () => {
     const plan = planEquirect(1000, 100, 20_000);
     expect(plan).toEqual({ width: 200, height: 100, top: 40, contentHeight: 20, scaled: true });
+  });
+
+  it('never plans more work than a real 150 MP 2:1 panorama', () => {
+    // The largest 2:1 source under the cap: 17,320 x 8,660.
+    const real = planEquirect(17_320, 8660);
+    expect(real.width * real.height).toBeLessThanOrEqual(MAX_INPUT_PIXELS);
+    const realFace = computeFaceSize(real.width, 512);
+    expect(realFace).toBe(8192);
+    // Every source build() accepts: under the pixel cap and within 16:1.
+    for (const [w, h] of [
+      [65_536, 2288],
+      [48_000, 3000],
+      [30_000, 5000],
+      [17_493, 8574],
+      [12_247, 12_247],
+      [3000, 48_000],
+    ] as const) {
+      expect(w * h).toBeLessThanOrEqual(MAX_INPUT_PIXELS);
+      const plan = planEquirect(w, h);
+      expect(plan.width * plan.height).toBeLessThanOrEqual(MAX_INPUT_PIXELS);
+      expect(computeFaceSize(plan.width, 512)).toBeLessThanOrEqual(realFace);
+    }
   });
 
   it('keeps at least one content row for an extreme strip', () => {
