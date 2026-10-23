@@ -3,6 +3,7 @@ import {
   ApiError,
   putFile,
   UPLOAD_CONTENT_TYPES,
+  UploadUrlUsedError,
   type UploadApi,
   type XhrLike,
 } from '@internal/web-kit';
@@ -118,14 +119,21 @@ export async function uploadPlanImage(
   file: File,
 ): Promise<TourPlan> {
   const prepared = await deps.prepare(file);
-  const { planId, url } = await deps.upload.presignPlan({
+  const { planId, url, headers } = await deps.upload.presignPlan({
     tourId,
     contentType: prepared.type,
     size: prepared.blob.size,
   });
-  await putFile(url, prepared.blob, {
-    contentType: prepared.type,
-    ...(deps.createXhr && { createXhr: deps.createXhr }),
-  });
+  try {
+    await putFile(url, prepared.blob, {
+      contentType: prepared.type,
+      headers,
+      ...(deps.createXhr && { createXhr: deps.createXhr }),
+    });
+  } catch (e) {
+    // The key is fresh and the URL create-only, so a 412 means a PUT of ours with
+    // this URL already landed (its answer got lost and it was sent again).
+    if (!(e instanceof UploadUrlUsedError)) throw e;
+  }
   return { id: planId, type: prepared.type, width: prepared.width, height: prepared.height };
 }

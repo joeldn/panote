@@ -21,6 +21,7 @@ export function createUploadDeps(opts: UploadDepsOptions): UploadDeps {
     put: (url, file, o) => {
       const putOpts: Parameters<typeof putFile>[2] = {
         contentType: o.contentType,
+        headers: o.headers,
         onProgress: o.onProgress,
         signal: o.signal,
       };

@@ -25,6 +25,13 @@ import worker, {
 const isMarker = (url: string): boolean =>
   url.endsWith('/deletion.json') || url.endsWith('/disabled.json');
 
+// The ETag every existing object HEADs with, unless a test says otherwise. A replace
+// signs it into the upload URL as If-Match.
+const ETAG = '"etag-1"';
+// A HEAD answer: a 200 carries an ETag, as R2's always does.
+const head = (status: number, etag = ETAG): Response =>
+  new Response(null, { status, headers: status === 200 ? { etag } : {} });
+
 // Maps a HEAD's target key suffix to a canned status, so a single mock can
 // drive both the original and tombstone HEADs independently per test.
 const mockHeads = (statuses: { original: number; tombstone: number }): Mock =>
@@ -32,7 +39,7 @@ const mockHeads = (statuses: { original: number; tombstone: number }): Mock =>
     const reqUrl = typeof input === 'string' ? input : input.url;
     if (isMarker(reqUrl)) return new Response(null, { status: 404 });
     const status = reqUrl.endsWith('/deleting') ? statuses.tombstone : statuses.original;
-    return new Response(null, { status });
+    return head(status);
   });
 
 const validBody = { contentType: 'image/jpeg', size: 1024 };
@@ -109,21 +116,23 @@ describe('upload-url', () => {
     expect(j.url).toContain('X-Amz-Signature=');
   });
 
-  it('presigns with a 10-minute expiry', async () => {
-    expect(UPLOAD_URL_EXPIRY_SECONDS).toBe(600);
+  it('presigns with a 2-minute expiry', async () => {
+    expect(UPLOAD_URL_EXPIRY_SECONDS).toBe(120);
     const r = await post(validBody);
     expect(r.status).toBe(200);
     const j = (await r.json()) as { url: string };
-    expect(new URL(j.url).searchParams.get('X-Amz-Expires')).toBe('600');
+    expect(new URL(j.url).searchParams.get('X-Amz-Expires')).toBe('120');
   });
 
-  it('pins the content-type and the declared size into the signed URL', async () => {
+  it('pins the content-type, the declared size and create-only into the signed URL', async () => {
     const r = await post({ contentType: 'image/webp', size: 1024 });
     expect(r.status).toBe(200);
-    const { url } = (await r.json()) as { url: string };
+    const { url, headers } = (await r.json()) as { url: string; headers: unknown };
     expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
-      'content-length;content-type;host',
+      'content-length;content-type;host;if-none-match',
     );
+    // The PUT must send exactly these: a second PUT to the URL gets 412 from R2.
+    expect(headers).toEqual({ 'content-type': 'image/webp', 'if-none-match': '*' });
   });
 
   it('signs a different URL for a different declared size', async () => {
@@ -139,9 +148,7 @@ describe('upload-url', () => {
         vi.fn(async (input: Request | string) => {
           if (isList(input)) return emptyListing();
           const reqUrl = typeof input === 'string' ? input : input.url;
-          return new Response(null, {
-            status: isMarker(reqUrl) || reqUrl.endsWith('/deleting') ? 404 : 200,
-          });
+          return head(isMarker(reqUrl) || reqUrl.endsWith('/deleting') ? 404 : 200);
         }),
       );
       expect(await sign(1024)).not.toBe(await sign(1025));
@@ -280,7 +287,7 @@ describe('upload-url', () => {
         if (reqUrl.includes('/deleting') || isMarker(reqUrl)) {
           return new Response(null, { status: 404 });
         }
-        return new Response(null, { status: 200 });
+        return head(200);
       });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -296,6 +303,57 @@ describe('upload-url', () => {
       );
       expect(headUrls.some((u) => u.includes(originalKey('auth0|me', 'existing-pano')))).toBe(true);
       expect(headUrls.some((u) => u.includes(deletingKey('auth0|me', 'existing-pano')))).toBe(true);
+    });
+
+    // These use `call` (below), off the real per-minute limiter this file's `post`s share.
+    it('pins the original’s current ETag as If-Match, so the URL overwrites it only once', async () => {
+      vi.stubGlobal('fetch', mockHeads({ original: 200, tombstone: 404 }));
+      const r = await call({ contentType: 'image/png', size: 1024, panoId: 'existing-pano' }, {});
+      expect(r.status).toBe(200);
+      const { url, headers } = (await r.json()) as { url: string; headers: unknown };
+      expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
+        'content-length;content-type;host;if-match',
+      );
+      expect(headers).toEqual({ 'content-type': 'image/png', 'if-match': ETAG });
+    });
+
+    it('signs a different URL for a different current ETag', async () => {
+      vi.useFakeTimers({ now: new Date('2026-10-22T12:00:00Z'), toFake: ['Date'] });
+      try {
+        const sign = async (etag: string) => {
+          vi.stubGlobal(
+            'fetch',
+            vi.fn(async (input: Request | string) => {
+              if (isList(input)) return emptyListing();
+              const reqUrl = typeof input === 'string' ? input : input.url;
+              return head(isMarker(reqUrl) || reqUrl.endsWith('/deleting') ? 404 : 200, etag);
+            }),
+          );
+          const r = await call({ ...validBody, panoId: 'same-pano' }, {});
+          const { url } = (await r.json()) as { url: string };
+          return new URL(url).searchParams.get('X-Amz-Signature');
+        };
+        expect(await sign('"etag-1"')).not.toBe(await sign('"etag-2"'));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('fails closed with 502, and no URL, when the original HEADs with no ETag', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: Request | string) => {
+          if (isList(input)) return emptyListing();
+          const reqUrl = typeof input === 'string' ? input : input.url;
+          if (reqUrl.endsWith('/original')) return new Response(null, { status: 200 });
+          // The upload log write would succeed: only the missing ETag refuses.
+          if (methodOf(input) === 'PUT') return new Response(null, { status: 200 });
+          return new Response(null, { status: 404 });
+        }),
+      );
+      const r = await call({ ...validBody, panoId: 'no-etag' }, {});
+      expect(r.status).toBe(502);
+      expect(await r.json()).not.toHaveProperty('url');
     });
 
     it.each([500, 502, 403])(
@@ -456,9 +514,7 @@ describe('upload-url owner quotas', () => {
         );
       }
       const path = reqUrl.pathname;
-      return new Response(null, {
-        status: isMarker(path) || path.endsWith('/deleting') ? 404 : 200,
-      });
+      return head(isMarker(path) || path.endsWith('/deleting') ? 404 : 200);
     });
   const pano = (id: string, size: number) => [
     { key: `${prefix}${id}/original`, size },
@@ -772,13 +828,22 @@ describe('upload-url for a floor-plan image (kind: plan)', () => {
     vi.stubGlobal('fetch', fetchMock);
     const r = await post(planBody);
     expect(r.status).toBe(200);
-    const j = (await r.json()) as { planId: string; key: string; url: string };
+    const j = (await r.json()) as {
+      planId: string;
+      key: string;
+      url: string;
+      headers: unknown;
+    };
     expect(j.key).toBe(`pub/plans/tour-1/${j.planId}.webp`);
     expect(j.key).not.toContain(encodeId('auth0|me'));
     const url = new URL(j.url);
     expect(decodeURIComponent(url.pathname)).toMatch(new RegExp(`/${j.key}$`));
-    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host');
-    expect(url.searchParams.get('X-Amz-Expires')).toBe('600');
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'content-length;content-type;host;if-none-match',
+    );
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('120');
+    // A fresh key: create-only, so the URL can be PUT to once.
+    expect(j.headers).toEqual({ 'content-type': 'image/webp', 'if-none-match': '*' });
     // Checked the caller owns the tour.
     const heads = fetchMock.mock.calls
       .map(([req]) => req as Request)

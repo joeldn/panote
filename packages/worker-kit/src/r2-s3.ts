@@ -25,6 +25,9 @@ export interface R2S3Client {
       /**
        * Pinned into SignedHeaders: the PUT's header value must match this
        * byte-for-byte (e.g. lowercase `image/png`, no `; charset=...`) or R2 403s.
+       * A condition signed here (`if-none-match: *`, or `if-match` with an ETag as
+       * `head` returns it) can't be dropped by the uploader, so it makes the URL
+       * single-use: once one PUT lands, R2 answers any other with 412.
        */
       headers?: Record<string, string> | undefined;
       /**

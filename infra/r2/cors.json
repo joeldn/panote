@@ -12,7 +12,7 @@
       "allowed": {
         "origins": ["https://panote.dev", "https://panote.io"],
         "methods": ["PUT"],
-        "headers": ["content-type"]
+        "headers": ["content-type", "if-match", "if-none-match"]
       },
       "maxAgeSeconds": 3600
     }

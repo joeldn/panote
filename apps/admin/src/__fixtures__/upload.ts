@@ -105,9 +105,14 @@ export function fakeBackend() {
       if (state.presignStatus !== 200) {
         return json({ error: state.presignError }, state.presignStatus);
       }
-      const req = body as { panoId?: string };
+      const req = body as { panoId?: string; contentType: string };
       const panoId = req.panoId ?? state.newPanoIds.shift() ?? state.newPanoId;
-      return json({ panoId, key: `panos/o/${panoId}/original`, url: PUT_URL });
+      // As upload-api signs them: create-only for a new pano, If-Match for a replace.
+      const headers = {
+        'content-type': req.contentType,
+        ...(req.panoId ? { 'if-match': '"orig-etag"' } : { 'if-none-match': '*' }),
+      };
+      return json({ panoId, key: `panos/o/${panoId}/original`, url: PUT_URL, headers });
     }
     if (method === 'POST' && path === '/api/admin/tours') {
       if (state.createTourStatus !== 201) return json({ error: 'nope' }, state.createTourStatus);

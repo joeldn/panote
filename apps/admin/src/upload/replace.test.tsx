@@ -101,7 +101,10 @@ describe('replace image', () => {
       panoId: 'pano-9',
       tourId: 'tour-1',
     });
-    expect(FakeXhr.last.headers['content-type']).toBe('image/png');
+    expect(FakeXhr.last.headers).toEqual({
+      'content-type': 'image/png',
+      'if-match': '"orig-etag"',
+    });
     expect(screen.queryByRole('dialog')).toBeNull();
 
     FakeXhr.last.respond(200);

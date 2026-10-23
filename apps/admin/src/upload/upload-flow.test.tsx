@@ -18,6 +18,13 @@ import {
 import { readResumeRecord } from './resume-store.js';
 import { READY_CHIP_MS } from './UploadProvider.js';
 
+// Each test drives the whole app from /app/new through presign, PUT and polling: under
+// 1 s alone, but CI's Coverage job runs every package's suite at once under V8 coverage,
+// and there the file's first test ran past 5 s (PR #138's run on 2046170). A test that
+// times out keeps running behind the next ones, so every later test in the file failed
+// too, stuck at the sign-in check. Same reasoning as Editor.test.tsx.
+vi.setConfig({ testTimeout: 15_000 });
+
 const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
 
 const chip = () => screen.getByRole('region', { name: 'Upload status' });
@@ -93,7 +100,8 @@ describe('fresh upload from /app/new', () => {
     const xhr = FakeXhr.last;
     expect(xhr.method).toBe('PUT');
     expect(xhr.url).toBe(PUT_URL);
-    expect(xhr.headers['content-type']).toBe('image/png');
+    // The signed headers from the presign, condition included.
+    expect(xhr.headers).toEqual({ 'content-type': 'image/png', 'if-none-match': '*' });
     expect(xhr.body).toBe(file);
     expect(chipTitle()).toBe('Uploading panorama');
 

@@ -8,6 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
   putFile,
   UploadAbortedError,
+  UploadUrlUsedError,
   validateUploadFile,
   type XhrLike,
 } from './upload.js';
@@ -29,7 +30,8 @@ class FakeXhr implements XhrLike {
     this.url = url;
   }
   setRequestHeader(n: string, v: string) {
-    this.headers[n] = v;
+    // As XHR does: a header set twice is joined, not replaced.
+    this.headers[n] = n in this.headers ? `${this.headers[n]}, ${v}` : v;
   }
   send(body: Blob) {
     this.sent = body;
@@ -59,7 +61,7 @@ describe('putFile', () => {
       createXhr: () => xhr,
     });
     expect(xhr.method).toBe('PUT');
-    expect(xhr.headers['Content-Type']).toBe('image/png');
+    expect(xhr.headers).toEqual({ 'content-type': 'image/png' });
     xhr.progress(5, 10);
     xhr.finish(200);
     await expect(p).resolves.toBeUndefined();
@@ -67,6 +69,37 @@ describe('putFile', () => {
       [5, 10],
       [10, 10],
     ]);
+  });
+
+  it('sends the presign’s signed headers, each once', async () => {
+    const xhr = new FakeXhr();
+    const p = putFile('https://r2.test/put', blob(), {
+      contentType: 'image/png',
+      headers: { 'Content-Type': 'image/png', 'If-Match': '"e1"' },
+      createXhr: () => xhr,
+    });
+    expect(xhr.headers).toEqual({ 'content-type': 'image/png', 'if-match': '"e1"' });
+    xhr.finish(200);
+    await p;
+    const fresh = new FakeXhr();
+    void putFile('u', blob(), {
+      contentType: 'image/webp',
+      headers: { 'content-type': 'image/webp', 'if-none-match': '*' },
+      createXhr: () => fresh,
+    });
+    expect(fresh.headers).toEqual({ 'content-type': 'image/webp', 'if-none-match': '*' });
+  });
+
+  it('a 412 (the URL was already used) rejects with UploadUrlUsedError', async () => {
+    const xhr = new FakeXhr();
+    const p = putFile('u', blob(), {
+      contentType: 'image/png',
+      headers: { 'if-none-match': '*' },
+      createXhr: () => xhr,
+    });
+    xhr.finish(412);
+    await expect(p).rejects.toBeInstanceOf(UploadUrlUsedError);
+    await expect(p).rejects.toMatchObject({ status: 412 });
   });
 
   it('rejects on a non-2xx status and on network error', async () => {
@@ -118,6 +151,26 @@ describe('createUploadApi', () => {
       contentType: 'image/jpeg',
       size: 5,
     });
+  });
+
+  it('passes on the headers the PUT must send', async () => {
+    const headers = { 'content-type': 'image/jpeg', 'if-match': '"e1"' };
+    const fetch = vi.fn(async () =>
+      json({ panoId: 'p1', key: 'k', url: 'https://r2.test/put?sig', headers }),
+    );
+    const api = createUploadApi({ fetch, getToken: async () => 't' });
+    await expect(
+      api.presign({ contentType: 'image/jpeg', size: 5, panoId: 'p1' }),
+    ).resolves.toMatchObject({ headers });
+    const bad = vi.fn(async () =>
+      json({ panoId: 'p1', key: 'k', url: 'https://r2.test/x', headers: { 'if-match': 1 } }),
+    );
+    await expect(
+      createUploadApi({ fetch: bad, getToken: async () => 't' }).presign({
+        contentType: 'image/png',
+        size: 1,
+      }),
+    ).rejects.toBeInstanceOf(ApiSchemaError);
   });
 
   it('rejects an invalid body, and a replace presign for a different pano', async () => {

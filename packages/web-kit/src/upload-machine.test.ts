@@ -2,6 +2,8 @@ import type { Manifest, TilingStatus } from '@internal/contracts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { manifest } from './__fixtures__/helpers.js';
+import { ApiError } from './api/http.js';
+import { UploadUrlUsedError } from './api/upload.js';
 import { AuthRequiredError } from './auth.js';
 import {
   canRetryPoll,
@@ -277,7 +279,15 @@ function harness(): Harness {
   h.deps = {
     presign: vi.fn(async (req) => {
       h.calls.push(`presign:${req.panoId ?? 'new'}`);
-      return { panoId: req.panoId ?? 'p1', key: 'k', url: 'https://r2.example/put' };
+      return {
+        panoId: req.panoId ?? 'p1',
+        key: 'k',
+        url: 'https://r2.example/put',
+        headers: {
+          'content-type': req.contentType,
+          ...(req.panoId ? { 'if-match': '"e1"' } : { 'if-none-match': '*' }),
+        },
+      };
     }),
     put: vi.fn((_url, _file, o) => {
       h.calls.push('put');
@@ -318,6 +328,20 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     expect(raf).not.toHaveBeenCalled();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('PUTs with the headers the presign signed', async () => {
+    const h = harness();
+    startUpload(h.deps, { file: file(200) });
+    await flush();
+    expect(h.deps.put).toHaveBeenCalledWith(
+      'https://r2.example/put',
+      expect.any(Blob),
+      expect.objectContaining({
+        contentType: 'image/jpeg',
+        headers: { 'content-type': 'image/jpeg', 'if-none-match': '*' },
+      }),
+    );
   });
 
   it('fresh upload: presign -> PUT progress -> poll manifest -> ready', async () => {
@@ -614,6 +638,71 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     await flush();
     b.put.reject(new Error('upload network error'));
     await expect(cb.settled).resolves.toMatchObject({ phase: 'failed', stage: 'upload' });
+  });
+
+  describe('a PUT that gets 412 (its single-use URL was used already)', () => {
+    it('new pano: the key is fresh, so the file landed: goes on to processing', async () => {
+      const h = harness();
+      h.manifests = [null];
+      const ctl = startUpload(h.deps, { file: file() });
+      await flush();
+      h.put.reject(new UploadUrlUsedError());
+      await flush();
+      expect(ctl.getState()).toMatchObject({ phase: 'processing', panoId: 'p1' });
+      expect(h.deps.presign).toHaveBeenCalledTimes(1);
+      expect(h.deps.put).toHaveBeenCalledTimes(1);
+    });
+
+    it('replace: asks once for a URL pinned to the original as it is now, and sends again', async () => {
+      const h = harness();
+      h.manifests = [manifest('t1-old')];
+      const second = deferred<void>();
+      vi.mocked(h.deps.put)
+        .mockRejectedValueOnce(new UploadUrlUsedError())
+        .mockImplementationOnce(() => second.promise);
+      vi.mocked(h.deps.presign)
+        .mockResolvedValueOnce({ panoId: 'p9', key: 'k', url: 'https://r2.example/put1' })
+        .mockResolvedValueOnce({
+          panoId: 'p9',
+          key: 'k',
+          url: 'https://r2.example/put2',
+          headers: { 'content-type': 'image/jpeg', 'if-match': '"e2"' },
+        });
+      const ctl = startUpload(h.deps, { file: file(), replacePanoId: 'p9' });
+      await flush();
+      expect(h.deps.presign).toHaveBeenCalledTimes(2);
+      expect(h.deps.put).toHaveBeenLastCalledWith(
+        'https://r2.example/put2',
+        expect.any(Blob),
+        expect.objectContaining({ headers: { 'content-type': 'image/jpeg', 'if-match': '"e2"' } }),
+      );
+      expect(ctl.getState().phase).toBe('upload');
+      second.resolve();
+      await flush();
+      expect(ctl.getState()).toMatchObject({ phase: 'processing', panoId: 'p9' });
+    });
+
+    it('replace: a second 412 fails at stage changed, with no third try', async () => {
+      const h = harness();
+      h.manifests = [manifest('t1-old')];
+      vi.mocked(h.deps.put).mockRejectedValue(new UploadUrlUsedError());
+      const ctl = startUpload(h.deps, { file: file(), replacePanoId: 'p9' });
+      await expect(ctl.settled).resolves.toMatchObject({ phase: 'failed', stage: 'changed' });
+      expect(h.deps.presign).toHaveBeenCalledTimes(2);
+      expect(h.deps.put).toHaveBeenCalledTimes(2);
+    });
+
+    it('replace: a pano deleted meanwhile fails at the second presign (404)', async () => {
+      const h = harness();
+      h.manifests = [manifest('t1-old')];
+      vi.mocked(h.deps.put).mockRejectedValueOnce(new UploadUrlUsedError());
+      vi.mocked(h.deps.presign)
+        .mockResolvedValueOnce({ panoId: 'p9', key: 'k', url: 'https://r2.example/put1' })
+        .mockRejectedValueOnce(new ApiError(404, { error: 'original not found' }));
+      const ctl = startUpload(h.deps, { file: file(), replacePanoId: 'p9' });
+      await expect(ctl.settled).resolves.toMatchObject({ phase: 'failed', stage: 'presign' });
+      expect(h.deps.put).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('replace-image fails in prepare if the baseline manifest cannot be read', async () => {

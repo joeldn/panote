@@ -1,6 +1,6 @@
 import type { Manifest, PanoStatus, TilingStatus } from '@internal/contracts';
 
-import type { UploadUrlOk } from './api/upload.js';
+import { UploadUrlUsedError, type UploadUrlOk } from './api/upload.js';
 import { isAuthError } from './auth.js';
 
 /** Processing shows timed-out (still slow-polling) this long after the PUT completes. */
@@ -21,8 +21,11 @@ const MANIFEST_POLL_FACTOR = 1.5;
  */
 export type UploadMode = { kind: 'fresh' } | { kind: 'replace'; baselineVersion: string | null };
 
-/** `auth`: the session expired (a 401 or a dead refresh token); sign in, then resume. */
-export type UploadFailureStage = 'prepare' | 'presign' | 'upload' | 'tiling' | 'auth';
+/**
+ * `auth`: the session expired (a 401 or a dead refresh token); sign in, then resume.
+ * `changed`: a replace whose pano changed (or was deleted) under it, twice running.
+ */
+export type UploadFailureStage = 'prepare' | 'presign' | 'upload' | 'changed' | 'tiling' | 'auth';
 
 export type UploadState =
   | { phase: 'preparing'; mode: UploadMode | null }
@@ -226,6 +229,8 @@ export interface UploadDeps {
     file: Blob,
     opts: {
       contentType: string;
+      /** The presign's signed headers, which the PUT must send. */
+      headers?: Readonly<Record<string, string>> | undefined;
       onProgress: (loaded: number, total: number) => void;
       signal: AbortSignal;
     },
@@ -436,31 +441,60 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
     }
     if (phase() !== 'preparing') return;
 
-    let presigned: UploadUrlOk;
-    try {
-      const req: { contentType: string; size: number; panoId?: string } = {
+    const req: { contentType: string; size: number; panoId?: string } = {
+      contentType,
+      size: opts.file.size,
+    };
+    if (opts.replacePanoId !== undefined) req.panoId = opts.replacePanoId;
+    // Null once it has failed (and dispatched the error).
+    const presign = async (): Promise<UploadUrlOk | null> => {
+      try {
+        return await deps.presign(req);
+      } catch (e) {
+        dispatch({
+          type: 'error',
+          stage: isAuthError(e) ? 'auth' : 'presign',
+          message: messageOf(e),
+        });
+        return null;
+      }
+    };
+    const put = (p: UploadUrlOk): Promise<void> =>
+      deps.put(p.url, opts.file, {
         contentType,
-        size: opts.file.size,
-      };
-      if (opts.replacePanoId !== undefined) req.panoId = opts.replacePanoId;
-      presigned = await deps.presign(req);
-    } catch (e) {
-      dispatch({
-        type: 'error',
-        stage: isAuthError(e) ? 'auth' : 'presign',
-        message: messageOf(e),
-      });
-      return;
-    }
-    if (phase() !== 'preparing') return;
-    dispatch({ type: 'presigned', panoId: presigned.panoId, total: opts.file.size });
-
-    try {
-      await deps.put(presigned.url, opts.file, {
-        contentType,
+        headers: p.headers,
         signal: abort.signal,
         onProgress: (loaded, total) => dispatch({ type: 'progress', loaded, total }),
       });
+
+    const presigned = await presign();
+    if (!presigned || phase() !== 'preparing') return;
+    dispatch({ type: 'presigned', panoId: presigned.panoId, total: opts.file.size });
+
+    try {
+      try {
+        await put(presigned);
+      } catch (e) {
+        // Each upload URL is single-use (a signed If-None-Match / If-Match), so a 412
+        // means it was used already: a PUT whose answer got lost and was sent again.
+        if (!(e instanceof UploadUrlUsedError)) throw e;
+        // A new pano's key is fresh and only this URL can write it, so the file is
+        // there: go on as if the PUT had answered.
+        if (opts.replacePanoId !== undefined) {
+          // A replace can't tell its own earlier PUT from another tab's replace or a
+          // delete, so it asks once for a URL pinned to the original as it is now and
+          // sends the file again. A deleted pano gets a 404 from the presign instead.
+          const again = await presign();
+          if (!again || phase() !== 'upload') return;
+          try {
+            await put(again);
+          } catch (e2) {
+            if (!(e2 instanceof UploadUrlUsedError)) throw e2;
+            dispatch({ type: 'error', stage: 'changed', message: messageOf(e2) });
+            return;
+          }
+        }
+      }
     } catch (e) {
       dispatch({ type: 'error', stage: 'upload', message: messageOf(e) });
       return;
