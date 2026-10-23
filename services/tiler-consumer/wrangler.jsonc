@@ -55,6 +55,9 @@
             "queue": "pano-uploads-dev",
             "max_batch_size": 1,
             "max_retries": 3,
+            // Seconds before a retry the code didn't schedule itself (an uncaught
+            // throw); consumer.ts asks for 60, 120, then 240 (retryDelaySeconds).
+            "retry_delay": 60,
             "dead_letter_queue": "pano-uploads-dlq-dev",
             // max_concurrency matches max_instances
             "max_concurrency": 5,
@@ -124,6 +127,7 @@
             "queue": "pano-uploads",
             "max_batch_size": 1,
             "max_retries": 3,
+            "retry_delay": 60,
             "dead_letter_queue": "pano-uploads-dlq",
             // max_concurrency matches max_instances
             "max_concurrency": 5,

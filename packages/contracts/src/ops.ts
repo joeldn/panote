@@ -18,6 +18,22 @@ export const CronStatusSchema = z.object({
 });
 export type CronStatus = z.infer<typeof CronStatusSchema>;
 
+/**
+ * admin-api's superseded-tile sweep, which runs on the 15-minute cron after the
+ * backup. The daily cron's `tile-gc` task reads it and fails when the sweep has
+ * not finished cleanly for a while, so the health check's daily cron status
+ * still covers it.
+ */
+export const TILE_GC_STATUS_KEY = 'ops/cron/admin-api-tile-gc.json';
+
+export const TileGcStatusSchema = z.object({
+  /** ISO time of the last sweep that ran (cleanly or not). */
+  lastRunAt: z.string(),
+  /** ISO time of the last sweep that finished without throwing; null if none has yet. */
+  lastOkAt: z.string().nullable(),
+});
+export type TileGcStatus = z.infer<typeof TileGcStatusSchema>;
+
 /** The latest failed CDN purge. Each failure overwrites it; nothing clears it. */
 export const CDN_PURGE_FAILURE_KEY = 'ops/cdn-purge/last-failure.json';
 

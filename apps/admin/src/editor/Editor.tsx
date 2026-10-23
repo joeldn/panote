@@ -57,6 +57,7 @@ import {
 import { SettingsPopover } from './SettingsPopover.js';
 import { StageFactoryContext, type Viewer } from './stage-factory.js';
 import { StageStatus } from './StageStatus.js';
+import { SceneDescription } from './SceneDescription.js';
 import { TourPanel } from './TourPanel.js';
 import { replaceImagePath } from './upload-links.js';
 import { useEditor, type EditorController } from './use-editor.js';
@@ -867,6 +868,23 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           )}
           {cfg && currentId && (
             <div className="ed-pano-settings" role="group" aria-label="This pano">
+              <SceneDescription
+                // A fresh draft per pano and language.
+                key={`${currentId}:${lang ?? ''}`}
+                value={lang ? (cfg.i18n?.[lang]?.description ?? '') : (cfg.description ?? '')}
+                {...(translation && {
+                  translating: { name: translation.name, placeholder: cfg.description ?? '' },
+                })}
+                disabled={lookOnly}
+                onChange={(description) =>
+                  dispatch({
+                    type: 'scene/description',
+                    panoId: currentId,
+                    description,
+                    ...(lang && { lang }),
+                  })
+                }
+              />
               <div className="ed-pano-settings__row">
                 <span className="ed-label">Start view</span>
                 <span className="ed-mono">

@@ -36,6 +36,7 @@ import {
 import type { R2S3Client } from '@internal/worker-kit/r2-s3';
 
 import { operatorApiFromEnv, r2ConfigFromEnv, type R2Config } from './delete-account-lib.ts';
+import { fetchWaitingOut429, type Sleep } from './operator-fetch.ts';
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -411,12 +412,18 @@ export async function requestRestore(
   fetchFn: FetchLike,
   api: { origin: string; token: string },
   body: { date: string; keys: string[]; overwrite: boolean },
+  sleep?: Sleep,
 ): Promise<OperatorRestoreOk> {
-  const res = await fetchFn(`${api.origin}${OPERATOR_RESTORE_PATH}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', [OPERATOR_TOKEN_HEADER]: api.token },
-    body: JSON.stringify(body),
-  });
+  const res = await fetchWaitingOut429(
+    fetchFn,
+    `${api.origin}${OPERATOR_RESTORE_PATH}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [OPERATOR_TOKEN_HEADER]: api.token },
+      body: JSON.stringify(body),
+    },
+    sleep,
+  );
   const json: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const hint =
@@ -434,6 +441,8 @@ export interface RestoreDeps {
   store: RestoreStore;
   fetch: FetchLike;
   log: (line: string) => void;
+  /** How a 429 is waited out (operator-fetch.ts); tests pass one that doesn't wait. */
+  sleep?: Sleep;
 }
 
 const describeScope = (scope: RestoreScope): string =>
@@ -492,11 +501,12 @@ export async function runRestore(args: RestoreArgs, deps: RestoreDeps): Promise<
     const keys = send.slice(i, i + OPERATOR_RESTORE_MAX_KEYS);
     let out: OperatorRestoreOk;
     try {
-      out = await requestRestore(deps.fetch, args.api!, {
-        date: args.date,
-        keys,
-        overwrite: args.overwrite,
-      });
+      out = await requestRestore(
+        deps.fetch,
+        args.api!,
+        { date: args.date, keys, overwrite: args.overwrite },
+        deps.sleep,
+      );
     } catch (e) {
       // The batch's outcome is unknown; carry on with the rest and report these as failed.
       log(

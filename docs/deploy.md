@@ -21,9 +21,9 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
 are `false` in both `dev` and `production`: from the first dev deploy
@@ -409,14 +409,19 @@ beside it). Why it links automatically, against Auth0's advice to re-authenticat
 - **Concurrent first logins.** A `400` or `409` from the link call means the picture went stale
   (another login linked or created a user a moment ago): it looks the users up once more and
   retries once, unless the deadline has passed.
-- **Token claims.** On every login and token refresh it also sets two custom claims on the access
+- **Token claims.** On every login and token refresh it also sets three custom claims on the access
   token (names in `packages/contracts/src/jwt.ts`, which `admin-api` reads):
   `https://panote.io/auth_time`, the latest of the session's authentication method timestamps in
   epoch seconds (not
   on a refresh-token exchange; account delete wants a recent one, see "Account deletion"), and
   `https://panote.io/linked_subs`, the user ids of the identities linked into the user (at most
-  10; on the login that links, the primary's plus the one just linked). These need neither the
-  Management API nor its secrets, so they work even while linking itself isn't configured.
+  10; on the login that links, the primary's plus the one just linked), and
+  `https://panote.io/email`, the user's address in lower case, set only when an identity from
+  `TRUSTED_PROVIDERS` verified it (the same test linking uses; refreshes included), so a
+  Microsoft-only or Facebook-only account has none. Tour invites are accepted against it. These
+  need neither the Management API nor its secrets, so they work even while linking itself isn't
+  configured. The APIs drop a missing or malformed claim rather than refuse the token, so the
+  Workers can deploy before the Action does.
 - **Never in the way.** It skips refresh-token exchanges and users that already have linked
   identities (merging two primaries is an operator job). Every Management API call has a 5 s
   timeout, the whole run (retries included) has one 10 s deadline, after which the login goes on
@@ -1081,7 +1086,10 @@ In order:
    truncated to 500 chars) and a thrown/rejected `stub.fetch()` (key and error message) — so a
    dead-lettered job's cause should be visible in `wrangler tail` (or observability logs) rather
    than a bare retry-until-DLQ with no trace of why. Those two are both *transient* failures, and
-   both are retried until they either succeed or exhaust `max_retries` and dead-letter. A key that
+   both are retried, 1, 2 and then 4 minutes apart (`retryDelaySeconds` in `consumer.ts`;
+   `retry_delay: 60` in `wrangler.jsonc` covers a retry the code didn't schedule), until they
+   either succeed or exhaust `max_retries` and dead-letter. A `422` from the container is not
+   retried: the tiler refused the source itself (see "Sources the tiler refuses" below). A key that
    doesn't match `panos/<owner>/<panoId>/original`, with both segments restricted to their valid
    charset, is a different, permanent case: the consumer validates every key with
    `deriveUploadTarget` before it ever reaches the container, logs why the key is invalid, and
@@ -1138,8 +1146,36 @@ with no original. Every message starts a container: the queue's `max_concurrency
 see "Tiling time and the queue limit" below for what that means for a large `--all`.
 
 Re-tiling identical bytes **without** a version bump yields the same ETag, so the derived version
-string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
-rewriting identical keys rather than creating a new one.
+string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too. The consumer reads the pano's manifest
+before starting a container and acks the message without tiling when the manifest already names
+that version (`alreadyTiled` in `services/tiler-consumer/src/consumer.ts`), so a duplicate delivery
+or a re-upload of the same bytes costs one R2 read. A manifest it can't read means it tiles as
+before. `retile.ts` is never skipped: its messages carry `force: true` (R2's never do), so a
+re-tile of the same bytes runs and rewrites every key of that version dir, which is how to repair
+a pano whose manifest is intact but whose tiles are missing.
+
+### Sources the tiler refuses
+
+`build()` (`packages/tiler/src/build.ts`) reads the original's header first and refuses, with a
+`SourceRejectedError`, a file that:
+
+- isn't JPEG, PNG or WebP by its bytes (whatever the upload's content-type said), or can't be read
+  as an image at all;
+- is over 150 MP (`MAX_INPUT_PIXELS`), also enforced by libvips through sharp's
+  `limitInputPixels` on every `sharp()` that opens the source, with `failOn: 'warning'`;
+- is more than 16:1 either way (`MAX_ASPECT_RATIO` in `packages/core/src/manifest.ts`). A 16:1
+  strip is a full sweep with a 22.5° vertical field of view; real partial panoramas are well
+  inside it. Wider strips are padded to 2:1 and, past the pixel cap, downscaled, so no accepted
+  source makes more work than a real 150 MP 2:1 panorama (8,192 px faces).
+
+The container answers `422` for these and the consumer acks the message once the
+`unsupported` failure marker is written (or not needed, because the original changed); if the
+marker write fails it retries, and the DLQ writes its own marker if retries run out. The original
+stays; a new upload replaces it. Every other failure is a `500` and is retried.
+
+The admin refuses the pixel and aspect cases before the upload starts
+(`validateUploadImage` in `packages/web-kit/src/image-size.ts`, reading the header), with the same
+`MAX_ASPECT_RATIO` from `@panote/core`, so only a client that skips it reaches the tiler's check.
 
 ### Old version dirs
 
@@ -1147,32 +1183,65 @@ Every successful re-tile leaves the previous version's tiles behind under `tiles
 job's manifest swap is confirmed (its post-PUT HEAD still sees the ETag it tiled), it records every
 other version dir it finds there at `tile-gc/<panoId>/<version>.json` (`{ v, originalKey,
 tilerVersion, supersededAt }`). Records are overwritten on every swap, so their time and tiler
-version always follow the latest one. `admin-api`'s daily cron (`17 3 * * *`, the same one as the
-slug-alias and account sweeps) deletes a recorded dir once the record is over 24 hours old, so a
-version goes 24-48 hours after it was superseded. Before deleting it checks, and keeps the dir if
+version always follow the latest one. A job that fails after it started uploading tiles records
+its own, partial, version dir the same way, so a pano whose jobs only ever failed doesn't keep
+them for good. `admin-api`'s 15-minute cron (`*/15 * * * *`, after the backup, in the same
+invocation) deletes a recorded dir once the record is over 24 hours old, so a version goes 24
+hours to 24 hours 15 minutes after it was superseded. Before deleting it checks, and keeps the dir if
 any check fails:
 
 - the manifest must be readable and name a different version (the version it names is never
   deleted; that record just goes);
 - the pano's current original must not tile into that dir again (same ETag, same tiler version as
-  the job that superseded it), since a job may be writing there;
+  the job that recorded it), since a job may be writing there; this holds with no manifest at all
+  too, for a first upload whose job failed;
 - nothing in the dir may have been written after the record (a re-upload of old bytes, or a tiler
   rollback, rewrote it); the record's time then moves to now.
 
-A pano whose original is gone has been deleted; its record and dir just go. A run acts on at most
-50 records (deleted or dropped) and looks at no more than 500; kept ones are checked again the next
-day. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+A pano whose original is gone has been deleted; its record and dir just go.
+
+**Limits.** The sweep shares the 15-minute invocation with the backup, and the two together, with
+the sweep's status record, make at most `BACKUP_RUN_BUDGET` (900) R2 operations, the figure the
+backup was already sized to keep under the per-invocation subrequest limit: the backup gets that
+total less 2, and the sweep whatever the backup run left (`runBackupThenTileGc` in
+`services/admin-api/src/tile-gc.ts`, which takes the total as `totalOps`, so another task on the
+same cron can spend part of it first and pass what is left). Once a day's backup set is
+complete a backup run costs 2 operations, so most runs give the sweep about 900. A record costs 3
+operations to check, plus one list per 1,000 objects in the dir to look for newer writes and one
+list and one delete per 1,000 to delete it: about 7 for a typical pano, 31 at most (a full
+16,384 px pyramid, 8,192 objects). A run starts a record only with 31 operations left, and also
+stops after acting on 200 records or looking at 500. That is roughly 125 typical records a run,
+about 12,000 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
+`tile-gc/`, moving on each quarter hour, and wraps round, so kept records listed early can't take
+every run's budget. Kept ones are checked again on a later run. CPU is not a constraint (a record
+is a few small JSON parses).
+
+**Monitoring.** Each 15-minute run records `{ lastRunAt, lastOkAt }` at
+`ops/cron/admin-api-tile-gc.json` (2 more R2 operations, taken out of the sweep's share). A run
+is clean when the backup didn't throw and the sweep finished. The daily cron's `tile-gc` task
+throws when the last clean run is over an hour old (four runs in a row) or none is recorded, so
+the health check's `admin-api daily cron` check alerts on a failing sweep, as before. Right
+after a deploy, a daily run before the first 15-minute run would report it once.
+
+A record the sweep keeps because the current original tiles into that dir (an in-flight job, or
+a pano whose jobs only failed) is rewritten with the time moved to now, so it is looked at again
+a day later rather than on every run.
+
+Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
 left over from before this existed are recorded the next time that pano re-tiles, so a
 `retile.ts --all` after deploying this clears them too, a day later.
 
 Records hold the owner-bearing original key, so deleting a pano (including through account
 deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job that confirmed its
-swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
+swap just before the delete can still write one afterwards; the sweep drops it about a day later
 (the original is gone by then).
 
-After a tiler rollback, don't run `retile.ts` around the cron time (03:17 UTC). A job that starts
-writing into an old version dir while the sweep is deleting it would leave a manifest pointing at
-a half-deleted dir. The window is seconds, but there is no lock between the two.
+After a tiler rollback, a `retile.ts` job that starts writing into an old version dir while the
+sweep is deleting it would leave a manifest pointing at a half-deleted dir. The window is seconds
+per dir, but there is no lock between the two, and the sweep now runs every 15 minutes, so there is
+no quiet hour to aim for. If a pano shows missing tiles after such a re-tile, re-tile it again with
+`retile.ts --pano <pano-uuid> --apply`: its message is forced past the duplicate skip, and the job
+rewrites every key of that version.
 
 The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
 fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
@@ -1726,18 +1795,23 @@ errors the request goes through and `rate limiter unavailable` is logged.
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
 | `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator routes (takedown, restore) | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
+| `admin-api` | `READ_LIMITER` | every `GET`/`HEAD` under `/api/admin/*` | owner (Auth0 sub), checked after the JWT, before any R2 read | 1200/min | `1302` / `2302` |
+| `admin-api` | `INSIGHTS_LIMITER` | `GET /api/admin/tours/:id/insights`, on top of `READ_LIMITER` | owner (Auth0 sub) | 30/min | `1303` / `2303` |
+| `admin-api` | `OPERATOR_LIMITER` | the operator routes (takedown, restore), every request counted before the token check | client IP (IPv6 per /64) | 120/min | `1304` / `2304` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
 | `public-api` | `ERRORS_LIMITER` | `POST /api/errors` | client IP (IPv6 per /64) | 20/min | `1204` / `2204` |
 | `public-api` | `EXPLORE_LIMITER` | `GET /api/explore` | client IP (IPv6 per /64) | 60/min | `1205` / `2205` |
+| `public-api` | `STATS_LIMITER` | `GET /api/tours/:id/stats` | client IP (IPv6 per /64) | 600/min | `1206` / `2206` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
 the same id share counters, so every binding and every env has its own. The dashboard doesn't show
 these limits: watch for `429`s in Workers Logs. To change a limit, edit `simple.limit` in both env
 blocks; `period` may only be `10` or `60`, and if it changes, change the matching constant
-(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
+(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS` in
+`services/admin-api/src/limits.ts`, which every admin-api limiter shares) too. The per-IP keys are coarse: an
 office or a carrier NAT shares one IP, which is why those limits are well above what one browser
 sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
 the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
@@ -1745,6 +1819,28 @@ the limiter's key, held in Cloudflare's short-lived counters: nothing of ours st
 300/min lets two editor Saves of a full tour through in one minute (each is up to `MAX_TOUR_SCENES`
 = 100 configs, the tour and the publish); people editing by hand stay far below it. A Save cut off
 by a `429` keeps the refused documents unsaved, and pressing Save again sends just those.
+`admin-api`'s 1,200 reads a minute are four times the editor polling every pano still tiling once
+each 10 s for 50 panos at once (a day's uploads), leaving room for a second tab and the editor's own
+loads; a poll that gets a `429` tries again on its next turn. `STATS_LIMITER`'s 600 lets the admin
+dashboard, which reads each tour's counts when it opens (up to 200 tours), open three times a
+minute.
+
+Request bodies are read through a capped reader (`readJsonBody`, `packages/worker-kit/src/body.ts`):
+a `Content-Length` over the cap is refused before anything is read, and a body sent without one
+(chunked) is counted as it streams in and cancelled once it passes the cap, so nothing past the cap
+is buffered; the text is decoded as it arrives, so the bytes are never held twice. Over the cap
+is `413`. The caps: `public-api`'s beacons and error reports 8 KiB (`MAX_BODY_BYTES`),
+`admin-api`'s scene config `PUT` 14 MiB (`MAX_CONFIG_BODY_BYTES`), every other `admin-api`
+write 256 KiB (`MAX_WRITE_BODY_BYTES`; a tour at its caps is under 50 KiB), and `upload-api`'s
+`POST /api/upload-url` 8 KiB. A config at every schema cap is about 4.5 MiB in ASCII and 12.6 MiB
+written entirely in 3-byte characters, so every config the schema allows fits. One over the
+backup's per-object limit (`BACKUP_MAX_OBJECT_BYTES`, 8 MiB) is stored but left out of the
+backup, which reports it (see Backups).
+
+Ids in a route or a hand-built body (`panoId`, `tourId`, a list `cursor`) must match `PANO_PATTERN`
+and be at most 64 characters (`isContentId` in `@internal/contracts`, the same rule as every body
+schema): anything else is a `400` in `admin-api` and `upload-api`, and `public-api`'s
+`400 {"error":"invalid tourId"}`, before the id reaches an R2 key or a Durable Object.
 
 ### admin-api object caps
 
@@ -1806,7 +1902,23 @@ unpublish or a takedown its views, events and likes can still count for up to 30
 cached: an unknown id costs a `HEAD` per request, braked by the per-IP limit, and a tour counts as
 soon as it is published. The website's view and events beacons ignore the `404`. Stats reads
 (`GET .../stats`) don't check the bundle: a read stores nothing (an unknown id reads zeros), and the
-admin dashboard reads the view counts of unpublished tours too.
+admin dashboard reads the view counts of unpublished tours too. They are limited per IP
+(`STATS_LIMITER`, see Rate limits).
+
+Views and events are refused from other sites the same way error reports are (see Error reporting,
+"Same origin only"): a `Sec-Fetch-Site` other than `same-origin`, or an `Origin` other than the
+API's own, gets `403 {"error":"cross-origin"}` before the limiter. Otherwise any page could have
+its visitors' browsers send views for any tour from their own IPs, past the per-IP limit. The
+embed is not affected: the iframe sits on another site, but its document is served from Panote's
+own origin (`/s/<slug>/embed`), so its beacons are same-origin requests. An embed placed in a
+`sandbox` iframe without `allow-same-origin` has an opaque origin, and its views stop counting; the
+embed snippet has no `sandbox`. A local Vite dev server proxying `/api` sends a localhost `Origin`,
+so its views and events are refused too. A refusal logs
+`[cross-origin] refused { route, secFetchSite, origin }` (the route as a pattern, never the
+tourId), at most once a minute per isolate, so a page or embed served from an unexpected origin
+shows up in Workers Logs. The origins: dev serves the website (tour pages `/s/<slug>`, embeds
+`/s/<slug>/embed`) on `panote.dev/*` and `public-api` on `panote.dev/api/tours/*`,
+`/api/errors` and `/api/explore`; production the same on `panote.io`. Same origin in both.
 
 ### Owner quotas
 
@@ -1877,7 +1989,12 @@ Two ways to stop abuse, usually together:
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is
   still published and Public (see Explore). It answers `404` for a missing or wrong token, and
   always while the `OPERATOR_TOKEN` secret isn't set on that env, so the route doesn't exist until
-  you set it. It skips the write gate (no Auth0 user).
+  you set it. It skips the write gate (no Auth0 user); instead `OPERATOR_LIMITER` allows 120
+  requests a minute per client IP, takedown and restore together, every request counted before
+  the token is checked, so wrong guesses spend it too (`429` with `Retry-After: 60`; see Rate
+  limits). `takedown.ts` and `restore-backup.ts` wait out a `429` (its `Retry-After`) and send the
+  request again, up to 5 times, so a long `--all-tours` or a restore of thousands of keys still
+  finishes.
 - **Disable the owner.** A marker `accounts/<owner>/disabled.json` (`{ v, disabledAt, reason? }`).
   While it exists every `admin-api` write and `upload-api`'s upload URL answer
   `403 {"error":"account disabled"}` (one more R2 `HEAD` each, in parallel with the deletion
@@ -2045,17 +2162,18 @@ the US Copyright Office.
   owner-scoped shape as `configKey`/`deletingKey` (`packages/contracts/src/keys.ts`'s `tileFailedKey`,
   for a caller with the raw owner sub, and `tileFailedKeyFromOriginalKey`, for the consumer, which
   only has the already-encoded owner segment from the R2 notification key and must not re-encode
-  it). `reason` is one of `'dlq' | 'oversize' | 'unprocessable-key'`. `originalEtag` is the R2
+  it). `reason` is one of `'dlq' | 'oversize' | 'unprocessable-key' | 'unsupported'`. `originalEtag` is the R2
   `etag` (bare, native-binding form) of the original the failure was about — the read side (A2)
   must treat a marker whose `originalEtag` doesn't match the *current* original's etag as stale
   and ignore it (a later, different upload superseded the failed one). `reason` and `originalEtag`
   are also written as R2 `customMetadata` on the same object (review fix, 2026-09-26), so A2's list
   endpoint can read both off `bucket.list({ include: ['customMetadata'] })` with no extra GET — the
   same pattern the plan already uses for config/tour summaries (section 3.1).
-- **Written by** `services/tiler-consumer/src/consumer.ts` on three permanent-failure paths: a
+- **Written by** `services/tiler-consumer/src/consumer.ts` on four permanent-failure paths: a
   dead-lettered message (the Worker now also consumes `pano-uploads-dlq[-dev]` itself, branching on
   `batch.queue` against an exact set of the two real DLQ names, not a substring test), an oversized
-  original, and a key `deriveUploadTarget` rejects. A charset-invalid key (bad owner or panoId) now
+  original, a key `deriveUploadTarget` rejects, and a source the tiler refused (`422`,
+  reason `unsupported`, see "Sources the tiler refuses"). A charset-invalid key (bad owner or panoId) now
   gets no marker at all — `tileFailedKeyFromOriginalKey` validates both segments and the write is
   skipped with a log line, rather than writing a marker keyed on a junk panoId.
 - **Oversized originals are deleted.** Once the `oversize` marker is written, the consumer
@@ -2353,6 +2471,12 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
 - **Vars.** `CF_ACCOUNT_ID` (`12e2809e05de8a2bf20b815fd394ec9a`) and `AE_DATASET` are plain vars
   in both `admin-api` env blocks; `AE_DATASET` must match `public-api`'s `EVENTS` dataset for the
   same env. Nothing to do beyond deploying.
+- **Limits and cache.** Each owner gets 30 Insights requests a minute (`INSIGHTS_LIMITER`, on
+  top of the read limit; see Rate limits). A full answer is kept in the Cache API of the
+  Cloudflare location for 60 s (`INSIGHTS_CACHE_SECONDS`), one entry per tour and `days`, so
+  refreshing doesn't run the 4 SQL queries again: new views show up within a minute or so, on top
+  of AE's own ingestion delay. The key holds the owner too (a SHA-256 of the sub), and the
+  route checks the caller owns the tour before it reads the cache; a `502` is never cached. The browser still gets `private, no-store`.
 - **Smoke test (dev).** After both Workers deploy and the secret is set, open a tour a few times,
   wait a minute or two for AE ingestion, then `GET /api/admin/tours/<tourId>/insights` as the
   owner and check `daily` shows today's views. The same token can run ad-hoc queries against
@@ -2554,7 +2678,7 @@ the account has the resources the config names.
     **Status: outstanding.**
 
 11. **Rate limits and Analytics Engine: nothing to create.** The production `namespace_id`s
-    (`2101`, `2201`–`2205`, `2301`, Rate limits) are already in config and only have to be unique in the
+    (`2101`, `2201`–`2206`, `2301`–`2304`, Rate limits) are already in config and only have to be unique in the
     account; the `panote_events` dataset appears on the first write (Insights).
     Verify: `grep -rn namespace_id services/*/wrangler.jsonc` shows no id used twice.
     **Status: done in config.**

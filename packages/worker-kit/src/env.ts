@@ -25,6 +25,8 @@ export interface AuthContext {
   readonly authTime?: number;
   /** Identities linked into this user (see contracts' LINKED_SUBS_CLAIM). */
   readonly linkedSubs?: readonly string[];
+  /** The user's verified email, lower case (contracts' EMAIL_CLAIM); absent if unverified. */
+  readonly email?: string;
 }
 
 export type JwtVerifier = (token: string) => Promise<AuthContext>;

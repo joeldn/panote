@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   assertClaims,
   AUTH_TIME_CLAIM,
+  EMAIL_CLAIM,
   fetchJwks,
   DEFAULT_JWKS_TIMEOUT_MS,
   LINKED_SUBS_CLAIM,
@@ -139,10 +140,32 @@ describe('assertClaims: Panote custom claims', () => {
     ).toBeUndefined();
   });
 
+  it('reads the verified email', () => {
+    expect(assertClaims({ ...base, [EMAIL_CLAIM]: 'maya@example.com' }, opts).email).toBe(
+      'maya@example.com',
+    );
+  });
+
+  it.each([
+    ['not a string', 42],
+    ['not lower case', 'Maya@example.com'],
+    ['padded', ' maya@example.com'],
+    ['without an @', 'maya.example.com'],
+    ['with two @', 'a@b@example.com'],
+    ['too long', `${'a'.repeat(250)}@x.io`],
+  ])('drops an email that is %s, and keeps the user', (_label, v) => {
+    expect(assertClaims({ ...base, [EMAIL_CLAIM]: v }, opts)).toEqual({ sub: 'google-oauth2|1' });
+  });
+
+  it('ignores an un-namespaced email claim', () => {
+    expect(assertClaims({ ...base, email: 'maya@example.com' }, opts).email).toBeUndefined();
+  });
+
   it('keeps the claim names the Auth0 Action sets', () => {
     // packages/auth0-actions/src/link-accounts.cjs has its own copy: change both together.
     expect(AUTH_TIME_CLAIM).toBe('https://panote.io/auth_time');
     expect(LINKED_SUBS_CLAIM).toBe('https://panote.io/linked_subs');
+    expect(EMAIL_CLAIM).toBe('https://panote.io/email');
   });
 });
 
