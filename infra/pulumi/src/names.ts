@@ -75,7 +75,7 @@ export const RESOURCES = {
   },
   githubMainProtection: {
     name: 'github-main-protection',
-    type: 'github:index/branchProtectionV3:BranchProtectionV3',
+    type: 'github:index/branchProtection:BranchProtection',
   },
   githubAccountIdVariable: {
     name: 'github-variable-cloudflare-account-id',

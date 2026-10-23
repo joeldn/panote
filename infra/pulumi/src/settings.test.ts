@@ -133,6 +133,18 @@ describe('readSettings', () => {
     ],
     ['no repository', 'dev', { ...DEV_GITHUB, githubRepository: undefined }, /githubRepository/],
     [
+      '. as the repository',
+      'dev',
+      { ...DEV_GITHUB, githubRepository: '.' },
+      /not a repository name/,
+    ],
+    [
+      '.. as the repository',
+      'dev',
+      { ...DEV_GITHUB, githubRepository: '..' },
+      /not a repository name/,
+    ],
+    [
       'production without its reviewer',
       'production',
       { ...PRODUCTION_GITHUB, githubEnvironmentReviewer: undefined },

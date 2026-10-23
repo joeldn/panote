@@ -993,7 +993,7 @@ GitHub). Until a stack names `github:owner` (step 19), the list below is still k
   deployment-branch policy restricted to `main` — the approval gate the workflow relies on. The
   `resolve-environment` job's "Guard deploys to main" step is a workflow-level backstop, not
   a substitute for this Environment protection rule. (Pulumi: the `production` stack.)
-- `main` protected: the checks Gate and Coverage required (from GitHub Actions), no force push,
+- `main` protected: the checks Gate and Coverage required (by name), no force push,
   no deletion, no required review (one maintainer merges his own pull requests). Merges are
   squash only and delete the branch; workflows get a read-only `GITHUB_TOKEN` and can't approve
   pull requests. (Pulumi: the `dev` stack, which owns everything repository-wide.)

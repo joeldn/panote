@@ -491,7 +491,7 @@ declare the same thing):
 
 | Stack | Owns |
 |---|---|
-| `dev` (`githubRepositoryWide: true`) | the repository's merge settings (squash only, delete the branch on merge); Actions workflow permissions (read-only `GITHUB_TOKEN`, Actions can't approve pull requests); `main`'s protection (Gate and Coverage from GitHub Actions, no force push, no deletion); the repository variables `CLOUDFLARE_ACCOUNT_ID` (the stacks' `accountId`) and `DEV_AUTO_DEPLOY` (`devAutoDeploy`); the `infra-preview` Environment and its reviewer; the `dev` Environment (main only) |
+| `dev` (`githubRepositoryWide: true`) | the repository's merge settings (squash only, delete the branch on merge); Actions workflow permissions (read-only `GITHUB_TOKEN`, Actions can't approve pull requests); `main`'s protection (Gate and Coverage required by name, no force push, no deletion); the repository variables `CLOUDFLARE_ACCOUNT_ID` (the stacks' `accountId`) and `DEV_AUTO_DEPLOY` (`devAutoDeploy`); the `infra-preview` Environment and its reviewer; the `dev` Environment (main only) |
 | `production` | the `production` Environment: main only, approved by `githubEnvironmentReviewer` |
 
 Dev owns the repository-wide part because it is the stack that exists and is imported now;
@@ -617,11 +617,17 @@ These and only these, all **update** or **create**:
 - `github-workflow-permissions`: only if Settings → Actions → General → Workflow permissions isn't
   already *Read repository contents and packages permissions* with *Allow GitHub Actions to create
   and approve pull requests* unticked;
-- `github-main-protection`: `strict` to `false` if *Require branches to be up to date* was on, and
-  away any required review, conversation resolution or signed-commit rule set by hand. This
-  resource writes the whole rule on every change, so settings it doesn't name (linear history,
-  lock branch) go back to off too, and force pushes and deletion stay blocked. To keep one of
-  them, add it to `src/github.ts` before `up`;
+- `github-main-protection`: `strict` to `false` if *Require branches to be up to date* was on;
+  `requiredLinearHistory`, `requireConversationResolution`, `requireSignedCommits` and
+  `lockBranch` to `false`, and any required review away, if they were set by hand (the resource
+  manages every field of the rule, and these are its defaults); `allowsForcePushes` and
+  `allowsDeletions` stay `false`, which only shows if someone allowed them. To keep any of the
+  others, add it to `src/github.ts` before `up`. The rule is GraphQL's: the REST
+  `BranchProtectionV3` only works on an organization's repository. It names the checks by
+  context only and can't pin them to the GitHub Actions app as the hand-made rule does; once
+  Pulumi writes the rule, a `Gate` or `Coverage` status from any source with write access to
+  commit statuses may count *(unverified: whether GitHub keeps the existing app pins when only
+  other fields change)*;
 - `github-environment-infra-preview`: **create** if no infra pull request has run yet, otherwise
   the reviewer, if it had none;
 - `github-environment` (dev): the branch policy to *Selected branches*, if it was something else;

@@ -150,13 +150,15 @@ describe('dev', () => {
     });
   });
 
-  it("requires ci.yml's Gate and Coverage from GitHub Actions on main, and no review", () => {
+  it("requires ci.yml's Gate and Coverage on main, blocks force pushes and deletion, no review", () => {
     const inputs = inputsOf(resources, 'githubMainProtection');
     expect(inputs).toEqual({
-      repository: 'panote',
-      branch: 'main',
+      repositoryId: `${RESOURCES.githubRepository.name}-node-id`,
+      pattern: 'main',
       enforceAdmins: false,
-      requiredStatusChecks: { strict: false, checks: ['Gate:15368', 'Coverage:15368'] },
+      allowsForcePushes: false,
+      allowsDeletions: false,
+      requiredStatusChecks: [{ strict: false, contexts: ['Gate', 'Coverage'] }],
     });
     const ci = repoFile('.github/workflows/ci.yml');
     expect(ci).toMatch(/^ {4}name: Gate$/m);

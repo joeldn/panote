@@ -80,6 +80,7 @@ export async function installMocks(
         const state: Record<string, unknown> = { ...args.inputs };
         if (args.type === RESOURCES.uploadsQueue.type) state.queueId = `${args.name}-queue-id`;
         if (args.type === RESOURCES.spaClient.type) state.clientId = `${args.name}-client-id`;
+        if (args.type === RESOURCES.githubRepository.type) state.nodeId = `${args.name}-node-id`;
         if (args.type === RESOURCES.linkingCredentials.type) {
           state.clientSecret = linkingSecret ?? `${args.name}-secret`;
         }

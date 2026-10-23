@@ -5,12 +5,12 @@ import { RESOURCES, type ResourceKey } from './names.js';
 import type { GithubSettings, Settings } from './settings.js';
 
 /**
- * The checks `main` requires (ci.yml's two jobs), each pinned to the GitHub
- * Actions app, so a status of the same name from anything else never counts.
+ * The checks `main` requires (ci.yml's two jobs), by name. The GraphQL
+ * resource can't pin a check to the GitHub Actions app as the hand-made rule
+ * does (docs/decisions.md), so a status of the same name from anyone with
+ * write access to statuses would count too.
  */
 export const REQUIRED_CHECKS = ['Gate', 'Coverage'] as const;
-/** The GitHub Actions app's id, as `main`'s protection already names it. */
-export const GITHUB_ACTIONS_APP_ID = 15368;
 export const PROTECTED_BRANCH = 'main';
 
 /**
@@ -116,7 +116,7 @@ export function createGithub(settings: Settings, gh: GithubSettings, track: Trac
   if (!wide) return;
 
   // --- The repository ------------------------------------------------------------------
-  track(
+  const repo = track(
     'githubRepository',
     new github.Repository(
       RESOURCES.githubRepository.name,
@@ -135,20 +135,19 @@ export function createGithub(settings: Settings, gh: GithubSettings, track: Trac
   );
 
   // --- main: the two checks, no force push, no deletion ------------------------------
-  // The REST resource: it pins each check to its app. Every update PUTs the
-  // whole protection, which leaves force pushes and deletion off. Admins are
-  // not held to it and no review is required: Joel merges his own pull
-  // requests (infra/README.md, GitHub).
+  // The GraphQL resource: the REST one (BranchProtectionV3) only works on an
+  // organization's repository, and joeldn/panote is a user's. Admins are not
+  // held to it and no review is required: Joel merges his own pull requests
+  // (infra/README.md, GitHub; docs/decisions.md).
   track(
     'githubMainProtection',
-    new github.BranchProtectionV3(RESOURCES.githubMainProtection.name, {
-      repository,
-      branch: PROTECTED_BRANCH,
+    new github.BranchProtection(RESOURCES.githubMainProtection.name, {
+      repositoryId: repo.nodeId,
+      pattern: PROTECTED_BRANCH,
       enforceAdmins: false,
-      requiredStatusChecks: {
-        strict: false,
-        checks: REQUIRED_CHECKS.map((check) => `${check}:${GITHUB_ACTIONS_APP_ID}`),
-      },
+      allowsForcePushes: false,
+      allowsDeletions: false,
+      requiredStatusChecks: [{ strict: false, contexts: [...REQUIRED_CHECKS] }],
     }),
   );
 

@@ -244,7 +244,7 @@ function readGithubSettings(stack: Settings['stack'], config: ConfigSource) {
       throw new Error(`${key} "${login}" is not a GitHub login`);
     }
   }
-  if (!GITHUB_REPOSITORY.test(repository)) {
+  if (!GITHUB_REPOSITORY.test(repository) || repository === '.' || repository === '..') {
     throw new Error(`githubRepository "${repository}" is not a repository name`);
   }
   if (stack === 'production' && environmentReviewer === undefined) {
