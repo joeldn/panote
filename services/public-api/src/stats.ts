@@ -22,9 +22,11 @@ const HASHED_PREFIX = 'likedh:';
 const LEGACY_PREFIX = 'liked:';
 const LEGACY_MIGRATED_KEY = 'likes-hashed';
 const MIGRATE_BATCH = 128;
-// Without the secret (local dev, or before it is set) the hash is an unkeyed
-// SHA-256 with a fixed domain prefix: likes keep working and no raw id is stored,
-// but anyone who knows a sub could recompute its hash, so it is logged once.
+// Without the secret, an env whose LIKER_HASH_FALLBACK var is "allow" (dev, and the
+// tests) hashes with an unkeyed SHA-256 under a fixed domain prefix: likes keep
+// working and no raw id is stored, but anyone who knows a sub could recompute its
+// hash, so it is logged once. Any other env (production) fails closed: a like
+// answers 503 and logs an error until the secret is set.
 const UNKEYED_DOMAIN = 'panote:liker:v1:';
 let warnedUnkeyed = false;
 
@@ -59,40 +61,58 @@ interface Counts {
 }
 
 export class TourStats {
+  private state: DurableObjectState;
   private storage: DurableObjectStorage;
   private likerKey: Promise<CryptoKey | null>;
+  private allowUnkeyed: boolean;
   private legacyMigrated = false;
 
-  constructor(state: DurableObjectState, env: Pick<Env, 'LIKER_HASH_KEY'>) {
+  constructor(
+    state: DurableObjectState,
+    env: Partial<Pick<Env, 'LIKER_HASH_KEY' | 'LIKER_HASH_FALLBACK'>>,
+  ) {
+    this.state = state;
     this.storage = state.storage;
     this.likerKey = importLikerKey(env.LIKER_HASH_KEY);
+    this.allowUnkeyed = env.LIKER_HASH_FALLBACK === 'allow';
   }
 
-  private async hash(who: string): Promise<string> {
-    return likerHash(who, await this.likerKey);
+  // The liker's hash, or null when likes can't be hashed here (no secret, and the
+  // env doesn't allow the unkeyed fallback).
+  private async hash(who: string): Promise<string | null> {
+    const key = await this.likerKey;
+    if (!key && !this.allowUnkeyed) return null;
+    return likerHash(who, key);
   }
 
-  // One batch of raw liked:<who> keys rewritten as likedh:<hash>; true once none are left.
+  // One batch of raw liked:<who> keys rewritten as likedh:<hash>; true once none are
+  // left. Hashing awaits crypto, which (unlike storage) doesn't hold the input gate,
+  // so the batch runs inside blockConcurrencyWhile: no other request, an account
+  // delete's DELETE included, can land between the list and the rewrite.
   private async migrateLegacyLikes(): Promise<boolean> {
     if (this.legacyMigrated) return true;
-    if (await this.storage.get(LEGACY_MIGRATED_KEY)) {
-      this.legacyMigrated = true;
-      return true;
-    }
-    const legacy = await this.storage.list({ prefix: LEGACY_PREFIX, limit: MIGRATE_BATCH });
-    if (legacy.size > 0) {
+    return this.state.blockConcurrencyWhile(async () => {
+      if (this.legacyMigrated || (await this.storage.get(LEGACY_MIGRATED_KEY))) {
+        this.legacyMigrated = true;
+        return true;
+      }
+      const legacy = await this.storage.list({ prefix: LEGACY_PREFIX, limit: MIGRATE_BATCH });
       const hashed: Record<string, number> = {};
       for (const key of legacy.keys()) {
-        hashed[`${HASHED_PREFIX}${await this.hash(key.slice(LEGACY_PREFIX.length))}`] = 1;
+        const hash = await this.hash(key.slice(LEGACY_PREFIX.length));
+        if (hash === null) return false; // No way to hash yet: leave them raw.
+        hashed[`${HASHED_PREFIX}${hash}`] = 1;
       }
-      await this.storage.put(hashed);
-      await this.storage.delete([...legacy.keys()]);
-    }
-    if (legacy.size < MIGRATE_BATCH) {
-      await this.storage.put(LEGACY_MIGRATED_KEY, true);
-      this.legacyMigrated = true;
-    }
-    return this.legacyMigrated;
+      if (legacy.size > 0) {
+        await this.storage.put(hashed);
+        await this.storage.delete([...legacy.keys()]);
+      }
+      if (legacy.size < MIGRATE_BATCH) {
+        await this.storage.put(LEGACY_MIGRATED_KEY, true);
+        this.legacyMigrated = true;
+      }
+      return this.legacyMigrated;
+    });
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -103,23 +123,31 @@ export class TourStats {
       this.legacyMigrated = false;
       return Response.json({ views: 0, likes: 0 });
     }
+    const isLike = req.method === 'POST' && url.pathname === '/like';
+    const raw = url.searchParams.get('u');
+    const who = isLike && raw && raw.length <= MAX_LIKER_LENGTH ? raw : null;
+    // Hashed before counts is read: from that read to its write only storage
+    // operations may await, since the input gate only holds across those. A crypto
+    // await in between would let two likes read the same count.
+    const likeKey = who === null ? null : await this.hash(who);
+    if (who !== null && likeKey === null) {
+      console.error('LIKER_HASH_KEY is not set: refusing a like (fails closed off dev)');
+      return Response.json({ error: 'likes unavailable' }, { status: 503 });
+    }
     const migrated = await this.migrateLegacyLikes();
     const c = (await this.storage.get<Counts>('counts')) ?? { views: 0, likes: 0 };
     if (req.method === 'POST' && url.pathname === '/view') {
       c.views++;
       await this.storage.put('counts', c);
-    } else if (req.method === 'POST' && url.pathname === '/like') {
-      const who = url.searchParams.get('u');
-      if (who && who.length <= MAX_LIKER_LENGTH && c.likes < MAX_LIKES_PER_TOUR) {
-        const key = `${HASHED_PREFIX}${await this.hash(who)}`;
-        const liked =
-          (await this.storage.get(key)) ||
-          (!migrated && (await this.storage.get(`${LEGACY_PREFIX}${who}`)));
-        if (!liked) {
-          c.likes++;
-          await this.storage.put('counts', c);
-          await this.storage.put(key, 1); // dedupe one like per user
-        }
+    } else if (who !== null && likeKey !== null && c.likes < MAX_LIKES_PER_TOUR) {
+      const key = `${HASHED_PREFIX}${likeKey}`;
+      const liked =
+        (await this.storage.get(key)) ||
+        (!migrated && (await this.storage.get(`${LEGACY_PREFIX}${who}`)));
+      if (!liked) {
+        c.likes++;
+        await this.storage.put('counts', c);
+        await this.storage.put(key, 1); // dedupe one like per user
       }
     }
     return Response.json(c);

@@ -485,6 +485,7 @@ describe('HotspotPanel', () => {
     const frame = screen.getByTitle('Kitchen');
     const flags = frame.getAttribute('sandbox')!.split(' ').sort();
     expect(flags).toEqual([
+      'allow-forms',
       'allow-popups',
       'allow-popups-to-escape-sandbox',
       'allow-presentation',

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { PreconditionRequiredError, toErrorResponse, UnauthorizedError } from './errors.js';
+import {
+  describeError,
+  PreconditionRequiredError,
+  toErrorResponse,
+  UnauthorizedError,
+} from './errors.js';
 
 describe('UnauthorizedError', () => {
   it('has status 401 and message "unauthorized"', () => {
@@ -46,17 +51,29 @@ describe('toErrorResponse', () => {
     await expect(res.json()).resolves.toEqual({ error: 'internal' });
   });
 
-  it('masks the owner segment of an R2 key in the logged message', () => {
+  it('logs message and stack with the owner segment of an R2 key masked', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     toErrorResponse(
       new Error('R2 PUT upload-log/Z29vZ2xl/x -> 500; HEAD panos/Z29vZ2xl/p1/original'),
     );
-    expect(errorSpy).toHaveBeenCalledWith(
-      'internal error:',
-      'R2 PUT upload-log/<owner>/x -> 500; HEAD panos/<owner>/p1/original',
+    const logged = String(errorSpy.mock.calls[0]![1]);
+    expect(errorSpy.mock.calls[0]![0]).toBe('internal error:');
+    expect(logged).toMatch(
+      /^Error: R2 PUT upload-log\/<owner>\/x -> 500; HEAD panos\/<owner>\/p1\/original\n\s+at /,
     );
+    expect(logged).not.toContain('Z29vZ2xl');
     toErrorResponse('tours/Z29vZ2xl/t1/tour.json');
     expect(errorSpy).toHaveBeenLastCalledWith('internal error:', 'tours/<owner>/t1/tour.json');
+  });
+
+  it('logs the cause chain, redacted too', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const inner = new Error('R2 GET accounts/Z29vZ2xl/deletion.json -> 503');
+    toErrorResponse(new Error('delete failed', { cause: inner }));
+    const logged = String(errorSpy.mock.calls[0]![1]);
+    expect(logged).toContain('Error: delete failed');
+    expect(logged).toContain('caused by: Error: R2 GET accounts/<owner>/deletion.json -> 503');
+    expect(logged).not.toContain('Z29vZ2xl');
   });
 
   it('does not log for an expected 4xx WorkerError', () => {
@@ -64,5 +81,16 @@ describe('toErrorResponse', () => {
     toErrorResponse(new UnauthorizedError());
     toErrorResponse(new PreconditionRequiredError());
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('describeError', () => {
+  it('stops at a cyclic cause and stringifies a non-Error cause', () => {
+    const e = new Error('loop');
+    e.cause = e;
+    expect(describeError(e).match(/caused by:/g)).toHaveLength(5);
+    expect(describeError(new Error('x', { cause: 'panos/Z29v/p1' }))).toContain(
+      'caused by: panos/<owner>/p1',
+    );
   });
 });

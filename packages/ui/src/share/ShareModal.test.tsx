@@ -298,7 +298,9 @@ describe('ShareModal', () => {
       expect(frame.getAttribute('allow')).toBe('fullscreen');
       // Sandboxed, but with what the same-origin embed needs to run; never top navigation.
       const flags = frame.getAttribute('sandbox')!.split(' ');
-      expect(flags).toEqual(expect.arrayContaining(['allow-scripts', 'allow-same-origin']));
+      expect(flags).toEqual(
+        expect.arrayContaining(['allow-scripts', 'allow-same-origin', 'allow-forms']),
+      );
       expect(flags.some((f) => f.startsWith('allow-top-navigation'))).toBe(false);
     });
   });

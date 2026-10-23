@@ -96,7 +96,7 @@ describe('TourStats liker hashing', () => {
   it('falls back to an unkeyed, domain-prefixed SHA-256 without the secret, and warns', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const res = await runInDurableObject(stub('t-unkeyed'), async (_i, state) => {
-      const unkeyed = new TourStats(state, {});
+      const unkeyed = new TourStats(state, { LIKER_HASH_FALLBACK: 'allow' });
       await unkeyed.fetch(new Request('https://do/like?u=alice', { method: 'POST' }));
       return unkeyed.fetch(new Request('https://do/like?u=alice', { method: 'POST' }));
     });
@@ -111,6 +111,33 @@ describe('TourStats liker hashing', () => {
     expect(stored.join()).not.toContain('alice');
     // Once per isolate: an earlier test may already have logged it.
     expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
+  });
+
+  it('refuses likes without the secret where the fallback is not allowed (production)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const [like, view, legacy] = await runInDurableObject(stub('t-closed'), async (_i, state) => {
+      await state.storage.put('liked:old', 1);
+      const closed = new TourStats(state, { LIKER_HASH_FALLBACK: 'refuse' });
+      const like = await closed.fetch(new Request('https://do/like?u=alice', { method: 'POST' }));
+      const view = await closed.fetch(new Request('https://do/view', { method: 'POST' }));
+      return [
+        { status: like.status, body: await like.json() },
+        await view.json(),
+        await state.storage.get('liked:old'),
+      ] as const;
+    });
+    expect(like).toEqual({ status: 503, body: { error: 'likes unavailable' } });
+    expect(error).toHaveBeenCalledTimes(1);
+    // Views still count, and a raw key stays raw until it can be hashed.
+    expect(view).toEqual({ views: 1, likes: 0 });
+    expect(legacy).toBe(1);
+    expect((await keys('t-closed')).join()).not.toContain('likedh:');
+  });
+
+  it('counts every one of many concurrent likes', async () => {
+    const likes = Array.from({ length: 20 }, (_, i) => callDO('t-race', `/like?u=user-${i}`));
+    await Promise.all(likes);
+    expect(await (await callDO('t-race', '/')).json()).toEqual({ views: 0, likes: 20 });
   });
 
   it('counts a like stored raw before the change, and rewrites it hashed', async () => {

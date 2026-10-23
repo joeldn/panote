@@ -20,7 +20,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (optional, see Likes) |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
@@ -656,8 +656,8 @@ variant counts as a *different* address, and a mismatch makes `send()` fail with
 destinations are allowed. Unset, the consumer skips the email with a warning and everything else
 works.
 
-Repeat with `--env production` once production is provisioned. `public-api` takes one optional
-secret, `LIKER_HASH_KEY` (see "Likes" below):
+Repeat with `--env production` once production is provisioned. `public-api` takes one secret,
+`LIKER_HASH_KEY` (see "Likes" below; optional in dev, required for likes in production):
 
 ```bash
 openssl rand -base64 32 | pnpm --filter @service/public-api exec wrangler secret put LIKER_HASH_KEY --env dev
@@ -1670,14 +1670,23 @@ stored, so storage per tour is bounded.
 
 The dedupe key never holds the liker's id: it is `likedh:` plus the hex HMAC-SHA-256 of the sub or
 client id under the `LIKER_HASH_KEY` secret (`src/stats.ts`). Set it once per env and never
-rotate it: a new key forgets who liked what, so everyone could like each tour once more. Unset
-(local dev, or an env before it's set), `TourStats` uses an unkeyed SHA-256 of
-`panote:liker:v1:<who>` and logs `LIKER_HASH_KEY is not set` once per isolate: likes keep working
-and no raw id is stored, but anyone who knows a sub can recompute its hash. Set the secret before
-production's first deploy; setting it later on an env that already has likes lets each earlier
-liker like again once. Keys stored raw before this change (`liked:<who>`) are rewritten as
-hashes, 128 per request to that tour's `TourStats` (any route: view, like, stats), until a
-`likes-hashed` marker says none are left; a raw key still waiting counts as a like.
+rotate it: a new key forgets who liked what, so everyone could like each tour once more. What
+happens while it's unset depends on the `LIKER_HASH_FALLBACK` var (`wrangler.jsonc`):
+
+- **dev (`allow`)**: `TourStats` uses an unkeyed SHA-256 of `panote:liker:v1:<who>` and logs
+  `LIKER_HASH_KEY is not set` once per isolate. Likes keep working and no raw id is stored, but
+  anyone who knows a sub can recompute its hash.
+- **production (`refuse`)**: it fails closed. Every like answers `503 {"error":"likes
+  unavailable"}` and logs an error; views and stats still work. Set the secret before
+  production's first deploy.
+
+Setting the secret on an env that already has unkeyed hashes (dev) lets each earlier liker like
+again once. Keys stored raw before this change (`liked:<who>`) are rewritten as hashes, 128 per
+request to that tour's `TourStats` (any route: view, like, stats), until a `likes-hashed` marker
+says none are left; a raw key still waiting counts as a like. The rewrite runs inside
+`blockConcurrencyWhile`, and a like is hashed before `counts` is read, so only storage operations
+(which hold the input gate) sit between that read and its write. With no way to hash (production
+without the secret) the raw keys are left alone until the secret is set.
 
 Likes, views (`POST .../view`) and Insights events (`POST .../events`) only count for a published
 tour. Each answers `404 {"error":"tour not found"}`, and creates no Durable Object state and writes

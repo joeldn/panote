@@ -52,6 +52,17 @@ describe('errorHandler', () => {
     expect(logged).not.toContain('Z29vZ2xl');
   });
 
+  it('logs the redacted cause chain', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = appWithRoute(() => {
+      throw new Error('publish failed', { cause: new Error('R2 PUT tours/Z29vZ2xl/t1/x -> 500') });
+    });
+    await app.request('/');
+    const logged = String(errorSpy.mock.calls[0]![1]);
+    expect(logged).toContain('caused by: Error: R2 PUT tours/<owner>/t1/x -> 500');
+    expect(logged).not.toContain('Z29vZ2xl');
+  });
+
   it("lets Hono's own HTTPException pass through unchanged", async () => {
     const app = appWithRoute(() => {
       throw new HTTPException(418, { message: 'teapot' });

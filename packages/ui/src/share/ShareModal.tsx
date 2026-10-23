@@ -3,6 +3,7 @@ import { useId, useState, type ReactNode } from 'react';
 
 import { Button } from '../Button.js';
 import { ConfirmModal } from '../ConfirmModal.js';
+import { IFRAME_SANDBOX } from '../constants.js';
 import { cx } from '../cx.js';
 import { Modal, ModalHeader } from '../Modal.js';
 import { Segmented } from '../Segmented.js';
@@ -89,12 +90,6 @@ const EMBED_STEPS = [
     body: 'The width follows your layout; adjust the height above if it feels cramped.',
   },
 ];
-
-// The embed is our own page on the same origin, so it needs scripts and its own
-// storage (with both, the sandbox is defence in depth, not a boundary). Popups for
-// its "open in Panote" link, presentation for a player inside it; no top navigation.
-const PREVIEW_SANDBOX =
-  'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
 
 const errorMessage = (e: unknown, fallback: string): string =>
   e instanceof Error && e.message ? e.message : fallback;
@@ -436,7 +431,7 @@ function EmbedTab({
           src={src}
           height={height}
           allow="fullscreen"
-          sandbox={PREVIEW_SANDBOX}
+          sandbox={IFRAME_SANDBOX}
           loading="lazy"
         />
       )}

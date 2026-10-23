@@ -22,6 +22,28 @@ export class PreconditionRequiredError extends WorkerError {
   }
 }
 
+// How deep a cause chain is logged; also stops a cycle (an error that is its own cause).
+const MAX_CAUSES = 5;
+
+const oneError = (e: unknown): string =>
+  e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e);
+
+/**
+ * An unexpected error as one log string: its stack (which starts with the message,
+ * or name and message without one) and each `cause` under it, with the owner segment
+ * of any R2 key masked. An R2 or S3 error names the key, whose owner segment decodes
+ * back to the sub, and a wrapper's cause can carry one too.
+ */
+export const describeError = (err: unknown): string => {
+  const parts = [oneError(err)];
+  let e = err instanceof Error ? err.cause : undefined;
+  for (let depth = 0; e !== undefined && depth < MAX_CAUSES; depth++) {
+    parts.push(`caused by: ${oneError(e)}`);
+    e = e instanceof Error ? e.cause : undefined;
+  }
+  return redactOwner(parts.join('\n'));
+};
+
 /**
  * Maps anything thrown to a Response. WorkerError -> { error: message } at its
  * status; anything else -> { error: 'internal' } at 500. Always JSON.
@@ -30,12 +52,12 @@ export class PreconditionRequiredError extends WorkerError {
  *
  * Only the 500 branch logs: a WorkerError is an expected, already-meaningful
  * rejection, but an unrecognised throw otherwise left a bare 500 with
- * nothing in the logs to explain it. The message goes through redactOwner: an
- * R2 or S3 error names the key, whose owner segment decodes back to the sub.
+ * nothing in the logs to explain it. It logs describeError's redacted text,
+ * like the Hono errorHandler.
  */
 export const toErrorResponse = (err: unknown): Response => {
   if (err instanceof WorkerError)
     return Response.json({ error: err.message }, { status: err.status });
-  console.error('internal error:', redactOwner(err instanceof Error ? err.message : String(err)));
+  console.error('internal error:', describeError(err));
   return Response.json({ error: 'internal' }, { status: 500 });
 };

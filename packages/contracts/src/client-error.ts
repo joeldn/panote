@@ -52,7 +52,9 @@ const BEARER = /\bBearer\s+[^\s()'"<>`]+/gi;
 const JWT = /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){0,4}/g;
 // A secret-bearing `key=value` outside a query string (a fragment, a form body,
 // a message): OAuth's code, state and *_token, and the usual secret names. The
-// value runs to the next `&`, `#`, `;` or `,`.
+// value runs to the next `&`, `#`, `;` or `,`. Deliberately anywhere in the text,
+// not only after `?` or `#`: an auth library's message can quote a bare
+// `code=...&state=...`, so an innocent `exit code=1` is masked too, a cheap loss.
 const SECRET_PAIR =
   /(?<![A-Za-z0-9_-])(code|state|nonce|password|sig|signature|x-amz-[a-z-]+|(?:[a-z0-9_]*_)?(?:token|secret))=[^&#;,]*/gi;
 // The segment after an R2 key root, wherever the key shows up (an error, a CDN
@@ -60,6 +62,12 @@ const SECRET_PAIR =
 // back to the sub; a pano id is enough to fetch an unlisted tour's images; a tour
 // id or slug can be an unlisted tour's only secret. Not the same word inside a
 // route (`/api/tours/`, `/app/panos/`), which ID_SEGMENT below handles.
+// Deliberately broad: a root counts after any `/` or non-word character, not only
+// at a key's start, because the key can be quoted inside an S3 URL
+// (`.../<bucket>/panos/...`), a backup or quarantine copy (`backup/<date>/tours/...`)
+// or an error string. The site has no page at `/tours/`, `/panos/` or `/tiles/`
+// (its pages live under `/s/` and `/app/`), so what this over-masks is prose like
+// `tiles/abc`, which costs a little debugging detail and never leaks.
 const KEY_SEGMENT =
   /(?<![A-Za-z0-9_.-])(?<!(?:api|admin|app|pub|explore)\/)(panos|tours|accounts|upload-log|tiles|tile-gc|tour-owners|slugs|pub\/tours|pub\/plans|explore\/tours|explore\/hidden)\/[^/\s?#()'"<>`]+/gi;
 const KEY_LABEL: Record<string, string> = {
