@@ -162,6 +162,9 @@ describe('account menu', () => {
     expect(screen.getByRole('menuitem', { name: 'Home page' }).getAttribute('href')).toBe(
       'http://localhost:5174/',
     );
+    expect(
+      screen.getByRole('menuitem', { name: 'Contact support' }).getAttribute('href'),
+    ).toContain(`body=${encodeURIComponent('Account ID: google-oauth2|1')}`);
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
     expect(auth.signOut).toHaveBeenCalledWith('http://localhost:5174/');
   });

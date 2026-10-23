@@ -10,6 +10,7 @@ import { Link } from 'react-router';
 import { formatBytes } from '../dashboard/format.js';
 import { useSession } from '../session.js';
 import { DeleteAccountModal } from './DeleteAccount.js';
+import { supportHref } from './support.js';
 
 type Load<T> = { status: 'loading' } | { status: 'error' } | { status: 'ready'; value: T };
 
@@ -180,6 +181,25 @@ export function AccountRoute() {
             </p>
           </>
         )}
+      </section>
+
+      <section className="acct__section" aria-labelledby="acct-help">
+        <h2 id="acct-help" className="dash__kicker">
+          Help
+        </h2>
+        {session.user.sub && (
+          <dl className="acct__facts">
+            <dt>Account ID</dt>
+            <dd className="acct__id">{session.user.sub}</dd>
+          </dl>
+        )}
+        <p className="acct__hint">
+          Something not working, or need a change to your account? Write to us and we’ll look into
+          it. Your account ID is filled in so we can find it.
+        </p>
+        <a className="pn-btn pn-btn--ghost" href={supportHref(session.user.sub)}>
+          Contact support
+        </a>
       </section>
 
       <section className="acct__section" aria-labelledby="acct-session">
