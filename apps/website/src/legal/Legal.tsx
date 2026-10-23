@@ -4,16 +4,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { CONTACT_EMAIL } from '../landing/content.js';
-import {
-  DMCA_AGENT_ADDRESS,
-  DMCA_AGENT_NAME,
-  DMCA_AGENT_PHONE,
-  OPERATOR_ADDRESS,
-  OPERATOR_JURISDICTION,
-  OPERATOR_LIABILITY_CAP,
-  OPERATOR_NAME,
-  OPERATOR_REPRESENTATIVES,
-} from './operator.js';
+import { OPERATOR_JURISDICTION } from './operator.js';
 
 const Mail = () => <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>;
 
@@ -46,14 +37,8 @@ export function Privacy() {
         collect, why, and who helps us run it.
       </p>
       <p>
-        Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />,
-        which is responsible for the personal data described here. Contact us at <Mail />.
-        {OPERATOR_REPRESENTATIVES ? (
-          <>
-            {' '}
-            Our representatives are <Operator value={OPERATOR_REPRESENTATIVES} />.
-          </>
-        ) : null}
+        Panote is a personal, non-commercial project. Its maintainer is responsible for the personal
+        data described here and can be reached at <Mail />.
       </p>
 
       <h2>Your account</h2>
@@ -241,9 +226,8 @@ export function Terms() {
   return (
     <LegalPage title="Terms" updated="23 October 2026">
       <p>
-        These terms cover your use of Panote (panote.io), run by <Operator value={OPERATOR_NAME} />,{' '}
-        <Operator value={OPERATOR_ADDRESS} />. By signing in or publishing a tour you agree to them.
-        You must be 16 or older to sign in.
+        These terms cover your use of Panote (panote.io), a personal, non-commercial project. By
+        signing in or publishing a tour you agree to them. You must be 16 or older to sign in.
       </p>
 
       <h2>The service</h2>
@@ -287,8 +271,7 @@ export function Terms() {
       <h2>No warranty</h2>
       <p>
         Panote is provided as it is, without warranties of any kind. As far as the law allows, we
-        aren’t liable for indirect or consequential losses, or for loss of content, and our total
-        liability to you is limited to <Operator value={OPERATOR_LIABILITY_CAP} />. Keep your own
+        aren’t liable for indirect or consequential losses, or for loss of content. Keep your own
         copies of your originals. Nothing in these terms limits liability for death or personal
         injury caused by negligence, or for fraud, or takes away any consumer rights the law doesn’t
         let us exclude.
@@ -319,9 +302,7 @@ export function ContentPolicy() {
         <Link to="/terms">terms</Link>.
       </p>
       <p>
-        Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />.
-        Reports and notices below go to <Mail /> (copyright notices can also go to our agent by post
-        or phone), in English.
+        Every report and notice below goes to <Mail />, in English.
       </p>
 
       <h2>What isn’t allowed</h2>
@@ -343,10 +324,8 @@ export function ContentPolicy() {
 
       <h2>Copyright notices</h2>
       <p>
-        If you believe a tour uses your work without permission, send a notice to our designated
-        copyright agent, <Operator value={DMCA_AGENT_NAME} />, at <Mail />, by post to{' '}
-        <Operator value={DMCA_AGENT_ADDRESS} />, or by phone on{' '}
-        <Operator value={DMCA_AGENT_PHONE} />. It must include:
+        If you believe a tour uses your work without permission, email <Mail /> a notice that
+        includes:
       </p>
       <ul>
         <li>your name, postal address, phone number and email address;</li>

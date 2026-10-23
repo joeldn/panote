@@ -163,7 +163,7 @@ describe('website routes', () => {
     expect(basis).toContain('Legal obligations');
   });
 
-  it('covers the minimum the law asks: rights, transfers, age, law and a US agent', async () => {
+  it('covers the minimum the law asks: rights, transfers, age and law', async () => {
     renderAt('/privacy');
     await screen.findByRole('heading', { name: 'Your rights' });
     const privacy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
@@ -172,7 +172,7 @@ describe('website routes', () => {
     expect(privacy).toContain('standard contractual clauses');
     expect(privacy).toContain('isn’t for anyone under 16');
     expect(privacy).toContain('Request logs and error reports we can read: up to 30 days.');
-    expect(privacy).toContain('YOUR_EU_AND_UK_REPRESENTATIVES');
+    expect(privacy).toContain('a personal, non-commercial project');
 
     cleanup();
     renderAt('/terms');
@@ -180,7 +180,7 @@ describe('website routes', () => {
     const terms = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
     expect(terms).toContain('You must be 16 or older');
     expect(terms).toContain('governed by the law of YOUR_GOVERNING_LAW_JURISDICTION');
-    expect(terms).toContain('limited to YOUR_LIABILITY_CAP');
+    expect(terms).toContain('aren’t liable for indirect or consequential losses');
     expect(terms).toContain('death or personal injury');
     expect(terms).toContain('we’ll tell you why');
 
@@ -188,7 +188,7 @@ describe('website routes', () => {
     renderAt('/content-policy');
     await screen.findByRole('heading', { name: 'Counter-notices' });
     const policy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
-    expect(policy).toContain('designated copyright agent, YOUR_DMCA_AGENT_NAME');
+    expect(policy).not.toContain('YOUR_');
     expect(policy).toContain('US federal district court for your address');
     expect(policy).not.toContain('YOUR_GOVERNING_LAW_JURISDICTION');
     expect(policy).toContain('which rule or law it broke');
