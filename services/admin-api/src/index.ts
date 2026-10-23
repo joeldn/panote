@@ -606,10 +606,10 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   const meter = meteredBucket(c.env.BUCKET);
   const purge =
     action === 'delete'
-      ? await deleteTour(meter.bucket, sub, tourId, () => stub.unpublish(sub, tourId), {
+      ? await deleteTour(meter.bucket, sub, tourId, () => stub.unpublish(sub, tourId, false, true), {
           tilesByUrl: true,
         })
-      : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
+      : { prefixes: [], files: await stub.unpublish(sub, tourId, true, true) };
   const planned = purge.prefixes.length + purge.files.length;
   const room =
     SUBREQUEST_LIMIT -

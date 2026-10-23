@@ -1946,8 +1946,8 @@ schema): anything else is a `400` in `admin-api` and `upload-api`, and `public-a
   `owner` a SHA-256 of the owner segment, never the sub; private, outside the CDN's WAF prefixes):
   until then a publish, rename or default slug from any other owner treats it as taken, so nobody
   can take over an old share link, while the same owner may claim it again from any of their
-  tours. A claim re-checks the hold after its create and gives the slug back if a release landed in
-  between. The daily cron deletes expired holds. A rename's old slug needs no hold: it stays this
+  tours (after an operator takedown, not even they can: see Takedown). A claim re-checks the hold after its create and gives the slug back if a release landed in
+  between, or if that re-check fails (the error then fails the publish). The daily cron deletes expired holds. A rename's old slug needs no hold: it stays this
   tour's redirect alias for `SLUG_ALIAS_DAYS` (30) and is free for anyone once that ends. A short list of support and sign-in words is
   reserved (`RESERVED_SLUGS`, plus any slug starting `panote` or led by `login`/`signin`); a tour
   already live at a word reserved later keeps republishing at it.
@@ -2160,7 +2160,9 @@ Two ways to stop abuse, usually together:
   reachable by anyone who has the URL); `delete` also deletes the tour, its floor-plan images and
   every pano no other tour of that owner uses, tiles included, purged from the CDN. Both
   also take the tour off Explore, and so does every script mode built on them (`--quarantine`,
-  `--all-tours`, `--close-account`'s sweep). `hide` only takes it off Explore and keeps it off
+  `--all-tours`, `--close-account`'s sweep). Their released slugs (live and aliases) are held for
+  `SLUG_HOLD_DAYS` (30) for **no** owner (`owner: "takedown"` in `slug-holds/`), so not even the
+  owner taken down can republish at them until the hold ends. `hide` only takes it off Explore and keeps it off
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is
   still published and Public (see Explore). It answers `404` for a missing or wrong token, and
   always while the `OPERATOR_TOKEN` secret isn't set on that env, so the route doesn't exist until

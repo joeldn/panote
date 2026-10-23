@@ -4,6 +4,8 @@ import {
   deletingKey,
   encodeId,
   manifestKey,
+  OPERATOR_TAKEDOWN_PATH,
+  OPERATOR_TOKEN_HEADER,
   originalKey,
   PublishedTourSchema,
   PublishOkSchema,
@@ -41,7 +43,7 @@ import {
   sweepExpiredAliases,
   unpublish,
 } from './publish.js';
-import { SLUG_HOLD_DAYS } from './slug-hold.js';
+import { SLUG_HOLD_DAYS, TAKEDOWN_HOLD_OWNER } from './slug-hold.js';
 
 const MY_SUB = 'auth0|me';
 const OTHER_SUB = 'auth0|other';
@@ -853,6 +855,53 @@ describe('released slugs cool off (slug-hold.ts)', () => {
     ).rejects.toThrow('r2 down');
     expect(await env.BUCKET.head(slugKey('hold-err-slug'))).toBeNull();
   });
+
+  it('a re-check that fails after the create gives the slug back and rethrows', async () => {
+    await readyPano('hold-recheck-o1', 'other');
+    const theirs = await createTour('Recheck', ['hold-recheck-o1'], 'other');
+    const holdKey = slugHoldKey('hold-recheck-slug')!;
+    let reads = 0;
+    // The first hold read (before the create) works; the re-check after it fails.
+    const flaky = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return (k: string) =>
+            k === holdKey && reads++ > 0 ? Promise.reject(new Error('r2 down')) : target.get(k);
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      publishTour(flaky, OTHER_SUB, theirs, { slug: 'hold-recheck-slug' }, clock()),
+    ).rejects.toThrow('r2 down');
+    expect(reads).toBe(2);
+    expect(await env.BUCKET.head(slugKey('hold-recheck-slug'))).toBeNull();
+  });
+
+  it.each(['unpublish', 'delete'])(
+    'an operator %s holds the slug for no owner, not even the one taken down',
+    async (action) => {
+      const slug = `hold-op-${action}`;
+      const tourId = await publishedTour(`hold-op-${action}`, slug);
+      const r = await SELF.fetch(`https://x${OPERATOR_TAKEDOWN_PATH}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          [OPERATOR_TOKEN_HEADER]: 'test-operator-token',
+        },
+        body: JSON.stringify({ sub: MY_SUB, tourId, action }),
+      });
+      expect(r.status).toBe(200);
+      expect((await holdOf(slug))?.owner).toBe(TAKEDOWN_HOLD_OWNER);
+      // The owner can't take it straight back, from this tour or another one.
+      await readyPano(`hold-op-${action}-p2`);
+      const another = await createTour('Again', [`hold-op-${action}-p2`]);
+      expect((await publish(another, { slug })).status).toBe(409);
+      if (action === 'unpublish') expect((await publish(tourId, { slug })).status).toBe(409);
+      expect(await env.BUCKET.head(slugKey(slug))).toBeNull();
+    },
+  );
 
   it('the daily cron sweeps expired holds and keeps live ones', async () => {
     const tourId = await publishedTour('hold-sweep', 'hold-sweep-a');

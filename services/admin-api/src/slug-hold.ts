@@ -24,17 +24,26 @@ export const holdOwner = async (sub: string): Promise<string> => {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
-/** Holds `slug` for its owner `sub` for SLUG_HOLD_DAYS from `now`, replacing any older hold. */
+// The owner of a hold left by an operator takedown. Never a hex digest, so no owner
+// matches it: not even the one taken down can claim the slug back for SLUG_HOLD_DAYS.
+export const TAKEDOWN_HOLD_OWNER = 'takedown';
+
+/**
+ * Holds `slug` for its owner `sub` for SLUG_HOLD_DAYS from `now`, replacing any older
+ * hold. `takedown`: an operator takedown, held for no owner at all (TAKEDOWN_HOLD_OWNER).
+ */
 export const holdSlug = async (
   bucket: R2Bucket,
   sub: string,
   slug: string,
   now: Date,
+  { takedown = false }: { takedown?: boolean } = {},
 ): Promise<void> => {
   const key = slugHoldKey(slug);
   if (!key) return;
   const expiresAt = new Date(now.getTime() + SLUG_HOLD_DAYS * DAY_MS).toISOString();
-  const hold: SlugHold = { v: 1, owner: await holdOwner(sub), expiresAt };
+  const owner = takedown ? TAKEDOWN_HOLD_OWNER : await holdOwner(sub);
+  const hold: SlugHold = { v: 1, owner, expiresAt };
   await putJson(bucket, key, hold, undefined, { expiresAt });
 };
 

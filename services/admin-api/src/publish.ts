@@ -184,8 +184,16 @@ export const claimSlug = async (
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const created = await putJson(bucket, key, pointer, { etagDoesNotMatch: '*' }, pointerMetadata);
     if (created.ok) {
-      // A release can land between the check above and the create: give it back.
-      if (!(await heldByOther(bucket, sub, slug, Date.now()))) return 'created';
+      // A release can land between the check above and the create: give it back. So
+      // must a re-check that fails, or the pointer would block the slug's rightful owner.
+      let held: boolean;
+      try {
+        held = await heldByOther(bucket, sub, slug, Date.now());
+      } catch (e) {
+        await bucket.delete(key);
+        throw e;
+      }
+      if (!held) return 'created';
       await bucket.delete(key);
       return 'taken';
     }
@@ -514,11 +522,13 @@ export const setVisibility = async (
 // is held for this owner first (slug-hold.ts), so for SLUG_HOLD_DAYS nobody else can take
 // over an old share link. Returns the public keys to purge (B6). `stopSharing` (the owner's "Stop sharing", or a takedown) also
 // leaves the sharing-stopped marker, so the editor's next Save doesn't publish it again.
+// `takedown` (the operator route): the released slugs are held for no owner, so the owner
+// taken down can't claim them back either until the hold ends.
 export const unpublish = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
-  { stopSharing = false }: { stopSharing?: boolean } = {},
+  { stopSharing = false, takedown = false }: { stopSharing?: boolean; takedown?: boolean } = {},
 ): Promise<string[]> => {
   const [stored, tour] = await Promise.all([
     readPublishRecord(bucket, sub, tourId),
@@ -535,7 +545,7 @@ export const unpublish = async (
     const existing = await readSlug(bucket, stored.value.slug);
     const key = storedSlugKey(stored.value.slug);
     if (key && existing?.record?.kind === 'tour' && existing.record.tourId === tourId) {
-      await holdSlug(bucket, sub, stored.value.slug, now);
+      await holdSlug(bucket, sub, stored.value.slug, now, { takedown });
       await bucket.delete(key);
       removed.push(key);
     }
@@ -545,7 +555,7 @@ export const unpublish = async (
         const aliasKey = storedSlugKey(alias);
         const record = aliasKey ? (await readSlug(bucket, alias))?.record : null;
         if (!aliasKey || record?.kind !== 'redirect' || record.tourId !== tourId) return null;
-        await holdSlug(bucket, sub, alias, now);
+        await holdSlug(bucket, sub, alias, now, { takedown });
         await bucket.delete(aliasKey);
         return aliasKey;
       }),
