@@ -2,92 +2,37 @@ import {
   pickLanguage,
   tourLanguageList,
   translated,
+  type TourPublishState,
   type TourWithConfigsOk,
 } from '@internal/contracts';
 import { Chip, LogoMark, ShareModal, TourViewer } from '@internal/ui';
-import { isAuthError, tilesBaseUrl, toViewerTour } from '@internal/web-kit';
-import { useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { tilesBaseUrl, toViewerTour } from '@internal/web-kit';
+import { useContext, useMemo, useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router';
 
 import './preview.css';
 
 import { useConfig } from '../config-context.js';
-import { useSession } from '../session.js';
+import type { EditorDocs } from '../editor/model.js';
+import { previewData } from './preview-data.js';
 import { StageFactoryContext } from './stage-factory.js';
 
-type Load =
-  | { status: 'loading' }
-  | { status: 'not-found' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; data: TourWithConfigsOk };
-
-/** Route element for `/app/t/:tourId/preview` (screen 05, owner side). */
-export function Preview() {
-  const { tourId = '' } = useParams();
-  return <TourPreview key={tourId} tourId={tourId} />;
-}
-
 /**
- * The tour as visitors will see it, from the owner's saved tour and configs, so
- * it works before the tour is published. No views, likes or analytics are sent.
+ * `/app/t/:tourId/preview` (screen 05, owner side): the tour as visitors will see it, drawn
+ * in place of the editor, which stays mounted with its unsaved edits for the way back. No
+ * views, likes or analytics are sent.
  */
-function TourPreview({ tourId }: { tourId: string }) {
-  const { api } = useSession();
-  const [load, setLoad] = useState<Load>({ status: 'loading' });
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    let live = true;
-    api.getTourWithConfigs(tourId).then(
-      (res) => {
-        if (!live) return;
-        setLoad(
-          res.status === 'ok' ? { status: 'ready', data: res.data } : { status: 'not-found' },
-        );
-      },
-      (e: unknown) => {
-        if (!live) return;
-        // A 401 has already reopened sign-in (RequireAuth); this is what stays behind it.
-        const message = isAuthError(e)
-          ? 'Sign in again to preview this tour.'
-          : 'Check your connection and try again.';
-        setLoad({ status: 'error', message });
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [api, tourId, attempt]);
-
-  if (load.status === 'loading') return <PreviewMessage title="Loading preview…" />;
-  if (load.status === 'not-found') {
-    return (
-      <PreviewMessage title="Tour not found">
-        <p>
-          It may have been deleted. <Link to="/">Back to your tours</Link>
-        </p>
-      </PreviewMessage>
-    );
-  }
-  if (load.status === 'error') {
-    return (
-      <PreviewMessage title="Couldn’t load this tour">
-        <p>
-          {load.message}{' '}
-          <button
-            type="button"
-            onClick={() => {
-              setLoad({ status: 'loading' });
-              setAttempt((n) => n + 1);
-            }}
-          >
-            Try again
-          </button>
-        </p>
-      </PreviewMessage>
-    );
-  }
-  return <PreviewScreen tourId={tourId} data={load.data} />;
+export function EditorPreview({
+  docs,
+  publish,
+  unsaved,
+}: {
+  docs: EditorDocs;
+  publish: TourPublishState | null;
+  unsaved: boolean;
+}) {
+  const data = useMemo(() => previewData(docs, publish), [docs, publish]);
+  return <PreviewScreen tourId={docs.tourId} data={data} unsaved={unsaved} />;
 }
 
 function PreviewMessage({ title, children }: { title: string; children?: ReactNode }) {
@@ -101,7 +46,15 @@ function PreviewMessage({ title, children }: { title: string; children?: ReactNo
   );
 }
 
-function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigsOk }) {
+function PreviewScreen({
+  tourId,
+  data,
+  unsaved,
+}: {
+  tourId: string;
+  data: TourWithConfigsOk;
+  unsaved: boolean;
+}) {
   const config = useConfig();
   const createViewer = useContext(StageFactoryContext);
   const { tour: doc, configs, publish } = data;
@@ -150,7 +103,7 @@ function PreviewScreen({ tourId, data }: { tourId: string; data: TourWithConfigs
         ),
         extras: () => (
           <Chip tone="light" mono icon="fa-solid fa-eye" className="pv-badge">
-            Preview
+            {unsaved ? 'Preview · not saved yet' : 'Preview'}
           </Chip>
         ),
         end: (

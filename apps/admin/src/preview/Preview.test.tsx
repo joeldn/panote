@@ -237,7 +237,7 @@ describe('owner preview', () => {
     server.unauthorized = true;
     open();
     expect(await screen.findByRole('heading', { name: 'Couldn’t load this tour' })).toBeTruthy();
-    expect(screen.getByText(/Sign in again to preview this tour/)).toBeTruthy();
+    expect(screen.getByText(/Sign in again to load this tour/)).toBeTruthy();
     expect(await screen.findByRole('dialog', { name: 'Your session has ended' })).toBeTruthy();
     server.unauthorized = false;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));

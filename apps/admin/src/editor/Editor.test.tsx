@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeAuth, renderAdmin, USER } from '../__fixtures__/auth.js';
@@ -54,6 +54,12 @@ function openTab(path = '/app/t/t1', auth = fakeAuth()) {
 const loaded = (ui: ReturnType<typeof within>) =>
   ui.findByRole('button', { name: /Tour title: Old town/ });
 
+/** Tour settings live in the bar's tour menu. */
+function openSettings(ui: ReturnType<typeof within>) {
+  fireEvent.click(ui.getByRole('button', { name: 'Tour menu' }));
+  fireEvent.click(ui.getByRole('menuitem', { name: 'Tour settings' }));
+}
+
 async function rename(ui: ReturnType<typeof within>, label: RegExp, value: string) {
   fireEvent.click(await ui.findByRole('button', { name: label }));
   const input = ui.getByRole('textbox', { name: label.source.split(':')[0]!.replace(/\\/g, '') });
@@ -102,7 +108,9 @@ describe('editor: someone else’s tour', () => {
     await loaded(ui);
     expect(ui.queryByRole('link', { name: 'Share' })).toBeNull();
     expect(ui.queryByRole('button', { name: 'From library' })).toBeNull();
-    expect(ui.getAllByRole('link', { name: 'People' }).length).toBeGreaterThan(0);
+    fireEvent.click(ui.getByRole('button', { name: 'Tour menu' }));
+    expect(ui.getByRole('menuitem', { name: 'People' })).toBeTruthy();
+    fireEvent.click(ui.getByRole('button', { name: 'Tour menu' }));
 
     await rename(ui, /Pano name: Square/, 'Main square');
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
@@ -204,7 +212,7 @@ describe('editor: save', () => {
     fireEvent.click(within(banner).getByRole('button', { name: 'Reload' }));
     expect(await b.ui.findByRole('button', { name: /Pano name: Plaza \(A\)/ })).toBeTruthy();
     expect(b.ui.queryByRole('alert')).toBeNull();
-    expect(b.ui.getByText('Saved')).toBeTruthy();
+    expect(b.ui.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
   it('a publish failure does not fail the save; slug lost links to the share link tab', async () => {
@@ -676,8 +684,12 @@ describe('editor: a Save that fails in part never publishes a mixed tour', () =>
     await ui.findByText(/weren’t saved/);
     expect(server.tour!.body.title).toBe('New town');
 
+    // Share saves unsaved edits on the way: the save fails again, so it stays here.
     fireEvent.click(ui.getByRole('link', { name: 'Share' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
+    await ui.findByRole('button', { name: 'Save' });
+    expect(router.state.location.pathname).toBe('/app/t/t1');
+    // Reached directly, the modal still refuses to publish the mix.
+    await act(() => router.navigate('/t/t1/share/link'));
     fireEvent.click(await screen.findByRole('button', { name: 'Publish link' }));
     expect(await screen.findByText('Save your changes first.')).toBeTruthy();
     expect(published).toEqual([]);
@@ -700,7 +712,7 @@ describe('editor: stop sharing', () => {
     expect(ui.getByText('Saving updates the live link')).toBeTruthy();
 
     // Stop sharing from the share modal over the editor (edits stay unsaved).
-    fireEvent.click(ui.getByRole('link', { name: 'Share' }));
+    await act(() => router.navigate('/t/t1/share/link'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
     fireEvent.click(await screen.findByRole('tab', { name: 'Privacy' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Stop sharing' }));
@@ -880,11 +892,11 @@ describe('editor: points, connections, views and settings', () => {
       fireEvent.keyDown(document, { key: 'Escape' });
       expect(screen.queryByText(/Click the new spot/)).toBeNull();
       // Back where it was: nothing to save.
-      expect(ui.getByText('Saved')).toBeTruthy();
+      expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
 
       fireEvent.click(panel.getByRole('button', { name: 'Move' }));
       drag(layer(/Click the new spot/), [20, 10], [90, 40]);
-      expect(ui.queryByText('Saved')).toBeNull();
+      expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
       fireEvent.click(panel.getByRole('button', { name: 'Move' }));
       fireEvent.pointerMove(layer(/Click the new spot/), { pointerId: 2, clientX: 5, clientY: 5 });
       fireEvent.click(panel.getByRole('button', { name: 'Cancel move' }));
@@ -972,7 +984,7 @@ describe('editor: points, connections, views and settings', () => {
       fireEvent.pointerCancel(el, { pointerId: 1 });
       expect(ui.getByRole('heading', { name: /Points 1/ })).toBeTruthy();
       expect(screen.queryByText(/drag to size it/)).toBeNull();
-      expect(ui.getByText('Saved')).toBeTruthy();
+      expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
 
       fireEvent.click(openFountain(ui).getByRole('button', { name: 'Move' }));
       el = layer(/drag the point there/);
@@ -981,7 +993,7 @@ describe('editor: points, connections, views and settings', () => {
       await ui.findByRole('button', { name: 'Save' });
       fireEvent.pointerCancel(el, { pointerId: 1 });
       expect(screen.queryByText(/drag the point there/)).toBeNull();
-      expect(ui.getByText('Saved')).toBeTruthy();
+      expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
     });
 
     it('ends a move when another point is opened, so Esc no longer rolls it back', async () => {
@@ -1024,7 +1036,7 @@ describe('editor: points, connections, views and settings', () => {
       await ui.findByRole('heading', { name: /Points 2/ });
       fireEvent.keyDown(document, { key: 'Escape' });
       expect(ui.getByRole('heading', { name: /Points 1/ })).toBeTruthy();
-      expect(ui.getByText('Saved')).toBeTruthy();
+      expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
 
       fireEvent.click(ui.getByRole('button', { name: 'Add point' }));
       // A wobble under the drag threshold is still a click.
@@ -1073,7 +1085,7 @@ describe('editor: points, connections, views and settings', () => {
     fireEvent.click(ui.getByRole('button', { name: /North is here/ }));
     fireEvent.click(ui.getByRole('button', { name: 'Start the tour at Church' }));
 
-    fireEvent.click(ui.getByRole('button', { name: 'Tour settings' }));
+    openSettings(ui);
     const settings = within(ui.getByRole('dialog', { name: 'Tour settings' }));
     fireEvent.click(settings.getByRole('radio', { name: 'Top' }));
     fireEvent.click(settings.getByRole('switch', { name: /Mini-map/ }));
@@ -1097,7 +1109,7 @@ describe('editor: points, connections, views and settings', () => {
     server.setTour({ ...server.tour!.body, description: 'Old town at dusk' });
     const { ui } = openTab();
     await loaded(ui);
-    fireEvent.click(ui.getByRole('button', { name: 'Tour settings' }));
+    openSettings(ui);
     const settings = within(ui.getByRole('dialog', { name: 'Tour settings' }));
     const field = settings.getByRole('textbox', { name: 'Description' }) as HTMLTextAreaElement;
     expect(field.value).toBe('Old town at dusk');
@@ -1116,14 +1128,13 @@ describe('editor: points, connections, views and settings', () => {
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
     const banner = await ui.findByRole('alert');
     fireEvent.click(within(banner).getByRole('button', { name: 'Reload' }));
-    await ui.findByText('Saved');
-    fireEvent.click(ui.getByRole('button', { name: 'Tour settings' }));
+    await waitFor(() => expect(ui.queryByRole('button', { name: 'Save' })).toBeNull());
+    openSettings(ui);
     const settings = within(ui.getByRole('dialog', { name: 'Tour settings' }));
     const field = settings.getByRole('textbox', { name: 'Description' });
     fireEvent.change(field, { target: { value: 'x' } });
     fireEvent.change(field, { target: { value: '' } });
     // Back to blank: nothing to save.
-    expect(ui.getByText('Saved')).toBeTruthy();
     expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
@@ -1149,6 +1160,39 @@ describe('editor: points, connections, views and settings', () => {
     expect(ui.getByRole('button', { name: /Tour title: Old town/ })).toBeTruthy();
   });
 
+  it('saves unsaved edits before Share opens, so what is shared is what is shown', async () => {
+    const { ui, router } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'New town');
+    expect(ui.getByRole('link', { name: 'Share' }).getAttribute('title')).toBe(
+      'Saves your changes first',
+    );
+    fireEvent.click(ui.getByRole('link', { name: 'Share' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
+    expect(server.tour!.body.title).toBe('New town');
+    expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
+  });
+
+  it('keeps the bar to Preview, Save only when needed, Share and one tour menu', async () => {
+    const { ui } = openTab();
+    await loaded(ui);
+    // Clean: no save state at all.
+    expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(ui.queryByText('Saved')).toBeNull();
+    expect(ui.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
+      '/app/t/t1/preview',
+    );
+    for (const gone of ['People', 'Insights']) {
+      expect(ui.queryByRole('link', { name: gone })).toBeNull();
+    }
+    expect(ui.queryByRole('button', { name: 'Tour settings' })).toBeNull();
+    await rename(ui, /Tour title: Old town/, 'New town');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    // "Saved" says so for a moment, then the bar is quiet again.
+    await waitFor(() => expect(ui.queryByText('Saved')).toBeNull(), { timeout: 4000 });
+  }, 10_000);
+
   it('asks before leaving with unsaved changes', async () => {
     const { ui, router } = openTab();
     await loaded(ui);
@@ -1159,10 +1203,18 @@ describe('editor: points, connections, views and settings', () => {
     expect(router.state.location.pathname).toBe('/app/t/t1');
     window.dispatchEvent(new Event('pagehide'));
     expect(localStorage.getItem(DRAFT)).toContain('Unsaved');
-    // Share opens over the editor, so it doesn't count as leaving.
-    fireEvent.click(ui.getByRole('link', { name: 'Share' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
+    // Share, People and Preview open over (or in place of) the editor: not leaving.
+    await act(() => router.navigate('/t/t1/people'));
+    await act(() => router.navigate('/t/t1/preview'));
     expect(screen.queryByRole('dialog', { name: 'Leave without saving?' })).toBeNull();
+    // The preview shows the edits as they stand, before any save.
+    expect(await screen.findByText('Preview · not saved yet')).toBeTruthy();
+    expect(
+      within(screen.getByRole('navigation', { name: 'Tour' })).getByText('Unsaved'),
+    ).toBeTruthy();
+    expect(server.tour!.body.title).toBe('Old town');
+    fireEvent.click(screen.getByRole('link', { name: 'Back to editor' }));
+    expect(await ui.findByRole('button', { name: /Tour title: Unsaved/ })).toBeTruthy();
     expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
   });
 

@@ -10,8 +10,6 @@ export { NewPanoOverlay as UploadOverlay } from './upload/UploadOverlay.js';
 
 export { Editor } from './editor/Editor.js';
 
-export { Preview } from './preview/Preview.js';
-
 export { ShareRoute as ShareModal } from './share/ShareRoute.js';
 export { InsightsRoute as InsightsModal } from './insights/InsightsRoute.js';
 export { PeopleRoute as PeopleModal } from './people/PeopleRoute.js';

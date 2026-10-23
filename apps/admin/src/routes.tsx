@@ -12,7 +12,6 @@ import {
   OpsOverview,
   OpsUsers,
   PeopleModal,
-  Preview,
   ShareModal,
   UnusedPanos,
   UploadOverlay,
@@ -53,8 +52,7 @@ export const routes: RouteObject[] = [
           { path: '*', element: <NotFound /> },
         ],
       },
-      // Full-screen with their own top bars, so outside Shell (whose bar would sit behind them).
-      { path: 't/:tourId/preview', element: <Preview /> },
+      // Full-screen with its own top bar, so outside Shell (whose bar would sit behind it).
       {
         path: 't/:tourId',
         element: <Editor />,
@@ -64,6 +62,8 @@ export const routes: RouteObject[] = [
           { path: 'share/embed', element: <ShareModal tab="embed" /> },
           { path: 'insights', element: <InsightsModal /> },
           { path: 'people', element: <PeopleModal /> },
+          // Drawn by the editor in its own place, from the tour it holds (unsaved edits too).
+          { path: 'preview', element: null },
         ],
       },
     ],

@@ -21,8 +21,24 @@ import {
   type ViewerLinkArrow,
 } from '@internal/ui';
 import { MAX_TOUR_SCENES, tilesBaseUrl } from '@internal/web-kit';
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, Outlet, useBlocker, useParams, useSearchParams } from 'react-router';
+import {
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
+import {
+  Link,
+  Outlet,
+  useBlocker,
+  useMatch,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router';
 
 import './editor.css';
 
@@ -30,6 +46,7 @@ import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { writeCurrentTour } from '../dashboard/current-tour.js';
 import { OwnerAccountMenu } from '../account/OwnerAccountMenu.js';
+import { EditorPreview } from '../preview/Preview.js';
 import { useSession } from '../session.js';
 import type { ShareOutletContext } from '../share/ShareRoute.js';
 import { UploadEnvContext, useUploads } from '../upload/upload-context.js';
@@ -103,6 +120,7 @@ function TourEditor({ tourId }: { tourId: string }) {
   const editor = useEditor(api, tourId, user.sub ?? 'anonymous');
   const { load } = editor;
   const ready = load.status === 'ready';
+  const previewing = useMatch('/t/:tourId/preview') !== null;
   useEffect(() => {
     if (ready) writeCurrentTour(tourId);
   }, [ready, tourId]);
@@ -141,6 +159,15 @@ function TourEditor({ tourId }: { tourId: string }) {
       </EditorMessage>
     );
   }
+  if (previewing) {
+    return (
+      <EditorPreview
+        docs={editor.docs}
+        publish={editor.publish}
+        unsaved={editor.dirty.length > 0}
+      />
+    );
+  }
   return <EditorScreen editor={editor} docs={editor.docs} />;
 }
 
@@ -157,8 +184,9 @@ function EditorMessage({ title, children }: { title: string; children?: ReactNod
 
 // The tab-close prompt lives in useEditor (the re-auth redirect has to disarm it).
 function useUnsavedGuards(dirty: boolean, tourId: string) {
-  // Share, insights and people open over the editor; anything else unmounts it.
-  const inside = new RegExp(`/t/${tourId}(/(share/[a-z]+|insights|people))?/?$`);
+  // Share, insights, people and preview keep the editor (and its unsaved edits); anything
+  // else unmounts it.
+  const inside = new RegExp(`/t/${tourId}(/(share/[a-z]+|insights|people|preview))?/?$`);
   return useBlocker(
     ({ currentLocation, nextLocation }) =>
       dirty &&
@@ -167,8 +195,18 @@ function useUnsavedGuards(dirty: boolean, tourId: string) {
   );
 }
 
+/** How long "Saved" stays in the bar after a save; a clean tour shows no save state at all. */
+const SAVED_FLASH_MS = 2500;
+
 function SaveButton({ editor }: { editor: EditorController }) {
   const { saving, dirty, conflicts, savedAt } = editor;
+  // The save whose "Saved" has had its moment.
+  const [faded, setFaded] = useState<Date | null>(null);
+  useEffect(() => {
+    if (!savedAt) return;
+    const timer = setTimeout(() => setFaded(savedAt), SAVED_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [savedAt]);
   if (saving) {
     return (
       <Button variant="glass" pill busy>
@@ -190,7 +228,7 @@ function SaveButton({ editor }: { editor: EditorController }) {
     return (
       <>
         {live && (
-          <span id="ed-save-hint" className="ed-save-hint">
+          <span id="ed-save-hint" className="pn-sr-only">
             Saving updates the live link
           </span>
         )}
@@ -200,21 +238,18 @@ function SaveButton({ editor }: { editor: EditorController }) {
           onClick={() => void editor.save()}
           aria-keyshortcuts="Control+S Meta+S"
           aria-describedby={live ? 'ed-save-hint' : undefined}
+          title={live ? 'Saving updates the live link' : undefined}
         >
           Save
         </Button>
       </>
     );
   }
-  return (
-    <span
-      className="ed-saved"
-      role="status"
-      title={savedAt ? `Saved ${savedAt.toLocaleTimeString()}` : undefined}
-    >
+  return savedAt && savedAt !== faded ? (
+    <span className="ed-saved" role="status" title={`Saved ${savedAt.toLocaleTimeString()}`}>
       <i className="fa-solid fa-circle-check" aria-hidden="true" /> Saved
     </span>
-  );
+  ) : null;
 }
 
 function EditorScreen({ editor, docs }: { editor: EditorController; docs: EditorDocs }) {
@@ -534,6 +569,15 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const previewTo = `/t/${docs.tourId}/preview${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`;
   const conflictBusy = editor.saving;
 
+  // Share shares the saved tour: unsaved edits are saved on the way. A save that fails, or
+  // can't start (a conflict is open), stays here with its banner instead.
+  const navigate = useNavigate();
+  const saveThen = (to: string) => {
+    void editor.save().then((saved) => {
+      if (saved) void navigate(to);
+    });
+  };
+
   return (
     <main ref={frame} className="ed">
       <title>{`${tour.title} · Editor · panote`}</title>
@@ -714,14 +758,15 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                   {missingName ?? pendingCurrent?.fileName ?? '—'}
                 </span>
               )}
-              <i className="fa-solid fa-pen ed-crumbs__pen" aria-hidden="true" />
+              {cfg && currentId && !lookOnly && (
+                <i className="fa-solid fa-pen ed-crumbs__pen" aria-hidden="true" />
+              )}
             </nav>
-          </div>
-          <div className="ed-bar__right">
-            <div className="ed-bar__tools">
+            {/* Which language the text is edited in: only a translated tour has a choice. */}
+            {(tour.languages?.others.length ?? 0) > 0 && (
               <button
                 type="button"
-                className="ed-glass-btn ed-lang-btn"
+                className={`ed-glass-btn ed-lang-btn${lang ? ' ed-lang-btn--translating' : ''}`}
                 aria-label={`Language: ${languageName(lang ?? defaultLang)}`}
                 aria-expanded={languagesOpen}
                 data-languages-toggle
@@ -730,38 +775,40 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                   setLanguagesOpen((o) => !o);
                 }}
               >
-                <i className="fa-solid fa-globe" aria-hidden="true" />
                 <span className="ed-lang-btn__tag">{lang ?? defaultLang}</span>
+                <i className="fa-solid fa-chevron-down" aria-hidden="true" />
               </button>
-              <button
-                type="button"
-                className="ed-glass-btn ed-glass-btn--icon"
-                aria-label="Tour settings"
-                aria-expanded={settingsOpen}
-                data-settings-toggle
-                onClick={() => {
-                  setLanguagesOpen(false);
-                  setSettingsOpen((o) => !o);
-                }}
+            )}
+          </div>
+          <div className="ed-bar__right">
+            <Link className="ed-glass-btn ed-preview-btn" to={previewTo} aria-label="Preview">
+              <i className="fa-solid fa-eye" aria-hidden="true" />
+              <span className="ed-glass-btn__label">Preview</span>
+            </Link>
+            <SaveButton editor={editor} />
+            {/* Sharing is the owner's: an editor's Save still updates a live tour. */}
+            {editor.role === 'owner' && (
+              <Link
+                className="pn-btn pn-btn--accent pn-btn--pill"
+                to="share/link"
+                // What gets shared is the saved tour: unsaved edits are saved on the way.
+                {...(dirty.length > 0 && {
+                  title: 'Saves your changes first',
+                  onClick: (e: MouseEvent) => {
+                    e.preventDefault();
+                    saveThen('share/link');
+                  },
+                })}
               >
-                <i className="fa-solid fa-sliders" aria-hidden="true" />
-              </button>
-              <Link className="ed-glass-btn" to="people">
-                People
+                {editor.publish && <span className="ed-live-dot" title="Live" aria-hidden="true" />}
+                Share
               </Link>
-              <Link className="ed-glass-btn" to="insights">
-                Insights
-              </Link>
-              <Link className="ed-glass-btn" to={previewTo}>
-                Preview
-              </Link>
-            </div>
+            )}
             <MoreMenu
               lang={lang ?? defaultLang}
               langName={languageName(lang ?? defaultLang)}
               peopleTo="people"
               insightsTo="insights"
-              previewTo={previewTo}
               onLanguages={() => {
                 setSettingsOpen(false);
                 setLanguagesOpen(true);
@@ -771,13 +818,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 setSettingsOpen(true);
               }}
             />
-            <SaveButton editor={editor} />
-            {/* Sharing is the owner's: an editor's Save still updates a live tour. */}
-            {editor.role === 'owner' && (
-              <Link className="pn-btn pn-btn--accent pn-btn--pill" to="share/link">
-                Share
-              </Link>
-            )}
             <OwnerAccountMenu session={session} />
           </div>
         </header>

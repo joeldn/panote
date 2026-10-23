@@ -46,7 +46,13 @@ type UI = ReturnType<typeof openTab>;
 const openMenu = async (ui: UI) => {
   const open = ui.queryByRole('dialog', { name: 'Languages' });
   if (open) return open;
-  fireEvent.click(await ui.findByRole('button', { name: /^Language:/ }));
+  // A translated tour has the language chip in the bar; otherwise it's in the tour menu.
+  const chip = ui.queryByRole('button', { name: /^Language:/ });
+  if (chip) fireEvent.click(chip);
+  else {
+    fireEvent.click(await ui.findByRole('button', { name: 'Tour menu' }));
+    fireEvent.click(ui.getByRole('menuitem', { name: /^Languages, editing/ }));
+  }
   return ui.getByRole('dialog', { name: 'Languages' });
 };
 
@@ -75,7 +81,8 @@ describe('editor: languages', () => {
     const squareEtag = server.configs.get('square')!.etag;
     const ui = openTab();
     await ui.findByRole('button', { name: /Tour title: Old town/ });
-    expect(ui.getByRole('button', { name: 'Language: English' })).toBeTruthy();
+    // One language: nothing to choose between, so no language chip in the bar.
+    expect(ui.queryByRole('button', { name: /^Language:/ })).toBeNull();
 
     const menu = await addLanguage(ui, 'de');
     // Switched straight to editing the new language.
