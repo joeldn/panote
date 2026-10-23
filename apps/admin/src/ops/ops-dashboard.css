@@ -1,0 +1,278 @@
+/* The operator dashboard at /app/ops (no design screen; follows the dashboard's type). */
+.opsd__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  margin-bottom: 8px;
+}
+
+.opsd__ranges {
+  display: inline-flex;
+  border: 1px solid var(--ink-13);
+  border-radius: var(--r-pill);
+  padding: 3px;
+}
+
+.opsd__range {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  font: 500 13px var(--fbody);
+  color: var(--ink-62);
+  cursor: pointer;
+}
+
+.opsd__range--on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.opsd__updated {
+  margin-left: auto;
+  font: 400 12px var(--fmono);
+  color: var(--ink-55);
+}
+
+.opsd__panel {
+  margin-top: 32px;
+}
+
+.opsd__title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 14px;
+  font: 600 18px var(--fdisp);
+  color: var(--ink);
+}
+
+.opsd__note {
+  font: 400 12px var(--fmono);
+  color: var(--ink-50);
+}
+
+.opsd__off {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--ink-13);
+  border-radius: var(--r-row);
+  font: 400 14px/1.45 var(--fbody);
+  color: var(--ink-62);
+  overflow-wrap: anywhere;
+}
+
+.opsd__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.opsd__tile {
+  padding: 14px 16px;
+  border: 1px solid var(--ink-10);
+  border-radius: var(--r-card);
+}
+
+.opsd__label {
+  margin: 0 0 6px;
+  font: 500 12px var(--fbody);
+  color: var(--ink-55);
+  text-align: left;
+}
+
+.opsd__value {
+  margin: 0;
+  font: 600 24px/1.1 var(--fdisp);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.opsd__bad {
+  color: var(--accent);
+}
+
+.opsd__muted {
+  color: var(--ink-50);
+}
+
+.opsd__line {
+  margin: 10px 0 0;
+  font: 400 13px/1.45 var(--fbody);
+  color: var(--ink-62);
+}
+
+.opsd__chart {
+  margin: 0 0 18px;
+}
+
+.opsd__bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 88px;
+  margin: 0;
+  padding: 0;
+  border-bottom: 1px solid var(--ink-13);
+  list-style: none;
+}
+
+.opsd__col {
+  flex: 1;
+  min-height: 0;
+  border-radius: 4px 4px 0 0;
+  background: var(--depth);
+}
+
+.opsd__col:hover {
+  opacity: 0.75;
+}
+
+.opsd__col--bad {
+  background: var(--accent);
+}
+
+.opsd__col[data-empty] {
+  height: 2px;
+  border-radius: 0;
+  background: var(--ink-06);
+}
+
+.opsd__axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font: 400 11px var(--fmono);
+  color: var(--ink-45);
+}
+
+.opsd__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.opsd__scroll {
+  overflow-x: auto;
+  margin-bottom: 8px;
+}
+
+.opsd__table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 13px/1.4 var(--fbody);
+  color: var(--ink);
+}
+
+.opsd__table th {
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid var(--ink-13);
+  font-weight: 500;
+  color: var(--ink-55);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.opsd__table td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--ink-06);
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+
+.opsd__statuses {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opsd__status {
+  display: grid;
+  grid-template-columns: 20px 130px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  font: 400 14px/1.45 var(--fbody);
+}
+
+.opsd__status-label {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.opsd__status-detail {
+  color: var(--ink-70);
+  overflow-wrap: anywhere;
+}
+
+.opsd__status--ok i {
+  color: var(--success);
+}
+
+.opsd__status--warn i {
+  color: var(--vis-unlisted);
+}
+
+.opsd__status--bad i {
+  color: var(--accent);
+}
+
+.opsd__status--none i {
+  color: var(--ink-40);
+}
+
+.opsd__meters {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.opsd__meter {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 12px;
+  font: 400 14px var(--fbody);
+}
+
+.opsd__meter-value {
+  font: 400 13px var(--fmono);
+  color: var(--ink-62);
+  text-align: right;
+}
+
+.opsd__meter-bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--ink-08);
+  overflow: hidden;
+}
+
+.opsd__meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--depth);
+}
+
+.opsd__meter-fill--high {
+  background: var(--accent);
+}
+
+@media (max-width: 560px) {
+  .opsd__status {
+    grid-template-columns: 20px 1fr;
+  }
+
+  .opsd__status-detail {
+    grid-column: 2;
+  }
+}

@@ -3014,6 +3014,41 @@ delete); otherwise the page asks the operator to sign in again and come back. Ea
 `[support] operator …` line in `admin-api`'s logs, with the tour or pano id and never the account
 ID; keep the case log as before (Takedown procedures).
 
+### Metrics dashboard
+
+The overview at `/app/ops` is one page with every signal the platform and the app record, from
+`GET /api/admin/ops/metrics?range=24h|7d` (`services/admin-api/src/ops-metrics/`). Each section comes
+from its own source and fails on its own. A section that can't be read shows `Unavailable:` and the
+reason (for example a GraphQL error naming a field Cloudflare renamed), and the rest of the page
+still loads.
+
+| Section | Source |
+|---|---|
+| Health | What's already recorded in the content bucket: `ops/health/state.json` (failing checks, last alert), the daily cron and tile sweep status, the CDN purge failure marker, a count of `ops/cdn-purge/pending/` and `dead/` (capped at 1,000), and the newest backup set with `complete.json` |
+| Viewers | Analytics Engine (`AE_DATASET`) across every tour: views, scenes, hotspots, average dwell, views over time, the ten most viewed tours (titles from `pub/tours/`), page against embed. Sampled |
+| Workers | GraphQL `workersInvocationsAdaptive` for the Workers listed in `OPS_RESOURCES`: requests, errors, subrequests, CPU p50/p99 per Worker, outcomes other than `success`, and requests and errors over time |
+| Storage | GraphQL `r2StorageAdaptiveGroups` and `r2OperationsAdaptiveGroups` for the env's bucket: objects, size, Class A/B operations, busiest operations |
+| Upload queue | GraphQL `queueBacklogAdaptiveGroups` and `queueMessageOperationsAdaptiveGroups`: average backlog, written, read, done, sent to the DLQ, average wait and retries |
+| Tiler containers | GraphQL `containersMetricsAdaptiveGroups`, whole account: CPU time, instances, peak memory and CPU |
+| Durable Objects | GraphQL `durableObjectsInvocationsAdaptiveGroups` and `durableObjectsStorageGroups`, whole account |
+| This month against the plan | Month-to-date usage against what Workers Paid includes (Cloudflare's pricing pages, checked 2026-10-23; `INCLUDED` in `platform.ts`): Worker requests, R2 Class A/B, R2 storage, queue operations, Durable Object requests, container CPU and memory. Whole account (dev and production share the allowance), except storage, which is the env's bucket |
+
+- **Token.** It uses `CF_ANALYTICS_TOKEN`, the same Account Analytics: Read token as tour insights, so
+  there's nothing new to set up. Queue names come from the Queues API, which that token may not be
+  allowed to call. When it isn't, the queue table lists every queue in the account by id, and nothing
+  else changes. Adding Account → Queues → Read to the token shows names and only this env's queues.
+- **`OPS_RESOURCES`** (var, both env blocks of `services/admin-api/wrangler.jsonc`) names this env's
+  Workers, buckets and queues, since dev and production share one account. Add a Worker there when a
+  new one ships.
+- **Cost.** An uncached load is about 13 GraphQL requests, 5 Analytics Engine queries, a Queues API
+  call and a few R2 reads. Each range's answer is cached for 60 s in the Worker's location, and the
+  route shares tour insights' limit (`INSIGHTS_LIMITER`, 30 a minute per operator). Cloudflare allows
+  300 GraphQL queries per 5 minutes per user.
+- **Not here yet.** Zone traffic (cache hit ratio, status codes, bandwidth) and WAF or rate-limit
+  blocks need a token with Zone Analytics: Read. Uploads, tiling time and failures, publishes and
+  sign-ups aren't recorded anywhere yet. Client error reports are only in `public-api`'s Workers Logs
+  (Error reporting).
+
 ---
 
 ## Insights (unit B5)
