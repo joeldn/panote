@@ -1765,8 +1765,12 @@ A tour save sweeps that tour's plan images ("CDN purge on delete"), but an uploa
 The daily cron's `plan-sweep` task (`sweepUnsavedPlans`, `services/admin-api/src/plan-sweep.ts`)
 lists `pub/plans/` and judges each tour's images:
 
-- **The tour is gone** (no `tour-owners/<tourId>.json` naming an owner whose `tour.json` is
-  there, and no live bundle `pub/tours/<tourId>.json`): its images older than a day go.
+- **No owner pointer** (no readable `tour-owners/<tourId>.json`): nothing goes. Without the
+  pointer the sweep can't find the `tour.json`, and a saved but unpublished tour would look
+  deleted, so it has no evidence either way. These tours are counted and logged.
+- **The tour is gone** (the pointer names an owner whose `tour.json` isn't there, and there is
+  no live bundle `pub/tours/<tourId>.json`): its images older than a day go. Deletes take
+  `tour.json` before the pointer, so this is a delete that stopped half-way or raced an upload.
 - **The tour exists**: images older than **7 days** that neither the stored `tour.json` nor the
   live bundle names go. 7 days is the editor's draft-autosave window (`DRAFT_MAX_AGE_MS`), so a
   plan a local draft holds survives as long as the draft can be restored (an image is aged from
@@ -1774,20 +1778,25 @@ lists `pub/plans/` and judges each tour's images:
   can lose a plan it never saved).
 
 A tour whose images are all younger than a day costs nothing beyond the listing; one being judged
-costs up to 4 R2 operations (pointer, `tour.json`, bundle, one batch delete). A run spends at most
+costs up to 4 R2 operations (pointer, `tour.json`, bundle, one batch delete), or 1 with no
+pointer. A run spends at most
 `PLAN_SWEEP_BUDGET` (400) operations; if it runs out it saves where it got to in
 `ops/plan-sweep/cursor.json` (`{ v, startAfter }`, private like the rest of `ops/`) and the next
 day's run carries on from there. A pass that reaches the end deletes the cursor, so the next one
 starts from the top. Deleted images are purged from the CDN by URL, as the per-save sweep does.
 It logs `[plan-sweep] deleted N unsaved plan image(s) of M tour(s)`, with `budget reached, the
-next run carries on` on a partial run.
+next run carries on` on a partial run, and `left N tour(s) alone with no owner pointer` when it
+skipped any.
 
-The "gone" test leans on the owner pointer, which tours created before pointers existed (#121)
-don't have unless they were published since. So every tour save that carries a plan now writes
-the pointer if it is missing (one `HEAD` after the first), and the cover backfill
-(`backfill-covers.ts`, "Cover and Explore backfill") writes the missing pointers of every tour:
-run it once after deploying this. A published tour with no pointer still counts as existing
-through its bundle.
+The sweep can only judge a tour through its owner pointer, which tours created before pointers
+existed (#121) don't have unless they were published since, and which a save writes only
+best-effort. Every tour save that carries a plan writes the pointer if it is missing (one `HEAD`
+after the first), and the cover backfill (`backfill-covers.ts`, "Cover and Explore backfill")
+writes the missing pointers of every tour. **Run `backfill-covers --apply` once after deploying
+this, in each environment, before relying on the sweep:** until then tours without a pointer
+are skipped, so their unsaved images stay (safe, but not swept). A `left N tour(s) alone` line
+in the logs after the backfill means a pointer write failed since; running the backfill again
+fixes it.
 
 ---
 
@@ -1873,7 +1882,8 @@ its admin-api origin, with the usual `--allow-bucket` for anything but a `-dev` 
   in between wins. An editor open on that tour then gets the usual "changed elsewhere" conflict
   on its next Save, so run it at a quiet time;
 - writes the owner pointer if there is none (create-only, the sub decoded from the key's owner
-  segment);
+  segment). The daily plan sweep skips any tour without one ("Unsaved floor-plan images"), so
+  run this with `--apply` before relying on that sweep;
 - re-syncs the Explore entry through the tour's `TourPublisher`, as a publish does, when the tour
   is Public, published, not hidden, has a ready start scene, and has no entry or an entry whose
   cover differs from the start scene's current one. A tour listed for the first time this way
@@ -1890,7 +1900,8 @@ node scripts/backfill-covers.ts --apply
 
 It prints one line per tour that needs (or got) something, `update <tourId>: cover,
 owner-pointer, explore`, and the totals. A skipped tour (a `tour.json` that doesn't parse) is
-listed with the reason. Not run against any environment yet.
+listed with the reason, and so is a tour whose cover fix lost a race with a save (`tour.json
+changed since read`: the save wrote the right cover itself). Not run against any environment yet.
 
 ---
 

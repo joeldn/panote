@@ -49,19 +49,23 @@ const putTour = async (tourId: string, p?: TourPlan, pointer = true) => {
     tourKey(SUB, tourId),
     JSON.stringify({ tourId, title: 't', scenes: [], ...(p ? { plan: p } : {}) }),
   );
-  if (pointer) await env.BUCKET.put(tourOwnerKey(tourId), JSON.stringify({ v: 1, sub: SUB }));
+  if (pointer) await putPointer(tourId);
 };
+// An owner pointer alone: its tour.json is gone, so the tour is.
+const putPointer = (tourId: string) =>
+  env.BUCKET.put(tourOwnerKey(tourId), JSON.stringify({ v: 1, sub: SUB }));
 
 describe('sweepUnsavedPlans', () => {
   it('deletes a gone tour’s images once they are a day old', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // No pointer, no bundle: deleted. A pointer whose tour.json is gone: deleted too.
+    // A pointer whose tour.json is gone, and no bundle: deleted.
     await putImages('gone-a', 'x', 'y');
     await putImages('gone-b', 'z');
-    await env.BUCKET.put(tourOwnerKey('gone-b'), JSON.stringify({ v: 1, sub: SUB }));
+    await putPointer('gone-a');
+    await putPointer('gone-b');
 
     const early = await sweepUnsavedPlans(env.BUCKET, after(PLAN_ORPHAN_GRACE_MS - HOUR_MS));
-    expect(early).toEqual({ deleted: [], tours: 0, done: true });
+    expect(early).toEqual({ deleted: [], tours: 0, unknown: 0, done: true });
     expect(await plansLeft()).toHaveLength(3);
 
     const out = await sweepUnsavedPlans(env.BUCKET, after(PLAN_ORPHAN_GRACE_MS + HOUR_MS));
@@ -91,6 +95,19 @@ describe('sweepUnsavedPlans', () => {
     expect(await plansLeft()).toEqual([img('live', 'saved'), img('live', 'shared')].sort());
   });
 
+  it('keeps a saved, unpublished tour with no owner pointer, and counts it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // A tour from before owner pointers: tour.json names its plan, nothing is published.
+    await putTour('legacy', plan('saved'), false);
+    await putImages('legacy', 'saved', 'draft');
+
+    const out = await sweepUnsavedPlans(env.BUCKET, after(PLAN_UNUSED_GRACE_MS + HOUR_MS));
+
+    expect(out).toEqual({ deleted: [], tours: 0, unknown: 1, done: true });
+    expect(await plansLeft()).toEqual([img('legacy', 'draft'), img('legacy', 'saved')]);
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/1 tour\(s\) alone with no owner pointer/);
+  });
+
   it('treats a published tour with no owner pointer as existing', async () => {
     await env.BUCKET.put(pubTourKey('old'), JSON.stringify({ plan: plan('shared') }));
     await putImages('old', 'shared', 'other');
@@ -104,6 +121,7 @@ describe('sweepUnsavedPlans', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     await putImages('bad', 'x');
     await putImages('ok', 'y');
+    await putPointer('ok');
     const failing = new Proxy(env.BUCKET, {
       get(target, prop) {
         const value = Reflect.get(target, prop) as unknown;
@@ -123,13 +141,16 @@ describe('sweepUnsavedPlans', () => {
 
   it('stops at its budget, saves a cursor, and the next run carries on from it', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    for (const t of ['t-a', 't-b', 't-c']) await putImages(t, 'x');
+    for (const t of ['t-a', 't-b', 't-c']) {
+      await putImages(t, 'x');
+      await putPointer(t);
+    }
     const now = after(2 * PLAN_ORPHAN_GRACE_MS);
 
     // The cursor read and a listing, then one tour (up to 4) with one left for the cursor.
     const first = await sweepUnsavedPlans(env.BUCKET, now, 7);
 
-    expect(first).toEqual({ deleted: [img('t-a', 'x')], tours: 1, done: false });
+    expect(first).toEqual({ deleted: [img('t-a', 'x')], tours: 1, unknown: 0, done: false });
     expect(warn.mock.calls.flat().join(' ')).toMatch(/budget reached/);
     expect(JSON.parse(await (await env.BUCKET.get(PLAN_SWEEP_CURSOR_KEY))!.text())).toEqual({
       v: 1,
@@ -137,10 +158,16 @@ describe('sweepUnsavedPlans', () => {
     });
 
     const second = await sweepUnsavedPlans(env.BUCKET, now);
-    expect(second).toEqual({ deleted: [img('t-b', 'x'), img('t-c', 'x')], tours: 2, done: true });
+    expect(second).toEqual({
+      deleted: [img('t-b', 'x'), img('t-c', 'x')],
+      tours: 2,
+      unknown: 0,
+      done: true,
+    });
     // A finished pass clears the cursor, so the next run starts from the top.
     expect(await env.BUCKET.head(PLAN_SWEEP_CURSOR_KEY)).toBeNull();
     await putImages('t-0', 'x');
+    await putPointer('t-0');
     const third = await sweepUnsavedPlans(env.BUCKET, after(2 * PLAN_ORPHAN_GRACE_MS));
     expect(third.deleted).toEqual([img('t-0', 'x')]);
   });
@@ -152,7 +179,7 @@ describe('sweepUnsavedPlans', () => {
 
     const out = await sweepUnsavedPlans(env.BUCKET, after(HOUR_MS));
 
-    expect(out).toEqual({ deleted: [], tours: 0, done: true });
+    expect(out).toEqual({ deleted: [], tours: 0, unknown: 0, done: true });
     // Only the cursor read.
     expect(gets).toHaveBeenCalledTimes(1);
   });
@@ -160,6 +187,7 @@ describe('sweepUnsavedPlans', () => {
   it('runs in the daily cron as the "plan-sweep" task', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await putImages('cron-gone', 'x');
+    await putPointer('cron-gone');
     const ctx = createExecutionContext();
 
     await worker.scheduled(
@@ -209,5 +237,51 @@ describe('a tour save with a plan', () => {
     expect((await save({ title: 't', scenes: [], plan: plan('p1') })).status).toBe(200);
     const pointer = await env.BUCKET.get(tourOwnerKey(tourId));
     expect(JSON.parse(await pointer!.text())).toEqual({ v: 1, sub: SUB });
+  });
+
+  it('keeps the plan of a save whose pointer write failed', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const auth = { Authorization: `Bearer good:${SUB}` };
+    const created = await SELF.fetch('https://x/api/admin/tours', {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 't', scenes: [] }),
+    });
+    const { tourId } = await created.json<{ tourId: string }>();
+    await env.BUCKET.delete(tourOwnerKey(tourId));
+    await putImages(tourId, 'p1');
+    // The best-effort pointer write after the save fails.
+    const failing = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop) as unknown;
+        if (prop === 'put') {
+          return (key: string, ...rest: unknown[]) =>
+            key === tourOwnerKey(tourId)
+              ? Promise.reject(new Error('r2'))
+              : (target.put as (...a: unknown[]) => unknown)(key, ...rest);
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(`https://x/api/admin/tours/${tourId}`, {
+        method: 'PUT',
+        headers: { ...auth, 'Content-Type': 'application/json', 'If-Match': '*' },
+        body: JSON.stringify({ title: 't', scenes: [], plan: plan('p1') }),
+      }),
+      { ...env, BUCKET: failing },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(200);
+    expect(await env.BUCKET.head(tourOwnerKey(tourId))).toBeNull();
+    expect(error.mock.calls.flat().join(' ')).toMatch(/owner pointer for tour .+ not written/);
+
+    const out = await sweepUnsavedPlans(env.BUCKET, after(PLAN_UNUSED_GRACE_MS + HOUR_MS));
+
+    expect(out.deleted).toEqual([]);
+    expect(await plansLeft()).toEqual([img(tourId, 'p1')]);
   });
 });

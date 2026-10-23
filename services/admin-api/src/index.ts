@@ -408,8 +408,8 @@ app.put('/api/admin/tours/:tourId', async (c) => {
     return c.json({ error: result.status === 404 ? 'not found' : 'conflict' }, result.status);
   }
   // A tour with a plan image needs its owner pointer: the daily plan sweep (plan-sweep.ts)
-  // takes a tour with neither pointer nor bundle for deleted. Create-only, so one HEAD after
-  // the first save; tours created before pointers existed get theirs here.
+  // finds the tour.json through it, and leaves a tour without one alone. Create-only, so one
+  // HEAD after the first save; tours created before pointers existed get theirs here.
   if (parsed.data.plan) {
     c.executionCtx.waitUntil(
       c.env.BUCKET.head(tourOwnerKey(tourId)).then((p) =>

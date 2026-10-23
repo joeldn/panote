@@ -14,8 +14,15 @@ import {
 // pub/plans/<tourId>/ until that tour's next save or its delete, which may never come: an
 // abandoned editor, or a tour deleted by a path that raced the upload. This lists all of
 // pub/plans/, a slice a day, and for each tour:
-// - if the tour is gone (no tour-owners pointer naming an owner with its tour.json, and no
-//   live bundle), deletes its images older than PLAN_ORPHAN_GRACE_MS;
+// - with no readable tour-owners pointer, leaves every image alone: without it the sweep
+//   can't find the tour.json, and a saved but unpublished tour (one from before pointers, or
+//   whose save lost its best-effort pointer write) would look gone. It counts these as
+//   `unknown`; the operator's backfill (scripts/backfill-covers.ts) writes the missing
+//   pointers, and a save with a plan writes its own;
+// - if the pointer names an owner whose tour.json is gone and there is no live bundle, the
+//   tour is gone (deletes take tour.json before the pointer, so this is a delete that
+//   stopped half-way, or one that raced the upload): deletes its images older than
+//   PLAN_ORPHAN_GRACE_MS;
 // - otherwise deletes images older than PLAN_UNUSED_GRACE_MS that neither the stored
 //   tour.json nor the live bundle names. That is the editor's draft autosave window
 //   (DRAFT_MAX_AGE_MS in apps/admin's draft.ts), so a plan a local draft still holds survives
@@ -42,6 +49,8 @@ export type PlanSweepResult = {
   deleted: string[];
   /** Tours whose images were judged (read and maybe deleted). */
   tours: number;
+  /** Tours left alone because they have no readable owner pointer to judge them by. */
+  unknown: number;
   /** True when this run reached the end of pub/plans/; false when the budget ran out. */
   done: boolean;
 };
@@ -80,19 +89,24 @@ const judgeTour = async (
   tourId: string,
   objects: readonly R2Object[],
   now: number,
-): Promise<{ stale: string[]; operations: number }> => {
+): Promise<{ stale: string[]; operations: number; unknown: boolean }> => {
   const age = (o: R2Object) => now - o.uploaded.getTime();
-  if (!objects.some((o) => age(o) > PLAN_ORPHAN_GRACE_MS)) return { stale: [], operations: 0 };
+  if (!objects.some((o) => age(o) > PLAN_ORPHAN_GRACE_MS)) {
+    return { stale: [], operations: 0, unknown: false };
+  }
   const pointer = TourOwnerRecordSchema.safeParse(await readJson(bucket, tourOwnerKey(tourId)));
+  // No evidence either way: the tour may be saved and unpublished. Keep everything.
+  if (!pointer.success) return { stale: [], operations: 1, unknown: true };
   const [tour, bundle] = await Promise.all([
-    pointer.success ? readJson(bucket, tourKey(pointer.data.sub, tourId)) : null,
+    readJson(bucket, tourKey(pointer.data.sub, tourId)),
     readJson(bucket, pubTourKey(tourId)),
   ]);
-  const operations = pointer.success ? 3 : 2;
+  const operations = 3;
   if (tour === null && bundle === null) {
     return {
       stale: objects.filter((o) => age(o) > PLAN_ORPHAN_GRACE_MS).map((o) => o.key),
       operations,
+      unknown: false,
     };
   }
   const keep = new Set([storedKey(tourId, tour), storedKey(tourId, bundle)]);
@@ -101,6 +115,7 @@ const judgeTour = async (
       .filter((o) => age(o) > PLAN_UNUSED_GRACE_MS && !keep.has(o.key))
       .map((o) => o.key),
     operations,
+    unknown: false,
   };
 };
 
@@ -114,7 +129,7 @@ export const sweepUnsavedPlans = async (
   now: Date,
   budget = PLAN_SWEEP_BUDGET,
 ): Promise<PlanSweepResult> => {
-  const result: PlanSweepResult = { deleted: [], tours: 0, done: false };
+  const result: PlanSweepResult = { deleted: [], tours: 0, unknown: 0, done: false };
   let operations = 1;
   const resumeFrom = await readCursor(bucket);
   // The last key every image up to which has been judged.
@@ -127,7 +142,7 @@ export const sweepUnsavedPlans = async (
       });
     }
     console.warn(
-      `${LOG_PREFIX} deleted ${result.deleted.length} unsaved plan image(s) of ${result.tours} tour(s); budget reached, the next run carries on`,
+      `${LOG_PREFIX} deleted ${result.deleted.length} unsaved plan image(s) of ${result.tours} tour(s), ${result.unknown} with no owner pointer left alone; budget reached, the next run carries on`,
     );
     return result;
   };
@@ -154,14 +169,14 @@ export const sweepUnsavedPlans = async (
       if (group.tourId !== null) {
         if (!room(TOUR_COST)) return stop();
         try {
-          const { stale, operations: reads } = await judgeTour(
-            bucket,
-            group.tourId,
-            group.objects,
-            now.getTime(),
-          );
+          const {
+            stale,
+            operations: reads,
+            unknown,
+          } = await judgeTour(bucket, group.tourId, group.objects, now.getTime());
           operations += reads;
-          if (reads) result.tours += 1;
+          if (unknown) result.unknown += 1;
+          else if (reads) result.tours += 1;
           if (stale.length) {
             operations += 1;
             await bucket.delete(stale);
@@ -187,6 +202,11 @@ export const sweepUnsavedPlans = async (
   if (result.deleted.length) {
     console.warn(
       `${LOG_PREFIX} deleted ${result.deleted.length} unsaved plan image(s) of ${result.tours} tour(s)`,
+    );
+  }
+  if (result.unknown) {
+    console.warn(
+      `${LOG_PREFIX} left ${result.unknown} tour(s) alone with no owner pointer; run backfill-covers --apply`,
     );
   }
   return result;
