@@ -5,6 +5,12 @@ import type { ViewerMedia } from './types.js';
 
 const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';
 const VIMEO_EMBED = 'https://player.vimeo.com/video/';
+// What the players need, and no more: their own scripts and storage, casting,
+// and "Watch on YouTube" opening a normal tab. Never allow-top-navigation, so a
+// compromised player can't move the tour page. Fullscreen isn't a sandbox flag:
+// it comes from the `allow` attribute.
+const PLAYER_SANDBOX =
+  'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
 
 const LINK_LABEL = {
   image: 'Open image ↗',
@@ -61,6 +67,7 @@ export function MediaEmbed({ media, title }: MediaEmbedProps) {
         }
         title={title}
         allow="encrypted-media; picture-in-picture; fullscreen"
+        sandbox={PLAYER_SANDBOX}
         referrerPolicy="strict-origin-when-cross-origin"
         loading="lazy"
       />

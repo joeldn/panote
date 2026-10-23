@@ -90,6 +90,12 @@ const EMBED_STEPS = [
   },
 ];
 
+// The embed is our own page on the same origin, so it needs scripts and its own
+// storage (with both, the sandbox is defence in depth, not a boundary). Popups for
+// its "open in Panote" link, presentation for a player inside it; no top navigation.
+const PREVIEW_SANDBOX =
+  'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox';
+
 const errorMessage = (e: unknown, fallback: string): string =>
   e instanceof Error && e.message ? e.message : fallback;
 
@@ -430,6 +436,7 @@ function EmbedTab({
           src={src}
           height={height}
           allow="fullscreen"
+          sandbox={PREVIEW_SANDBOX}
           loading="lazy"
         />
       )}

@@ -20,7 +20,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | none |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (optional, see Likes) |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
@@ -656,7 +656,12 @@ variant counts as a *different* address, and a mismatch makes `send()` fail with
 destinations are allowed. Unset, the consumer skips the email with a warning and everything else
 works.
 
-Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
+Repeat with `--env production` once production is provisioned. `public-api` takes one optional
+secret, `LIKER_HASH_KEY` (see "Likes" below):
+
+```bash
+openssl rand -base64 32 | pnpm --filter @service/public-api exec wrangler secret put LIKER_HASH_KEY --env dev
+```
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
 for tour insights (see "Insights (unit B5)" below), the optional `CF_PURGE_TOKEN` (see "CDN
 purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" and "Backups" below;
@@ -1348,9 +1353,11 @@ name.
   so one delete removes every way that person signed in. A secondary that was never linked (an
   unverified email, an Apple relay address) is a separate user with its own data and is not
   touched.
-- **Likes this user gave on other people's tours.** A signed-in like stores `liked:<sub>` in that
-  tour's `TourStats`, and there's no index from a user to the tours they liked. The privacy page
-  says so.
+- **Likes this user gave on other people's tours.** A signed-in like stores a keyed hash of the
+  sub (`likedh:<HMAC>`, see "Likes") in that tour's `TourStats`, and there's no index from a user
+  to the tours they liked. The hash can't be tied back to the sub without `LIKER_HASH_KEY`. A
+  like given before the hash was stored raw (`liked:<sub>`) until that tour's `TourStats` next
+  gets a request, which rewrites it. The privacy page says likes stay.
 - **Analytics Engine events** for the deleted tours. They're keyed by tourId, hold nothing about
   the owner, and age out with AE's three-month retention (see Insights).
 - **Redirect aliases a tour dropped before every alias was tracked** (`MAX_ALIASES` was 20 and
@@ -1658,8 +1665,19 @@ by a `429` keeps the refused documents unsaved, and pressing Save again sends ju
 `X-Client-Id` that isn't a lowercase v4 UUID (`CLIENT_ID_PATTERN` in `@internal/contracts`; the
 website mints `crypto.randomUUID()` and replaces a stored id that doesn't match). A signed-in like
 still dedupes by sub and ignores the header. Inside `TourStats`, one tour keeps at most
-`MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a new liker is neither counted nor
+`MAX_LIKES_PER_TOUR` (100,000) `likedh:<hash>` keys; past that a new liker is neither counted nor
 stored, so storage per tour is bounded.
+
+The dedupe key never holds the liker's id: it is `likedh:` plus the hex HMAC-SHA-256 of the sub or
+client id under the `LIKER_HASH_KEY` secret (`src/stats.ts`). Set it once per env and never
+rotate it: a new key forgets who liked what, so everyone could like each tour once more. Unset
+(local dev, or an env before it's set), `TourStats` uses an unkeyed SHA-256 of
+`panote:liker:v1:<who>` and logs `LIKER_HASH_KEY is not set` once per isolate: likes keep working
+and no raw id is stored, but anyone who knows a sub can recompute its hash. Set the secret before
+production's first deploy; setting it later on an env that already has likes lets each earlier
+liker like again once. Keys stored raw before this change (`liked:<who>`) are rewritten as
+hashes, 128 per request to that tour's `TourStats` (any route: view, like, stats), until a
+`likes-hashed` marker says none are left; a raw key still waiting counts as a like.
 
 Likes, views (`POST .../view`) and Insights events (`POST .../events`) only count for a published
 tour. Each answers `404 {"error":"tour not found"}`, and creates no Durable Object state and writes
@@ -2241,9 +2259,19 @@ followed by an optional port and `/`, or a `host.tld` at the token start or afte
 characters. It drops everything from the first `?` or `#` after that point to the end of the
 token, keeping a frame's trailing `:line:col`; the token is never split at `=` or `,`, so later
 query values go too. A `?` in plain prose ("valid? no") is kept, and so is the query of a URL
-with none of those shapes (e.g. `api/x?y`, with no leading `/`). It masks emails as `<email>`, tour
-slugs as `/s/:slug` and `/slugs/:slug`, and tour ids as `/pub/tours/:tourId`, `/api/tours/:tourId`,
-`/api/admin/tours/:tourId` and `/app/t/:tourId` (any case). The scrub is linear in the text. The
+with none of those shapes (e.g. `api/x?y`, with no leading `/`). It masks emails as `<email>`
+(also `%40`-encoded, and with non-ASCII or punycode domains), the user and password of
+`scheme://user:pass@host` as `<userinfo>`, anything after `Bearer ` as `<token>`, JWTs (`eyJ...`)
+as `<jwt>`, and the value of `code=`, `state=`, `nonce=`, `password=`, `sig=`, `signature=`,
+`x-amz-*=`, `token=`, `secret=` and any `*_token=` / `*_secret=` pair wherever it appears (a
+fragment, a form body) as `<redacted>`. In R2 keys and CDN URLs it masks the owner segment after
+`panos/`, `tours/`, `accounts/` and `upload-log/` as `:owner`, pano ids after `tiles/` and
+`tile-gc/` as `:panoId`, tour ids after `pub/tours/`, `pub/plans/`, `tour-owners/`,
+`explore/tours/` and `explore/hidden/` as `:tourId`, and slugs after `slugs/` as `:slug`. In page
+and API paths it masks slugs as `/s/:slug`, tour ids as `/api/tours/:tourId`,
+`/api/admin/tours/:tourId` and `/app/t/:tourId`, and pano ids as `/api/admin/panos/:panoId` (any
+case). Any remaining UUID (pano and tour ids, a visitor's like id) becomes `<id>`. The scrub is
+linear in the text, and its tests time adversarial inputs of ~100k characters. The
 reporter slices each field to 4× its cap before scrubbing and drops the token that slice cut
 through (back to the last whitespace, if any), so half an email can't get past the mask. `public-api` validates
 the shape, scrubs again and re-caps each field, since masking can lengthen it.
