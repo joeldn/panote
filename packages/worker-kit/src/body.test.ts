@@ -106,4 +106,17 @@ describe('readBodyText decoding', () => {
     });
     expect(await readBodyText(post(stream), 10)).toEqual({ ok: true, text: 'a漢b' });
   });
+
+  it('flushes a character cut off at the end of the body as U+FFFD, not dropped', async () => {
+    const bytes = new TextEncoder().encode('a漢');
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // The body ends two bytes into '漢', those two split across the last chunks.
+        controller.enqueue(bytes.slice(0, 2));
+        controller.enqueue(bytes.slice(2, 3));
+        controller.close();
+      },
+    });
+    expect(await readBodyText(post(stream), 10)).toEqual({ ok: true, text: 'a\uFFFD' });
+  });
 });
