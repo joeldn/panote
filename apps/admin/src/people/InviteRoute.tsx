@@ -161,9 +161,10 @@ export function InviteRoute() {
   }
 
   return (
-    <main className="ppl-page">
+    // A section: Shell already supplies the page's <main>.
+    <section className="ppl-page">
       <h1 className="ppl-page__title">Tour invite</h1>
       {body}
-    </main>
+    </section>
   );
 }
