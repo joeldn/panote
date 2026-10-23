@@ -119,12 +119,18 @@ describe('landing', () => {
     expect(stash).toHaveBeenCalledTimes(1);
   });
 
-  it('sends a signed-in upload straight to the admin app', async () => {
+  it('sends a signed-in upload straight to the admin app, as a new tour, not a first', async () => {
     renderSite('/', signedIn());
     await screen.findByRole('button', { name: 'Account: Maya Larsson' });
     const admin = `${LOCAL.admin}${RESUME}`;
-    expect(dropTarget().getAttribute('href')).toBe(admin);
+    const drop = screen.getByRole('link', { name: /^Upload a new tour free/ });
+    expect(drop.getAttribute('href')).toBe(admin);
+    expect(drop.textContent).toContain('free, opens in your dashboard');
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(admin);
+    expect(screen.getByRole('link', { name: 'Upload a new tour' }).getAttribute('href')).toBe(
+      admin,
+    );
+    expect(screen.queryByText(/your first tour/)).toBeNull();
   });
 
   it('links the section nav and keeps one FAQ answer open at a time', async () => {

@@ -146,13 +146,22 @@ function DropTarget() {
       onDragLeave={() => setOver(false)}
       onDrop={onDrop}
     >
-      <span className="landing-drop__icon" aria-hidden="true">
-        ↑
-      </span>
-      <span>
-        <span className="landing-drop__title">Upload your first tour</span>{' '}
-        <span className="landing-drop__sub">free, sign in and go live in seconds</span>
-      </span>
+      {(signedIn) => (
+        <>
+          <span className="landing-drop__icon" aria-hidden="true">
+            ↑
+          </span>
+          {/* Someone signed in already has an account, and maybe tours: not their first. */}
+          <span>
+            <span className="landing-drop__title">
+              {signedIn ? 'Upload a new tour' : 'Upload your first tour'}
+            </span>{' '}
+            <span className="landing-drop__sub">
+              {signedIn ? 'free, opens in your dashboard' : 'free, sign in and go live in seconds'}
+            </span>
+          </span>
+        </>
+      )}
     </UploadLink>
   );
 }
@@ -397,7 +406,12 @@ function FinalCta() {
           and you’re live.
         </p>
         <UploadLink className="landing-final__cta">
-          Upload your first tour — free <span aria-hidden="true">→</span>
+          {(signedIn) => (
+            <>
+              {signedIn ? 'Upload a new tour' : 'Upload your first tour — free'}{' '}
+              <span aria-hidden="true">→</span>
+            </>
+          )}
         </UploadLink>
       </div>
     </section>
