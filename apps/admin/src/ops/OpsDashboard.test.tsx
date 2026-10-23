@@ -29,7 +29,7 @@ const METRICS: OpsMetrics = {
       cdnPurge: { lastFailure: null, pending: 2, pendingCapped: false, dead: 0, deadCapped: false },
       backup: {
         lastCompleteDate: '2026-10-22',
-        lastCompleteDaysAgo: 1,
+        lastCompleteDaysAgo: 3,
         inProgress: { date: '2026-10-23', objects: 1234, runs: 1 },
       },
     },
@@ -160,7 +160,11 @@ describe('the operator dashboard', () => {
     expect(within(health).getByText(/website \/ \(3× in a row\)/)).toBeTruthy();
     expect(within(health).getByText(/failed: trash/)).toBeTruthy();
     expect(within(health).getByText(/2 queued, 0 dead letters/)).toBeTruthy();
-    expect(within(health).getByText(/Last complete set 2026-10-22/)).toBeTruthy();
+    const backup = within(health)
+      .getByText(/Last complete set 2026-10-22/)
+      .closest('li')!;
+    expect(backup.className).toContain('opsd__status--bad');
+    expect(within(backup).getByText('Failing')).toBeTruthy();
     expect(
       within(health).getByText(/2026-10-23 being written \(1,234 objects so far\)/),
     ).toBeTruthy();

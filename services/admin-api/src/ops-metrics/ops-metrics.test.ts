@@ -344,6 +344,19 @@ describe('getOpsMetrics', () => {
     expect(product.series.at(-2)).toEqual({ t: '2026-10-23T09:00:00.000Z', views: 40 });
   });
 
+  it('reads storage from the latest sample, not only this month', async () => {
+    const queries: string[] = [];
+    stubCloudflare((query) => {
+      queries.push(query);
+      return platform(query);
+    });
+    const early = new Date('2026-11-01T00:20:00.000Z');
+    await getOpsMetrics(testEnv, '24h', early);
+    const storage = queries.filter((q) => q.includes('s0: r2StorageAdaptiveGroups'));
+    expect(storage.some((q) => q.includes('datetime_geq: "2026-10-30T00:20:00.000Z"'))).toBe(true);
+    for (const q of storage) expect(q).not.toContain('2026-11-01T00:00:00.000Z');
+  });
+
   it('shows every queue by id when the token cannot list queues', async () => {
     stubCloudflare(platform, { queues: false });
     const m = await getOpsMetrics(testEnv, '24h', NOW);
@@ -432,6 +445,7 @@ describe('healthSection', () => {
       put(`${CDN_PURGE_PENDING_PREFIX}a.json`, {}),
       put(`${CDN_PURGE_PENDING_PREFIX}b.json`, {}),
       put(`${CDN_PURGE_DEAD_PREFIX}c.json`, {}),
+      put(backupCompleteKey('2026-10-19'), {}),
       put(backupCompleteKey('2026-10-21'), {}),
       put('backup/2026-10-22/tours/x.json', {}),
       put('backup/progress.json', {
