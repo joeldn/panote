@@ -1,13 +1,17 @@
 import {
+  contentIdError,
   DEFAULT_INSIGHTS_DAYS,
+  isContentId,
   MAX_INSIGHTS_DAYS,
   MIN_INSIGHTS_DAYS,
   PANO_PATTERN,
   tourKey,
   type InsightsOk,
 } from '@internal/contracts';
-import { authenticate } from '@internal/worker-kit';
+import { authenticate, rateLimit } from '@internal/worker-kit';
 import type { Context } from 'hono';
+
+import { WRITE_RATE_PERIOD_SECONDS } from './limits.js';
 
 // Tour insights (unit B5): Workers Analytics Engine via its SQL API. The
 // event schema is written by public-api's events.ts (blob1 = type, etc.).
@@ -17,6 +21,9 @@ const DATASET_PATTERN = /^[A-Za-z0-9_]+$/;
 const TOP_HOTSPOTS = 5;
 const MAX_BY_PANO = 100;
 export const SQL_TIMEOUT_MS = 10_000;
+// How long one tour's answer for one `days` is reused (in this Cloudflare location's
+// cache), so reopening or refreshing Insights doesn't run the 4 SQL queries again.
+export const INSIGHTS_CACHE_SECONDS = 60;
 
 export class AnalyticsUnavailable extends Error {}
 
@@ -136,14 +143,35 @@ export const getInsights = async (
   };
 };
 
+// The cache key: this route's own URL with nothing but `days`, plus the owner, so made-up
+// query parameters can't skip the cache and one owner's entry is never another's. The owner
+// goes in as a SHA-256 of the sub, never the sub itself (it decodes to the Auth0 id). The
+// route also checks the caller owns the tour before it looks here, and admin-api owns this
+// path, so the CDN never answers it from this cache itself.
+const insightsCacheKey = async (
+  reqUrl: string,
+  sub: string,
+  tourId: string,
+  days: number,
+): Promise<Request> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sub));
+  const owner = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const url = new URL(`/api/admin/tours/${tourId}/insights`, reqUrl);
+  url.searchParams.set('days', String(days));
+  url.searchParams.set('owner', owner);
+  return new Request(url.toString());
+};
+
 export const insightsRoute = async (
   c: Context<{ Bindings: Env; Variables: { sub: string | undefined } }>,
   tourId: string,
 ) => {
-  const { sub } = await authenticate(c.req.raw, c.env);
+  const sub = c.get('sub') ?? (await authenticate(c.req.raw, c.env)).sub;
   c.header('Cache-Control', 'private, no-store');
-  if (!PANO_PATTERN.test(tourId))
-    return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
+  // Its own, tighter budget per owner, on top of the read limit every GET has.
+  const limited = await rateLimit(c.env.INSIGHTS_LIMITER, sub, WRITE_RATE_PERIOD_SECONDS);
+  if (limited) return limited;
+  if (!isContentId(tourId)) return c.json({ error: contentIdError('tourId') }, 400);
   const days = parseDays(c.req.query('days'));
   if (days === null) {
     return c.json(
@@ -151,12 +179,24 @@ export const insightsRoute = async (
       400,
     );
   }
+  // Ownership first, every time: the cache below is shared by everyone who asks.
   if (!(await c.env.BUCKET.head(tourKey(sub, tourId)))) return c.json({ error: 'not found' }, 404);
+  const cache = caches.default;
+  const key = await insightsCacheKey(c.req.url, sub, tourId, days);
+  const hit = await cache.match(key);
+  if (hit) return c.json(await hit.json<InsightsOk>());
+  let insights: InsightsOk;
   try {
-    return c.json(await getInsights(c.env, tourId, days, new Date()));
+    insights = await getInsights(c.env, tourId, days, new Date());
   } catch (err) {
     if (!(err instanceof AnalyticsUnavailable)) throw err;
     console.error('insights: analytics unavailable', { tourId, reason: err.message });
     return c.json({ error: 'analytics unavailable' }, 502);
   }
+  // Only a full answer is kept; the browser still gets private, no-store.
+  const stored = Response.json(insights, {
+    headers: { 'Cache-Control': `max-age=${INSIGHTS_CACHE_SECONDS}` },
+  });
+  c.executionCtx.waitUntil(cache.put(key, stored));
+  return c.json(insights);
 };

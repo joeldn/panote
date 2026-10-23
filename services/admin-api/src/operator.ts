@@ -1,6 +1,6 @@
 import {
   accountDisabledKey,
-  PANO_PATTERN,
+  isContentId,
   publishKey,
   tourKey,
   tourOwnerKey,
@@ -41,7 +41,7 @@ export const tourExists = async (
   sub: string,
   tourId: string,
 ): Promise<boolean> => {
-  if (!PANO_PATTERN.test(tourId)) return false;
+  if (!isContentId(tourId)) return false;
   const [tour, record] = await Promise.all([
     bucket.head(tourKey(sub, tourId)),
     bucket.head(publishKey(sub, tourId)),

@@ -4,6 +4,7 @@ import {
   type AnalyticsEventType,
   type AnalyticsSurface,
 } from '@internal/contracts';
+import { readJsonBody, type BodyResult } from '@internal/worker-kit';
 
 // Beacon bodies are tiny; anything bigger than this is not ours.
 export const MAX_BODY_BYTES = 8 * 1024;
@@ -26,23 +27,8 @@ export const toDataPoint = (tourId: string, p: AnalyticsPoint): AnalyticsEngineD
   doubles: [p.type === 'dwell' ? clampDwell(p.ms ?? 0) : 0],
 });
 
-export type BodyResult = { ok: true; value: unknown } | { ok: false; status: 400 | 413 };
-
-// Reads the body as text whatever the content-type, since sendBeacon sends
-// strings as text/plain. An empty body is treated as `{}`.
-export const readJsonBody = async (req: Request): Promise<BodyResult> => {
-  // Reject by header before buffering; the post-read check covers chunked bodies.
-  if (Number(req.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) {
-    return { ok: false, status: 413 };
-  }
-  const text = await req.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) {
-    return { ok: false, status: 413 };
-  }
-  if (text.trim() === '') return { ok: true, value: {} };
-  try {
-    return { ok: true, value: JSON.parse(text) as unknown };
-  } catch {
-    return { ok: false, status: 400 };
-  }
-};
+// Reads the body as text whatever the content-type, since sendBeacon sends strings as
+// text/plain, and stops reading past MAX_BODY_BYTES (worker-kit's body.ts). An empty
+// body is treated as `{}`.
+export const readBeaconBody = (req: Request): Promise<BodyResult> =>
+  readJsonBody(req, MAX_BODY_BYTES);
