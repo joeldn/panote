@@ -126,7 +126,7 @@ describe('Segmented', () => {
         options={[
           { value: 'link', label: 'Link' },
           { value: 'privacy', label: 'Privacy' },
-          { value: 'embed', label: 'Embed' },
+          { value: 'embed', label: 'Embed', disabled: true },
         ]}
       />,
     );
@@ -136,5 +136,7 @@ describe('Segmented', () => {
     expect(link.getAttribute('aria-controls')).toBe('share-panel-link');
     expect(link.id).toBe('share-tab-link');
     expect(link.hasAttribute('aria-checked')).toBe(false);
+    // A disabled tab may have no panel: it points at none.
+    expect(screen.getByRole('tab', { name: 'Embed' }).hasAttribute('aria-controls')).toBe(false);
   });
 });

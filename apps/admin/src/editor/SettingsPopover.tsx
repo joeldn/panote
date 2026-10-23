@@ -17,12 +17,12 @@ export interface SettingsPopoverProps {
   translating?: { name: string; placeholder: string } | null;
 }
 
+// The map's own switch is in the editor's Map card, beside the plan it shows.
 const TOGGLES: Array<{
-  key: 'showMap' | 'showCompass' | 'autoRotate';
+  key: 'showCompass' | 'autoRotate';
   label: string;
   hint: string;
 }> = [
-  { key: 'showMap', label: 'Mini-map', hint: 'Floor plan in the corner' },
   { key: 'showCompass', label: 'Compass', hint: 'Points to each pano’s north' },
   { key: 'autoRotate', label: 'Auto-rotate', hint: 'Slowly pans when idle' },
 ];

@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import { searchIcons } from './icons.js';
+import { useMenu } from './use-menu.js';
 import { applyFormat, formatForKey, IS_MAC, type MarkdownFormat } from './markdown-format.js';
 import {
   POINT_SIZE_MAX,
@@ -187,7 +188,10 @@ function MediaField({ point, onChange }: FieldProps) {
   return (
     <fieldset className="ed-field ed-media">
       <legend className="ed-label">Media</legend>
-      <p className="ed-note">What are you adding? We only link to it — never host it.</p>
+      {/* Until there is something to show: then the preview says it. */}
+      {!stored && (
+        <p className="ed-note">What are you adding? We only link to it — never host it.</p>
+      )}
       <Segmented
         aria-label="Media type"
         options={MEDIA_OPTIONS}
@@ -232,6 +236,47 @@ function MediaField({ point, onChange }: FieldProps) {
         )
       )}
     </fieldset>
+  );
+}
+
+/** The point's occasional actions, Duplicate and Delete, behind a ⋯ button. */
+function PointMenu({ onDuplicate, onDelete }: Pick<PointEditorProps, 'onDuplicate' | 'onDelete'>) {
+  const { open, close, rootProps, buttonProps, menuProps } = useMenu();
+  return (
+    <div {...rootProps} className="ed-more ed-point__more">
+      <button {...buttonProps} type="button" className="ed-icon-btn" aria-label="Point actions">
+        <i className="fa-solid fa-ellipsis" aria-hidden="true" />
+      </button>
+      {open && (
+        <div {...menuProps} className="ed-more__menu ed-more__menu--up" aria-label="Point actions">
+          <button
+            type="button"
+            role="menuitem"
+            className="ed-more__item"
+            onClick={() => {
+              close(false);
+              onDuplicate();
+            }}
+          >
+            <i className="fa-solid fa-clone" aria-hidden="true" />
+            Duplicate
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="ed-more__item ed-more__item--danger"
+            onClick={() => {
+              // Back on ⋯ first: the confirm dialog returns focus there if it's cancelled.
+              close(true);
+              onDelete();
+            }}
+          >
+            <i className="fa-solid fa-trash" aria-hidden="true" />
+            Delete point
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -349,7 +394,7 @@ export function PointEditor({
         />
       </div>
       <MediaField key={point.id} point={point} onChange={onChange} />
-      <div className="ed-point__tools">
+      <div className="ed-point__actions">
         <Button
           variant="ghost"
           size="sm"
@@ -359,14 +404,7 @@ export function PointEditor({
         >
           {moving ? 'Cancel move' : 'Move'}
         </Button>
-        <Button variant="ghost" size="sm" icon="fa-solid fa-clone" onClick={onDuplicate}>
-          Duplicate
-        </Button>
-      </div>
-      <div className="ed-point__actions">
-        <Button variant="ghost" size="sm" icon="fa-solid fa-trash" onClick={onDelete}>
-          Delete point
-        </Button>
+        <PointMenu onDuplicate={onDuplicate} onDelete={onDelete} />
         <Button variant="primary" size="sm" onClick={onDone}>
           Done
         </Button>

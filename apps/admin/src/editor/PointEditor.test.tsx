@@ -77,6 +77,11 @@ describe('PointEditor media picker', () => {
     expect(screen.getByText(/We only link to it — never host it\./)).toBeTruthy();
   });
 
+  it('drops the note once there is media to preview', () => {
+    renderMedia({ kind: 'audio', url: 'https://sounds.example/bell.mp3' });
+    expect(screen.queryByText(/never host it/)).toBeNull();
+  });
+
   it('stores an audio link from any https host', () => {
     const { onChange } = renderMedia();
     fireEvent.click(screen.getByRole('radio', { name: 'Audio' }));
@@ -229,10 +234,11 @@ describe('PointEditor markdown toolbar', () => {
   });
 });
 
-describe('PointEditor move and duplicate', () => {
-  it('offers Move (Cancel move while moving) and Duplicate', () => {
+describe('PointEditor move, and the point menu', () => {
+  const setup = (moving = false) => {
     const onMove = vi.fn();
     const onDuplicate = vi.fn();
+    const onDelete = vi.fn();
     const point: Hotspot = { id: 'p1', type: 'info', yaw: 0, pitch: 0, title: 'Point' };
     const props = {
       point,
@@ -240,18 +246,76 @@ describe('PointEditor move and duplicate', () => {
       onFace: noop,
       onMove,
       onDuplicate,
-      onDelete: noop,
+      onDelete,
       onDone: noop,
     };
-    const { rerender } = render(<PointEditor {...props} moving={false} />);
+    const view = render(<PointEditor {...props} moving={moving} />);
+    return { ...props, ...view };
+  };
+  const more = () => screen.getByRole('button', { name: 'Point actions' });
+
+  it('offers Move, and Cancel move while moving', () => {
+    const { onMove, rerender, ...props } = setup();
     fireEvent.click(screen.getByRole('button', { name: 'Move' }));
     expect(onMove).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Duplicate' }));
-    expect(onDuplicate).toHaveBeenCalledTimes(1);
-    rerender(<PointEditor {...props} moving />);
+    rerender(<PointEditor {...props} onMove={onMove} moving />);
     const cancel = screen.getByRole('button', { name: 'Cancel move' });
     expect(cancel.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(cancel);
     expect(onMove).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps Duplicate and Delete behind a ⋯ menu', () => {
+    const { onDuplicate, onDelete } = setup();
+    expect(screen.queryByRole('button', { name: 'Duplicate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull();
+    expect(more().getAttribute('aria-haspopup')).toBe('menu');
+    expect(more().getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(more());
+    expect(more().getAttribute('aria-expanded')).toBe('true');
+    const menu = screen.getByRole('menu', { name: 'Point actions' });
+    expect(more().getAttribute('aria-controls')).toBe(menu.id);
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((m) => m.textContent),
+    ).toEqual(['Duplicate', 'Delete point']);
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Duplicate' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Duplicate' }));
+    expect(onDuplicate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    fireEvent.click(more());
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete point' }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('menu')).toBeNull();
+    // Back on ⋯, for the confirm dialog to return to.
+    expect(document.activeElement).toBe(more());
+  });
+
+  it('walks the menu with the arrow keys; Esc closes it back onto ⋯, and goes no further', () => {
+    setup();
+    const onDocKey = vi.fn((e: KeyboardEvent) => e.key === 'Escape');
+    document.addEventListener('keydown', onDocKey);
+    fireEvent.click(more());
+    const menu = screen.getByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Delete point' }));
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Duplicate' }));
+    fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(more());
+    // The editor's Esc (cancel placing or a move) doesn't also fire.
+    expect(onDocKey.mock.results.some((r) => r.value === true)).toBe(false);
+    document.removeEventListener('keydown', onDocKey);
+  });
+
+  it('closes on a press outside it', () => {
+    setup();
+    fireEvent.click(more());
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });

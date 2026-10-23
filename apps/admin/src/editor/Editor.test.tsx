@@ -927,7 +927,8 @@ describe('editor: points, connections, views and settings', () => {
       });
       const { ui } = openTab();
       await stageReady(ui);
-      fireEvent.click(openFountain(ui).getByRole('button', { name: 'Duplicate' }));
+      fireEvent.click(openFountain(ui).getByRole('button', { name: 'Point actions' }));
+      fireEvent.click(ui.getByRole('menuitem', { name: 'Duplicate' }));
       const copy = within(ui.getByRole('group', { name: 'Edit point Fountain (copy)' }));
       expect((copy.getByLabelText(/Text/) as HTMLTextAreaElement).value).toBe('**Old**');
       expect(ui.getByRole('heading', { name: /Points 2/ })).toBeTruthy();
@@ -1060,7 +1061,8 @@ describe('editor: points, connections, views and settings', () => {
     const { ui } = openTab();
     await loaded(ui);
     fireEvent.click(ui.getAllByRole('button', { name: 'Fountain' })[0]!);
-    fireEvent.click(ui.getByRole('button', { name: 'Delete point' }));
+    fireEvent.click(ui.getByRole('button', { name: 'Point actions' }));
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Delete point' }));
     const modal = await screen.findByRole('dialog', { name: 'Delete point?' });
     fireEvent.click(within(modal).getByRole('button', { name: 'Delete point' }));
     expect(ui.getByRole('heading', { name: /Points 0/ })).toBeTruthy();
@@ -1091,8 +1093,11 @@ describe('editor: points, connections, views and settings', () => {
     openSettings(ui);
     const settings = within(ui.getByRole('dialog', { name: 'Tour settings' }));
     fireEvent.click(settings.getByRole('radio', { name: 'Top' }));
-    fireEvent.click(settings.getByRole('switch', { name: /Mini-map/ }));
     fireEvent.click(settings.getByRole('switch', { name: /Auto-rotate/ }));
+    // The map's switch is on the Map card, not in the settings.
+    expect(settings.queryByRole('switch', { name: /map/i })).toBeNull();
+    const map = within(ui.getByRole('region', { name: /^Map/ }));
+    fireEvent.click(map.getByRole('switch', { name: 'Show the map to visitors' }));
 
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));
     await ui.findByText('Saved');

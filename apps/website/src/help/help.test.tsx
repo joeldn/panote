@@ -60,6 +60,19 @@ describe('help pages', () => {
     );
   });
 
+  it('describe the editor as it is laid out: its cards, the map switch and the tour menu', async () => {
+    renderSite('/help');
+    await screen.findByRole('heading', { level: 1, name: 'Help' });
+    for (const card of ['The Panos card', 'The Map card']) {
+      expect(screen.getByRole('heading', { level: 3, name: card })).toBeTruthy();
+    }
+    expect(screen.queryByRole('heading', { name: 'The Tour card' })).toBeNull();
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('The switch in the Map card’s title shows the map to visitors');
+    expect(text).toContain('opens Tour settings');
+    expect(text).not.toContain('sliders button');
+  });
+
   it('use no em-dashes', () => {
     for (const file of ['./Help.tsx', './pages.ts']) {
       expect(readFileSync(new URL(file, import.meta.url), 'utf8')).not.toContain('—');

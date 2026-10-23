@@ -13,6 +13,8 @@ import {
 
 import { suggestForTour } from './map-suggest.js';
 import { editorReducer, mapPositions, sameValue, type EditorDocs } from './model.js';
+import { PanelCard } from './PanelCard.js';
+import { setPanelOpen } from './panels.js';
 
 // The plan's shape without an image: the viewer's map box is 220×140 px (packages/ui
 // styles/viewer.css), so a dot sits in the same place in both.
@@ -34,6 +36,9 @@ export interface MapPanelProps {
   currentId: string | null;
   /** The floor-plan image, if the tour has one. */
   plan: MapPanelPlan | null;
+  /** Visitors see the map (the tour's `showMap` setting). */
+  shown: boolean;
+  onShownChange: (shown: boolean) => void;
   /** A plan image is being prepared or uploaded. */
   uploading?: boolean;
   /** Why the last plan image couldn't be added, for the user. */
@@ -73,12 +78,15 @@ function freeSpot(taken: Iterable<MapPoint>): MapPoint {
 
 /**
  * The editor's "Map" card: the floor plan, where each pano is placed by dragging its dot
- * (or with the arrow keys), plus the plan image behind them. Collapsed until opened.
+ * (or with the arrow keys), plus the plan image behind them. Its head has the switch that
+ * shows the map to visitors. Folded until opened.
  */
 export function MapPanel({
   docs,
   currentId,
   plan,
+  shown,
+  onShownChange,
   uploading = false,
   planError = null,
   onPlace,
@@ -88,7 +96,6 @@ export function MapPanel({
   onPlanFile,
   onRemovePlan,
 }: MapPanelProps) {
-  const [open, setOpen] = useState(false);
   // What the last "Suggest positions" did, for the line under the button, and the tour
   // it left: any later edit (a drag, a remove, an undo) makes the line stale.
   const [suggested, setSuggested] = useState<{ text: string; tour: TourDoc } | null>(null);
@@ -96,7 +103,6 @@ export function MapPanel({
   const focusDot = useRef<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const file = useRef<HTMLInputElement>(null);
-  const bodyId = useId();
   const keysId = useId();
   const tour = docs.tour.current;
   const positions = mapPositions(tour);
@@ -219,158 +225,179 @@ export function MapPanel({
   const status = suggested && sameValue(suggested.tour, tour) ? suggested.text : null;
 
   return (
-    <section
-      className={cx('ed-card ed-map', open && 'ed-map--open')}
-      aria-labelledby="ed-map-title"
-    >
-      <header className="ed-card__head">
-        <h2 id="ed-map-title" className="ed-card__title">
-          <button
-            type="button"
-            className="ed-map__toggle"
-            aria-expanded={open}
-            aria-controls={bodyId}
-            onClick={() => {
-              setOpen((o) => !o);
-              setSuggested(null);
+    <PanelCard
+      panel="map"
+      className="ed-map"
+      count={
+        <span className="ed-card__count">
+          · {placedCount} of {tour.scenes.length} placed
+        </span>
+      }
+      actions={
+        <label className="ed-switch" title="Show the map to visitors">
+          <span className="ed-sr">Show the map to visitors</span>
+          <input
+            type="checkbox"
+            role="switch"
+            checked={shown}
+            onChange={(e) => {
+              onShownChange(e.target.checked);
+              // Turned on: open the card to place the panos.
+              if (e.target.checked) setPanelOpen('map', true);
             }}
-          >
-            Map{' '}
-            <span className="ed-card__count">
-              · {placedCount} of {tour.scenes.length} placed
-            </span>
-            <i className="fa-solid fa-chevron-right ed-map__chevron" aria-hidden="true" />
-          </button>
-        </h2>
-      </header>
-      {open && (
-        <div id={bodyId} className="ed-map__body">
-          <p className="ed-hint">
-            Drag each pano to where it was taken, or click the plan to put the open pano there. Keep
-            north at the top.
+          />
+        </label>
+      }
+      notice={
+        planError && (
+          <p className="ed-note ed-note--error ed-map__error" role="alert">
+            {planError}
           </p>
-          <p id={keysId} className="ed-sr">
-            Arrow keys move it, Shift for bigger steps. Delete takes it off the map.
-          </p>
-          <div className="ed-map__frame">
-            <div
-              ref={box}
-              className={cx(
-                'ed-map__plan',
-                plan && 'ed-map__plan--image',
-                current && 'ed-map__plan--placing',
-              )}
-              style={{ '--ed-map-ratio': ratio } as CSSProperties}
-              role="group"
-              aria-label="Floor plan"
-              tabIndex={-1}
-              onClick={clickPlan}
-            >
-              {plan && <img className="ed-map__img" src={plan.url} alt="" draggable={false} />}
-              {[...positions].map(([panoId, stored]) => {
-                const at = drag?.panoId === panoId && drag.at ? drag.at : stored;
-                const name = nameOf(panoId);
-                return (
-                  <button
-                    key={panoId}
-                    type="button"
-                    data-pano={panoId}
-                    className={cx(
-                      'ed-map__dot',
-                      panoId === currentId && 'ed-map__dot--current',
-                      drag?.panoId === panoId && drag.moved && 'ed-map__dot--dragging',
-                    )}
-                    style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%` }}
-                    aria-label={`${name}, ${pct(at.x)}% across, ${pct(at.y)}% down`}
-                    aria-describedby={keysId}
-                    aria-current={panoId === currentId ? 'true' : undefined}
-                    title={name}
-                    onPointerDown={(e) => down(e, panoId)}
-                    onPointerMove={move}
-                    onPointerUp={up}
-                    onPointerCancel={() => setDrag(null)}
-                    onLostPointerCapture={() => setDrag(null)}
-                    onClick={(e) => clickDot(e, panoId)}
-                    onKeyDown={(e) => keyDot(e, panoId, stored)}
-                  >
-                    <span className="ed-map__label" aria-hidden="true">
-                      {name}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="ed-map__suggest">
-            <Button
-              variant="ghost"
-              size="sm"
-              pill
-              icon="fa-solid fa-diagram-project"
-              disabled={placedCount === tour.scenes.length}
-              onClick={suggest}
-            >
-              Suggest positions
-            </Button>
-            <p className="ed-hint ed-map__suggested" role="status">
-              {status}
-            </p>
-          </div>
-          {current && (
-            <div className="ed-map__row" role="group" aria-label="Open pano on the map">
-              <span className="ed-map__name">{nameOf(current)}</span>
-              {currentPlaced ? (
-                <button type="button" className="ed-conn__aim" onClick={() => onRemove(current)}>
-                  <i className="fa-solid fa-xmark" aria-hidden="true" /> Remove from map
-                </button>
-              ) : (
-                <button type="button" className="ed-conn__aim" onClick={placeCurrent}>
-                  <i className="fa-solid fa-location-dot" aria-hidden="true" /> Place on map
-                </button>
-              )}
-            </div>
+        )
+      }
+      onToggle={() => setSuggested(null)}
+    >
+      {placedCount === 0 && (
+        <p className="ed-hint">
+          Drag each pano to where it was taken, or click the plan to put the open pano there. Keep
+          north at the top.
+        </p>
+      )}
+      <p id={keysId} className="ed-sr">
+        Arrow keys move it, Shift for bigger steps. Delete takes it off the map.
+      </p>
+      <div className="ed-map__frame">
+        <div
+          ref={box}
+          className={cx(
+            'ed-map__plan',
+            plan && 'ed-map__plan--image',
+            current && 'ed-map__plan--placing',
           )}
-          <div className="ed-map__image">
-            <span className="ed-label">Plan image</span>
-            <input
-              ref={file}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              className="ed-sr"
-              tabIndex={-1}
-              aria-hidden="true"
-              data-testid="plan-input"
-              onChange={(e) => {
-                const picked = e.target.files?.[0];
-                e.target.value = '';
-                if (picked) onPlanFile(picked);
-              }}
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              pill
-              icon="fa-solid fa-image"
-              busy={uploading}
-              disabled={uploading}
-              onClick={() => file.current?.click()}
-            >
-              {uploading ? 'Adding…' : plan ? 'Replace' : 'Add image'}
-            </Button>
-            {plan && !uploading && (
-              <Button variant="ghost" size="sm" pill onClick={onRemovePlan}>
-                Remove
-              </Button>
-            )}
-          </div>
-          {planError && (
-            <p className="ed-note ed-note--error ed-map__error" role="alert">
-              {planError}
-            </p>
+          style={{ '--ed-map-ratio': ratio } as CSSProperties}
+          role="group"
+          aria-label="Floor plan"
+          tabIndex={-1}
+          onClick={clickPlan}
+        >
+          {plan && <img className="ed-map__img" src={plan.url} alt="" draggable={false} />}
+          {[...positions].map(([panoId, stored]) => {
+            const at = drag?.panoId === panoId && drag.at ? drag.at : stored;
+            const name = nameOf(panoId);
+            return (
+              <button
+                key={panoId}
+                type="button"
+                data-pano={panoId}
+                className={cx(
+                  'ed-map__dot',
+                  panoId === currentId && 'ed-map__dot--current',
+                  drag?.panoId === panoId && drag.moved && 'ed-map__dot--dragging',
+                )}
+                style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%` }}
+                aria-label={`${name}, ${pct(at.x)}% across, ${pct(at.y)}% down`}
+                aria-describedby={keysId}
+                aria-current={panoId === currentId ? 'true' : undefined}
+                title={name}
+                onPointerDown={(e) => down(e, panoId)}
+                onPointerMove={move}
+                onPointerUp={up}
+                onPointerCancel={() => setDrag(null)}
+                onLostPointerCapture={() => setDrag(null)}
+                onClick={(e) => clickDot(e, panoId)}
+                onKeyDown={(e) => keyDot(e, panoId, stored)}
+              >
+                <span className="ed-map__label" aria-hidden="true">
+                  {name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="ed-map__suggest">
+        <Button
+          variant="ghost"
+          size="sm"
+          pill
+          icon="fa-solid fa-diagram-project"
+          disabled={placedCount === tour.scenes.length}
+          onClick={suggest}
+        >
+          Suggest positions
+        </Button>
+        <p className="ed-hint ed-map__suggested" role="status">
+          {status}
+        </p>
+      </div>
+      {current && (
+        <div className="ed-map__row" role="group" aria-label="Open pano on the map">
+          <span className="ed-map__name">{nameOf(current)}</span>
+          {currentPlaced ? (
+            <button type="button" className="ed-conn__aim" onClick={() => onRemove(current)}>
+              <i className="fa-solid fa-xmark" aria-hidden="true" /> Remove from map
+            </button>
+          ) : (
+            <button type="button" className="ed-conn__aim" onClick={placeCurrent}>
+              <i className="fa-solid fa-location-dot" aria-hidden="true" /> Place on map
+            </button>
           )}
-          <p className="ed-hint ed-map__fine">JPG, PNG or WebP. Saved with the tour.</p>
         </div>
       )}
-    </section>
+      <input
+        ref={file}
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        className="ed-sr"
+        tabIndex={-1}
+        aria-hidden="true"
+        data-testid="plan-input"
+        onChange={(e) => {
+          const picked = e.target.files?.[0];
+          e.target.value = '';
+          if (picked) onPlanFile(picked);
+        }}
+      />
+      {plan ? (
+        // Replacing or removing the image only means something once there is one.
+        <div className="ed-map__image" role="group" aria-label="Plan image">
+          <span className="ed-label">Plan image</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            pill
+            icon="fa-solid fa-image"
+            busy={uploading}
+            disabled={uploading}
+            onClick={() => file.current?.click()}
+          >
+            {uploading ? 'Adding…' : 'Replace'}
+          </Button>
+          {!uploading && (
+            <Button variant="ghost" size="sm" pill onClick={onRemovePlan}>
+              Remove
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="ed-map__image">
+          <Button
+            variant="ghost"
+            size="sm"
+            pill
+            icon="fa-solid fa-image"
+            busy={uploading}
+            disabled={uploading}
+            aria-describedby={`${keysId}-plan`}
+            onClick={() => file.current?.click()}
+          >
+            {uploading ? 'Adding…' : 'Add plan image'}
+          </Button>
+          <span id={`${keysId}-plan`} className="ed-map__fine">
+            JPG, PNG or WebP
+          </span>
+        </div>
+      )}
+    </PanelCard>
   );
 }

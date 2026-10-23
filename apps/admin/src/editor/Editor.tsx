@@ -11,11 +11,13 @@ import {
   Button,
   Compass,
   ConfirmModal,
+  cx,
   FloorLinks,
   HotspotMarkers,
   LogoMark,
   PanoStage,
   pointIcon,
+  Segmented,
   ViewerControls,
   type ViewerHotspot,
   type ViewerLinkArrow,
@@ -24,6 +26,7 @@ import { MAX_TOUR_SCENES, tilesBaseUrl } from '@internal/web-kit';
 import {
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -60,6 +63,16 @@ import { LibraryPicker } from './LibraryPicker.js';
 import { MapPanel } from './MapPanel.js';
 import { MoreMenu } from './MoreMenu.js';
 import { newId, pointSizeForDrag, yawDegrees, type ConfigState, type EditorDocs } from './model.js';
+import { PanelCard } from './PanelCard.js';
+import {
+  PANEL_LABELS,
+  PanelSheetContext,
+  PANELS,
+  PHONE_QUERY,
+  setPanelOpen,
+  useMediaQuery,
+  type PanelKey,
+} from './panels.js';
 import { PointEditor } from './PointEditor.js';
 import {
   planErrorMessage,
@@ -337,6 +350,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   );
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [failedLoad, setFailedLoad] = useState<string | null>(null);
+  // On a phone the side cards are tabs of one sheet (editor.css draws it).
+  const phone = useMediaQuery(PHONE_QUERY);
+  const [tabPicked, setTabPicked] = useState<PanelKey>('panos');
+  const sheetId = useId();
   const frame = useRef<HTMLElement>(null);
   const { dispatch, dirty } = editor;
   const tour = docs.tour.current;
@@ -376,6 +393,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   // An upload on stage before it has a scene: its local preview, look-only.
   const pendingCurrent =
     currentId && !scene ? (staged.find((p) => p.panoId === currentId) ?? null) : null;
+  // "This pano" is the open pano's own settings: none to show without one.
+  const hasPanoCard = cfg !== null && currentId !== null;
+  const overLimit = cfg !== null && sceneTranslationChars(cfg) > MAX_SCENE_TRANSLATION_CHARS;
+  const sheetTab = tabPicked === 'pano' && !hasPanoCard ? 'panos' : tabPicked;
 
   // Scenes whose tiles the editor checks on itself: ones whose tiles failed to load on
   // stage, and the ones the last publish waited on, unless an upload here speaks for them.
@@ -469,9 +490,14 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   }, [uploading, setParams]);
 
   // A move belongs to the open point: opening another (or none) ends it where it is.
+  // An opened point shows in its card, opened (or on its tab) if it wasn't.
   const openPoint = (id: string | null) => {
     setActivePoint(id);
     setMoving(null);
+    if (id) {
+      setPanelOpen('points', true);
+      setTabPicked('points');
+    }
   };
 
   const select = (panoId: string) => {
@@ -984,48 +1010,78 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
         </div>
       </div>
 
-      <aside className="ed-side" aria-label="Editor panels">
-        <section className="ed-card ed-points" aria-labelledby="ed-points-title">
-          <header className="ed-card__head">
-            <h2 id="ed-points-title" className="ed-card__title">
-              Points <span className="ed-card__count">{points.length}</span>
-            </h2>
-            <Button
-              variant="accent"
-              size="sm"
-              pill
-              icon={placingNow ? 'fa-solid fa-xmark' : 'fa-solid fa-plus'}
-              disabled={!cfg || !viewer || lookOnly}
-              aria-pressed={placingNow}
-              onClick={() => {
-                openPoint(null);
-                setPlacing((p) => !p);
-              }}
-            >
-              {placingNow ? 'Cancel' : 'Add point'}
-            </Button>
-          </header>
-          {translation && (
-            <p className="ed-hint ed-translating" role="note">
-              <i className="fa-solid fa-globe" aria-hidden="true" /> Translating into{' '}
-              {translation.name}. Blank fields show the {languageName(defaultLang)} text.
-            </p>
-          )}
-          {cfg && sceneTranslationChars(cfg) > MAX_SCENE_TRANSLATION_CHARS && (
-            <p className="ed-note ed-note--error" role="alert">
-              This pano’s translations are over the{' '}
-              {MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit, so it can’t be
-              saved. Shorten some of them.
-            </p>
-          )}
-          {lookOnly && (
-            <p className="ed-hint ed-look-only" role="note">
-              <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
-              uploads: editing unlocks once it lands.
-            </p>
-          )}
+      <aside className={cx('ed-side', phone && 'ed-side--sheet')} aria-label="Editor panels">
+        {/* A phone has room for one card at a time: they become the tabs of one sheet. */}
+        {phone && (
+          <Segmented
+            kind="tabs"
+            idPrefix={sheetId}
+            aria-label="Panels"
+            className="ed-side__tabs"
+            options={PANELS.map((key) => ({
+              value: key,
+              label: PANEL_LABELS[key],
+              disabled: key === 'pano' && !hasPanoCard,
+            }))}
+            value={sheetTab}
+            onChange={setTabPicked}
+          />
+        )}
+        {/* What holds for every card: above them, so folding one never hides it. */}
+        {(translation || overLimit || lookOnly) && (
+          <div className="ed-side__notes">
+            {translation && (
+              <p className="ed-hint ed-translating" role="note">
+                <i className="fa-solid fa-globe" aria-hidden="true" /> Translating into{' '}
+                {translation.name}. Blank fields show the {languageName(defaultLang)} text.
+              </p>
+            )}
+            {overLimit && (
+              <p className="ed-note ed-note--error" role="alert">
+                This pano’s translations are over the{' '}
+                {MAX_SCENE_TRANSLATION_CHARS.toLocaleString('en')}-character limit, so it can’t be
+                saved. Shorten some of them.
+              </p>
+            )}
+            {lookOnly && (
+              <p className="ed-hint ed-look-only" role="note">
+                <i className="fa-solid fa-eye" aria-hidden="true" /> Look-only while the image
+                uploads: editing unlocks once it lands.
+              </p>
+            )}
+          </div>
+        )}
+        <PanelSheetContext value={phone ? { active: sheetTab, idPrefix: sheetId } : null}>
+          <TourPanel
+            docs={docs}
+            currentId={currentId}
+            startId={startId}
+            dirty={dirty.length > 0}
+            pending={pendingCards}
+            statusOf={statusFor}
+            lookOnly={lookOnly}
+            onSelect={select}
+            onSetStart={(panoId) => dispatch({ type: 'tour/start', panoId })}
+            onMove={(panoId, to) => dispatch({ type: 'tour/move-scene', panoId, to })}
+            onRemove={(panoId) => setConfirm({ kind: 'remove-pano', panoId })}
+            onAim={(to, title) => {
+              const v = view();
+              if (v && currentId)
+                dispatch({ type: 'link/set', from: currentId, to, yaw: v.yaw, title });
+            }}
+            onNudge={(to, delta) =>
+              currentId && dispatch({ type: 'link/nudge', from: currentId, to, delta })
+            }
+            onDisconnect={(to) =>
+              currentId && dispatch({ type: 'link/remove', from: currentId, to })
+            }
+            // The library is the signed-in user's own panos: not for someone else's tour.
+            {...(editor.role === 'owner' && { onAddFromLibrary: () => setLibraryOpen(true) })}
+            onAddPano={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
+            onReplace={(panoId) => uploads.pick({ kind: 'replace', tourId: docs.tourId, panoId })}
+          />
           {cfg && currentId && (
-            <div className="ed-pano-settings" role="group" aria-label="This pano">
+            <PanelCard panel="pano" className="ed-pano-settings">
               <SceneDescription
                 // A fresh draft per pano and language.
                 key={`${currentId}:${lang ?? ''}`}
@@ -1077,124 +1133,133 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                   <i className="fa-solid fa-compass" aria-hidden="true" /> North is here
                 </button>
               </div>
-            </div>
+            </PanelCard>
           )}
-          {cfg && !point && points.length === 0 && !lookOnly && (
-            <p className="ed-hint ed-empty" role="note">
-              {placingNow ? (
-                <>Click the pano where the point goes. Drag as you drop it to make it bigger.</>
-              ) : (
-                <>
-                  No points on this pano yet. Press <b>Add point</b> to put a label, text, a photo
-                  or a video on the spot it’s about.
-                </>
-              )}
-            </p>
-          )}
-          {!cfg && !pendingCurrent && sceneIds.length === 0 && (
-            <p className="ed-hint ed-empty" role="note">
-              Points sit on a pano. Add one to the tour first.
-            </p>
-          )}
-          {point && currentId ? (
-            <PointEditor
-              key={`${point.id}:${lang ?? ''}`}
-              point={point}
-              translation={translation}
-              onTranslate={(patch) =>
-                lang &&
-                dispatch({ type: 'point/translate', panoId: currentId, id: point.id, lang, patch })
-              }
-              onChange={(patch) =>
-                dispatch({ type: 'point/update', panoId: currentId, id: point.id, patch })
-              }
-              onFace={() => viewer?.setView({ yaw: point.yaw, pitch: point.pitch })}
-              moving={movingNow !== null}
-              onMove={() => {
-                if (movingNow) {
-                  cancelMove();
-                  return;
+          <PanelCard
+            panel="points"
+            className="ed-points"
+            count={<span className="ed-card__count">{points.length}</span>}
+            actions={
+              <Button
+                variant="accent"
+                size="sm"
+                pill
+                icon={placingNow ? 'fa-solid fa-xmark' : 'fa-solid fa-plus'}
+                disabled={!cfg || !viewer || lookOnly}
+                aria-pressed={placingNow}
+                onClick={() => {
+                  openPoint(null);
+                  setPlacing((p) => !p);
+                }}
+              >
+                {placingNow ? 'Cancel' : 'Add point'}
+              </Button>
+            }
+          >
+            {cfg && !point && points.length === 0 && !lookOnly && (
+              <p className="ed-hint ed-empty" role="note">
+                {placingNow ? (
+                  <>Click the pano where the point goes. Drag as you drop it to make it bigger.</>
+                ) : (
+                  <>
+                    No points on this pano yet. Press <b>Add point</b> to put a label, text, a photo
+                    or a video on the spot it’s about.
+                  </>
+                )}
+              </p>
+            )}
+            {!cfg && !pendingCurrent && sceneIds.length === 0 && (
+              <p className="ed-hint ed-empty" role="note">
+                Points sit on a pano. Add one to the tour first.
+              </p>
+            )}
+            {point && currentId ? (
+              <PointEditor
+                key={`${point.id}:${lang ?? ''}`}
+                point={point}
+                translation={translation}
+                onTranslate={(patch) =>
+                  lang &&
+                  dispatch({
+                    type: 'point/translate',
+                    panoId: currentId,
+                    id: point.id,
+                    lang,
+                    patch,
+                  })
                 }
-                setPlacing(false);
-                setMoving({ panoId: currentId, id: point.id, yaw: point.yaw, pitch: point.pitch });
-              }}
-              onDuplicate={() => {
-                const id = newId('pt');
-                dispatch({ type: 'point/duplicate', panoId: currentId, id: point.id, newId: id });
-                openPoint(id);
-              }}
-              onDelete={() =>
-                setConfirm({
-                  kind: 'delete-point',
-                  panoId: currentId,
-                  id: point.id,
-                  title: point.title,
-                })
-              }
-              onDone={() => openPoint(null)}
-            />
-          ) : (
-            points.length > 0 && (
-              <ul className="ed-points__list">
-                {points.map((h) => (
-                  <li key={h.id}>
-                    <button
-                      type="button"
-                      className="ed-points__item"
-                      disabled={lookOnly}
-                      onClick={() => openPoint(h.id)}
-                    >
-                      <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
-                      {localizeHotspot(h, lang).title}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )
-          )}
-        </section>
-        <TourPanel
-          docs={docs}
-          currentId={currentId}
-          startId={startId}
-          dirty={dirty.length > 0}
-          pending={pendingCards}
-          statusOf={statusFor}
-          lookOnly={lookOnly}
-          onSelect={select}
-          onSetStart={(panoId) => dispatch({ type: 'tour/start', panoId })}
-          onMove={(panoId, to) => dispatch({ type: 'tour/move-scene', panoId, to })}
-          onRemove={(panoId) => setConfirm({ kind: 'remove-pano', panoId })}
-          onAim={(to, title) => {
-            const v = view();
-            if (v && currentId)
-              dispatch({ type: 'link/set', from: currentId, to, yaw: v.yaw, title });
-          }}
-          onNudge={(to, delta) =>
-            currentId && dispatch({ type: 'link/nudge', from: currentId, to, delta })
-          }
-          onDisconnect={(to) => currentId && dispatch({ type: 'link/remove', from: currentId, to })}
-          // The library is the signed-in user's own panos: not for someone else's tour.
-          {...(editor.role === 'owner' && { onAddFromLibrary: () => setLibraryOpen(true) })}
-          onAddPano={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
-          onReplace={(panoId) => uploads.pick({ kind: 'replace', tourId: docs.tourId, panoId })}
-        />
-        <MapPanel
-          docs={docs}
-          currentId={currentId}
-          plan={planImage}
-          uploading={planUploading}
-          planError={planError}
-          onPlace={(panoId, x, y) => dispatch({ type: 'map/place', panoId, x, y })}
-          onRemove={(panoId) => dispatch({ type: 'map/remove', panoId })}
-          onSuggest={(positions) => dispatch({ type: 'map/suggest', positions })}
-          onSelect={select}
-          onPlanFile={(file) => void addPlanImage(file)}
-          onRemovePlan={() => {
-            setPlanError(null);
-            dispatch({ type: 'tour/plan', plan: null });
-          }}
-        />
+                onChange={(patch) =>
+                  dispatch({ type: 'point/update', panoId: currentId, id: point.id, patch })
+                }
+                onFace={() => viewer?.setView({ yaw: point.yaw, pitch: point.pitch })}
+                moving={movingNow !== null}
+                onMove={() => {
+                  if (movingNow) {
+                    cancelMove();
+                    return;
+                  }
+                  setPlacing(false);
+                  setMoving({
+                    panoId: currentId,
+                    id: point.id,
+                    yaw: point.yaw,
+                    pitch: point.pitch,
+                  });
+                }}
+                onDuplicate={() => {
+                  const id = newId('pt');
+                  dispatch({ type: 'point/duplicate', panoId: currentId, id: point.id, newId: id });
+                  openPoint(id);
+                }}
+                onDelete={() =>
+                  setConfirm({
+                    kind: 'delete-point',
+                    panoId: currentId,
+                    id: point.id,
+                    title: point.title,
+                  })
+                }
+                onDone={() => openPoint(null)}
+              />
+            ) : (
+              points.length > 0 && (
+                <ul className="ed-points__list">
+                  {points.map((h) => (
+                    <li key={h.id}>
+                      <button
+                        type="button"
+                        className="ed-points__item"
+                        disabled={lookOnly}
+                        onClick={() => openPoint(h.id)}
+                      >
+                        <i className={`fa-solid fa-${pointIcon(h.icon)}`} aria-hidden="true" />
+                        {localizeHotspot(h, lang).title}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )
+            )}
+          </PanelCard>
+          <MapPanel
+            docs={docs}
+            currentId={currentId}
+            plan={planImage}
+            shown={settings.showMap}
+            onShownChange={(showMap) => dispatch({ type: 'tour/settings', settings: { showMap } })}
+            uploading={planUploading}
+            planError={planError}
+            onPlace={(panoId, x, y) => dispatch({ type: 'map/place', panoId, x, y })}
+            onRemove={(panoId) => dispatch({ type: 'map/remove', panoId })}
+            onSuggest={(positions) => dispatch({ type: 'map/suggest', positions })}
+            onSelect={select}
+            onPlanFile={(file) => void addPlanImage(file)}
+            onRemovePlan={() => {
+              setPlanError(null);
+              dispatch({ type: 'tour/plan', plan: null });
+            }}
+          />
+        </PanelSheetContext>
       </aside>
 
       <ConfirmModal

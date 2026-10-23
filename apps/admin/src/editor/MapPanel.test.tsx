@@ -9,6 +9,8 @@ import { editorReducer, fromServer, type EditorAction, type EditorDocs } from '.
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // The card remembers whether it was open.
+  localStorage.clear();
 });
 
 const server = (scenes: TourWithConfigsOk['tour']['scenes']): TourWithConfigsOk => ({
@@ -34,6 +36,8 @@ function setup(
     docs: fromServer(server(scenes)),
     currentId: 'a',
     plan: null,
+    shown: true,
+    onShownChange: vi.fn(),
     onPlace: vi.fn(),
     onRemove: vi.fn(),
     onSuggest: vi.fn(),
@@ -73,6 +77,44 @@ describe('MapPanel', () => {
     expect(screen.queryByRole('group', { name: 'Floor plan' })).toBeNull();
     open();
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('remembers whether it was open, and folds again from its head', () => {
+    setup();
+    open();
+    cleanup();
+    setup();
+    const toggle = screen.getByRole('button', { name: /^Map/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('group', { name: 'Floor plan' })).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(screen.queryByRole('group', { name: 'Floor plan' })).toBeNull();
+    expect(localStorage.getItem('panote.editor.panel.map')).toBe('closed');
+  });
+
+  it('has the switch that shows the map to visitors in its head, folded or open', () => {
+    const { onShownChange, rerender, ...rest } = setup({ shown: false });
+    const head = within(screen.getByRole('heading', { name: /^Map/ }).closest('header')!);
+    const toggle = head.getByRole('switch', { name: 'Show the map to visitors' });
+    expect(toggle).toHaveProperty('checked', false);
+    // Turning it on opens the card, to put the panos on the plan.
+    fireEvent.click(toggle);
+    expect(onShownChange).toHaveBeenCalledWith(true);
+    expect(screen.getByRole('group', { name: 'Floor plan' })).toBeTruthy();
+    rerender(<MapPanel {...rest} onShownChange={onShownChange} shown />);
+    fireEvent.click(screen.getByRole('switch', { name: 'Show the map to visitors' }));
+    expect(onShownChange).toHaveBeenLastCalledWith(false);
+    // Turning it off leaves the card as it is.
+    expect(screen.getByRole('group', { name: 'Floor plan' })).toBeTruthy();
+  });
+
+  it('says how placing works only until the first pano is on the plan', () => {
+    setup({}, [{ panoId: 'a' }, { panoId: 'b' }]);
+    open();
+    expect(screen.getByText(/Drag each pano to where it was taken/)).toBeTruthy();
+    cleanup();
+    setup();
+    expect(screen.queryByText(/Drag each pano to where it was taken/)).toBeNull();
   });
 
   it('draws a dot per placed pano, at its 0..1 position, the open one marked', () => {
@@ -189,11 +231,30 @@ describe('MapPanel', () => {
     expect(Math.hypot(x - 0.5, y - 0.5)).toBeGreaterThan(0.04);
   });
 
+  it('says why a plan image couldn’t be added even while folded', () => {
+    setup({ planError: 'Use a JPG, PNG or WebP image.' });
+    expect(screen.getByRole('button', { name: /^Map/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    );
+    expect(screen.getByRole('alert').textContent).toBe('Use a JPG, PNG or WebP image.');
+  });
+
+  it('offers only Add plan image until there is a plan', () => {
+    setup();
+    open();
+    expect(screen.getByRole('button', { name: 'Add plan image' })).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'Plan image' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Replace' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  });
+
   it('draws the plan image in its own shape, and adds, replaces and removes it', () => {
     const { onPlanFile, onRemovePlan, container, rerender, ...rest } = setup();
     open();
-    expect(screen.getByRole('button', { name: 'Add image' })).toBeTruthy();
+    const browse = vi.spyOn(HTMLInputElement.prototype, 'click');
+    fireEvent.click(screen.getByRole('button', { name: 'Add plan image' }));
     const input = screen.getByTestId('plan-input') as HTMLInputElement;
+    expect(browse.mock.contexts).toEqual([input]);
     const file = new File(['x'], 'plan.png', { type: 'image/png' });
     fireEvent.change(input, { target: { files: [file] } });
     expect(onPlanFile).toHaveBeenCalledWith(file);
@@ -205,8 +266,10 @@ describe('MapPanel', () => {
     const box = screen.getByRole('group', { name: 'Floor plan' });
     expect(box.style.getPropertyValue('--ed-map-ratio')).toBe(String(400 / 300));
     expect(container.querySelector('.ed-map__img')?.getAttribute('src')).toBe(image.url);
-    expect(screen.getByRole('button', { name: 'Replace' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    const controls = within(screen.getByRole('group', { name: 'Plan image' }));
+    expect(controls.getByRole('button', { name: 'Replace' })).toBeTruthy();
+    fireEvent.click(controls.getByRole('button', { name: 'Remove' }));
+    expect(screen.queryByRole('button', { name: 'Add plan image' })).toBeNull();
     expect(onRemovePlan).toHaveBeenCalled();
 
     rerender(
@@ -282,6 +345,8 @@ describe('MapPanel', () => {
             docs={docs}
             currentId={null}
             plan={null}
+            shown
+            onShownChange={vi.fn()}
             onPlace={(panoId, x, y) => apply({ type: 'map/place', panoId, x, y })}
             onRemove={(panoId) => apply({ type: 'map/remove', panoId })}
             onSuggest={(positions) => apply({ type: 'map/suggest', positions })}
@@ -324,6 +389,7 @@ describe('MapPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Suggest positions' }));
       const text = screen.getByRole('status').textContent;
       cleanup();
+      localStorage.clear();
       return text;
     };
     const withLinks = (

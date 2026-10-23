@@ -35,7 +35,7 @@ function openTab() {
 const points = (ui: ReturnType<typeof within>) =>
   within(ui.getByRole('heading', { name: /^Points/ }).closest('section')!);
 const tourCard = (ui: ReturnType<typeof within>) =>
-  within(ui.getByRole('heading', { name: /^Tour/ }).closest('section')!);
+  within(ui.getByRole('heading', { name: /^Panos/ }).closest('section')!);
 
 describe('editor: first run', () => {
   it('an empty tour says to upload a pano, on the stage and in each panel', async () => {
