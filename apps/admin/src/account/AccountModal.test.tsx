@@ -253,6 +253,17 @@ describe('the account menu', () => {
     await waitFor(() => expect(auth.signOut).toHaveBeenCalled());
   });
 
+  it('goes to Operations from the window opened at /app/account', async () => {
+    const operator = server({
+      'GET /api/admin/account': () => json({ ...ACCOUNT, operator: true }),
+    });
+    const { router } = renderAdmin('/app/account', { fetch: operator });
+    const dialog = within(await screen.findByRole('dialog', { name: 'Account' }));
+    fireEvent.click(await dialog.findByRole('link', { name: 'Operations' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/ops'));
+    expect(screen.queryByRole('dialog', { name: 'Account' })).toBeNull();
+  });
+
   it('lists Operations for an operator only, and goes there', async () => {
     const operator = server({
       'GET /api/admin/account': () => json({ ...ACCOUNT, operator: true }),

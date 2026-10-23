@@ -77,7 +77,7 @@ export function OwnerAccountMenu({ session }: { session: Session }) {
       <AccountMenu
         user={session.user}
         items={items}
-        // Asked when the menu first opens, not on every page load; isOperator keeps the answer.
+        // Asked when the menu opens, not on page load; isOperator keeps the answer after the first.
         onOpen={() => void isOperator(session.api).then((yes) => yes && setOperator(true))}
         onSignOut={session.signOut}
       />
