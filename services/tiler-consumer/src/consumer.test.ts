@@ -564,6 +564,37 @@ describe('a source the tiler refuses, when the marker write fails', () => {
     }
   });
 
+  it('retries when the marker HEAD hits an R2 error, rather than acking with no marker', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(async () => new Response('SourceRejectedError: nope', { status: 422 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    const key = 'panos/u1/rejected-head-fails/original';
+    await env.BUCKET.put(key, 'not really a jpeg');
+    const head = await env.BUCKET.head(key);
+    const headSpy = vi.spyOn(env.BUCKET, 'head').mockRejectedValue(new Error('head boom'));
+    try {
+      const ctx = createExecutionContext();
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-rejected-head-fails',
+          timestamp: new Date(),
+          body: { object: { key, size: 17, eTag: head!.etag }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.explicitAcks).toEqual([]);
+      expect(result.retryMessages).toEqual([{ msgId: 'msg-rejected-head-fails' }]);
+    } finally {
+      headSpy.mockRestore();
+      getSpy.mockRestore();
+    }
+  });
+
   it('acks when the marker is skipped because a newer upload replaced the original', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -596,7 +627,12 @@ describe('a source the tiler refuses, when the marker write fails', () => {
 });
 
 describe('an original that is already tiled', () => {
-  const run = async (panoId: string, manifest: string | null, eTag: string | undefined) => {
+  const run = async (
+    panoId: string,
+    manifest: string | null,
+    eTag: string | undefined,
+    extra: { force?: boolean } = {},
+  ) => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     if (manifest !== null) await env.BUCKET.put(manifestKey(panoId), manifest);
@@ -613,6 +649,7 @@ describe('an original that is already tiled', () => {
           body: {
             object: { key: `panos/u1/${panoId}/original`, size: 10, ...(eTag ? { eTag } : {}) },
             action: 'PutObject',
+            ...extra,
           },
           attempts: 1,
         },
@@ -633,6 +670,18 @@ describe('an original that is already tiled', () => {
 
   it('matches a quoted event ETag', async () => {
     expect(await run('dup-quoted', current('e2'), '"e2"')).toBe(0);
+  });
+
+  it('tiles anyway for a forced re-tile (retile.ts), to repair missing tiles', async () => {
+    expect(await run('dup-forced', current('e8'), 'e8', { force: true })).toBe(1);
+  });
+
+  it('only a literal true forces it', async () => {
+    expect(
+      await run('dup-force-string', current('e9'), 'e9', { force: 'true' } as unknown as {
+        force: boolean;
+      }),
+    ).toBe(0);
   });
 
   it.each([

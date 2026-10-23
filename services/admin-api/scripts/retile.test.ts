@@ -107,7 +107,7 @@ describe('currentEtag', () => {
 });
 
 describe('notificationFor', () => {
-  it('matches the R2 object-create event tiler-consumer reads', () => {
+  it('matches the R2 object-create event tiler-consumer reads, forced past its duplicate skip', () => {
     const now = new Date('2026-10-01T00:00:00.000Z');
     expect(
       notificationFor({ panoId: 'p1', key: 'panos/o1/p1/original', size: 10 }, 'e1', ENV_R2, now),
@@ -117,6 +117,7 @@ describe('notificationFor', () => {
       action: 'PutObject',
       object: { key: 'panos/o1/p1/original', size: 10, eTag: 'e1' },
       eventTime: '2026-10-01T00:00:00.000Z',
+      force: true,
     });
   });
 });

@@ -30,6 +30,11 @@ export class Tiler extends Container<Env> {
 interface R2Event {
   object: { key: string; size?: number; eTag?: string };
   action: string;
+  /**
+   * Set only by services/admin-api/scripts/retile.ts, never by R2: tile even
+   * when the manifest already names this original's version (alreadyTiled).
+   */
+  force?: boolean;
 }
 
 // R2 object-create actions that can produce a new `original`. A single PUT is
@@ -142,7 +147,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       continue;
     }
     // panoId only in log lines from here on: the key carries the owner segment.
-    if (await alreadyTiled(env.BUCKET, panoId, msg.body.object.eTag)) {
+    if (msg.body.force !== true && (await alreadyTiled(env.BUCKET, panoId, msg.body.object.eTag))) {
       console.warn(
         `skip tile job pano=${panoId}: the manifest already has this original's version`,
       );

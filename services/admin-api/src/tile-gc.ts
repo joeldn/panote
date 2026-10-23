@@ -116,6 +116,13 @@ export const sweepTileGcRecord = async (
   if (original) {
     const v = VERSION_RE.exec(version);
     if (v && v[2] === bareEtag(original.etag) && Number(v[1]) === record.data.tilerVersion) {
+      // Rewritten with the time moved to now, so it waits out another grace period
+      // before it is looked at again: a dead-lettered pano's partial dir would
+      // otherwise cost every 15-minute run its checks until a new upload. Safe for
+      // the newer-writes check below, which only ever compares against this time.
+      await bucket.put(key, JSON.stringify({ ...record.data, supersededAt: now.toISOString() }), {
+        httpMetadata: { contentType: 'application/json' },
+      });
       return 'kept';
     }
   }
@@ -279,27 +286,35 @@ const readTileGcStatus = async (bucket: R2Bucket): Promise<TileGcStatus | null> 
 };
 
 /**
- * The 15-minute cron: the backup first, then the tile sweep with the R2 operations
- * the backup left of TILE_GC_RUN_OPS, then the sweep's status at TILE_GC_STATUS_KEY.
- * A backup that throws is assumed to have spent its whole budget, so the sweep does
- * nothing and the run doesn't count as clean (tile GC isn't happening), and the
- * backup's error is thrown again at the end.
+ * The 15-minute cron: the backup first, then the tile sweep, then the sweep's
+ * status at TILE_GC_STATUS_KEY, all within `totalOps` R2 operations (default
+ * TILE_GC_RUN_OPS): the backup gets the total less the status's two, and the sweep
+ * what the backup left of that. A caller that spends some of the invocation's
+ * budget first (another task on the same cron) passes the reduced total. A backup
+ * that throws is assumed to have spent its whole share, so the sweep does nothing
+ * and the run doesn't count as clean (tile GC isn't happening), and the backup's
+ * error is thrown again at the end.
  */
 export const runBackupThenTileGc = async (
   bucket: R2Bucket,
   now: Date,
-  backup: (bucket: R2Bucket, now: Date) => Promise<{ operations: number }> = runBackup,
+  options: {
+    totalOps?: number;
+    backup?: (bucket: R2Bucket, now: Date, budget: number) => Promise<{ operations: number }>;
+  } = {},
 ): Promise<void> => {
-  let spent = TILE_GC_RUN_OPS;
+  const share = Math.max(0, (options.totalOps ?? TILE_GC_RUN_OPS) - STATUS_OPS);
+  const backup = options.backup ?? ((b, n, budget) => runBackup(b, n, budget));
+  let spent = share;
   let backupError: { error: unknown } | undefined;
   try {
-    spent = (await backup(bucket, now)).operations;
+    spent = (await backup(bucket, now, share)).operations;
   } catch (error) {
     backupError = { error };
   }
   let ok = backupError === undefined;
   try {
-    await sweepSupersededTiles(bucket, now, { ops: TILE_GC_RUN_OPS - STATUS_OPS - spent });
+    await sweepSupersededTiles(bucket, now, { ops: share - spent });
   } catch (e) {
     ok = false;
     console.error('[tile-gc] run failed:', errorName(e));

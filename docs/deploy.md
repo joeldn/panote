@@ -1145,7 +1145,9 @@ string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too. The consumer reads t
 before starting a container and acks the message without tiling when the manifest already names
 that version (`alreadyTiled` in `services/tiler-consumer/src/consumer.ts`), so a duplicate delivery
 or a re-upload of the same bytes costs one R2 read. A manifest it can't read means it tiles as
-before. To force a re-tile of the same bytes, bump `TILER_OUTPUT_VERSION`.
+before. `retile.ts` is never skipped: its messages carry `force: true` (R2's never do), so a
+re-tile of the same bytes runs and rewrites every key of that version dir, which is how to repair
+a pano whose manifest is intact but whose tiles are missing.
 
 ### Sources the tiler refuses
 
@@ -1193,10 +1195,12 @@ any check fails:
 
 A pano whose original is gone has been deleted; its record and dir just go.
 
-**Limits.** The sweep shares the 15-minute invocation with the backup, and the two together make at
-most `BACKUP_RUN_BUDGET` (900) R2 operations, the figure the backup was already sized to keep under
-the per-invocation subrequest limit: the sweep gets whatever the backup run left
-(`runBackupThenTileGc` in `services/admin-api/src/tile-gc.ts`). Once a day's backup set is
+**Limits.** The sweep shares the 15-minute invocation with the backup, and the two together, with
+the sweep's status record, make at most `BACKUP_RUN_BUDGET` (900) R2 operations, the figure the
+backup was already sized to keep under the per-invocation subrequest limit: the backup gets that
+total less 2, and the sweep whatever the backup run left (`runBackupThenTileGc` in
+`services/admin-api/src/tile-gc.ts`, which takes the total as `totalOps`, so another task on the
+same cron can spend part of it first and pass what is left). Once a day's backup set is
 complete a backup run costs 2 operations, so most runs give the sweep about 900. A record costs 3
 operations to check, plus one list per 1,000 objects in the dir to look for newer writes and one
 list and one delete per 1,000 to delete it: about 7 for a typical pano, 31 at most (a full
@@ -1212,20 +1216,27 @@ is a few small JSON parses).
 is clean when the backup didn't throw and the sweep finished. The daily cron's `tile-gc` task
 throws when the last clean run is over an hour old (four runs in a row) or none is recorded, so
 the health check's `admin-api daily cron` check alerts on a failing sweep, as before. Right
-after a deploy, a daily run before the first 15-minute run would report it once. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+after a deploy, a daily run before the first 15-minute run would report it once.
+
+A record the sweep keeps because the current original tiles into that dir (an in-flight job, or
+a pano whose jobs only failed) is rewritten with the time moved to now, so it is looked at again
+a day later rather than on every run.
+
+Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
 left over from before this existed are recorded the next time that pano re-tiles, so a
 `retile.ts --all` after deploying this clears them too, a day later.
 
 Records hold the owner-bearing original key, so deleting a pano (including through account
 deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job that confirmed its
-swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
+swap just before the delete can still write one afterwards; the sweep drops it about a day later
 (the original is gone by then).
 
 After a tiler rollback, a `retile.ts` job that starts writing into an old version dir while the
 sweep is deleting it would leave a manifest pointing at a half-deleted dir. The window is seconds
 per dir, but there is no lock between the two, and the sweep now runs every 15 minutes, so there is
-no quiet hour to aim for. If a pano shows missing tiles after such a re-tile, re-tile it again: the
-job rewrites every key of that version.
+no quiet hour to aim for. If a pano shows missing tiles after such a re-tile, re-tile it again with
+`retile.ts --pano <pano-uuid> --apply`: its message is forced past the duplicate skip, and the job
+rewrites every key of that version.
 
 The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
 fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete

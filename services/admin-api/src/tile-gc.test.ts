@@ -24,7 +24,6 @@ import {
   sweepTileGcRecord,
   TILE_GC_GRACE_MS,
   TILE_GC_RECORD_MAX_OPS,
-  TILE_GC_RUN_OPS,
   TILE_GC_STALE_MS,
   tileGcStart,
 } from './tile-gc.js';
@@ -113,15 +112,19 @@ describe('sweepTileGcRecord', () => {
     expect(await listKeys(tileVersionPrefix(panoId, current))).toHaveLength(1);
   });
 
-  it('keeps the dir a first upload with no manifest yet tiles into (its job may retry)', async () => {
+  it('keeps the dir a first upload with no manifest yet tiles into (its job may retry), and re-times its record', async () => {
     const panoId = 'gc-no-manifest';
     const put = await env.BUCKET.put(originalKey(SUB, panoId), 'original');
     const own = `t${TILER}-${put!.etag}`;
     await env.BUCKET.put(`${tileVersionPrefix(panoId, own)}0/px/0-0.webp`, 'tile');
     await record(panoId, own);
 
-    expect(await sweepTileGcRecord(env.BUCKET, tileGcKey(panoId, own), later())).toBe('kept');
+    const when = later();
+    expect(await sweepTileGcRecord(env.BUCKET, tileGcKey(panoId, own), when)).toBe('kept');
     expect(await listKeys(tileVersionPrefix(panoId, own))).toHaveLength(1);
+    // So it waits out another grace period instead of costing every run its checks.
+    const rec = (await (await env.BUCKET.get(tileGcKey(panoId, own)))!.json()) as TileGcRecord;
+    expect(rec.supersededAt).toBe(when.toISOString());
   });
 
   it('deletes the partial dir of an earlier, failed original when there is no manifest', async () => {
@@ -407,14 +410,45 @@ describe('runBackupThenTileGc', () => {
     await record(panoId, 't1-old');
 
     // A backup that used it all leaves the sweep nothing to work with.
-    await runBackupThenTileGc(env.BUCKET, later(), async () => ({
-      operations: TILE_GC_RUN_OPS,
-    }));
+    await runBackupThenTileGc(env.BUCKET, later(), {
+      backup: async (_b, _n, budget) => ({ operations: budget }),
+    });
     expect(await listKeys(tileVersionPrefix(panoId, 't1-old'))).toHaveLength(2);
 
     // An idle backup run (2 operations) leaves it the rest.
-    await runBackupThenTileGc(env.BUCKET, later(), async () => ({ operations: 2 }));
+    await runBackupThenTileGc(env.BUCKET, later(), { backup: async () => ({ operations: 2 }) });
     expect(await listKeys(tileVersionPrefix(panoId, 't1-old'))).toEqual([]);
+  });
+
+  it('keeps the backup, the sweep and the status within the total it is given', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const panoId of ['gc-total-a', 'gc-total-b', 'gc-total-c']) {
+      await seedPano(panoId, ['t1-old']);
+      await record(panoId, 't1-old');
+    }
+    let calls = 0;
+    const counting = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        const v = Reflect.get(target, prop) as unknown;
+        if (typeof v !== 'function') return v;
+        return (...args: unknown[]) => {
+          calls += 1;
+          return (v as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+    const totalOps = 50;
+    let backupBudget = -1;
+    await runBackupThenTileGc(counting, later(), {
+      totalOps,
+      backup: async (_b, _n, budget) => {
+        backupBudget = budget;
+        calls += 10; // a backup run that made 10 R2 calls
+        return { operations: 10 };
+      },
+    });
+    expect(backupBudget).toBe(totalOps - 2);
+    expect(calls).toBeLessThanOrEqual(totalOps);
   });
 
   it('skips the sweep when the backup throws, then throws its error', async () => {
@@ -423,8 +457,10 @@ describe('runBackupThenTileGc', () => {
     await record(panoId, 't1-old');
 
     await expect(
-      runBackupThenTileGc(env.BUCKET, later(), async () => {
-        throw new Error('backup broke');
+      runBackupThenTileGc(env.BUCKET, later(), {
+        backup: async () => {
+          throw new Error('backup broke');
+        },
       }),
     ).rejects.toThrow('backup broke');
     expect(await listKeys(tileVersionPrefix(panoId, 't1-old'))).toHaveLength(2);
@@ -442,7 +478,7 @@ describe('tile-gc monitoring', () => {
   const idleBackup = async () => ({ operations: 2 });
 
   it('records each clean run, and keeps the last clean time when a run fails', async () => {
-    await runBackupThenTileGc(env.BUCKET, at(0), idleBackup);
+    await runBackupThenTileGc(env.BUCKET, at(0), { backup: idleBackup });
     expect(await status()).toEqual({
       lastRunAt: at(0).toISOString(),
       lastOkAt: at(0).toISOString(),
@@ -450,8 +486,10 @@ describe('tile-gc monitoring', () => {
 
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await expect(
-      runBackupThenTileGc(env.BUCKET, at(15), async () => {
-        throw new Error('backup broke');
+      runBackupThenTileGc(env.BUCKET, at(15), {
+        backup: async () => {
+          throw new Error('backup broke');
+        },
       }),
     ).rejects.toThrow('backup broke');
     expect(await status()).toEqual({
@@ -465,7 +503,7 @@ describe('tile-gc monitoring', () => {
     await env.BUCKET.delete(TILE_GC_STATUS_KEY);
     await expect(checkTileGcStatus(env.BUCKET, at(0))).rejects.toThrow();
 
-    await runBackupThenTileGc(env.BUCKET, at(0), idleBackup);
+    await runBackupThenTileGc(env.BUCKET, at(0), { backup: idleBackup });
     await expect(checkTileGcStatus(env.BUCKET, at(30))).resolves.toBeUndefined();
     await expect(
       checkTileGcStatus(env.BUCKET, new Date(at(0).getTime() + TILE_GC_STALE_MS + 1)),
@@ -475,7 +513,7 @@ describe('tile-gc monitoring', () => {
   it('shows a stale sweep in the daily cron status the health check reads', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    await runBackupThenTileGc(env.BUCKET, at(0), idleBackup);
+    await runBackupThenTileGc(env.BUCKET, at(0), { backup: idleBackup });
     const fire = async (when: Date) => {
       const ctx = createExecutionContext();
       await worker.scheduled(

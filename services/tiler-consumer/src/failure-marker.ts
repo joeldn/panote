@@ -45,9 +45,11 @@ export const writeFailureMarker = async (
   try {
     head = await bucket.head(originalNotificationKey);
   } catch (e) {
-    // An R2 error here must not read as "original is gone" - skip, don't write.
+    // An R2 error here must not read as "original is gone": don't write, and
+    // report 'failed', not 'skipped', so a caller that acks only once the
+    // marker is settled (the 422 path) retries instead of dropping the failure.
     console.warn(`skip tile-failed marker pano=${pano}: HEAD failed (${errorText(e)})`);
-    return 'skipped';
+    return 'failed';
   }
   if (!head) {
     console.warn(`skip tile-failed marker pano=${pano}: original no longer exists`);
