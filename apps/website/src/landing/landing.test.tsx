@@ -178,6 +178,13 @@ describe('landing', () => {
       /in seconds|as long as you want|never downscale/i,
     );
     expect(screen.getByRole('button', { name: 'Who can see my tours?' })).toBeTruthy();
+    // Editors are capped per tour (MAX_TOUR_MEMBERS), not by the per-editor membership cap.
+    const editors = screen.getByRole('button', {
+      name: 'Can other people work on a tour with me?',
+    });
+    expect(document.getElementById(editors.getAttribute('aria-controls')!)?.textContent).toContain(
+      'Invite up to 10 editors',
+    );
     expect(screen.getByRole('button', { name: 'What happens if Panote shuts down?' })).toBeTruthy();
   });
 

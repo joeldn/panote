@@ -2,8 +2,8 @@
 // Limits are real (copy-rule.test bans "unlimited"/"no limits"): state the numbers.
 import {
   MAX_HOTSPOTS,
-  MAX_MEMBERSHIPS,
   MAX_TOUR_LANGUAGES,
+  MAX_TOUR_MEMBERS,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
 } from '@internal/contracts';
@@ -118,7 +118,7 @@ export const FEATURES = [
   {
     icon: 'fa-solid fa-globe',
     title: 'Many languages',
-    body: `Translate a tour into up to ${MAX_TOUR_LANGUAGES} languages. Visitors pick theirs.`,
+    body: `Offer a tour in up to ${MAX_TOUR_LANGUAGES} languages. Visitors pick theirs.`,
   },
   {
     icon: 'fa-solid fa-chart-line',
@@ -187,11 +187,11 @@ export const FAQS = [
   },
   {
     q: 'Who can see my tours?',
-    a: 'Only people you share them with. New tours are unlisted: anyone with the link can open them, but they aren’t listed anywhere. Make a tour public to show it on Explore. Stop sharing, and the link and every embed go offline.',
+    a: 'Tours are unlisted by default: anyone with the link can open one, but it isn’t listed anywhere. Make a tour public to show it on Explore. Stop sharing, and the link and every embed go offline.',
   },
   {
     q: 'What happens if Panote shuts down?',
-    a: 'We have no plans to, and our terms commit us to giving notice wherever we reasonably can. Panote is a host, not a backup, so keep your original photos, as you would with any host.',
+    a: 'We have no plans to, and our terms say we’ll give notice where we reasonably can. Panote is a host, not a backup, so keep your original photos, as you would with any host.',
   },
   {
     q: 'Are there resolution limits?',
@@ -207,7 +207,7 @@ export const FAQS = [
   },
   {
     q: 'Can other people work on a tour with me?',
-    a: `Yes. Invite up to ${MAX_MEMBERSHIPS} editors to a tour and they can change it with you. You stay the owner, and you can hand the tour over to one of them.`,
+    a: `Yes. Invite up to ${MAX_TOUR_MEMBERS} editors to a tour and they can change it with you. You stay the owner, and you can hand the tour over to one of them.`,
   },
   {
     q: 'Do I own what I upload?',
