@@ -49,6 +49,12 @@ describe('admin routes', () => {
     expect(screen.getByText('Your tours')).toBeTruthy();
   });
 
+  it('opens the account window over the dashboard at /app/account', async () => {
+    renderAt('/app/account');
+    expect(await screen.findByRole('dialog', { name: 'Account' })).toBeTruthy();
+    expect(screen.getByText('Your tours')).toBeTruthy();
+  });
+
   it('404s an unknown share tab and unknown paths', async () => {
     renderAt('/app/t/tour-1/share/bogus');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();

@@ -1,7 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
-import { cx } from './cx.js';
-
 export interface AccountUser {
   name?: string;
   email?: string;
@@ -13,22 +11,24 @@ export type AccountMenuItem = {
   icon: string;
 } & (
   | { href: string }
-  /** An action instead of a link, e.g. "Delete account"; `danger` draws it in the accent red. */
-  | { onSelect: () => void; danger?: boolean }
+  /** An action instead of a link, e.g. "Account…" opening a dialog. */
+  | { onSelect: () => void }
 );
 
 export interface AccountMenuProps {
   user: AccountUser;
-  /** Links and actions above the divider ("My tours", "Home page", "Delete account"). */
+  /** Links and actions above the divider ("My tours", "Account…"). */
   items?: readonly AccountMenuItem[];
   onSignOut: () => void | Promise<void>;
+  /** Runs each time the menu opens, e.g. to look up an item that depends on the user. */
+  onOpen?: () => void;
 }
 
 const initialOf = (user: AccountUser): string =>
   (user.name ?? user.email ?? '?').trim().charAt(0).toUpperCase() || '?';
 
 /** The 38px avatar (initial) that opens the name/email + links + "Sign out" menu. */
-export function AccountMenu({ user, items = [], onSignOut }: AccountMenuProps) {
+export function AccountMenu({ user, items = [], onSignOut, onOpen }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -64,7 +64,10 @@ export function AccountMenu({ user, items = [], onSignOut }: AccountMenuProps) {
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         title={label}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen(!open);
+        }}
       >
         {initialOf(user)}
       </button>
@@ -85,7 +88,7 @@ export function AccountMenu({ user, items = [], onSignOut }: AccountMenuProps) {
                 key={item.label}
                 type="button"
                 role="menuitem"
-                className={cx('pn-account__item', item.danger && 'pn-account__item--danger')}
+                className="pn-account__item"
                 onClick={() => {
                   setOpen(false);
                   item.onSelect();
@@ -100,7 +103,7 @@ export function AccountMenu({ user, items = [], onSignOut }: AccountMenuProps) {
           <button
             type="button"
             role="menuitem"
-            className="pn-account__item pn-account__item--danger"
+            className="pn-account__item"
             onClick={() => {
               setOpen(false);
               void onSignOut();

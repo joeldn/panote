@@ -509,13 +509,6 @@ button.pn-chip {
   font-size: 13px;
   color: var(--ink-50);
 }
-.pn-account__item--danger,
-.pn-account__item--danger i {
-  color: var(--accent);
-}
-.pn-account__item--danger:hover {
-  background: rgba(181, 72, 58, 0.07);
-}
 .pn-account__divider {
   height: 1px;
   margin: 6px 4px;

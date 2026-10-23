@@ -494,12 +494,15 @@ describe('editor: save', () => {
     expect(localStorage.getItem(DRAFT)).toBeNull();
   });
 
-  it("offers Delete account in the editor's account menu", async () => {
-    const { ui } = openTab('/app/t/t1');
+  it("offers Delete account from the editor's account window, staying in the editor", async () => {
+    const { ui, router } = openTab('/app/t/t1');
     await loaded(ui);
     fireEvent.click(ui.getByRole('button', { name: /^Account:/ }));
-    fireEvent.click(ui.getByRole('menuitem', { name: 'Delete account' }));
+    fireEvent.click(ui.getByRole('menuitem', { name: 'Account…' }));
+    const account = await screen.findByRole('dialog', { name: 'Account' });
+    fireEvent.click(within(account).getByRole('button', { name: 'Delete account' }));
     expect(await screen.findByRole('dialog', { name: 'Delete your account?' })).toBeTruthy();
+    expect(router.state.location.pathname).toBe('/app/t/t1');
   });
 
   it('restores a draft whose doc changed on the server into the conflict banner, and Discard drops it', async () => {

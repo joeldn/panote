@@ -30,22 +30,49 @@
   border-color: var(--accent);
 }
 
-/* The account page at /app/account (no design screen; follows the dashboard's type). */
+/* The account window (no design screen; follows the Insights and People modals). */
 .acct {
-  max-width: 720px;
+  padding: 20px 24px 6px;
+  font-family: var(--fbody);
+  color: var(--ink);
 }
 
 .acct__section {
-  margin-top: 36px;
+  margin-bottom: 20px;
+}
+
+.acct__label {
+  display: block;
+  margin: 0 0 8px;
+  font: 400 11px var(--fmono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-45);
+}
+
+.acct__status {
+  margin: 0;
+  font: 400 13px/1.5 var(--fbody);
+  color: var(--ink-62);
+}
+
+.acct__retry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--r-row);
+  background: color-mix(in srgb, var(--accent) 8%, #fff);
+  font: 400 13px/1.5 var(--fbody);
 }
 
 .acct__facts {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 10px 24px;
+  gap: 6px 20px;
   margin: 0;
-  font: 400 15px/1.4 var(--fbody);
-  color: var(--ink);
+  font: 400 14px/1.4 var(--fbody);
 }
 
 .acct__facts dt {
@@ -57,38 +84,45 @@
   overflow-wrap: anywhere;
 }
 
-.acct__hint {
-  max-width: 56ch;
-  margin: 14px 0 16px;
-  font: 400 13px/1.55 var(--fbody);
-  color: var(--ink-62);
+.acct__link {
+  font-weight: 500;
+  color: var(--accent);
 }
 
 .acct__meters {
   display: grid;
-  gap: 18px;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
 .acct__meter {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px 16px;
-  font: 400 15px/1.4 var(--fbody);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 11px 12px 12px;
+  border: 1px solid var(--ink-10);
+  border-radius: var(--r-card);
+  background: #fff;
+}
+
+.acct__meter .acct__label {
+  margin: 0;
 }
 
 .acct__meter-value {
   font: 400 13px var(--fmono);
-  color: var(--ink-62);
+  color: var(--ink);
 }
 
 .acct__bar {
-  grid-column: 1 / -1;
-  height: 6px;
+  height: 4px;
+  margin-top: 6px;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--ink-08);
 }
 
@@ -102,12 +136,62 @@
   background: var(--accent);
 }
 
+.acct__note {
+  margin: 8px 0 0;
+  font: 400 12px/1.5 var(--fbody);
+  color: var(--ink-55);
+}
+
+.acct__id-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.acct__id-row .acct__label {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .acct__id {
+  flex: 1;
+  min-width: 0;
   font: 400 13px/1.4 var(--fmono);
+  overflow-wrap: anywhere;
   user-select: all;
 }
 
-.acct__link {
-  font: 500 15px var(--fbody);
+.acct__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--ink-10);
+}
+
+/* Quiet on purpose: the dialog it opens does the warning. */
+.acct__delete {
+  margin-right: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 400 13px var(--fbody);
+  color: var(--ink-45);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.acct__delete:hover,
+.acct__delete:focus-visible {
   color: var(--accent);
+}
+
+/* A phone: one meter a row, so each keeps its number and bar readable. */
+@media (max-width: 400px) {
+  .acct__meters {
+    grid-template-columns: 1fr;
+  }
 }

@@ -20,26 +20,36 @@ const json = (body: unknown, status = 200) =>
     headers: { 'content-type': 'application/json' },
   });
 
-/** The dashboard's lists, plus whatever the account route answers. */
+/** The dashboard's lists, the account window's reads, and whatever the delete answers. */
 function server(account: () => Response) {
   return vi.fn<FetchLike>(async (input, init = {}) => {
     const url = new URL(String(input), 'https://panote.test');
     const key = `${init.method ?? 'GET'} ${url.pathname}`;
     if (key === 'GET /api/admin/tours') return json({ tours: [], cursor: null });
     if (key === 'GET /api/admin/panos') return json({ panoIds: [], panos: [], cursor: null });
+    if (key === 'GET /api/admin/account') return json({ email: USER.email, signIns: ['email'] });
+    if (key === 'GET /api/upload-url') {
+      const limits = { maxPanos: null, maxBytes: null, maxUploadsPerDay: null };
+      return json({ panos: 0, bytes: 0, uploadsToday: 0, limits });
+    }
     if (key === 'DELETE /api/admin/account') return account();
     throw new Error(`unexpected ${key}`);
   });
 }
 
+/** Avatar menu, Account…, then the window's Delete account. */
 async function openDialog() {
   fireEvent.click(await screen.findByRole('button', { name: 'Account: Maya Larsson' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Delete account' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Account…' }));
+  const account = await screen.findByRole('dialog', { name: 'Account' });
+  fireEvent.click(within(account).getByRole('button', { name: 'Delete account' }));
   return screen.getByRole('dialog', { name: 'Delete your account?' });
 }
 
 const deleteButton = () =>
-  screen.getByRole('button', { name: 'Delete account' }) as HTMLButtonElement;
+  within(screen.getByRole('dialog', { name: 'Delete your account?' })).getByRole('button', {
+    name: 'Delete account',
+  }) as HTMLButtonElement;
 const phraseInput = () => screen.getByRole('textbox', { name: /to confirm/ });
 
 describe('Delete account', () => {
