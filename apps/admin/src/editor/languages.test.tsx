@@ -255,17 +255,21 @@ describe('editor: languages', () => {
     expect(server.writes().filter((w) => w.path.includes('/panos/'))).toEqual([]);
   });
 
-  it('the Preview link carries the language being edited', async () => {
+  it('the Preview link carries the pano and language being edited, and comes back to them', async () => {
     server.setTour({ ...server.tour!.body, languages: { default: 'en', others: ['de'] } });
     const ui = openTab();
     await ui.findByRole('button', { name: /Tour title: Old town/ });
     expect(ui.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
-      '/app/t/t1/preview',
+      '/app/t/t1/preview?pano=square',
     );
     fireEvent.click(within(await openMenu(ui)).getByRole('button', { name: 'Deutsch' }));
     expect(ui.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
-      '/app/t/t1/preview?lang=de',
+      '/app/t/t1/preview?pano=square&lang=de',
     );
+    fireEvent.click(ui.getByRole('link', { name: 'Preview' }));
+    fireEvent.click(await screen.findByRole('link', { name: 'Back to editor' }));
+    // Still translating into German, not typing German into the English text.
+    expect(await ui.findByRole('button', { name: 'Language: Deutsch' })).toBeTruthy();
   });
 });
 

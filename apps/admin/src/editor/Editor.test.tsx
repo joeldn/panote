@@ -1180,7 +1180,7 @@ describe('editor: points, connections, views and settings', () => {
     expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
     expect(ui.queryByText('Saved')).toBeNull();
     expect(ui.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe(
-      '/app/t/t1/preview',
+      '/app/t/t1/preview?pano=square',
     );
     for (const gone of ['People', 'Insights']) {
       expect(ui.queryByRole('link', { name: gone })).toBeNull();
@@ -1213,6 +1213,11 @@ describe('editor: points, connections, views and settings', () => {
       within(screen.getByRole('navigation', { name: 'Tour' })).getByText('Unsaved'),
     ).toBeTruthy();
     expect(server.tour!.body.title).toBe('Old town');
+    // Leaving from the preview asks too.
+    fireEvent.click(screen.getByRole('link', { name: 'Your tours' }));
+    const again = await screen.findByRole('dialog', { name: 'Leave without saving?' });
+    fireEvent.click(within(again).getByRole('button', { name: 'Stay' }));
+    expect(router.state.location.pathname).toBe('/app/t/t1/preview');
     fireEvent.click(screen.getByRole('link', { name: 'Back to editor' }));
     expect(await ui.findByRole('button', { name: /Tour title: Unsaved/ })).toBeTruthy();
     expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();

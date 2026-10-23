@@ -121,6 +121,7 @@ function TourEditor({ tourId }: { tourId: string }) {
   const { load } = editor;
   const ready = load.status === 'ready';
   const previewing = useMatch('/t/:tourId/preview') !== null;
+  const blocker = useUnsavedGuards(editor.dirty.length > 0, tourId);
   useEffect(() => {
     if (ready) writeCurrentTour(tourId);
   }, [ready, tourId]);
@@ -159,16 +160,32 @@ function TourEditor({ tourId }: { tourId: string }) {
       </EditorMessage>
     );
   }
-  if (previewing) {
-    return (
-      <EditorPreview
-        docs={editor.docs}
-        publish={editor.publish}
-        unsaved={editor.dirty.length > 0}
+  return (
+    <>
+      {previewing ? (
+        <EditorPreview
+          docs={editor.docs}
+          publish={editor.publish}
+          unsaved={editor.dirty.length > 0}
+        />
+      ) : (
+        <EditorScreen editor={editor} docs={editor.docs} />
+      )}
+      {/* Here, not in the screen: it guards leaving from the preview too. */}
+      <ConfirmModal
+        open={blocker.state === 'blocked'}
+        title="Leave without saving?"
+        body="Your unsaved changes to this tour will be lost."
+        confirmLabel="Leave"
+        cancelLabel="Stay"
+        onConfirm={() => {
+          editor.forgetDraft();
+          blocker.proceed?.();
+        }}
+        onCancel={() => blocker.reset?.()}
       />
-    );
-  }
-  return <EditorScreen editor={editor} docs={editor.docs} />;
+    </>
+  );
 }
 
 function EditorMessage({ title, children }: { title: string; children?: ReactNode }) {
@@ -200,11 +217,15 @@ const SAVED_FLASH_MS = 2500;
 
 function SaveButton({ editor }: { editor: EditorController }) {
   const { saving, dirty, conflicts, savedAt } = editor;
-  // The save whose "Saved" has had its moment.
-  const [faded, setFaded] = useState<Date | null>(null);
+  // The save whose "Saved" has had its moment (counted from the save, so coming back from
+  // Preview doesn't say it again).
+  const [faded, setFaded] = useState<Date | null>(() =>
+    savedAt && Date.now() - savedAt.getTime() >= SAVED_FLASH_MS ? savedAt : null,
+  );
   useEffect(() => {
     if (!savedAt) return;
-    const timer = setTimeout(() => setFaded(savedAt), SAVED_FLASH_MS);
+    const left = SAVED_FLASH_MS - (Date.now() - savedAt.getTime());
+    const timer = setTimeout(() => setFaded(savedAt), Math.max(0, left));
     return () => clearTimeout(timer);
   }, [savedAt]);
   if (saving) {
@@ -268,7 +289,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [languagesOpen, setLanguagesOpen] = useState(false);
   // The language titles and text are edited in; null is the default language.
-  const [editLang, setEditLang] = useState<string | null>(null);
+  // ?lang= is where Preview's Back to editor returns to; a language the tour lacks is ignored.
+  const [editLang, setEditLang] = useState<string | null>(() => params.get('lang'));
   const [libraryOpen, setLibraryOpen] = useState(false);
   const uploadEnv = useContext(UploadEnvContext);
   const [planUploading, setPlanUploading] = useState(false);
@@ -296,7 +318,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     i18n: Partial<Record<string, Partial<Record<F, string | undefined>> | undefined>> | undefined,
     field: F,
   ) => (lang ? { value: i18n?.[lang]?.[field] ?? '', placeholder: base ?? '' } : null);
-  const blocker = useUnsavedGuards(dirty.length > 0, docs.tourId);
 
   const sceneIds = useMemo(() => tour.scenes.map((s) => s.panoId), [tour.scenes]);
   const startId = tour.startPanoId && sceneIds.includes(tour.startPanoId) ? tour.startPanoId : null;
@@ -566,16 +587,21 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
     : null;
 
   const missingName = scene?.kind === 'missing' ? 'Missing pano' : null;
-  const previewTo = `/t/${docs.tourId}/preview${lang ? `?lang=${encodeURIComponent(lang)}` : ''}`;
+  const previewQuery = new URLSearchParams({
+    ...(currentId && { pano: currentId }),
+    ...(lang && { lang }),
+  }).toString();
+  const previewTo = `/t/${docs.tourId}/preview${previewQuery ? `?${previewQuery}` : ''}`;
   const conflictBusy = editor.saving;
 
   // Share shares the saved tour: unsaved edits are saved on the way. A save that fails, or
   // can't start (a conflict is open), stays here with its banner instead.
   const navigate = useNavigate();
   const saveThen = (to: string) => {
-    void editor.save().then((saved) => {
-      if (saved) void navigate(to);
-    });
+    void (async () => {
+      // A save already under way finishes first; then whatever was edited meanwhile.
+      if ((await editor.save()) && (await editor.save())) void navigate(to);
+    })();
   };
 
   return (
@@ -1144,18 +1170,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           setConfirm(null);
         }}
         onCancel={() => setConfirm(null)}
-      />
-      <ConfirmModal
-        open={blocker.state === 'blocked'}
-        title="Leave without saving?"
-        body="Your unsaved changes to this tour will be lost."
-        confirmLabel="Leave"
-        cancelLabel="Stay"
-        onConfirm={() => {
-          editor.forgetDraft();
-          blocker.proceed?.();
-        }}
-        onCancel={() => blocker.reset?.()}
       />
       {libraryOpen && (
         <LibraryPicker

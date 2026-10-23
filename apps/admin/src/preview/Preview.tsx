@@ -72,7 +72,16 @@ function PreviewScreen({
   const [sharing, setSharing] = useState(false);
   // The scene whose tiles failed to load, e.g. one still processing.
   const [notReady, setNotReady] = useState<string | null>(null);
-  const editor = `/t/${encodeURIComponent(tourId)}`;
+  // Back to the pano and language the editor was on (the language picker here drops ?pano=).
+  const [editor] = useState(() => {
+    const back = new URLSearchParams();
+    for (const key of ['pano', 'lang']) {
+      const value = params.get(key);
+      if (value) back.set(key, value);
+    }
+    const query = back.toString();
+    return `/t/${encodeURIComponent(tourId)}${query ? `?${query}` : ''}`;
+  });
 
   if (!vt.tour) {
     return (

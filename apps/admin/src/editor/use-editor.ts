@@ -455,7 +455,7 @@ export function useEditor(
    * Resolves true once everything is saved (or there was nothing to save); false when this
    * save failed in part, couldn't start, or another one was already under way.
    */
-  const save = useCallback(
+  const saveNow = useCallback(
     async ({ resolving = false } = {}): Promise<boolean> => {
       const current = docsRef.current;
       if (!current || savingRef.current) return false;
@@ -516,6 +516,17 @@ export function useEditor(
       setAwaiting,
       foldAppends,
     ],
+  );
+  // The save under way, so a second caller (Share) can wait on it rather than give up.
+  const inflightRef = useRef<Promise<boolean> | null>(null);
+  const save = useCallback(
+    (opts: { resolving?: boolean } = {}): Promise<boolean> => {
+      if (savingRef.current && inflightRef.current) return inflightRef.current;
+      const run = saveNow(opts);
+      inflightRef.current = run;
+      return run;
+    },
+    [saveNow],
   );
 
   /**

@@ -1269,13 +1269,16 @@ p.ed-banner__text {
     gap: 8px;
   }
 
-  .ed-bar__left,
-  .ed-bar__right {
+  .ed-bar__left {
     flex-wrap: nowrap;
   }
 
+  /* Its own row here: on the narrowest phones Save's states may take a second line. */
   .ed-bar__right {
     align-self: flex-end;
+    flex-wrap: wrap;
+    max-width: 100%;
+    row-gap: 8px;
   }
 
   .ed-inline {

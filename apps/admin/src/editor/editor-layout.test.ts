@@ -28,7 +28,10 @@ describe('editor layout CSS', () => {
   it('keeps the bar to one row at every width: the title gives way, not the controls', () => {
     expect(css).toMatch(/\n\.ed-bar__left\s*{\s*flex:\s*1;/);
     expect(css).toMatch(/\n\.ed-bar__right\s*{\s*flex:\s*none;/);
-    expect(css).not.toMatch(/\.ed-bar__right\s*{[^}]*flex-wrap:\s*wrap/);
+    // Wide, the controls never wrap under the popovers' fixed offsets (a phone's column may).
+    expect(css.slice(0, mediaBlock(600).at)).not.toMatch(
+      /\.ed-bar__right\s*{[^}]*flex-wrap:\s*wrap/,
+    );
     // The menu is the bar's at every width, never hidden by a media query.
     expect(css).not.toMatch(/\.ed-more\s*{[^}]*display:\s*none/);
   });
