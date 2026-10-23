@@ -91,9 +91,12 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   from the panos already placed. Panos with no direction to go by sit beside a
   linked one, or near the middle. Placed dots never move, and the whole layout is
   one tour edit. It is a first draft for the creator to drag into place.
-- **Editor layout.** The design has no editor screen for the plan. It is a third
-  card under Points and Tour, collapsed to its title (with an "n of m placed"
-  count) until opened, so the side column keeps its room.
+- **Editor layout.** The design has no editor screen for the plan. It is the last
+  of the editor's side cards (Panos, This pano, Points, Map), folded to its title
+  (with an "n of m placed" count) until opened, so the side column keeps its room.
+  Every card folds from its head and the browser remembers it; on a phone the cards
+  are the tabs of one bottom sheet. The Map card's head has the switch that shows
+  the map to visitors (the tour's `showMap`), so Tour settings no longer has it.
 
 ## Where the code deliberately drops part of the design
 

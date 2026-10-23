@@ -12,6 +12,7 @@ import {
 
 import type { PendingUpload } from '../upload/upload-context.js';
 import { findLink, yawDegrees, type EditorDocs } from './model.js';
+import { PanelCard } from './PanelCard.js';
 import { pendingLine, pendingPct, type SceneStatus } from './scene-status.js';
 import { dropIndex, keyMoveIndex, movedLine } from './scene-order.js';
 
@@ -70,7 +71,7 @@ interface Drag {
 
 const hueOf = (id: string): number => [...id].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
 
-/** Screen 04's "Tour" card: the scene list, entry scene, and connections from the open pano. */
+/** Screen 04's tour card, "Panos": the scene list, entry scene, and connections from the open pano. */
 export function TourPanel({
   docs,
   currentId,
@@ -94,6 +95,20 @@ export function TourPanel({
   const current = currentId ? docs.scenes[currentId] : undefined;
   const from = current?.kind === 'config' ? current.current : null;
   const reorder = onMove && scenes.length > 1 ? onMove : null;
+  // Any connection between two of the tour's panos yet.
+  const linked = scenes.some(({ panoId }) => {
+    const s = docs.scenes[panoId];
+    return (
+      s?.kind === 'config' &&
+      s.current.hotspots.some(
+        (h) =>
+          h.type === 'link' &&
+          h.targetPanoId !== undefined &&
+          h.targetPanoId !== panoId &&
+          scenes.some((t) => t.panoId === h.targetPanoId),
+      )
+    );
+  });
   const keysId = useId();
   const list = useRef<HTMLUListElement>(null);
   const handles = useRef(new Map<string, HTMLButtonElement>());
@@ -159,12 +174,12 @@ export function TourPanel({
   };
 
   return (
-    <section className="ed-card ed-tour" aria-labelledby="ed-tour-title">
-      <header className="ed-card__head">
-        <h2 id="ed-tour-title" className="ed-card__title">
-          Tour <span className="ed-card__count">· {scenes.length} panos</span>
-        </h2>
-        <div className="ed-card__actions">
+    <PanelCard
+      panel="panos"
+      className="ed-tour"
+      count={<span className="ed-card__count">{scenes.length}</span>}
+      actions={
+        <>
           {onAddFromLibrary && (
             <Button
               variant="ghost"
@@ -182,13 +197,17 @@ export function TourPanel({
           <Button variant="accent" size="sm" pill icon="fa-solid fa-plus" onClick={onAddPano}>
             Add pano
           </Button>
-        </div>
-      </header>
-      <p className="ed-hint">
-        Click a pano to edit it. Connections point <b>from</b> the open pano: <b>Aim here</b> sets
-        one to the current view.
-        {reorder && <> Drag a pano by its handle to change the order visitors see.</>}
-      </p>
+        </>
+      }
+    >
+      {/* How connections work, until the tour has its first one. */}
+      {scenes.length > 1 && !linked && (
+        <p className="ed-hint ed-tour__hint">
+          Click a pano to edit it. Connections point <b>from</b> the open pano: <b>Aim here</b> sets
+          one to the current view.
+          {reorder && <> Drag a pano by its handle to change the order visitors see.</>}
+        </p>
+      )}
       {reorder && (
         <p id={keysId} className="ed-sr">
           Arrow keys move it up or down the list, Home and End to the top or bottom.
@@ -316,7 +335,11 @@ export function TourPanel({
                 </button>
               </div>
               {from && !isCurrent && !missing && (
-                <div className="ed-conn" role="group" aria-label={`Connection to ${name}`}>
+                <div
+                  className={cx('ed-conn', link && 'ed-conn--linked')}
+                  role="group"
+                  aria-label={`Connection to ${name}`}
+                >
                   <i className="fa-solid fa-diamond-turn-right ed-conn__icon" aria-hidden="true" />
                   {link ? (
                     <>
@@ -324,7 +347,7 @@ export function TourPanel({
                       <span className="ed-conn__deg">{yawDegrees(link.yaw)}°</span>
                       <button
                         type="button"
-                        className="ed-icon-btn ed-conn__nudge"
+                        className="ed-icon-btn ed-conn__nudge ed-conn__act"
                         disabled={lookOnly}
                         aria-label={`Nudge left ${NUDGE_DEG}°`}
                         onClick={() => onNudge(panoId, -NUDGE)}
@@ -333,7 +356,7 @@ export function TourPanel({
                       </button>
                       <button
                         type="button"
-                        className="ed-icon-btn ed-conn__nudge"
+                        className="ed-icon-btn ed-conn__nudge ed-conn__act"
                         disabled={lookOnly}
                         aria-label={`Nudge right ${NUDGE_DEG}°`}
                         onClick={() => onNudge(panoId, NUDGE)}
@@ -342,7 +365,7 @@ export function TourPanel({
                       </button>
                       <button
                         type="button"
-                        className="ed-conn__aim"
+                        className="ed-conn__aim ed-conn__act"
                         disabled={lookOnly}
                         onClick={() => onAim(panoId, name)}
                       >
@@ -350,7 +373,7 @@ export function TourPanel({
                       </button>
                       <button
                         type="button"
-                        className="ed-icon-btn"
+                        className="ed-icon-btn ed-conn__act"
                         disabled={lookOnly}
                         aria-label={`Remove connection to ${name}`}
                         onClick={() => onDisconnect(panoId)}
@@ -434,6 +457,6 @@ export function TourPanel({
           floor.
         </p>
       )}
-    </section>
+    </PanelCard>
   );
 }

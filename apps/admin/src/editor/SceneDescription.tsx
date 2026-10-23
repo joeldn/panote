@@ -34,20 +34,19 @@ export function SceneDescription({
         id={id}
         className="ed-input ed-textarea"
         value={text}
-        {...(translating && { placeholder: translating.placeholder })}
+        // What it's for, in the empty field only (the default text while translating).
+        placeholder={
+          translating ? translating.placeholder : 'Visitors see it under About in the viewer.'
+        }
         maxLength={MAX_SCENE_DESCRIPTION_LENGTH}
         rows={2}
         disabled={disabled}
-        aria-describedby={`${id}-hint`}
         onChange={(e) => {
           setDraft(e.target.value);
           onChange(e.target.value);
         }}
         onBlur={() => setDraft(null)}
       />
-      <span id={`${id}-hint`} className="ed-pano-settings__hint">
-        Visitors see it under About in the viewer.
-      </span>
     </div>
   );
 }
