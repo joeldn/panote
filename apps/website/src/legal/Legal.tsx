@@ -4,12 +4,8 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { CONTACT_EMAIL } from '../landing/content.js';
-import { OPERATOR_ADDRESS, OPERATOR_JURISDICTION, OPERATOR_NAME } from './operator.js';
 
 const Mail = () => <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>;
-
-// Operator details still undecided show as their placeholder, marked so nobody mistakes them.
-const Operator = ({ value }: { value: string }) => <span className="legal__todo">{value}</span>;
 
 function LegalPage({
   title,
@@ -33,173 +29,79 @@ export function Privacy() {
   return (
     <LegalPage title="Privacy" updated="23 October 2026">
       <p>
-        Panote is a free service for publishing 360° panoramas and tours. This page says what we
-        collect, why, and who helps us run it. The short version: we keep what we need to run your
-        account and show your tours, we count visits without personal data, and we don’t sell
-        anything about you.
-      </p>
-      <p>
-        Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />,
-        which is responsible for the personal data described here.
+        Panote is a free, non-commercial hobby project for sharing 360° panoramas, run by one person
+        you can reach at <Mail />. This page says what data it uses and why. There are no ads, no
+        tracking cookies, and nothing is sold.
       </p>
 
-      <h2>Your account</h2>
-      <p>
-        You sign in with an account you already have with Google, Apple, Microsoft or Facebook, or
-        with your email address and a one-time code we email to it (whichever the sign-in screen
-        offers). Sign-in is handled by Auth0, which passes us an account id and, where the provider
-        shares them, your name, email address and profile picture. We use these to sign you in, show
-        who is signed in, and link your tours to you. If you sign in with more than one of Google,
-        Apple or an email code using the same email address, and each has confirmed that address is
-        yours, they are joined into one Panote account. Signing in with Microsoft or Facebook keeps
-        a separate account. Your browser keeps the sign-in session in local storage so you stay
-        signed in between visits.
-      </p>
-
-      <h2>What you upload</h2>
-      <p>
-        Panoramas, tour titles, hotspot text and other content you add are stored on Cloudflare and
-        served from our content network. A tour you publish can be opened by anyone with its link; a
-        public tour is also listed on Explore (its title, cover image and scene count, never your
-        name) and can appear in search, once your account is a week old. When you delete a tour or
-        panorama we remove it from storage and our caches, except for the private copies described
-        under Backups and content held after a report (see below). When you unpublish a tour, its
-        link and embeds stop working, but people who already viewed it may still be able to load its
-        panorama images until you delete them.
-      </p>
-
-      <h2>Visitors and analytics</h2>
-      <p>
-        <strong>Visits are counted without personal data.</strong> When someone opens a tour we
-        record anonymous counts — views, time spent in the tour (dwell), and which panoramas and
-        hotspots were opened — in Cloudflare Workers Analytics Engine. These records hold the tour,
-        panorama and hotspot they relate to, not who the visitor is: no names, no accounts, no IP
-        addresses. We use no cookies for analytics and no third-party trackers.
-      </p>
-      <p>
-        So a like counts once, liking a tour while signed out stores a random id in your browser’s
-        local storage, and liking it while signed in records your account id against that tour. Tour
-        owners see totals only. Deleting your account doesn’t remove likes you gave on other
-        people’s tours.
-      </p>
-
-      <h2>IP addresses and logs</h2>
-      <p>
-        Every request to Panote arrives with the IP address it came from. We use it briefly to
-        protect the service from abuse: views, likes, visit counts, Explore and error reports are
-        limited per IP address, and uploads and edits per account. The limiter only counts the last
-        minute or so of requests. We don’t store IP addresses with our analytics or visit counts.
-      </p>
-      <p>
-        Our hosting provider, Cloudflare, keeps logs of requests to our service, which can include
-        the IP address and the address of the page or file asked for. We use these logs to find and
-        fix problems and to look into abuse. They are kept for a limited time and then deleted
-        automatically.
-      </p>
-
-      <h2>Error reports</h2>
-      <p>
-        When a Panote page, a tour or the tour editor hits an error in your browser, it may send us
-        a short report. It says which app and version it was, the kind of error, the error message,
-        the top lines of the code trace, and the path of the page. Before the report is sent, and
-        again when we receive it, we remove email addresses, tour ids and tour links, and anything
-        after a ? in a web address. We add nothing about you to it: no IP address, browser or
-        country. Reports go into the same logs as above and are deleted with them. Only some page
-        visits send reports at all.
-      </p>
-
-      <h2>Videos and media in tours</h2>
-      <p>
-        A tour’s owner can add a YouTube or Vimeo video, or link an image, audio or video file from
-        another website, to a hotspot. It loads only when you open that hotspot, and it comes
-        straight from that site, not from Panote. That site sees your IP address and may set cookies
-        or store data in your browser under its own privacy policy. YouTube videos play in YouTube’s
-        privacy-enhanced mode (youtube-nocookie.com) and Vimeo videos in Vimeo’s do-not-track
-        player, which limit this but don’t stop it.
-      </p>
-
-      <h2>Backups</h2>
-      <p>
-        Every day we back up tour details and account settings to the same private storage as the
-        rest of Panote, and keep each backup for about a month. They are only used to recover from a
-        fault and are never shown publicly. So a tour or account you delete can remain in these
-        private backups for up to 31 days before it is gone.
-      </p>
-      <p>
-        When you delete a panorama, or a tour or account that removes it, we keep the original photo
-        in the same private storage for up to 31 days, so it can be put back if it was deleted by
-        mistake, and then delete it. It is never shown publicly. Content we remove after a report is
-        not kept this way.
-      </p>
-
-      <h2>Who helps us run Panote</h2>
-      <ul>
-        <li>Cloudflare: hosting, storage, content delivery and visit counts.</li>
-        <li>Auth0 (Okta): sign-in.</li>
-        <li>Google, Apple, Microsoft or Facebook: whichever account you sign in with.</li>
-        <li>Our email delivery provider: sending one-time sign-in codes.</li>
-        <li>
-          YouTube, Vimeo and other sites a tour links media from: only when you open that hotspot.
-        </li>
-      </ul>
-      <p>We don’t show ads and we don’t sell or rent personal data.</p>
-
-      <h2>Your choices</h2>
-      <p>
-        You can edit, unpublish or delete your tours at any time. You can also delete your whole
-        account yourself: once signed in, open the account menu and choose Delete account. That
-        removes your tours, panoramas, share links and visit counts, and your sign-in record is
-        removed within 30 days. Private backups and the original photos are gone within 31 days (see
-        Backups). Content held after a report is the one exception, below. To ask what we hold about
-        you, email <Mail />.
-      </p>
-
-      <h2>Reports and legal holds</h2>
-      <p>
-        If we remove content under our{' '}
-        <Link to="/content-policy">content and copyright policy</Link>, we may keep a private copy
-        of it, with the account id it belonged to and the details of the report, as evidence for as
-        long as the law requires. That copy is never shown publicly, and it stays even if the
-        account is deleted. When you send us a report or a copyright notice, we keep your contact
-        details and what you sent in our private record of reports, and may pass a copyright notice
-        on to the owner of the content.
-      </p>
-
-      <h2>How long we keep things</h2>
-      <ul>
-        <li>Your account, tours and panoramas: until you delete them, or we close the account.</li>
-        <li>Your sign-in record: up to 30 days after you delete your account.</li>
-        <li>Backups: up to 31 days.</li>
-        <li>The original photos of deleted panoramas: up to 31 days.</li>
-        <li>
-          Visit counts and likes: until the account that owns the tour is deleted. The anonymous
-          visit records behind them: about three months.
-        </li>
-        <li>IP addresses for abuse protection: about a minute.</li>
-        <li>Request logs and error reports: a limited time, then deleted automatically.</li>
-        <li>Reports, notices and content held after a report: as long as the law requires.</li>
-        <li>The like id in your browser: until you clear your browser’s storage.</li>
-      </ul>
-
-      <h2>Why we’re allowed to</h2>
+      <h2>What we keep</h2>
       <ul>
         <li>
-          To run the service you signed up for (our contract with you): your account, sign-in, what
-          you upload and publish, and your likes.
+          <strong>Your account.</strong> You sign in through Auth0 with Google, Apple, Microsoft or
+          Facebook, or with a one-time code we email to you. We get an account id and, if the
+          provider shares them, your name, email address and profile picture. Google, Apple and
+          email-code sign-ins with the same verified email address are joined into one account;
+          Microsoft and Facebook each keep a separate one. You only need an account to upload, not
+          to view tours.
         </li>
         <li>
-          Our legitimate interest in keeping Panote secure and working: IP addresses for abuse
-          protection, request logs, error reports and backups.
+          <strong>What you upload.</strong> Panoramas, tours and their text. Anyone with a published
+          tour’s link can open it. Once your account is a week old, a public tour is also listed on
+          Explore (title, cover image and scene count, never your name) and can appear in search.
         </li>
         <li>
-          Legal obligations: handling reports and copyright notices, and keeping content and records
-          when the law requires it.
+          <strong>Likes.</strong> Signed out, a random id in your browser’s local storage, so a like
+          counts once. Signed in, your account id against the tour.
+        </li>
+        <li>
+          <strong>Visit counts.</strong> Anonymous views, time spent and hotspots opened. No names,
+          accounts or IP addresses.
+        </li>
+        <li>
+          <strong>IP addresses</strong> are used for about a minute to limit abuse.
+        </li>
+        <li>
+          <strong>Logs and error reports.</strong> Cloudflare’s request logs (which include IP
+          addresses) and short error reports from your browser (with email addresses and tour links
+          removed) help fix problems. They are deleted within 30 days.
         </li>
       </ul>
+
+      <h2>Who else handles it</h2>
+      <ul>
+        <li>Cloudflare: hosting, storage and visit counts.</li>
+        <li>Auth0: sign-in. Plus whichever provider you sign in with.</li>
+        <li>An email delivery provider: sign-in codes.</li>
+        <li>
+          YouTube, Vimeo or another site, only when you open a hotspot that plays media from it.
+          That site sees your IP address and may set cookies under its own policy.
+        </li>
+      </ul>
+      <p>Some of these are in the US.</p>
+
+      <h2>Deleting</h2>
+      <p>
+        You can delete tours, panoramas or your whole account (account menu, Delete account) at any
+        time. Private backups and the originals of deleted photos are kept for up to 31 days in case
+        of mistakes, and your sign-in record is removed within 30 days. Unpublishing stops a tour’s
+        link working, but people who already viewed it may still load its images until you delete
+        them. If content is taken down after a report, a private copy and the report may be kept as
+        long as the law requires.
+      </p>
+
+      <h2>Your rights</h2>
+      <p>
+        Email <Mail /> to see, correct or delete your data, or to object to how it is used. If you
+        aren’t happy with the answer, you can complain to your data protection authority. Your data
+        is used to run the service you signed up for and to keep it secure and working.
+      </p>
+
+      <h2>Children</h2>
+      <p>Panote isn’t for anyone under 16.</p>
 
       <h2>Changes</h2>
       <p>
-        If this policy changes we’ll update this page and the date above. See also our{' '}
+        If this page changes, the date above changes too. See also the{' '}
         <Link to="/terms">terms</Link>.
       </p>
     </LegalPage>
@@ -208,54 +110,46 @@ export function Privacy() {
 
 export function Terms() {
   return (
-    <LegalPage title="Terms" updated="22 October 2026">
+    <LegalPage title="Terms" updated="23 October 2026">
       <p>
-        These terms cover your use of Panote (panote.io). By signing in or publishing a tour you
-        agree to them.
-      </p>
-
-      <h2>The service</h2>
-      <p>
-        Panote is free. We host your panoramas and tours and serve them to the people you share them
-        with. We may change, limit or stop parts of the service, and we’ll give notice where we
-        reasonably can.
+        Panote (panote.io) is a free, non-commercial hobby project. By signing in or publishing a
+        tour you agree to these terms. You must be 16 or older to sign in.
       </p>
 
       <h2>Your content</h2>
       <p>
-        You keep ownership of everything you upload. You give us permission to store, process (for
-        example, tile for zooming) and show it, only as needed to run Panote and in the way you set
-        it up — for example as an unlisted or public tour. You can unpublish or delete it at any
-        time.
+        You keep ownership of what you upload. You let Panote store, process and show it, as needed
+        to run the service and in the way you set it up, for example as a public tour on Explore.
       </p>
       <p>
-        Only upload content you have the right to share. Don’t upload anything illegal, anything
-        that infringes someone else’s rights, or images of people who haven’t agreed to be shown. We
-        may remove content or suspend an account that breaks these rules.
-      </p>
-      <p>
-        Our <Link to="/content-policy">content and copyright policy</Link> is part of these terms.
-        It says what isn’t allowed, how to report a tour, how copyright notices and counter-notices
-        work, and what happens to accounts that break the rules.
+        Only upload what you have the right to share: nothing illegal, nothing that infringes
+        someone else’s rights, and no images of people who haven’t agreed to be shown. The{' '}
+        <Link to="/content-policy">content and copyright policy</Link> has the details.
       </p>
 
       <h2>Fair use</h2>
       <p>
-        Don’t try to break, overload or get around the limits of the service, or use it to
-        distribute malware or spam.
+        Don’t try to break, overload or get around the limits of the service, or use it for malware
+        or spam.
       </p>
 
-      <h2>No warranty</h2>
+      <h2>No guarantees</h2>
       <p>
-        Panote is provided as it is, without warranties of any kind. As far as the law allows, we
-        aren’t liable for indirect or consequential losses, or for loss of content. Keep your own
-        copies of your originals.
+        Panote is provided as it is, and may change or stop at any time. It’s a hobby project, so
+        keep your own copies of your originals. As far as the law allows, Panote isn’t liable for
+        any loss, including loss of content.
+      </p>
+
+      <h2>Ending</h2>
+      <p>
+        You can delete your account at any time. Content or accounts that break these terms may be
+        removed.
       </p>
 
       <h2>Changes and contact</h2>
       <p>
-        We may update these terms; the date above shows the latest version. Questions: <Mail />. See
-        also our <Link to="/privacy">privacy policy</Link>.
+        These terms may change; the date above shows the latest version. Questions: <Mail />. See
+        also the <Link to="/privacy">privacy policy</Link>.
       </p>
     </LegalPage>
   );
@@ -263,117 +157,40 @@ export function Terms() {
 
 export function ContentPolicy() {
   return (
-    <LegalPage title="Content and copyright" updated="22 October 2026">
+    <LegalPage title="Content and copyright" updated="23 October 2026">
       <p>
-        Panote hosts the panoramas and tours people upload. This page says what isn’t allowed, how
-        to report a tour, and what we do when we get a report. It is part of our{' '}
+        What isn’t allowed on Panote, and how to report it. This page is part of the{' '}
         <Link to="/terms">terms</Link>.
-      </p>
-      <p>
-        Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />.
-        Every report and notice below goes to <Mail />.
       </p>
 
       <h2>What isn’t allowed</h2>
       <ul>
-        <li>Photos or panoramas you don’t have the right to share, such as someone else’s work.</li>
+        <li>Photos you don’t have the right to share, such as someone else’s work.</li>
         <li>Images of people who haven’t agreed to be shown, above all in private places.</li>
-        <li>Any sexual content involving someone under 18. We report it to the authorities.</li>
-        <li>Anything else that is illegal to publish where you or your viewers are.</li>
-        <li>Content that threatens or harasses someone, or exposes their private information.</li>
-        <li>Malware, spam or misleading links in hotspots.</li>
+        <li>
+          Anything illegal, threatening or harassing, or that exposes someone’s private details.
+        </li>
+        <li>Malware, spam or misleading links.</li>
       </ul>
 
       <h2>Report a tour</h2>
       <p>
-        Use the Report link on the tour, or email <Mail /> with the tour’s link and what is wrong
-        with it. We read every report. If it is about copyright, send a notice as described below so
-        we can act on it.
+        Use the Report link on the tour, or email <Mail /> with the tour’s link and what’s wrong.
+        For copyright, say which work is yours and how to reach you. Every report is read, and
+        content that breaks these rules is taken down.
       </p>
 
-      <h2>Copyright notices</h2>
+      <h2>What happens next</h2>
       <p>
-        If you believe a tour uses your work without permission, email <Mail /> a notice that
-        includes:
-      </p>
-      <ul>
-        <li>your name, postal address, phone number and email address;</li>
-        <li>
-          the work you say is being infringed, for example the original photo or where it is
-          published;
-        </li>
-        <li>the link to the tour on Panote, and which panorama in it if there are several;</li>
-        <li>
-          a statement that you believe in good faith that the use isn’t authorised by you, your
-          agent or the law;
-        </li>
-        <li>
-          a statement that the information in your notice is accurate and, under penalty of perjury,
-          that you own the rights or are authorised to act for the owner;
-        </li>
-        <li>your signature: typing your full name is enough.</li>
-      </ul>
-      <p>
-        If something is missing we’ll ask for it before we act. Don’t send a notice you know to be
-        false: you may be liable for the harm it causes.
-      </p>
-
-      <h2>What we do</h2>
-      <p>
-        When we get a complete notice we remove the content or disable access to it, usually by
-        taking the tour offline so its link stops working. We tell the owner what was removed and
-        why, and pass on the notice.
-      </p>
-
-      <h2>Counter-notices</h2>
-      <p>
-        If your content was removed and you believe that was a mistake, or that you have the right
-        to use it, email <Mail /> a counter-notice that includes:
-      </p>
-      <ul>
-        <li>your name, postal address, phone number and email address;</li>
-        <li>what was removed and the link where it appeared;</li>
-        <li>
-          a statement, under penalty of perjury, that you believe in good faith it was removed by
-          mistake or because it was misidentified;
-        </li>
-        <li>
-          a statement that you consent to the jurisdiction of the courts of{' '}
-          <Operator value={OPERATOR_JURISDICTION} />, and will accept service of legal papers from
-          the person who sent the notice;
-        </li>
-        <li>your signature: typing your full name is enough.</li>
-      </ul>
-      <p>
-        We pass the counter-notice on to the person who sent the notice. If they don’t tell us
-        within 10 to 14 working days that they have started legal action, we may put the content
-        back.
-      </p>
-
-      <h2>Repeat infringers</h2>
-      <p>
-        We keep a record of the notices we act on. An account that keeps getting valid notices is
-        closed, and its tours and panoramas are deleted.
+        Except for illegal images, when something is taken down its owner is told why. If you think
+        it was a mistake, reply to that email. Accounts that keep breaking the rules are closed.
       </p>
 
       <h2>Illegal images</h2>
       <p>
-        Child sexual abuse material, and anything else that is illegal to host, is taken offline as
-        soon as we know about it, without warning the owner. We keep a private copy where the law
-        requires it and report it to the authorities: in the US that is the National Center for
-        Missing &amp; Exploited Children (NCMEC), elsewhere the national hotline or the police. The
-        account is closed.
-      </p>
-      <p>
-        If you come across such content, report it to us and to your national hotline or the police.
-        Send us the link only, never the images themselves.
-      </p>
-
-      <h2>Other reports</h2>
-      <p>
-        For anything else, such as a photo of you shown without your agreement, we look at the
-        report and may remove the content or suspend the account. Questions about this policy go to{' '}
-        <Mail />.
+        Child sexual abuse material is taken down straight away, reported to the authorities (NCMEC
+        in the US, the national hotline elsewhere), and the account is closed. If you find any, send
+        the link only, never the images.
       </p>
     </LegalPage>
   );
