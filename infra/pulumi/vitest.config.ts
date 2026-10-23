@@ -3,8 +3,9 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 
 /**
  * Unit tests run the program against Pulumi's mocks (no engine, no
- * provider, no Cloudflare). `src/index.ts` and `src/import-file-cli.ts` are
- * thin entry points over tested modules, so they are left out of coverage.
+ * provider, no Cloudflare, no Auth0). `src/index.ts` and the two `*-cli.ts`
+ * scripts are thin entry points over tested modules, so they are left out of
+ * coverage.
  *
  * The shared node config resolves the `module` export condition first.
  * `@opentelemetry/api` (pulled in by `@pulumi/pulumi`) points that condition
@@ -21,7 +22,7 @@ export default mergeConfig(
     test: {
       name: '@internal/infra',
       coverage: {
-        exclude: ['src/index.ts', 'src/import-file-cli.ts'],
+        exclude: ['src/index.ts', 'src/import-file-cli.ts', 'src/auth0-import-file-cli.ts'],
         thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
       },
     },

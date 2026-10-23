@@ -294,7 +294,10 @@ rotating refresh tokens cached in localStorage, so both apps share one session o
 The Auth0 dev SPA application allows callbacks `https://panote.dev/app/callback` and
 `http://localhost:5173/app/callback`, and logout URLs `https://panote.dev/`,
 `https://panote.dev/app/`, `http://localhost:5173/app/` and `http://localhost:5174/`; refresh-token
-rotation is on and the API `https://api.panote.dev` allows offline access.
+rotation is on and the API `https://api.panote.dev` allows offline access. Pulumi manages all of
+that, the `google-oauth2` connection and the password database being off
+(`infra/pulumi/src/auth0.ts`, `infra/README.md` steps 11-16); change them there, not in the
+dashboard.
 
 - The website's modal opens on any page with `?signin=1`; `next` (a path, query kept, e.g.
   `/app/new?resume=1`) is where the callback lands, defaulting to `/app/`.
@@ -355,7 +358,9 @@ wants the app switched to *Live*, which can mean app review and business verific
    a production connection on developer keys.
 3. **Enable it for the SPA.** On the connection's Applications tab, turn on the tenant's SPA
    application (the one whose client id is `VITE_AUTH0_CLIENT_ID`). Use the connection's *Try*
-   button to check a sign-in reaches the callback.
+   button to check a sign-in reaches the callback. Pulumi manages only `google-oauth2` and the
+   password database, so a connection added by hand stays as it is; better still, add it to
+   `infra/pulumi/src/auth0.ts` next to Google, with its credentials as stack secrets.
 4. **Show the button.** Add the connection name to `VITE_AUTH0_CONNECTIONS` in both
    `apps/website/.env.<env>` and `apps/admin/.env.<env>` for that environment (comma-separated;
    order doesn't matter, the apps sort them), e.g.
@@ -436,28 +441,30 @@ Who won't be joined: Microsoft and Facebook sign-ins (above), an Apple user who 
 *Hide My Email* (the private relay address matches nothing), and anyone whose provider doesn't
 report the email as verified. They all still sign in, as their own account.
 
-Setting it up, once per tenant (**Needs you**, all in the Auth0 dashboard):
+Setting it up, once per tenant: Pulumi does it (`infra/pulumi/src/auth0.ts`; dev is imported and
+production created from code, `infra/README.md` steps 11-16). It declares:
 
-1. **M2M application.** Applications → Create Application → Machine to Machine, name it
-   `link-accounts action`, authorise it for the *Auth0 Management API* with only `read:users` and
-   `update:users`. Copy its client id and secret. It is used by nothing else. Never authorise it,
-   or any M2M application, for Panote's own API audience: the Workers refuse a client-credentials
-   token anyway (`gty: client-credentials` or a sub ending `@clients`, `contracts/src/jwt.ts`),
-   but such a token stands for no user.
-2. **The Action.** Actions → Library → Create Action → Build from scratch, trigger *Login /
-   Post Login*, runtime Node 22 (the newest offered), name `Link accounts by verified email`. Replace
-   the editor's code with the whole of `packages/auth0-actions/src/link-accounts.cjs` as it is on
-   `main`. It needs no npm dependency (it calls the Management API with `fetch`). Under Secrets add
-   `AUTH0_DOMAIN` (the tenant's own domain, e.g. `panote-dev.au.auth0.com`, not a custom domain),
-   `MGMT_CLIENT_ID` and `MGMT_CLIENT_SECRET` from step 1. Deploy it.
-3. **Add it to the Login flow.** Actions → Triggers → post-login: drag the Action into the flow
-   and Apply.
+1. **The M2M application** `link-accounts action`, granted the *Auth0 Management API* with only
+   `read:users` and `update:users`. It is used by nothing else. Never authorise it, or any M2M
+   application, for Panote's own API audience: the Workers refuse a client-credentials token
+   anyway (`gty: client-credentials` or a sub ending `@clients`, `contracts/src/jwt.ts`), but
+   such a token stands for no user.
+2. **The Action** `Link accounts by verified email`, trigger *Login / Post Login*, runtime Node 22,
+   code the whole of `packages/auth0-actions/src/link-accounts.cjs` as it is, secrets
+   `AUTH0_DOMAIN` (the tenant's own domain, not a custom domain), `MGMT_CLIENT_ID` and
+   `MGMT_CLIENT_SECRET`, taken from the M2M application itself, so rotating its secret and
+   running `pulumi up` updates the Action too.
+3. **The Login flow**: *Block banned emails* first, then this Action, nothing else.
+
+Then, by hand:
+
 4. **Check it.** Sign in once with Google, then sign out and sign in with an email code to the same
    address: User Management → Users shows one user with both identities, its user id still the
    Google one, and the dashboard shows the same tours. The Action's logs (Monitoring → Logs, or the
    Action's real-time logs) show `[link-accounts] linked email|… into google-oauth2|…`.
-5. **When the code changes,** paste the new file over the old in the same Action and Deploy. The
-   repo file is the source of truth; never edit the Action in the dashboard only.
+5. **When the code changes,** merge it, then `pulumi up` for each stack (`infra/README.md`,
+   Changing things). The repo file is the source of truth; an edit made in the dashboard is
+   undone by the next `up`.
 
 Nothing on the API side changes. Workers only check the JWT, and owner keys are
 `base64url(sub)` of whatever sub the token carries, so any sub prefix (`apple|…`,
@@ -490,11 +497,11 @@ only (`[ban-list] N BANNED_EMAIL_SHA256 entries are not SHA-256 hashes, ignored`
 unsalted SHA-256: they keep addresses out of plain sight in the dashboard, but anyone who can read
 the secret can check whether a given address is on the list, so treat the secret as private.
 
-Setting it up, once per tenant (**Needs you**, Auth0 dashboard): Actions → Library → Create Action
-→ Build from scratch, trigger *Login / Post Login*, runtime Node 22, name `Block banned emails`.
-Paste the whole of `ban-list.cjs` as it is on `main`, add the secret `BANNED_EMAIL_SHA256` (empty
-is fine to start), Deploy, and in Actions → Triggers → post-login put it **first**, before "Link
-accounts by verified email", then Apply.
+Setting it up, once per tenant: Pulumi does it (`infra/pulumi/src/auth0.ts`): the Action
+`Block banned emails`, trigger *Login / Post Login*, runtime Node 22, the whole of `ban-list.cjs`
+as it is, **first** in the Login flow, before "Link accounts by verified email". Its
+`BANNED_EMAIL_SHA256` comes from the stack's `bannedEmailSha256` secret; unset, the Action has no
+secret and nobody is refused.
 
 Banning someone: look up the address on the Auth0 user (User Management → Users → search the
 sub `takedown.ts` printed → its email; a linked user shows each identity's), then
@@ -504,9 +511,10 @@ node packages/auth0-actions/scripts/ban-email.cjs 'person@example.com'
 # stderr: hashed as person@example.com   stdout: the 64-hex hash
 ```
 
-and add the printed hash to `BANNED_EMAIL_SHA256` (Action → Secrets → edit; keep the existing
-hashes, comma-separated), then Deploy the Action. Keep which case each hash belongs to in the case
-log, not in the secret. To lift a ban, remove that hash and Deploy. `takedown.ts --disable-owner`
+and add the printed hash to the stack's `bannedEmailSha256` secret (keep the existing hashes,
+comma-separated), then `pulumi up` (`infra/README.md`, step 12, has the commands). Don't edit the
+Action's secret in the dashboard: the next `up` puts the stack's list back. Keep which case each hash belongs to in the case
+log, not in the secret. To lift a ban, remove that hash from `bannedEmailSha256` and `pulumi up`. `takedown.ts --disable-owner`
 prints this step after it disables an owner, since it has no Auth0 access to read the email
 itself. A ban list only raises the cost of coming back: a person with a different address still
 signs up.
@@ -1480,8 +1488,8 @@ the claim yet; while it is off, account delete is back to the typed phrase only.
 tenant, Delete account on dev fails closed with the "couldn't confirm your sign-in" message.
 Nothing else is affected.
 
-1. Paste the new `packages/auth0-actions/src/link-accounts.cjs` into the "Link accounts by
-   verified email" Action and Deploy (see "Account linking"; it needs no new secret). It now adds
+1. Deploy the new `packages/auth0-actions/src/link-accounts.cjs` with `pulumi up` for the stack
+   (see "Account linking"; it needs no new secret). It now adds
    the sign-in time and the linked subs to every access token, whether or not linking is set up.
 2. Check it: sign out and in on dev, then Delete account on a throwaway account: it should go
    straight through, or, if the last sign-in was more than 10 minutes ago, ask once for a fresh
@@ -3193,7 +3201,8 @@ explains it; the dev version of every step has been done and is recorded there.
 Steps 1-7 are one `pulumi up --stack production` now (`infra/README.md`, step 10): bucket,
 queues, notification, CORS, WAF rules (with URL normalization), cache rules, `cdn.panote.io`, and
 the apex and `www` records with the redirect. Their **Verify** lines still apply. The manual
-commands stay below as the fallback.
+commands stay below as the fallback. Step 8's Auth0 tenant, once made by hand, is a second
+`pulumi up` (`infra/README.md`, step 16).
 
 All commands run from the repo root. CI already dry-runs every Worker with `--env production`
 (`deploy-dry-run` in `ci.yml`), so the production config bundles; what it can't check is whether
@@ -3260,24 +3269,23 @@ the account has the resources the config names.
    The apex itself answers with a Cloudflare error page until step 12 deploys.
    **Status: outstanding.**
 
-8. **Production Auth0 tenant.** A new tenant (not `panote-dev`), created in the **US** region:
-   the region can't be changed later, and US is closest to the R2 bucket (`enam`, see
-   `infra/pulumi/Pulumi.production.yaml`). With:
-   - an API, identifier `https://api.panote.io` (must match `OAUTH_AUDIENCE` and
-     `VITE_AUTH0_AUDIENCE`), offline access allowed;
-   - a Single Page Application: callback `https://panote.io/app/callback`, logout URLs
-     `https://panote.io/` and `https://panote.io/app/`, allowed web origin `https://panote.io`,
-     refresh-token rotation on (the dev settings are in Sign-in, unit C3; production has no
-     `localhost` entries);
-   - the `google-oauth2` connection with **its own Google OAuth client**, not Auth0's dev keys
-     (those are for testing only, and Google's consent screen would name Auth0, not panote). In Google Cloud: an OAuth
-     consent screen for panote with the `panote.io` domain and the privacy and terms URLs
-     (`https://panote.io/privacy`, `/terms`), published to production; a Web client with
-     authorized redirect URI `https://<tenant domain>/login/callback`. Put its client id and
-     secret into the Auth0 connection and enable the connection for the SPA only. No other
-     connection is enabled (`VITE_AUTH0_CONNECTIONS=google-oauth2`).
+8. **Production Auth0 tenant.** The tenant and Pulumi's clients in it by hand, the tenant in the
+   **US** region: the region can't be changed later, and US is closest to the R2 bucket (`enam`,
+   see `infra/pulumi/Pulumi.production.yaml`). The rest is one `pulumi up` (`infra/README.md`,
+   step 16): the API `https://api.panote.io` (must match
+   `OAUTH_AUDIENCE` and `VITE_AUTH0_AUDIENCE`) with offline access; the SPA (callback
+   `https://panote.io/app/callback`, logout URLs `https://panote.io/` and `https://panote.io/app/`,
+   web origin `https://panote.io`, rotating refresh tokens, no `localhost` entries); the
+   `google-oauth2` connection for the SPA only, on **its own Google OAuth client**, never Auth0's
+   developer keys (the program refuses production without `googleClientId`); the password
+   database off; Attack Protection; both Actions and their order. The Google client is made by
+   hand first: in Google Cloud, an OAuth consent screen for panote with the `panote.io` domain and
+   the privacy and terms URLs (`https://panote.io/privacy`, `/terms`), published to production,
+   and a Web client with authorized redirect URI `https://<tenant domain>/login/callback`.
+   `VITE_AUTH0_CONNECTIONS` stays `google-oauth2`.
    Verify: `curl -s https://<tenant domain>/.well-known/openid-configuration | jq -r .issuer`
-   prints the issuer URL step 10 will use, trailing slash included.
+   prints the issuer URL step 10 will use, trailing slash included, the same as
+   `pulumi stack output auth0Issuer --stack production`.
    **Status: outstanding.**
 
 9. **Secrets.** All with `--env production` (Secrets, CDN purge on delete, Insights, Takedown,
@@ -3299,7 +3307,8 @@ the account has the resources the config names.
     the tenant may be regional, `https://<name>.<region>.auth0.com/`); `CDN_ZONE_ID` in
     `services/admin-api/wrangler.jsonc`; `VITE_AUTH0_DOMAIN` and `VITE_AUTH0_CLIENT_ID` in
     `apps/website/.env.production` and `apps/admin/.env.production` (the SPA's client id is
-    public). `CDN_ZONE_ID` is `pulumi stack output zoneId --stack production`. Replace each only with the real value, never another made-up
+    public: `pulumi stack output auth0SpaClientId --stack production`; the issuer is
+    `auth0Issuer`). `CDN_ZONE_ID` is `pulumi stack output zoneId --stack production`. Replace each only with the real value, never another made-up
     name (`docs/decisions.md`). Run `pnpm -r run types` and commit any `env.d.ts` change (CI fails
     on drift).
     Verify: this prints nothing (comment lines mention `YOUR_` and are skipped):

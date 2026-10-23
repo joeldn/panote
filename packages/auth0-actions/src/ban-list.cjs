@@ -4,15 +4,15 @@
 /*
  * Auth0 post-login Action "Block banned emails".
  *
- * Paste this whole file into the Action's code editor (docs/deploy.md, "Email ban list"), and
- * put it FIRST in the Login flow, before "Link accounts by verified email", so a banned address
- * is refused before it is linked into anything.
+ * infra/pulumi deploys this whole file as it is (src/auth0.ts; docs/deploy.md, "Email ban list")
+ * and puts it FIRST in the Login flow, before "Link accounts by verified email", so a banned
+ * address is refused before it is linked into anything.
  *
  * A takedown (services/admin-api/scripts/takedown.ts --disable-owner) blocks one Auth0 user id.
  * This blocks the person's email address instead, so a new Google, Apple or email-code sign-in
  * with that address can't start a fresh account. It needs no npm dependency.
  *
- * Secret (Action → Secrets):
+ * Secret (set by infra/pulumi from the stack's `bannedEmailSha256` secret, infra/README.md):
  *   BANNED_EMAIL_SHA256  SHA-256 hashes (hex) of normalised email addresses, separated by
  *                        commas, spaces or newlines. Never the addresses themselves.
  *                        `node packages/auth0-actions/scripts/ban-email.cjs <email>` prints

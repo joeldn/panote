@@ -1,31 +1,43 @@
 name: Infra preview
 
 # `pulumi preview` of infra/pulumi for both stacks on a pull request that
-# touches it, so a reviewer sees what would change in the Cloudflare account.
+# touches it, so a reviewer sees what would change in the Cloudflare account
+# and the Auth0 tenants.
 # It never applies anything: there is no `pulumi up` in CI, Joel runs it by
 # hand (infra/README.md).
 #
 # Secrets live in the `infra-preview` GitHub Environment. Until they are all
-# set, every job ends with a notice and succeeds, so the workflow is safe to
+# set (the Auth0 pair only for a stack that names a tenant), every job ends
+# with a notice and succeeds, so the workflow is safe to
 # merge before the state bucket exists. A fork's pull request gets no secrets
 # and takes the same path.
 #
 # `pulumi preview` runs the pull request's own program with these secrets, so
 # the environment must have required reviewers (or a deployment-branch rule),
 # the Cloudflare token must be read-only and the R2 key scoped to the state
-# bucket (infra/README.md, CI preview). They are set only on the two steps
-# below that need them, never on install or build.
+# bucket (infra/README.md, CI preview), and so must the Auth0 clients (no
+# write scope and no read:client_keys: a preview never reads a client's
+# secret from the tenant). The job still holds the passphrase, which decrypts
+# every secret in the state, so a reviewer reads the infra/** and
+# packages/auth0-actions/src/** diff before approving. The secrets are set
+# only on the steps below that need them, never on install or build.
 #
 #   PULUMI_BACKEND_URL        s3://panote-pulumi-state?endpoint=...  (the CLI reads this)
 #   AWS_ACCESS_KEY_ID         R2 token for the state bucket (Object Read & Write:
 #   AWS_SECRET_ACCESS_KEY     preview takes the stack's lock)
 #   PULUMI_CONFIG_PASSPHRASE  the stacks' passphrase
 #   CLOUDFLARE_API_TOKEN      a read-only token (infra/README.md, "CI preview token")
+#   AUTH0_CLIENT_ID_DEV,      a read-only Management API client in each Auth0 tenant
+#   AUTH0_CLIENT_SECRET_DEV,  (infra/README.md, step 11). Only a stack that names a
+#   ..._PRODUCTION            tenant (auth0:domain) needs its pair; without it that
+#                             stack's preview ends with a notice.
 on:
   pull_request:
     branches: [main]
     paths:
       - 'infra/**'
+      # The Auth0 Actions' code, which the program deploys as it is.
+      - 'packages/auth0-actions/src/**'
       # Catalog bumps of @pulumi/* and the lockfile change what the program runs.
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
@@ -62,7 +74,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [dev, production]
+        include:
+          - stack: dev
+            auth0: DEV
+          - stack: production
+            auth0: PRODUCTION
     steps:
       # Only tests that each secret is set; nothing else runs here.
       - name: Check for the secrets
@@ -90,11 +106,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - if: steps.secrets.outputs.ready == 'true'
+      # A stack whose file names an Auth0 tenant needs that tenant's read-only
+      # client; only tests that both values are set.
+      - name: Check for the Auth0 credentials
+        id: auth0
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          STACK: ${{ matrix.stack }}
+          AUTH0_CLIENT_ID: ${{ secrets[format('AUTH0_CLIENT_ID_{0}', matrix.auth0)] }}
+          AUTH0_CLIENT_SECRET: ${{ secrets[format('AUTH0_CLIENT_SECRET_{0}', matrix.auth0)] }}
+          SUFFIX: ${{ matrix.auth0 }}
+        run: |
+          if ! grep -qE '^\s+auth0:domain:' "infra/pulumi/Pulumi.$STACK.yaml"; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          elif [ -n "$AUTH0_CLIENT_ID" ] && [ -n "$AUTH0_CLIENT_SECRET" ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Infra preview skipped for $STACK: the infra-preview environment has no AUTH0_CLIENT_ID_$SUFFIX / AUTH0_CLIENT_SECRET_$SUFFIX (infra/README.md)."
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.auth0.outputs.ready == 'true'
         uses: ./.github/actions/setup
 
       - name: Install the Pulumi CLI
-        if: steps.secrets.outputs.ready == 'true'
+        if: steps.auth0.outputs.ready == 'true'
         run: |
           archive="pulumi-v${PULUMI_VERSION}-linux-x64.tar.gz"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
@@ -104,13 +140,13 @@ jobs:
           echo "$RUNNER_TEMP/pulumi" >> "$GITHUB_PATH"
 
       - name: Build the program
-        if: steps.secrets.outputs.ready == 'true'
+        if: steps.auth0.outputs.ready == 'true'
         run: pnpm --filter @internal/infra build
 
       # A stack that hasn't been created yet (production, today) is a notice,
       # not a failure.
       - name: pulumi preview
-        if: steps.secrets.outputs.ready == 'true'
+        if: steps.auth0.outputs.ready == 'true'
         working-directory: infra/pulumi
         env:
           STACK: ${{ matrix.stack }}
@@ -119,6 +155,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The Auth0 provider reads these; the tenant is the stack's auth0:domain.
+          AUTH0_CLIENT_ID: ${{ secrets[format('AUTH0_CLIENT_ID_{0}', matrix.auth0)] }}
+          AUTH0_CLIENT_SECRET: ${{ secrets[format('AUTH0_CLIENT_SECRET_{0}', matrix.auth0)] }}
         run: |
           # Fails here on bad backend credentials, before the stack check.
           stacks=$(pulumi stack ls --json --non-interactive)

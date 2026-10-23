@@ -1,72 +1,20 @@
 import { readFileSync } from 'node:fs';
 
-import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { RESOURCES, type ResourceKey } from './names.js';
 import type { Infra } from './infra.js';
 import type { Settings } from './settings.js';
-import { stackSettings } from './test-support.js';
+import {
+  inputsOf,
+  installMocks,
+  run,
+  stackSettings,
+  ZONE_IDS,
+  type Registered,
+} from './test-support.js';
 
-const ZONE_IDS: Record<string, string> = {
-  'panote.dev': '2196d8dead0322ad69307711fc72b5d3',
-  'panote.io': '0123456789abcdef0123456789abcdef',
-};
-
-interface Registered {
-  type: string;
-  name: string;
-  inputs: Record<string, unknown>;
-}
-
-/** Every resource the mocked engine saw, by logical name, per run. */
-let registered = new Map<string, Registered>();
-
-beforeAll(async () => {
-  await pulumi.runtime.setMocks(
-    {
-      newResource(args) {
-        registered.set(args.name, { type: args.type, name: args.name, inputs: args.inputs });
-        const state: Record<string, unknown> = { ...args.inputs };
-        if (args.type === RESOURCES.uploadsQueue.type) state.queueId = `${args.name}-queue-id`;
-        return { id: `${args.name}-id`, state };
-      },
-      call(args) {
-        if (args.token === 'cloudflare:index/getZone:getZone') {
-          const filter = args.inputs.filter as { name: string };
-          return { id: ZONE_IDS[filter.name] ?? 'unknown-zone' };
-        }
-        return args.inputs;
-      },
-    },
-    'panote-infra',
-    'test',
-    false,
-  );
-});
-
-function settle<T>(output: pulumi.Output<T>): Promise<T> {
-  return new Promise((resolve) => output.apply(resolve));
-}
-
-/** The program's return value from the latest `run`. */
-let lastInfra: Infra;
-
-/** Runs the program for one stack's settings and waits for every registration. */
-async function run(settings: Settings): Promise<Map<string, Registered>> {
-  registered = new Map();
-  const { createInfra } = await import('./infra.js');
-  lastInfra = createInfra(settings);
-  await Promise.all(Object.values(lastInfra.resources).map((resource) => settle(resource.urn)));
-  return registered;
-}
-
-function inputsOf(resources: Map<string, Registered>, key: ResourceKey) {
-  const resource = resources.get(RESOURCES[key].name);
-  if (!resource) throw new Error(`${key} was not declared`);
-  expect(resource.type).toBe(RESOURCES[key].type);
-  return resource.inputs;
-}
+beforeAll(() => installMocks());
 
 interface Rule {
   ref?: string;
@@ -91,8 +39,7 @@ describe.each([
   let resources: Map<string, Registered>;
   let infra: Infra;
   beforeAll(async () => {
-    resources = await run(settings);
-    infra = lastInfra;
+    ({ resources, infra } = await run(settings));
   });
 
   it('names every resource for its environment', () => {
@@ -212,12 +159,15 @@ describe.each([
     expect(appHeaders).toContain('max-age=31536000; includeSubDomains');
   });
 
-  it('protects the bucket and both queues from deletion', () => {
+  it('protects the bucket, both queues and, where declared, the Auth0 API, SPA and Google connection', () => {
     // `__protect` is the SDK's record of the protect option; mocks don't see options.
     const protectedKeys = Object.entries(infra.resources)
       .filter(([, resource]) => (resource as unknown as { __protect?: boolean }).__protect)
       .map(([key]) => key);
-    expect(protectedKeys.sort()).toEqual(['bucket', 'deadLetterQueue', 'uploadsQueue']);
+    const auth0 = settings.auth0 ? ['api', 'googleConnection', 'spaClient'] : [];
+    expect(protectedKeys.sort()).toEqual(
+      ['bucket', 'deadLetterQueue', 'uploadsQueue', ...auth0].sort(),
+    );
   });
 
   it('normalizes incoming URLs, which the WAF rule relies on', () => {
@@ -239,7 +189,7 @@ describe.each([
 
 describe('dev only', () => {
   it('marks every response noindex and has no www redirect', async () => {
-    const resources = await run(stackSettings('dev'));
+    const resources = (await run(stackSettings('dev'))).resources;
     const rules = resources.get(RESOURCES.responseHeaderRuleset.name)?.inputs.rules as Rule[];
     expect(rules[1]).toMatchObject({
       expression: 'true',
@@ -255,7 +205,7 @@ describe('dev only', () => {
 
 describe('production only', () => {
   it('stays indexable and redirects www to the apex', async () => {
-    const resources = await run(stackSettings('production'));
+    const resources = (await run(stackSettings('production'))).resources;
     const rules = resources.get(RESOURCES.responseHeaderRuleset.name)?.inputs.rules as Rule[];
     expect(rules).toHaveLength(1);
     expect(JSON.stringify(rules)).not.toContain('X-Robots-Tag');

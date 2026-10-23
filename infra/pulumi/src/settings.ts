@@ -27,6 +27,27 @@ export interface Settings {
   readonly noindexAllResponses: boolean;
   /** Production only: `www.<zone>` redirects to the apex. */
   readonly wwwRedirect: boolean;
+  /**
+   * The stack's Auth0 tenant (src/auth0.ts). Absent until the stack names a
+   * tenant (`auth0:domain`, the provider's own key, so the provider and the
+   * program can never point at two different tenants). Until then nothing in
+   * Auth0 is declared: dev's is named when it is imported, production's once
+   * it exists (infra/README.md, steps 13 and 16).
+   */
+  readonly auth0?: Auth0Settings;
+}
+
+export interface Auth0Settings {
+  /** The tenant's own domain, e.g. `panote-dev.au.auth0.com`; never a custom domain. */
+  readonly domain: string;
+  /**
+   * The Google OAuth client the `google-oauth2` connection uses (its secret is
+   * the `googleClientSecret` secret). Unset: Auth0's developer keys, which
+   * production refuses.
+   */
+  readonly googleClientId?: string;
+  /** Dev only: the SPA also allows the local Vite servers (docs/deploy.md, Local dev). */
+  readonly localDevCallbacks: boolean;
 }
 
 /** R2's location hints: best effort, not a guarantee (unlike a jurisdiction). */
@@ -40,10 +61,16 @@ export interface ConfigSource {
   getBoolean(key: string): boolean | undefined;
 }
 
+/** The key `ConfigSource.get` answers with the provider's `auth0:domain`. */
+export const AUTH0_DOMAIN_KEY = 'auth0:domain';
+
 const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 const ZONE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 const RESOURCE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 const FILE_NAME = /^[A-Za-z0-9._-]+\.json$/;
+/** A tenant's own domain: `<name>.auth0.com` or `<name>.<region>.auth0.com`. */
+const AUTH0_DOMAIN = /^[a-z0-9-]+(\.[a-z]{2})?\.auth0\.com$/;
+const GOOGLE_CLIENT_ID = /^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/;
 
 /**
  * Reads and checks the stack's settings. Dev resources carry the `-dev`
@@ -98,6 +125,7 @@ export function readSettings(stack: string, config: ConfigSource): Settings {
     throw new Error('noindexAllResponses would hide production from search engines');
   }
 
+  const auth0 = readAuth0Settings(stack, config);
   return {
     stack,
     accountId,
@@ -108,9 +136,49 @@ export function readSettings(stack: string, config: ConfigSource): Settings {
     cacheRulesFile,
     noindexAllResponses,
     wwwRedirect: config.getBoolean('wwwRedirect') ?? false,
+    ...(auth0 ? { auth0 } : {}),
   };
 }
 
 function isBucketLocation(value: string): value is BucketLocation {
   return (BUCKET_LOCATIONS as readonly string[]).includes(value);
+}
+
+/**
+ * The Auth0 half, the same way: a dev tenant's name ends in `-dev` and
+ * production's never does, so a stack pointed at the other environment's
+ * tenant fails here, before any call to it.
+ */
+function readAuth0Settings(stack: Settings['stack'], config: ConfigSource) {
+  const domain = config.get(AUTH0_DOMAIN_KEY);
+  const googleClientId = config.get('googleClientId');
+  const localDevCallbacks = config.getBoolean('auth0LocalDevCallbacks') ?? false;
+  // The other keys may sit in the stack file before the tenant is named.
+  if (domain === undefined) return undefined;
+  if (!AUTH0_DOMAIN.test(domain)) {
+    throw new Error(`${AUTH0_DOMAIN_KEY} "${domain}" is not an Auth0 tenant domain`);
+  }
+  const isDevTenant = domain.split('.')[0]?.endsWith('-dev') ?? false;
+  if (stack === 'dev' && !isDevTenant) {
+    throw new Error(`${AUTH0_DOMAIN_KEY} "${domain}" must be a -dev tenant on dev`);
+  }
+  if (stack === 'production' && isDevTenant) {
+    throw new Error(`${AUTH0_DOMAIN_KEY} "${domain}" is a dev tenant; production must not use it`);
+  }
+  if (googleClientId !== undefined && !GOOGLE_CLIENT_ID.test(googleClientId)) {
+    throw new Error(`googleClientId "${googleClientId}" is not a Google OAuth client id`);
+  }
+  if (stack === 'production' && googleClientId === undefined) {
+    throw new Error(
+      "production needs its own Google OAuth client (googleClientId), not Auth0's developer keys",
+    );
+  }
+  if (stack === 'production' && localDevCallbacks) {
+    throw new Error('auth0LocalDevCallbacks would let localhost receive production sign-ins');
+  }
+  return {
+    domain,
+    ...(googleClientId === undefined ? {} : { googleClientId }),
+    localDevCallbacks,
+  } satisfies Auth0Settings;
 }

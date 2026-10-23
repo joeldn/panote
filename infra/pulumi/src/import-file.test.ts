@@ -183,9 +183,19 @@ describe('parseStackConfig', () => {
         'config:',
         '  panote-infra:zone: panote.dev',
         '  panote-infra:bucket: "pano-content-dev"',
+        '  panote-infra:auth0LocalDevCallbacks: true',
         '  cloudflare:apiToken: nope',
+        '  auth0:domain: panote-dev.au.auth0.com',
+        '  auth0:clientSecret: nope',
+        '  panote-infra:bannedEmailSha256:',
+        '    secure: v1:abc',
       ].join('\n'),
     );
-    expect(Object.fromEntries(values)).toEqual({ zone: 'panote.dev', bucket: 'pano-content-dev' });
+    expect(Object.fromEntries(values)).toEqual({
+      zone: 'panote.dev',
+      bucket: 'pano-content-dev',
+      auth0LocalDevCallbacks: 'true',
+      'auth0:domain': 'panote-dev.au.auth0.com',
+    });
   });
 });

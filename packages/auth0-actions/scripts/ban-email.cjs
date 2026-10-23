@@ -2,8 +2,9 @@
 'use strict';
 
 /*
- * Prints the line to add to the "Block banned emails" Action's BANNED_EMAIL_SHA256 secret
- * for an email address (docs/deploy.md, "Email ban list"). Nothing is sent anywhere.
+ * Prints the hash to add to the ban list (the stack's `bannedEmailSha256` secret, which
+ * infra/pulumi deploys as the "Block banned emails" Action's BANNED_EMAIL_SHA256) for an email
+ * address (docs/deploy.md, "Email ban list"). Nothing is sent anywhere.
  *
  *   node packages/auth0-actions/scripts/ban-email.cjs someone@example.com [another@example.com]
  */
