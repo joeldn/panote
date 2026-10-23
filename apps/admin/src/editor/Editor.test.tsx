@@ -508,6 +508,150 @@ describe('editor: save', () => {
   });
 });
 
+describe('editor: a Save that fails in part never publishes a mixed tour', () => {
+  /** What each publish would snapshot: the server's documents at that moment. */
+  function recordPublishes() {
+    const seen: Array<{ tour: unknown; square: unknown }> = [];
+    server.intercept = (r) => {
+      if (r.method === 'POST' && r.path.endsWith('/publish')) {
+        seen.push({
+          tour: server.tour!.body.title,
+          square: server.configs.get('square')!.body.title,
+        });
+      }
+    };
+    return seen;
+  }
+
+  /** The publish notice (not the save error banner) and its Try again. */
+  const publishRetry = (ui: ReturnType<typeof within>) => {
+    const notice = ui
+      .queryAllByRole('status')
+      .find((n: HTMLElement) => n.textContent?.includes('share link'));
+    return notice ? within(notice).queryByRole('button', { name: 'Try again' }) : null;
+  };
+
+  const failures = {
+    '5xx': () => server.brokenConfigs.add('square'),
+    'network error': () => {
+      const record = server.intercept;
+      server.intercept = (r) => {
+        if (r.method === 'PUT' && r.path === '/api/admin/panos/square/config') {
+          throw new TypeError('Failed to fetch');
+        }
+        return record?.(r);
+      };
+    },
+    '412': () => server.setConfig('square', { title: 'Theirs', hotspots: [] }),
+  };
+
+  it.each(Object.keys(failures) as Array<keyof typeof failures>)(
+    'a %s on one document: no publish, not "Saved", edits kept, retry publishes all of it',
+    async (kind) => {
+      const published = recordPublishes();
+      const { ui } = openTab();
+      await loaded(ui);
+      await rename(ui, /Tour title: Old town/, 'New town');
+      await rename(ui, /Pano name: Square/, 'New square');
+      failures[kind]();
+      fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+      await ui.findAllByRole('alert');
+
+      // The other document did land: the server now holds a mix of new and old.
+      expect(server.tour!.body.title).toBe('New town');
+      expect(server.configs.get('square')!.body.title).not.toBe('New square');
+      // ...but nothing published it, and the editor doesn't claim it saved.
+      expect(published).toEqual([]);
+      expect(ui.queryByText('Saved')).toBeNull();
+      expect(ui.queryByText(/now live/)).toBeNull();
+      if (kind === '412') expect(ui.getByText('Conflict')).toBeTruthy();
+      else expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
+      // The failed edit stays on screen, unsaved, and in the draft.
+      expect(ui.getByRole('button', { name: /Pano name: New square/ })).toBeTruthy();
+      expect(unloadPrompts()).toBe(true);
+      window.dispatchEvent(new Event('pagehide'));
+      expect(localStorage.getItem(DRAFT)).toContain('New square');
+
+      // Retry: only the failed document goes again, then one publish of the whole tour.
+      server.brokenConfigs.clear();
+      server.intercept = null;
+      const recorded = recordPublishes();
+      const before = server.writes().length;
+      if (kind === '412') {
+        const conflict = ui
+          .getAllByRole('alert')
+          .find((a) => a.textContent?.includes('changed elsewhere'))!;
+        fireEvent.click(within(conflict).getByRole('button', { name: 'Overwrite' }));
+      } else {
+        const error = ui
+          .getAllByRole('alert')
+          .find((a) => a.textContent?.includes('weren’t saved'))!;
+        fireEvent.click(within(error).getByRole('button', { name: 'Try again' }));
+      }
+      await ui.findByText(/now live/);
+      expect(
+        server
+          .writes()
+          .slice(before)
+          .map((w) => `${w.method} ${w.path}`),
+      ).toEqual(['PUT /api/admin/panos/square/config', 'POST /api/admin/tours/t1/publish']);
+      expect(recorded).toEqual([{ tour: 'New town', square: 'New square' }]);
+      expect(localStorage.getItem(DRAFT)).toBeNull();
+    },
+  );
+
+  it('a stale publish Try again is gone while a Save runs and after it fails in part', async () => {
+    // A first save whose publish failed: its notice offers Try again.
+    server.publishScript = () => new Response('{"error":"boom"}', { status: 503 });
+    const { ui } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'First');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText(/share link couldn’t be updated/);
+    expect(publishRetry(ui)).toBeTruthy();
+    server.publishScript = null;
+
+    // A second save: the config PUT is held, then fails; the tour PUT lands.
+    let answer!: (r: Response) => void;
+    const held = new Promise<Response>((r) => (answer = r));
+    const published = recordPublishes();
+    const record = server.intercept!;
+    server.intercept = (r) =>
+      r.method === 'PUT' && r.path === '/api/admin/panos/square/config' ? held : record(r);
+    await rename(ui, /Tour title: First/, 'Second');
+    await rename(ui, /Pano name: Square/, 'New square');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByRole('button', { name: /Saving/ });
+    // Mid-save, the old notice can't publish the PUTs halfway.
+    expect(publishRetry(ui)).toBeNull();
+    answer(new Response('{"error":"boom"}', { status: 500 }));
+    await ui.findByText(/weren’t saved/);
+    expect(server.tour!.body.title).toBe('Second');
+    // After a partial failure, nothing on screen publishes the mix either.
+    expect(publishRetry(ui)).toBeNull();
+    expect(published).toEqual([]);
+  });
+
+  it('the Share modal over the editor won’t publish after a Save fails in part', async () => {
+    const published = recordPublishes();
+    const { ui, router } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'New town');
+    await rename(ui, /Pano name: Square/, 'New square');
+    server.brokenConfigs.add('square');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText(/weren’t saved/);
+    expect(server.tour!.body.title).toBe('New town');
+
+    fireEvent.click(ui.getByRole('link', { name: 'Share' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish link' }));
+    expect(await screen.findByText('Save your changes first.')).toBeTruthy();
+    expect(published).toEqual([]);
+    expect(server.publish).toBeNull();
+  });
+});
+
 describe('editor: stop sharing', () => {
   it('says Save updates a live link, and a stopped tour stays offline on Save', async () => {
     server.publish = {

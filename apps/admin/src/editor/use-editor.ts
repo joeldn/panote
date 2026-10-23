@@ -457,13 +457,13 @@ export function useEditor(
       if (isEmptyPlan(plan)) return;
       savingRef.current = true;
       setSaving(true);
-      // A new attempt: whatever the last publish waited on, this save's publish decides
-      // again, and a publish still out (an automatic one) can't apply its stale result.
+      // A new attempt: whatever the last publish waited on or said, this save's publish
+      // decides again, and a publish still out (an automatic one) can't apply its stale
+      // result. The old notice's Try again goes too: pressed mid-save, or after some PUTs
+      // failed, it would publish a mix of new and old documents.
       publishSeq.current++;
-      if (awaitingRef.current) {
-        setAwaiting(null);
-        dismiss('publish');
-      }
+      setAwaiting(null);
+      dismiss('publish');
       // A sync whose GET is already out could answer with the pre-save tour: drop it and rerun.
       syncSeq.current++;
       if (syncInFlight.current !== null) syncAfterSave.current = true;
@@ -570,10 +570,23 @@ export function useEditor(
     [dismiss, setAwaiting],
   );
 
-  /** The publish notice's "Try again": publishes the already-saved tour. */
+  /**
+   * Why nothing may publish the saved tour right now, or null when it may. Mid-save, or
+   * after a save that failed in part, the server holds a mix of new and old documents.
+   */
+  const publishBlocked = useCallback(
+    (): string | null =>
+      savingRef.current || Object.keys(failuresRef.current).length > 0
+        ? 'Save your changes first.'
+        : null,
+    [],
+  );
+
+  /** The publish notice's "Try again": publishes the already-saved tour, unless blocked. */
   const republish = useCallback(async () => {
+    if (publishBlocked() !== null) return;
     if (docsRef.current) await republishWith(docsRef.current);
-  }, [republishWith]);
+  }, [publishBlocked, republishWith]);
 
   /**
    * The tiles the last publish waited on are all in: publish again. A no-op unless that
@@ -742,6 +755,7 @@ export function useEditor(
     overwriteConflicts,
     publish,
     setShared,
+    publishBlocked,
     republish,
     publishing,
     awaitingTiles,

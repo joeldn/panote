@@ -302,6 +302,32 @@ describe('useEditor autoRepublish', () => {
     expect(publishTour).toHaveBeenCalledTimes(1);
   });
 
+  it('Try again never publishes during a save or after one that failed', async () => {
+    const publishTour = vi.fn().mockRejectedValueOnce(notReady('p1')).mockResolvedValue(ok);
+    const { result, api } = await waiting(publishTour);
+    // Mid-save: the server holds some of this save's documents and not others yet.
+    const put = deferred<{ etag: string }>();
+    api.putTour.mockReturnValueOnce(put.promise);
+    act(() => result.current.dispatch({ type: 'tour/title', title: 'Again' }));
+    let saving!: Promise<void>;
+    act(() => {
+      saving = result.current.save();
+    });
+    await act(() => result.current.republish());
+    expect(publishTour).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      put.resolve({ etag: 't3' });
+      await saving;
+    });
+    expect(publishTour).toHaveBeenCalledTimes(2);
+    // A failed save: the saved tour isn't what the user is editing.
+    api.putTour.mockRejectedValueOnce(new ApiError(500, { error: 'boom' }));
+    act(() => result.current.dispatch({ type: 'tour/title', title: 'Once more' }));
+    await act(() => result.current.save());
+    await act(() => result.current.republish());
+    expect(publishTour).toHaveBeenCalledTimes(2);
+  });
+
   it('a publish superseded by a save does not apply its stale result', async () => {
     const autoOut = deferred<typeof ok>();
     let failSave!: (e: unknown) => void;

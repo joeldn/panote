@@ -10,6 +10,8 @@ import { useConfig } from '../config-context.js';
 /** What the editor under this route passes down, so it follows sharing changed here. */
 export interface ShareOutletContext {
   onSharingChange: (publish: TourPublishState | null) => void;
+  /** Why the editor's saved tour can't be published now (a Save running or failed in part). */
+  publishBlocked: () => string | null;
 }
 
 interface Published {
@@ -155,6 +157,12 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
 
   const onCommitSlug = async (slug: string) => {
     if (!tour) return;
+    // A first share publishes: not while the editor's Save is out or failed in part.
+    const blocked = tour.publish ? null : (editor?.publishBlocked() ?? null);
+    if (blocked) {
+      setNotice(blocked);
+      throw new Error(blocked);
+    }
     try {
       if (tour.publish) {
         const res = await api.renameSlug(tourId, slug);
@@ -191,6 +199,9 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
   };
 
   const onPublish = async () => {
+    // The editor under this modal has a Save out or half failed: don't publish the mix.
+    const blocked = editor?.publishBlocked() ?? null;
+    if (blocked) throw new Error(blocked);
     try {
       const res = await api.publishTour(tourId);
       setPublish({ slug: res.slug, visibility: res.visibility });
