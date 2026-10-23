@@ -105,8 +105,8 @@ export function Privacy() {
       <p>
         Our hosting provider, Cloudflare, keeps logs of requests to our service, which can include
         the IP address and the address of the page or file asked for. We use these logs to find and
-        fix problems and to look into abuse. They are kept for a limited time, at most 30 days, and
-        then deleted automatically.
+        fix problems and to look into abuse. The logs we can read are deleted automatically within
+        30 days. Cloudflare’s own security logs follow Cloudflare’s privacy policy.
       </p>
 
       <h2>Error reports</h2>
@@ -153,8 +153,8 @@ export function Privacy() {
       </ul>
       <p>We don’t show ads and we don’t sell or rent personal data.</p>
       <p>
-        Cloudflare and Auth0 are US companies and may handle your data in the US and other
-        countries. Where the law requires it, these transfers are protected by the European
+        Cloudflare, Auth0 and our email delivery provider may handle your data in the US and other
+        countries. Where the law requires it, we rely on safeguards such as the European
         Commission’s standard contractual clauses or the EU-US Data Privacy Framework, and their UK
         equivalents.
       </p>
@@ -206,7 +206,7 @@ export function Privacy() {
           visit records behind them: about three months.
         </li>
         <li>IP addresses for abuse protection: about a minute.</li>
-        <li>Request logs and error reports: up to 30 days.</li>
+        <li>Request logs and error reports we can read: up to 30 days.</li>
         <li>Reports, notices and content held after a report: as long as the law requires.</li>
         <li>The like id in your browser: until you clear your browser’s storage.</li>
       </ul>
@@ -258,8 +258,8 @@ export function Terms() {
         You keep ownership of everything you upload. You give us permission to store, process (for
         example, tile for zooming) and show it, only as needed to run Panote and in the way you set
         it up — for example as an unlisted or public tour, including its title and cover image on
-        Explore and in search previews. Copies stay in our caches and private backups for a short
-        time after you remove it. You can unpublish or delete it at any time.
+        Explore and in search previews. Copies stay in our caches and private backups for up to 31
+        days after you remove it. You can unpublish or delete it at any time.
       </p>
       <p>
         Only upload content you have the right to share. Don’t upload anything illegal, anything
@@ -290,8 +290,8 @@ export function Terms() {
         aren’t liable for indirect or consequential losses, or for loss of content, and our total
         liability to you is limited to <Operator value={OPERATOR_LIABILITY_CAP} />. Keep your own
         copies of your originals. Nothing in these terms limits liability for death or personal
-        injury caused by negligence, for fraud, or any consumer rights the law doesn’t let us
-        exclude.
+        injury caused by negligence, or for fraud, or takes away any consumer rights the law doesn’t
+        let us exclude.
       </p>
 
       <h2>Law</h2>
@@ -320,7 +320,8 @@ export function ContentPolicy() {
       </p>
       <p>
         Panote is run by <Operator value={OPERATOR_NAME} />, <Operator value={OPERATOR_ADDRESS} />.
-        Every report and notice below goes to <Mail />, in English.
+        Reports and notices below go to <Mail /> (copyright notices can also go to our agent by post
+        or phone), in English.
       </p>
 
       <h2>What isn’t allowed</h2>

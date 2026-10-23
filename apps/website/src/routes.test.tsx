@@ -138,7 +138,7 @@ describe('website routes', () => {
     const ips = await textOf('IP addresses and logs');
     expect(ips).toContain('We use it briefly to protect the service from abuse');
     expect(ips).toContain('We don’t store IP addresses with our analytics');
-    expect(ips).toContain('at most 30 days, and then deleted automatically');
+    expect(ips).toContain('The logs we can read are deleted automatically within 30 days');
     const errors = await textOf('Error reports');
     expect(errors).toContain('no IP address, browser or country');
     const media = await textOf('Videos and media in tours');
@@ -171,7 +171,7 @@ describe('website routes', () => {
     expect(privacy).toContain('complain to your local data protection authority');
     expect(privacy).toContain('standard contractual clauses');
     expect(privacy).toContain('isn’t for anyone under 16');
-    expect(privacy).toContain('Request logs and error reports: up to 30 days.');
+    expect(privacy).toContain('Request logs and error reports we can read: up to 30 days.');
     expect(privacy).toContain('YOUR_EU_AND_UK_REPRESENTATIVES');
 
     cleanup();

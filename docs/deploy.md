@@ -2663,10 +2663,11 @@ account: `--sub '<sub>' --disable-owner --reason '<case id>' --all-tours --unpub
 and tell the owner.
 
 **TODO (Joel):** the legal pages still carry `YOUR_` placeholders for the operator's legal name,
-postal address and the counter-notice jurisdiction (`apps/website/src/legal/operator.ts`), and the
-minimum age isn't on the Terms yet. They show as-is on dev; the production deploy refuses to run
+postal address, governing law, liability cap, EU and UK representatives (`''` if the operator is
+based in both) and the DMCA agent's name, address and phone (`apps/website/src/legal/operator.ts`).
+They show as-is on dev; the production deploy refuses to run
 while any file under `apps/website/src/legal/` has one (`.github/workflows/deploy.yml`, the
-`YOUR_` placeholder step). Have the Terms and the content policy reviewed before production. If
+`YOUR_` placeholder step). Have the Terms, privacy and content policy reviewed by a lawyer before production. If
 Panote is to rely on the US DMCA safe harbour, a designated agent must also be registered with
 the US Copyright Office.
 
