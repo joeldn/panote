@@ -44,7 +44,7 @@ describe('share links', () => {
     expect(embedSnippet(embedSrc('https://panote.io/', 'st-lawrence-jewry'), 480)).toBe(
       '<iframe src="https://panote.io/s/st-lawrence-jewry/embed"\n' +
         '  width="100%" height="480" style="border:0"\n' +
-        '  allow="fullscreen"></iframe>',
+        '  allow="fullscreen; gyroscope; accelerometer"></iframe>',
     );
     expect(embedSrc(SITE, 'a-b', 'pano-1')).toBe(`${SITE}/s/a-b/embed?pano=pano-1`);
     expect(embedSrc(SITE, 'a-b', 'pano-1', 'pt-BR')).toBe(
@@ -294,8 +294,8 @@ describe('ShareModal', () => {
       const frame = screen.getByTitle('Embed preview');
       expect(frame.getAttribute('src')).toBe(`${SITE}/s/old-town/embed`);
       expect(frame.getAttribute('height')).toBe('480');
-      // No VR mode, so no xr-spatial-tracking: the embed asks only for fullscreen.
-      expect(frame.getAttribute('allow')).toBe('fullscreen');
+      // No VR mode, so no xr-spatial-tracking: fullscreen, and motion for tilt to look.
+      expect(frame.getAttribute('allow')).toBe('fullscreen; gyroscope; accelerometer');
     });
   });
 
@@ -347,5 +347,39 @@ describe('ShareModal', () => {
     expect(screen.queryByRole('button', { name: 'Edit custom link' })).toBeNull();
     expect(screen.queryByText('This tour is')).toBeNull();
     expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy();
+  });
+
+  it('offers visitors this view as well as the tour, sharing the tour by default', async () => {
+    renderModal({
+      variant: 'visitor',
+      currentView: { name: 'Courtyard', query: 'pano=pano-2&yaw=12&pitch=-5&fov=70' },
+    });
+    const group = screen.getByRole('radiogroup', { name: 'What to share' });
+    const tour = within(group).getByRole('radio', { name: /The tour/ });
+    const here = within(group).getByRole('radio', { name: /This view.*Courtyard/ });
+    expect(tour.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByLabelText('Share link').textContent).toBe('panote.test/s/old-town');
+
+    fireEvent.click(here);
+    expect(here.getAttribute('aria-checked')).toBe('true');
+    const url = `${SITE}/s/old-town?pano=pano-2&yaw=12&pitch=-5&fov=70`;
+    expect(screen.getByLabelText('Share link').textContent).toBe(url.replace('https://', ''));
+    expect(screen.getByRole('link', { name: 'Share on X' }).getAttribute('href')).toContain(
+      encodeURIComponent(url),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledWith(url);
+
+    fireEvent.click(tour);
+    expect(screen.getByLabelText('Share link').textContent).toBe('panote.test/s/old-town');
+  });
+
+  it('offers no choice without a view, nor to the owner', () => {
+    renderModal({ variant: 'visitor' });
+    expect(screen.queryByRole('radiogroup', { name: 'What to share' })).toBeNull();
+    cleanup();
+    renderModal({ currentView: { name: 'Courtyard', query: 'pano=pano-2' } });
+    expect(screen.queryByRole('radiogroup', { name: 'What to share' })).toBeNull();
   });
 });

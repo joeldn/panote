@@ -28,6 +28,14 @@ export interface SharePano {
   name: string;
 }
 
+/** The scene and camera on screen, offered by the visitor sheet as "This view". */
+export interface ShareView {
+  /** The scene's title. */
+  name: string;
+  /** Query for the tour link that opens this view, without `?`, e.g. `pano=hall&yaw=12`. */
+  query: string;
+}
+
 export interface ShareModalProps {
   open: boolean;
   onClose: () => void;
@@ -42,6 +50,8 @@ export interface ShareModalProps {
   variant?: 'owner' | 'visitor';
   tab?: ShareTab;
   onTabChange?: (tab: ShareTab) => void;
+  /** Visitor only: the view on screen, offered beside the whole tour (which stays the default). */
+  currentView?: ShareView | null;
   /** The pano open in the editor, offered as "This pano only" on the Embed tab. */
   currentPano?: SharePano | null;
   /** The tour's languages, default first: with more than one, the embed can pin one. */
@@ -182,11 +192,35 @@ function LinkTab({
   slug,
   owner,
   onCommitSlug,
+  currentView,
 }: ShareModalProps & { slug: string; owner: boolean }) {
-  const url = shareUrl(siteOrigin, slug);
+  const [what, setWhat] = useState<'tour' | 'view'>('tour');
+  const view = !owner && what === 'view' ? currentView : null;
+  const tourUrl = shareUrl(siteOrigin, slug);
+  const url = view ? `${tourUrl}?${view.query}` : tourUrl;
   const [copied, copy] = useCopy();
   return (
     <>
+      {!owner && currentView && (
+        <div role="radiogroup" aria-label="What to share" className="pn-share__scopes">
+          {[
+            { value: 'tour' as const, label: 'The tour', desc: 'Opens where the tour starts' },
+            { value: 'view' as const, label: 'This view', desc: currentView.name },
+          ].map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={what === o.value}
+              className={cx('pn-share__scope', what === o.value && 'is-active')}
+              onClick={() => setWhat(o.value)}
+            >
+              <span className="pn-share__scope-title">{o.label}</span>
+              <span className="pn-share__scope-desc">{o.desc}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <ul className="pn-share__socials">
         {socialTargets(url, title).map((s) => (
           <li key={s.id}>
@@ -429,7 +463,7 @@ function EmbedTab({
           title="Embed preview"
           src={src}
           height={height}
-          allow="fullscreen"
+          allow="fullscreen; gyroscope; accelerometer"
           loading="lazy"
         />
       )}

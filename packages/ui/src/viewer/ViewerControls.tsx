@@ -13,20 +13,33 @@ export interface ViewerControlsProps {
   onAutoRotateChange?: (on: boolean) => void;
   /** Tour setting `controls`: the pill sits at the bottom (default) or top. */
   position?: 'bottom' | 'top';
+  /**
+   * Where the target can't go fullscreen (iPhone Safari has no Fullscreen API on
+   * elements, and an embed may not be allowed it): `'pseudo'` pins the target over
+   * the whole viewport with the page's chrome hidden, `{ href }` offers a link that
+   * opens that page in a new tab (an embed, where pinning would only fill the frame),
+   * and `'none'` (the default) offers nothing.
+   */
+  fullscreenFallback?: 'pseudo' | { href: string } | 'none';
   /** Extra buttons at the end of the pill (share, like). */
   children?: ReactNode;
 }
 
-/** The glass controls pill: zoom, fullscreen, auto-rotate. */
+/** On the target while it is pinned over the viewport (see viewer.css). */
+export const PSEUDO_FULLSCREEN_CLASS = 'pn-pseudo-fullscreen';
+
+/** The glass controls pill: zoom, fullscreen (or its fallback), auto-rotate. */
 export function ViewerControls({
   fullscreenTarget,
   autoRotate,
   onAutoRotateChange,
   position = 'bottom',
+  fullscreenFallback = 'none',
   children,
 }: ViewerControlsProps) {
   const viewer = usePanoViewer();
   const [fullscreen, setFullscreen] = useState(false);
+  const [pseudo, setPseudo] = useState(false);
   // Offer fullscreen only when the document doesn't forbid it (false in an embed
   // without allow="fullscreen") and the target can actually request it: iPhone
   // Safari's elements can't, and some browsers only have a prefixed version.
@@ -40,6 +53,21 @@ export function ViewerControls({
     document.addEventListener('fullscreenchange', sync);
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
+  const pseudoOn = pseudo && !canFullscreen;
+  useEffect(() => {
+    const el = fullscreenTarget?.current;
+    if (!pseudoOn || !el) return;
+    el.classList.add(PSEUDO_FULLSCREEN_CLASS);
+    // Escape leaves it, as it leaves real fullscreen; a dialog open over it handles its own.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) setPseudo(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      el.classList.remove(PSEUDO_FULLSCREEN_CLASS);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [pseudoOn, fullscreenTarget]);
 
   // Stepped from the fov on screen, so no press is lost above the horizontal cap.
   const zoom = (factor: number) => viewer?.zoomBy(factor);
@@ -83,6 +111,27 @@ export function ViewerControls({
             aria-hidden="true"
           />
         </button>
+      )}
+      {fullscreenTarget && !canFullscreen && fullscreenFallback === 'pseudo' && (
+        <button
+          type="button"
+          className="pn-controls__btn pn-controls__btn--accent"
+          aria-label={pseudoOn ? 'Exit fullscreen' : 'Fullscreen'}
+          onClick={() => setPseudo(!pseudoOn)}
+        >
+          <i className={`fa-solid ${pseudoOn ? 'fa-compress' : 'fa-expand'}`} aria-hidden="true" />
+        </button>
+      )}
+      {!canFullscreen && typeof fullscreenFallback === 'object' && (
+        <a
+          className="pn-controls__btn pn-controls__btn--accent"
+          href={fullscreenFallback.href}
+          target="_blank"
+          rel="noopener"
+          aria-label="Open fullscreen in a new tab"
+        >
+          <i className="fa-solid fa-expand" aria-hidden="true" />
+        </a>
       )}
       {onAutoRotateChange && (
         <button

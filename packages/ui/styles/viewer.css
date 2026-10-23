@@ -480,6 +480,35 @@
   background: #0d0c0a;
 }
 
+/*
+ * Fullscreen where the Fullscreen API can't reach (iPhone Safari): the viewer pinned over
+ * the whole viewport, page chrome hidden. Below the modal scrim (z-index 90), so the share
+ * sheet still opens over it. Chrome near an edge already adds its safe-area inset.
+ */
+.pn-pseudo-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  width: auto;
+  height: auto;
+  background: #0d0c0a;
+}
+:root:has(.pn-pseudo-fullscreen),
+:root:has(.pn-pseudo-fullscreen) body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+.pn-pseudo-fullscreen .pn-stage__overlay > .pn-tourbar {
+  display: none;
+}
+.pn-pseudo-fullscreen .pn-controls--top {
+  top: calc(16px + env(safe-area-inset-top, 0px));
+}
+/* The embed's "open fullscreen in a new tab" is a link styled as a pill button. */
+a.pn-controls__btn {
+  text-decoration: none;
+}
+
 /* Logo, breadcrumb pill, extras, then the end slot. Only its children take pointer events. */
 .pn-stage__overlay > .pn-tourbar {
   position: absolute;
