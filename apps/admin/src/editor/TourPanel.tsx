@@ -188,7 +188,7 @@ export function TourPanel({
           Arrow keys move it up or down the list, Home and End to the top or bottom.
         </p>
       )}
-      <p className="ed-sr" role="status" aria-live="polite">
+      <p className="ed-sr" aria-live="polite">
         {said}
       </p>
       <ul ref={list} className="ed-scenes">
