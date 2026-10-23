@@ -7,7 +7,18 @@ import { TourError, TourPage } from './tour/TourPage.js';
 // landing or legal pages. The tour routes stay eager: lazy-loading them would put a chunk
 // request in front of the tour data.
 const page =
-  (name: 'Landing' | 'Explore' | 'Privacy' | 'Terms' | 'ContentPolicy' | 'NotFound') =>
+  (
+    name:
+      | 'Landing'
+      | 'Explore'
+      | 'Privacy'
+      | 'Terms'
+      | 'ContentPolicy'
+      | 'Help'
+      | 'CameraGuide'
+      | 'Embedding'
+      | 'NotFound',
+  ) =>
   async () => ({
     Component: (await import('./pages.js'))[name],
   });
@@ -28,6 +39,10 @@ export const routes: RouteObject[] = [
       { path: 'privacy', lazy: page('Privacy') },
       { path: 'terms', lazy: page('Terms') },
       { path: 'content-policy', lazy: page('ContentPolicy') },
+      // The paths are HELP_PAGES' (help/pages.ts), which the footer and sitemap list.
+      { path: 'help', lazy: page('Help') },
+      { path: 'help/cameras', lazy: page('CameraGuide') },
+      { path: 'help/embedding', lazy: page('Embedding') },
       { path: '*', lazy: page('NotFound') },
     ],
   },

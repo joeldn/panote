@@ -17,18 +17,14 @@ afterEach(cleanup);
 describe('admin routes', () => {
   it('renders the shell and the dashboard at /app/', async () => {
     renderAt('/app/');
-    expect(
-      await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
-    ).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /^Welcome.*Maya Larsson\.$/ })).toBeTruthy();
     expect(screen.getByRole('img', { name: 'panote.io' })).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('opens the upload overlay over the dashboard', async () => {
     renderAt('/app/new');
-    expect(
-      await screen.findByRole('heading', { name: 'Welcome back, Maya Larsson.' }),
-    ).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /^Welcome.*Maya Larsson\.$/ })).toBeTruthy();
     expect(screen.getByRole('dialog', { name: 'New pano' })).toBeTruthy();
   });
 
@@ -45,6 +41,12 @@ describe('admin routes', () => {
     cleanup();
     renderAt('/app/t/tour-1/preview');
     expect(await screen.findByRole('heading', { name: 'Nothing to preview yet' })).toBeTruthy();
+  });
+
+  it('opens insights over the dashboard too', async () => {
+    renderAt('/app/insights/tour-1');
+    expect(await screen.findByRole('dialog', { name: 'Insights' })).toBeTruthy();
+    expect(screen.getByText('Your tours')).toBeTruthy();
   });
 
   it('404s an unknown share tab and unknown paths', async () => {

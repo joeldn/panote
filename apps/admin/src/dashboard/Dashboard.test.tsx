@@ -86,6 +86,10 @@ describe('Dashboard', () => {
     const { fetch } = server(lists([]));
     renderAdmin('/app/', { fetch });
     expect(await screen.findByRole('heading', { name: 'No tours yet' })).toBeTruthy();
+    // Someone with no tours is new here: no "Welcome back".
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+      'Welcome to panote, Maya Larsson.',
+    );
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(
       '/app/new',
     );
@@ -97,12 +101,57 @@ describe('Dashboard', () => {
     renderAdmin('/app/', { fetch, strict: true });
     const link = await screen.findByRole('link', { name: 'St Lawrence Jewry' });
     expect(link.getAttribute('href')).toBe('/app/t/t1');
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+      'Welcome back, Maya Larsson.',
+    );
     await waitFor(() => expect(card('St Lawrence Jewry').textContent).toContain('4.4k views'));
     expect(card('St Lawrence Jewry').textContent).toContain('3 panos');
     const totals = document.querySelector('.dash__totals')!;
     await waitFor(() => expect(totals.textContent).toContain('total views4.4k'));
     expect(totals.textContent).toContain('tours2');
     expect(totals.textContent).toContain('panos1');
+  });
+
+  describe('card actions', () => {
+    it('opens a published tour live, copies its link and opens its insights', async () => {
+      const writeText = vi.fn(async () => {});
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      const { fetch } = server(lists([tour()]));
+      const { router } = renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const actions = within(card('St Lawrence Jewry'));
+
+      const live = actions.getByRole('link', { name: 'View “St Lawrence Jewry” live' });
+      expect(live.getAttribute('href')).toBe('https://panote.dev/s/st-lawrence');
+      expect(live.getAttribute('target')).toBe('_blank');
+
+      fireEvent.click(
+        actions.getByRole('button', { name: 'Copy the link to “St Lawrence Jewry”' }),
+      );
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith('https://panote.dev/s/st-lawrence'),
+      );
+      const said = await actions.findByText('Copied ✓');
+      // Its own live region, not text inside the labelled button.
+      expect(said.getAttribute('role')).toBe('status');
+      expect(said.closest('button')).toBeNull();
+      expect(said.parentElement?.className).toBe('dash-card__actions');
+
+      const insights = actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' });
+      expect(insights.getAttribute('href')).toBe('/app/insights/t1');
+      fireEvent.click(insights);
+      await waitFor(() => expect(router.state.location.pathname).toBe('/app/insights/t1'));
+    });
+
+    it('offers no live link for a tour that isn’t shared, but still its insights', async () => {
+      const { fetch } = server(lists([tour({ publish: null })]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const actions = within(card('St Lawrence Jewry'));
+      expect(actions.queryByRole('link', { name: /live/ })).toBeNull();
+      expect(actions.queryByRole('button', { name: /Copy the link/ })).toBeNull();
+      expect(actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' })).toBeTruthy();
+    });
   });
 
   it('builds covers from the pano manifest and falls back when one is missing', async () => {
@@ -155,6 +204,8 @@ describe('Dashboard', () => {
     });
     renderAdmin('/app/', { fetch });
     expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load your tours');
+    // Not knowing whether they have tours, it doesn't say "back".
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Welcome, Maya Larsson.');
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('link', { name: 'St Lawrence Jewry' })).toBeTruthy();
