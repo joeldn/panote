@@ -1,6 +1,7 @@
 import { Container } from '@cloudflare/containers';
 import { manifestKey, redactOwner } from '@internal/contracts';
 import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
+import { recordOps, type OpsEvent } from '@internal/worker-kit';
 import { containerEnvVars } from './container-env.js';
 import { deriveUploadTarget, errorText, panoIdForLog } from './upload-prefix.js';
 import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
@@ -58,6 +59,9 @@ export const RETRY_BASE_SECONDS = 60;
 export const retryDelaySeconds = (attempts: number): number =>
   RETRY_BASE_SECONDS * 2 ** Math.min(Math.max(attempts, 1) - 1, 4);
 
+// The operator event stream (@internal/contracts ops-events.ts): what each job came to.
+const record = (env: Env, e: OpsEvent): void => recordOps(env.OPS_EVENTS, 'tiler-consumer', e);
+
 // R2 event etags may arrive quoted (S3-style) or bare.
 const bareEtag = (raw: string): string => raw.replace(/^"|"$/g, '');
 
@@ -101,12 +105,14 @@ const handleDlqBatch = async (batch: MessageBatch<R2Event>, env: Env): Promise<v
     if (typeof key !== 'string') {
       console.error(`dead-lettered message ${msg.id} has no object.key`);
       dead.push({ key: null, messageId: msg.id, marker: 'none' });
+      record(env, { event: 'tile-dead' });
       msg.ack();
       continue;
     }
     console.error(`tile job dead-lettered pano=${panoIdForLog(key)} after exhausting retries`);
     const marker = await writeFailureMarker(env.BUCKET, key, 'dlq', msg.body.object.eTag);
     dead.push({ key, messageId: msg.id, marker });
+    record(env, { event: 'tile-dead' });
     msg.ack();
   }
   // After the loop, so every message is already acked whatever happens here.
@@ -132,6 +138,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       // rather than fail.
       if (marker === 'written')
         await deleteOversizedOriginal(env.BUCKET, key, msg.body.object.eTag);
+      record(env, { event: 'tile-refused', detail: 'oversize', value: size });
       msg.ack();
       continue;
     }
@@ -143,6 +150,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
     } catch (e) {
       console.error(`skip unprocessable key pano=${panoIdForLog(key)}: ${errorText(e)}`);
       await writeFailureMarker(env.BUCKET, key, 'unprocessable-key', msg.body.object.eTag);
+      record(env, { event: 'tile-refused', detail: 'unprocessable-key' });
       msg.ack();
       continue;
     }
@@ -151,6 +159,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       console.warn(
         `skip tile job pano=${panoId}: the manifest already has this original's version`,
       );
+      record(env, { event: 'tile-skipped' });
       msg.ack();
       continue;
     }
@@ -165,6 +174,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       });
       console.warn(`tile job end pano=${panoId} status=${res.status} after ${elapsed()}`);
       if (res.ok) {
+        record(env, { event: 'tile-ok', value: Date.now() - t0 });
         msg.ack();
       } else {
         // container.ts puts its error text in the body; log it or a
@@ -189,9 +199,15 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
             'unsupported',
             msg.body.object.eTag,
           );
-          if (marker === 'failed') msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
-          else msg.ack();
+          if (marker === 'failed') {
+            record(env, { event: 'tile-retry', detail: '422' });
+            msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
+          } else {
+            record(env, { event: 'tile-refused', detail: 'unsupported' });
+            msg.ack();
+          }
         } else {
+          record(env, { event: 'tile-retry', detail: String(res.status) });
           msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
         }
       }
@@ -200,6 +216,7 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
       // secrets, container-env.ts); e's message never contains a secret.
       console.warn(`tile job end pano=${panoId} threw after ${elapsed()}`);
       console.error(`tile job failed pano=${panoId}: ${errorText(e)}`);
+      record(env, { event: 'tile-retry', detail: 'threw' });
       msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
     }
   }

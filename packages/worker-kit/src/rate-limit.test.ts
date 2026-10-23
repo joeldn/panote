@@ -42,4 +42,27 @@ describe('rateLimit', () => {
     expect(res).toBeNull();
     expect(log).toHaveBeenCalledWith('rate limiter unavailable:', 'down');
   });
+
+  it('records a refusal as an operator event when told where, and only a refusal', async () => {
+    const writeDataPoint = vi.fn();
+    const events = { sink: { writeDataPoint }, service: 'admin-api', limiter: 'WRITE_LIMITER' };
+    await rateLimit(
+      limiter(async () => ({ success: true })),
+      'k',
+      60,
+      events,
+    );
+    expect(writeDataPoint).not.toHaveBeenCalled();
+    await rateLimit(
+      limiter(async () => ({ success: false })),
+      'k',
+      60,
+      events,
+    );
+    expect(writeDataPoint).toHaveBeenCalledWith({
+      indexes: ['rate-limited'],
+      blobs: ['rate-limited', 'WRITE_LIMITER', 'admin-api', 'o1'],
+      doubles: [0],
+    });
+  });
 });

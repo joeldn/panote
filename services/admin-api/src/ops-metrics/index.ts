@@ -19,6 +19,7 @@ import {
   usageSection,
   workersSection,
 } from './platform.js';
+import { pipelineSection } from './pipeline.js';
 import { productSection } from './product.js';
 import { healthSection } from './state.js';
 import { OpsUnavailable } from './unavailable.js';
@@ -71,7 +72,7 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
       if (typeof resources === 'string') throw new OpsUnavailable(resources);
       return work(resources);
     });
-  const [health, workers, storage, queues, durableObjects, containers, usage, product] =
+  const [health, workers, storage, queues, durableObjects, containers, usage, product, pipeline] =
     await Promise.all([
       settle(() => healthSection(env.BUCKET, now)),
       settle(() => cf((r) => workersSection(env, w, r))),
@@ -81,6 +82,7 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
       settle(() => account(() => containersSection(env, w))),
       settle(() => cf((r) => usageSection(env, w, r))),
       settle(() => productSection(env, env.BUCKET, w)),
+      settle(() => pipelineSection(env, w)),
     ]);
   return {
     range,
@@ -94,6 +96,7 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
     containers,
     usage,
     product,
+    pipeline,
   };
 };
 
@@ -106,6 +109,7 @@ export const opsMetricsRoute = async (
     c.env.INSIGHTS_LIMITER,
     c.get('sub') ?? 'operator',
     WRITE_RATE_PERIOD_SECONDS,
+    { sink: c.env.OPS_EVENTS, service: 'admin-api', limiter: 'INSIGHTS_LIMITER' },
   );
   if (limited) return limited;
   const range = parseRange(c.req.query('range'));

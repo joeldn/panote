@@ -16,6 +16,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import worker from '../index.js';
 import { getOpsMetrics, opsResources, parseRange } from './index.js';
+import { buildPipelineQueries } from './pipeline.js';
 import { INCLUDED, r2ClassOf, usageLines } from './platform.js';
 import { buildProductQueries } from './product.js';
 import { healthSection } from './state.js';
@@ -62,6 +63,12 @@ const stubCloudflare = (graphql: (query: string) => Answer, opts: { queues?: boo
       });
     }
     const sql = String(init?.body);
+    if (sql.includes('FROM panote_ops_dev')) {
+      const rows = pipelineAnswer(sql);
+      if (rows === 'refuse')
+        return Response.json({ errors: ['no such function'] }, { status: 422 });
+      return Response.json({ meta: [], data: rows, rows: rows.length });
+    }
     const data = sql.includes('GROUP BY type')
       ? [
           { type: 'view', n: '40' },
@@ -83,6 +90,29 @@ const stubCloudflare = (graphql: (query: string) => Answer, opts: { queues?: boo
               ];
     return Response.json({ meta: [], data, rows: data.length });
   });
+
+// The operator event stream's three queries (pipeline.ts).
+let pipelineP95: 'answer' | 'refuse' = 'answer';
+const pipelineAnswer = (sql: string): Record<string, unknown>[] | 'refuse' => {
+  if (sql.includes('quantileExactWeighted')) {
+    return pipelineP95 === 'refuse' ? 'refuse' : [{ p95: 41234.6, n: 3 }];
+  }
+  if (sql.includes('GROUP BY t, event')) {
+    return [
+      { t: '2026-10-23 09:00:00', event: 'upload-url', n: 4 },
+      { t: '2026-10-23 09:00:00', event: 'tile-ok', n: 3 },
+      { t: '2026-10-23 10:00:00', event: 'tile-dead', n: 1 },
+      { t: '2026-10-23 10:00:00', event: 'tile-ok', n: '2' },
+    ];
+  }
+  return [
+    { event: 'upload-url', detail: 'new', service: 'upload-api', n: 4, value: 8e7 },
+    { event: 'tile-ok', detail: '', service: 'tiler-consumer', n: 5, value: 100_000 },
+    { event: 'rate-limited', detail: 'WRITE_LIMITER', service: 'admin-api', n: '2', value: 0 },
+    // A name this build doesn't know (a newer Worker): left out, not an error.
+    { event: 'tile-teleported', detail: '', service: 'tiler-consumer', n: 1, value: 0 },
+  ];
+};
 
 // A full, plausible answer for every dataset the dashboard asks for.
 const platform = (query: string): Answer => {
@@ -288,6 +318,21 @@ describe('buildProductQueries', () => {
   });
 });
 
+describe('buildPipelineQueries', () => {
+  it('reads only this schema version in the window, and refuses a bad dataset name', () => {
+    const q = buildPipelineQueries('panote_ops_dev', opsWindow('24h', NOW));
+    for (const sql of Object.values(q)) {
+      expect(sql).toContain("timestamp >= toDateTime('2026-10-22 11:00:00')");
+      expect(sql).toContain("blob4 = 'o1'");
+      expect(sql).toContain('FROM panote_ops_dev');
+    }
+    expect(q.series).toContain('toStartOfHour');
+    expect(q.series).toContain("blob1 IN ('upload-url', 'tile-ok', 'tile-dead')");
+    expect(buildPipelineQueries('x', opsWindow('7d', NOW)).series).toContain('toStartOfDay');
+    expect(() => buildPipelineQueries('x; DROP', opsWindow('24h', NOW))).toThrow();
+  });
+});
+
 describe('getOpsMetrics', () => {
   it('puts every source together', async () => {
     await env.BUCKET.put(
@@ -361,6 +406,32 @@ describe('getOpsMetrics', () => {
       { tourId: 'tour-gone', views: 10, title: null, slug: null },
     ]);
     expect(product.series.at(-2)).toEqual({ t: '2026-10-23T09:00:00.000Z', views: 40 });
+
+    const pipeline = ok(m.pipeline);
+    expect(pipeline.events).toEqual([
+      { event: 'upload-url', detail: 'new', service: 'upload-api', n: 4, value: 8e7 },
+      { event: 'tile-ok', detail: '', service: 'tiler-consumer', n: 5, value: 100_000 },
+      { event: 'rate-limited', detail: 'WRITE_LIMITER', service: 'admin-api', n: 2, value: 0 },
+    ]);
+    expect(pipeline.tileP95Ms).toBe(41235);
+    expect(pipeline.series).toHaveLength(24);
+    expect(pipeline.series.slice(-3)).toEqual([
+      { t: '2026-10-23T08:00:00.000Z', uploads: 0, tiled: 0, failed: 0 },
+      { t: '2026-10-23T09:00:00.000Z', uploads: 4, tiled: 3, failed: 0 },
+      { t: '2026-10-23T10:00:00.000Z', uploads: 0, tiled: 2, failed: 1 },
+    ]);
+  });
+
+  it('keeps the pipeline when Analytics Engine refuses the percentile', async () => {
+    pipelineP95 = 'refuse';
+    try {
+      stubCloudflare(platform);
+      const pipeline = ok((await getOpsMetrics(testEnv, '24h', NOW)).pipeline);
+      expect(pipeline.tileP95Ms).toBeNull();
+      expect(pipeline.events).toHaveLength(3);
+    } finally {
+      pipelineP95 = 'answer';
+    }
   });
 
   it('reads storage from the latest sample, not only this month', async () => {
@@ -414,6 +485,7 @@ describe('getOpsMetrics', () => {
       reason: 'CF_ANALYTICS_TOKEN or CF_ACCOUNT_ID not set',
     });
     expect(m.product).toEqual({ status: 'unavailable', reason: 'analytics not configured' });
+    expect(m.pipeline).toEqual({ status: 'unavailable', reason: 'analytics not configured' });
     expect(m.health.status).toBe('ok');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -442,7 +514,12 @@ describe('healthSection', () => {
       dailyCron: null,
       tileGc: null,
       cdnPurge: { lastFailure: null, pending: 0, pendingCapped: false, dead: 0, deadCapped: false },
-      backup: { lastCompleteDate: null, lastCompleteDaysAgo: null, inProgress: null },
+      backup: {
+        lastCompleteDate: null,
+        lastCompleteDaysAgo: null,
+        hasRun: false,
+        inProgress: null,
+      },
     });
   });
 
@@ -500,6 +577,7 @@ describe('healthSection', () => {
     expect(h.backup).toEqual({
       lastCompleteDate: '2026-10-21',
       lastCompleteDaysAgo: 2,
+      hasRun: true,
       inProgress: { date: '2026-10-22', objects: 1234, runs: 2 },
     });
   });
@@ -511,6 +589,12 @@ describe('the last complete backup', () => {
     const h = await healthSection(env.BUCKET, new Date('2026-12-01T01:00:00Z'));
     expect(h.backup.lastCompleteDate).toBe('2026-11-30');
     expect(h.backup.lastCompleteDaysAgo).toBe(1);
+  });
+
+  it('says it has run when the only complete sets are older than last month', async () => {
+    await env.BUCKET.delete('backup/progress.json');
+    const h = await healthSection(env.BUCKET, new Date('2027-06-01T01:00:00Z'));
+    expect(h.backup).toMatchObject({ lastCompleteDate: null, hasRun: true, inProgress: null });
   });
 });
 

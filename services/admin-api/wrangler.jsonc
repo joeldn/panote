@@ -17,6 +17,9 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.dev/api/admin/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
+      // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+      // "Metrics dashboard"). AE creates the dataset on the first write.
+      "analytics_engine_datasets": [{ "binding": "OPS_EVENTS", "dataset": "panote_ops_dev" }],
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read)
       // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
       // enables the operator takedown and restore routes, docs/deploy.md "Takedown", "Backups").
@@ -82,6 +85,8 @@
         "CF_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         // public-api's EVENTS dataset for the same env
         "AE_DATASET": "panote_events_dev",
+        // The OPS_EVENTS dataset every Worker writes for the same env (operator dashboard)
+        "OPS_EVENTS_DATASET": "panote_ops_dev",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
         // Days a new account's public tours stay off Explore and noindex (M6); "0" turns it off.
@@ -126,6 +131,9 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.io/api/admin/*", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
+      // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+      // "Metrics dashboard"). AE creates the dataset on the first write.
+      "analytics_engine_datasets": [{ "binding": "OPS_EVENTS", "dataset": "panote_ops" }],
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env production (Account Analytics: Read)
       // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
       // enables the operator takedown and restore routes, docs/deploy.md "Takedown", "Backups").
@@ -189,6 +197,7 @@
         "OAUTH_AUDIENCE": "https://api.panote.io",
         "CF_ACCOUNT_ID": "12e2809e05de8a2bf20b815fd394ec9a",
         "AE_DATASET": "panote_events",
+        "OPS_EVENTS_DATASET": "panote_ops",
         // Days an old slug keeps redirecting after a rename (plan 3.2, Q6).
         "SLUG_ALIAS_DAYS": "30",
         // Days a new account's public tours stay off Explore and noindex (M6); "0" turns it off.

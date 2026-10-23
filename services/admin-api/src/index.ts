@@ -41,7 +41,14 @@ import {
   type TourDoc,
   type TourPublishState,
 } from '@internal/contracts';
-import { authenticate, rateLimit, rateLimitKeyForIp, type AuthContext } from '@internal/worker-kit';
+import {
+  authenticate,
+  rateLimit,
+  rateLimitKeyForIp,
+  recordOps,
+  type AuthContext,
+  type OpsEvent,
+} from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
@@ -225,7 +232,12 @@ const OPERATOR_ROUTE_RESERVE = 25;
 // Worker; without it (a test) every caller shares one key.
 const operatorLimit = createMiddleware<AppEnv>(async (c, next) => {
   const ip = rateLimitKeyForIp(c.req.header('CF-Connecting-IP') ?? 'unknown');
-  const limited = await rateLimit(c.env.OPERATOR_LIMITER, ip, WRITE_RATE_PERIOD_SECONDS);
+  const limited = await rateLimit(
+    c.env.OPERATOR_LIMITER,
+    ip,
+    WRITE_RATE_PERIOD_SECONDS,
+    limiterEvents(c.env, 'OPERATOR_LIMITER'),
+  );
   if (limited) return limited;
   await next();
 });
@@ -245,7 +257,12 @@ app.use(OPERATOR_BACKFILL_PATH, operatorLimit);
 app.use('/api/admin/*', async (c, next) => {
   if (READ_METHODS.has(c.req.method)) {
     const auth = await authenticate(c.req.raw, c.env);
-    const limited = await rateLimit(c.env.READ_LIMITER, auth.sub, WRITE_RATE_PERIOD_SECONDS);
+    const limited = await rateLimit(
+      c.env.READ_LIMITER,
+      auth.sub,
+      WRITE_RATE_PERIOD_SECONDS,
+      limiterEvents(c.env, 'READ_LIMITER'),
+    );
     if (limited) return limited;
     c.set('sub', auth.sub);
     c.set('auth', auth);
@@ -255,7 +272,12 @@ app.use('/api/admin/*', async (c, next) => {
   if (OPERATOR_PATHS.has(c.req.path)) return next();
   const auth = await authenticate(c.req.raw, c.env);
   const verified = auth.sub;
-  const limited = await rateLimit(c.env.WRITE_LIMITER, verified, WRITE_RATE_PERIOD_SECONDS);
+  const limited = await rateLimit(
+    c.env.WRITE_LIMITER,
+    verified,
+    WRITE_RATE_PERIOD_SECONDS,
+    limiterEvents(c.env, 'WRITE_LIMITER'),
+  );
   if (limited) return limited;
   c.set('sub', verified);
   c.set('auth', auth);
@@ -273,6 +295,15 @@ app.use('/api/admin/*', async (c, next) => {
 // The operator area (ops-gate.ts): /api/admin/ops and every route under it, after the gate
 // above.
 app.use('/api/admin/ops/*', requireOperator);
+
+// The operator event stream (@internal/contracts ops-events.ts): what happened, never who.
+const SERVICE = 'admin-api';
+const ops = (c: { env: Env }, e: OpsEvent): void => recordOps(c.env.OPS_EVENTS, SERVICE, e);
+const limiterEvents = (env: Env, limiter: string) => ({
+  sink: env.OPS_EVENTS,
+  service: SERVICE,
+  limiter,
+});
 
 // The caller's sub: from the gate when it ran, else verified here.
 const ownerOf = async (c: Context<AppEnv>): Promise<string> =>
@@ -435,7 +466,12 @@ app.delete('/api/admin/panos/:panoId', async (c) => {
   if (!isContentId(panoId)) {
     return c.json({ error: contentIdError('panoId') }, 400);
   }
-  const limited = await rateLimit(c.env.PANO_DELETE_LIMITER, sub, PANO_DELETE_RATE_PERIOD_SECONDS);
+  const limited = await rateLimit(
+    c.env.PANO_DELETE_LIMITER,
+    sub,
+    PANO_DELETE_RATE_PERIOD_SECONDS,
+    limiterEvents(c.env, 'PANO_DELETE_LIMITER'),
+  );
   if (limited) return limited;
   const result = await deleteOwnedPano(c.env.BUCKET, sub, panoId);
   if (!result.ok) {
@@ -445,6 +481,7 @@ app.delete('/api/admin/panos/:panoId', async (c) => {
   }
   // Same purge tour delete batches for each pano it deletes.
   if (result.tilesDeleted) purgeLater(c, { prefixes: [tilesPrefix(panoId)], files: [] });
+  ops(c, { event: 'pano-deleted' });
   return c.body(null, 204);
 });
 
@@ -469,6 +506,7 @@ app.post('/api/admin/tours', async (c) => {
     tourCustomMetadata(parsed.data),
   );
   await recordTourOwner(c.env.BUCKET, sub, tourId);
+  ops(c, { event: 'tour-created' });
   return c.json({ tourId }, 201);
 });
 
@@ -597,11 +635,17 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
     return c.json({ error: contentIdError('tourId') }, 400);
   }
   // Counts like a pano delete: it sweeps every pano only this tour used.
-  const limited = await rateLimit(c.env.PANO_DELETE_LIMITER, sub, PANO_DELETE_RATE_PERIOD_SECONDS);
+  const limited = await rateLimit(
+    c.env.PANO_DELETE_LIMITER,
+    sub,
+    PANO_DELETE_RATE_PERIOD_SECONDS,
+    limiterEvents(c.env, 'PANO_DELETE_LIMITER'),
+  );
   if (limited) return limited;
   const purge = await publisher(c.env, tourId).deleteTour(sub, tourId);
   if (!purge) return c.json({ error: TOUR_TRANSFERRING_ERROR }, 409);
   purgeLater(c, purge);
+  ops(c, { event: 'tour-deleted' });
   return c.body(null, 204);
 });
 
@@ -636,7 +680,10 @@ app.post('/api/admin/tours/:tourId/publish', async (c) => {
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
   const out = await publisher(c.env, tourId).publish(sub, tourId, body.data);
   // Tours created before the owner pointer existed get one when they're (re)published.
-  if (out.status < 300) await recordTourOwner(c.env.BUCKET, sub, tourId);
+  if (out.status < 300) {
+    await recordTourOwner(c.env.BUCKET, sub, tourId);
+    ops(c, { event: 'tour-published', detail: afterSave ? 'save' : 'share' });
+  }
   return c.json(out.body, out.status);
 });
 
@@ -681,6 +728,7 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   // The owner's "Stop sharing": the editor's later Saves leave it offline.
   const files = await publisher(c.env, tourId).unpublish(sub, tourId, true);
   purgeLater(c, { prefixes: [], files });
+  ops(c, { event: 'tour-unpublished' });
   return c.body(null, 204);
 });
 
@@ -720,6 +768,7 @@ app.post('/api/admin/tours/:tourId/invites', async (c) => {
     body.data.email,
     new Date(),
   );
+  if (out.status < 300) ops(c, { event: 'invite-created' });
   return c.json(out.body, out.status);
 });
 
@@ -759,6 +808,7 @@ app.post('/api/admin/invites/accept', async (c) => {
     body.data.token,
     new Date(),
   );
+  if (out.status < 300) ops(c, { event: 'invite-accepted' });
   return c.json(out.body, out.status);
 });
 
@@ -905,6 +955,7 @@ app.delete(ACCOUNT_PATH, async (c) => {
     auth.linkedSubs,
   );
   purgeLater(c, purge);
+  ops(c, { event: 'account-deleted', detail: status });
   return c.json({ status }, status === 'deleted' ? 200 : 202);
 });
 

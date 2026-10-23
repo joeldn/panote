@@ -26,7 +26,12 @@
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
       // AE creates the dataset on first write; no provisioning step.
-      "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "panote_events_dev" }],
+      "analytics_engine_datasets": [
+        { "binding": "EVENTS", "dataset": "panote_events_dev" },
+        // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+        // "Metrics dashboard"): client error reports and rate-limit refusals.
+        { "binding": "OPS_EVENTS", "dataset": "panote_ops_dev" },
+      ],
       // namespace_id is ours to choose (any integer, unique in the account; nothing to
       // create), dev 12xx and production 22xx. Each `period` (10 or 60) must match
       // RATE_PERIOD_SECONDS in src/index.ts, which is the 429's Retry-After.
@@ -83,7 +88,12 @@
         "bindings": [{ "name": "STATS", "class_name": "TourStats" }],
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourStats"] }],
-      "analytics_engine_datasets": [{ "binding": "EVENTS", "dataset": "panote_events" }],
+      "analytics_engine_datasets": [
+        { "binding": "EVENTS", "dataset": "panote_events" },
+        // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+        // "Metrics dashboard"): client error reports and rate-limit refusals.
+        { "binding": "OPS_EVENTS", "dataset": "panote_ops" },
+      ],
       // Per client IP (CF-Connecting-IP) per minute, one namespace per route.
       "ratelimits": [
         { "name": "VIEW_LIMITER", "namespace_id": "2201", "simple": { "limit": 30, "period": 60 } },

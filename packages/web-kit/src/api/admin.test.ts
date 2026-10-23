@@ -557,6 +557,7 @@ describe('tour members', () => {
       containers: off,
       usage: off,
       product: off,
+      pipeline: off,
     };
     const { api, call } = setup(
       json(metrics),

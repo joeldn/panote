@@ -2,6 +2,7 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  OPS_EVENTS_SCHEMA_VERSION,
   MAX_ERROR_FRAME_LENGTH,
   MAX_ERROR_MESSAGE_LENGTH,
   MAX_ERROR_PATH_LENGTH,
@@ -164,5 +165,51 @@ describe('POST /api/errors', () => {
     expect(r.headers.get('Retry-After')).toBe(String(RATE_PERIOD_SECONDS));
     expect(limit).toHaveBeenCalledWith({ key: '2001:db8:1:2::/64' });
     expect(other).not.toHaveBeenCalled();
+  });
+
+  describe('operator events', () => {
+    const sink = () => ({ writeDataPoint: vi.fn() });
+
+    it('counts an accepted report by app, with nothing else from it', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const events = sink();
+      const r = await app.request(
+        '/api/errors',
+        { method: 'POST', body: JSON.stringify(REPORT) },
+        { ...env, OPS_EVENTS: events },
+      );
+      expect(r.status).toBe(204);
+      expect(events.writeDataPoint).toHaveBeenCalledExactlyOnceWith({
+        indexes: ['client-error'],
+        blobs: ['client-error', 'website', 'public-api', OPS_EVENTS_SCHEMA_VERSION],
+        doubles: [0],
+      });
+    });
+
+    it('records nothing for a refused report', async () => {
+      const events = sink();
+      const r = await app.request(
+        '/api/errors',
+        { method: 'POST', body: '{' },
+        { ...env, OPS_EVENTS: events },
+      );
+      expect(r.status).toBe(400);
+      expect(events.writeDataPoint).not.toHaveBeenCalled();
+    });
+
+    it('records a limiter refusal by limiter name', async () => {
+      const events = sink();
+      const r = await app.request(
+        '/api/errors',
+        { method: 'POST', body: JSON.stringify(REPORT) },
+        { ...env, OPS_EVENTS: events, ERRORS_LIMITER: { limit: async () => ({ success: false }) } },
+      );
+      expect(r.status).toBe(429);
+      expect(events.writeDataPoint).toHaveBeenCalledExactlyOnceWith({
+        indexes: ['rate-limited'],
+        blobs: ['rate-limited', 'ERRORS_LIMITER', 'public-api', OPS_EVENTS_SCHEMA_VERSION],
+        doubles: [0],
+      });
+    });
   });
 });

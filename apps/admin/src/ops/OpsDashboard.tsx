@@ -3,8 +3,10 @@ import './ops-dashboard.css';
 import {
   DEFAULT_OPS_RANGE,
   OPS_RANGES,
+  type OpsEventName,
   type OpsHealth,
   type OpsMetrics,
+  type OpsPipeline,
   type OpsRange,
   type OpsSection,
   type OpsUsage,
@@ -101,6 +103,10 @@ function Metrics({ m }: { m: OpsMetrics }) {
     <>
       <Panel title="Health" section={m.health}>
         {(h) => <Health h={h} />}
+      </Panel>
+
+      <Panel title="Pipeline" section={m.pipeline} note="Sampled by Analytics Engine">
+        {(p) => <Pipeline p={p} step={step} />}
       </Panel>
 
       <Panel title="Viewers" section={m.product} note="Sampled by Analytics Engine">
@@ -321,6 +327,91 @@ function Panel<T>({
   );
 }
 
+const REFUSAL_LABEL: Partial<Record<OpsEventName, string>> = {
+  'upload-refused': 'Upload refused',
+  'tile-refused': 'Tiling refused',
+  'tile-retry': 'Tiling retried',
+  'tile-skipped': 'Duplicate skipped',
+};
+
+function Pipeline({ p, step }: { p: OpsPipeline; step: 'hour' | 'day' }) {
+  const rows = (event: OpsEventName) => p.events.filter((e) => e.event === event);
+  const total = (event: OpsEventName, detail?: string) =>
+    rows(event)
+      .filter((e) => detail === undefined || e.detail === detail)
+      .reduce((s, e) => s + e.n, 0);
+  const tiles = rows('tile-ok');
+  const tiled = total('tile-ok');
+  const tileMs = tiles.reduce((s, e) => s + e.value, 0);
+  const dead = total('tile-dead');
+  const uploadBytes = rows('upload-url').reduce((s, e) => s + e.value, 0);
+  const refusals = p.events.filter((e) => REFUSAL_LABEL[e.event as OpsEventName]);
+  const activity = [
+    ['Tours created', total('tour-created')],
+    ['Tours shared', total('tour-published', 'share')],
+    ['Republished on save', total('tour-published', 'save')],
+    ['Sharing stopped', total('tour-unpublished')],
+    ['Tours deleted', total('tour-deleted')],
+    ['Panoramas deleted', total('pano-deleted')],
+    ['Accounts deleted', total('account-deleted')],
+    ['Invites sent', total('invite-created')],
+    ['Invites accepted', total('invite-accepted')],
+  ] as const;
+  return (
+    <>
+      <Tiles>
+        <Tile label="Upload links issued" value={formatNumber(total('upload-url'))} />
+        <Tile label="Declared upload size" value={formatSize(uploadBytes)} />
+        <Tile label="Panoramas tiled" value={formatNumber(tiled)} />
+        <Tile label="Tiling failed" value={formatNumber(dead)} tone={dead > 0 ? 'bad' : 'ok'} />
+        <Tile label="Avg. tiling time" value={tiled > 0 ? formatMs(tileMs / tiled) : '—'} />
+        <Tile label="p95 tiling time" value={p.tileP95Ms === null ? '—' : formatMs(p.tileP95Ms)} />
+      </Tiles>
+      <Bars
+        title="Upload links"
+        series={p.series.map((d) => ({ t: d.t, v: d.uploads }))}
+        step={step}
+      />
+      <Bars
+        title="Panoramas tiled"
+        series={p.series.map((d) => ({ t: d.t, v: d.tiled }))}
+        step={step}
+      />
+      <Bars
+        title="Tiling failed"
+        tone="bad"
+        series={p.series.map((d) => ({ t: d.t, v: d.failed }))}
+        step={step}
+      />
+      <p className="opsd__line">
+        {activity.map(([label, n]) => `${label}: ${formatNumber(n)}`).join(' · ')}
+      </p>
+      <Table
+        caption="Refused and retried"
+        head={['What', 'Reason', 'Count']}
+        rows={refusals.map((e) => [
+          REFUSAL_LABEL[e.event as OpsEventName],
+          e.detail || <span className="opsd__muted">none given</span>,
+          formatNumber(e.n),
+        ])}
+        empty="Nothing refused in this range."
+      />
+      <Table
+        caption="Rate limited"
+        head={['Worker', 'Limiter', 'Refusals']}
+        rows={rows('rate-limited').map((e) => [e.service, e.detail, formatNumber(e.n)])}
+        empty="No one was rate limited in this range."
+      />
+      <Table
+        caption="Client error reports"
+        head={['App', 'Reports']}
+        rows={rows('client-error').map((e) => [e.detail, formatNumber(e.n)])}
+        empty="No error reports in this range."
+      />
+    </>
+  );
+}
+
 function Tiles({ children }: { children: ReactNode }) {
   return <div className="opsd__tiles">{children}</div>;
 }
@@ -494,10 +585,12 @@ function Health({ h }: { h: OpsHealth }) {
         {purge.lastFailure &&
           ` · last failure ${formatTime(purge.lastFailure.at)} (${purge.lastFailure.detail})`}
       </StatusRow>
-      <StatusRow tone={backupTone(h.backup.lastCompleteDaysAgo)} label="Backup">
+      <StatusRow tone={backupTone(h.backup.lastCompleteDaysAgo, h.backup.hasRun)} label="Backup">
         {h.backup.lastCompleteDate
           ? `Last complete set ${h.backup.lastCompleteDate}`
-          : 'No complete set yet'}
+          : h.backup.hasRun
+            ? 'No complete set this month or last'
+            : 'No complete set yet'}
         {h.backup.inProgress &&
           ` · ${h.backup.inProgress.date} being written (${formatNumber(h.backup.inProgress.objects)} objects so far)`}
       </StatusRow>

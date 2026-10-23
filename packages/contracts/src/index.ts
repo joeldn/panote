@@ -16,3 +16,4 @@ export * from './ops.js';
 export * from './support.js';
 export * from './members.js';
 export * from './ops-metrics.js';
+export * from './ops-events.js';
