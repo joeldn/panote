@@ -169,7 +169,11 @@ export const insightsRoute = async (
   const sub = c.get('sub') ?? (await authenticate(c.req.raw, c.env)).sub;
   c.header('Cache-Control', 'private, no-store');
   // Its own, tighter budget per owner, on top of the read limit every GET has.
-  const limited = await rateLimit(c.env.INSIGHTS_LIMITER, sub, WRITE_RATE_PERIOD_SECONDS);
+  const limited = await rateLimit(c.env.INSIGHTS_LIMITER, sub, WRITE_RATE_PERIOD_SECONDS, {
+    sink: c.env.OPS_EVENTS,
+    service: 'admin-api',
+    limiter: 'INSIGHTS_LIMITER',
+  });
   if (limited) return limited;
   if (!isContentId(tourId)) return c.json({ error: contentIdError('tourId') }, 400);
   const days = parseDays(c.req.query('days'));

@@ -17,6 +17,9 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.dev/api/upload-url", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
+      // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+      // "Metrics dashboard"). AE creates the dataset on the first write.
+      "analytics_engine_datasets": [{ "binding": "OPS_EVENTS", "dataset": "panote_ops_dev" }],
       // The global daily upload ceiling (src/ceiling.ts): one instance counts every
       // owner's upload URLs and bytes per UTC day.
       "durable_objects": {
@@ -62,6 +65,9 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.io/api/upload-url", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
+      // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+      // "Metrics dashboard"). AE creates the dataset on the first write.
+      "analytics_engine_datasets": [{ "binding": "OPS_EVENTS", "dataset": "panote_ops" }],
       // The global daily upload ceiling (src/ceiling.ts).
       "durable_objects": {
         "bindings": [{ "name": "UPLOAD_CEILING", "class_name": "UploadCeiling" }],

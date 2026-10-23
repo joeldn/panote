@@ -17,6 +17,9 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.dev/api/admin/*", "zone_name": "panote.dev" }],
       "observability": { "enabled": true },
+      // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+      // "Metrics dashboard"). AE creates the dataset on the first write.
+      "analytics_engine_datasets": [{ "binding": "OPS_EVENTS", "dataset": "panote_ops_dev" }],
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env dev (Account Analytics: Read)
       // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
       // enables the operator takedown and restore routes, docs/deploy.md "Takedown", "Backups").
@@ -126,6 +129,9 @@
       "preview_urls": false,
       "routes": [{ "pattern": "panote.io/api/admin/*", "zone_name": "panote.io" }],
       "observability": { "enabled": true },
+      // The operator event stream (@internal/contracts ops-events.ts; docs/deploy.md,
+      // "Metrics dashboard"). AE creates the dataset on the first write.
+      "analytics_engine_datasets": [{ "binding": "OPS_EVENTS", "dataset": "panote_ops" }],
       // secrets (per env): wrangler secret put CF_ANALYTICS_TOKEN --env production (Account Analytics: Read)
       // and CF_PURGE_TOKEN (Zone > Cache Purge, optional, B6), and OPERATOR_TOKEN (optional:
       // enables the operator takedown and restore routes, docs/deploy.md "Takedown", "Backups").

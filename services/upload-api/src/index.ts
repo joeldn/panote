@@ -23,6 +23,7 @@ import {
   authenticate,
   rateLimit,
   readJsonBody,
+  recordOps,
   toErrorResponse,
   WorkerError,
 } from '@internal/worker-kit';
@@ -189,6 +190,7 @@ async function planUrl(
     headers,
     contentLength: size,
   });
+  recordOps(env.OPS_EVENTS, SERVICE, { event: 'upload-url', detail: 'plan', value: size });
   return Response.json({ planId, key, url, headers });
 }
 
@@ -292,8 +294,25 @@ const pruneLater = (r2: R2, expired: readonly string[], ctx: ExecutionContext): 
   );
 };
 
-export default {
-  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+const SERVICE = 'upload-api';
+// What a POST's refusal is recorded as: the account, access, quota and ceiling answers,
+// not a 400 for a malformed body or the rate limit's 429 (rateLimit records that one).
+const REFUSAL_STATUSES = new Set([403, 404, 410, 503]);
+
+/** An operator event for a POST to the route that was refused (ops-events.ts). */
+const recordRefusal = async (req: Request, res: Response, env: Env): Promise<void> => {
+  if (req.method !== 'POST' || !REFUSAL_STATUSES.has(res.status)) return;
+  if (new URL(req.url).pathname !== '/api/upload-url') return;
+  const body = (await res
+    .clone()
+    .json()
+    .catch(() => null)) as { error?: unknown } | null;
+  const detail = typeof body?.error === 'string' ? body.error : String(res.status);
+  recordOps(env.OPS_EVENTS, SERVICE, { event: 'upload-refused', detail });
+};
+
+const api = {
+  async handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     if (url.pathname !== '/api/upload-url' || (req.method !== 'POST' && req.method !== 'GET')) {
       return Response.json({ error: 'not found' }, { status: 404 });
@@ -302,7 +321,11 @@ export default {
     try {
       const { sub } = await authenticate(req, env);
       // Per owner, before any R2 request: a runaway client can't run up S3 calls.
-      const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS);
+      const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS, {
+        sink: env.OPS_EVENTS,
+        service: SERVICE,
+        limiter: 'UPLOAD_URL_LIMITER',
+      });
       if (limited) return limited;
       if (req.method === 'GET') return await usage(r2Client(env), sub, env);
       // Read at most MAX_BODY_BYTES (worker-kit's body.ts). Not JSON reads as {}: the field
@@ -448,12 +471,25 @@ export default {
         headers,
         contentLength: size,
       });
+      recordOps(env.OPS_EVENTS, SERVICE, {
+        event: 'upload-url',
+        detail: 'panoId' in body ? 'replace' : 'new',
+        value: size,
+      });
       return Response.json({ panoId, key, url: putUrl, headers });
     } catch (e) {
       // No URL went out (the log write or the signing failed): give the slot back.
       releaseLater(env, reserved.held, ctx);
       return toErrorResponse(e);
     }
+  },
+};
+
+export default {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const res = await api.handle(req, env, ctx);
+    await recordRefusal(req, res, env);
+    return res;
   },
 };
 

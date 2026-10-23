@@ -1401,3 +1401,84 @@ describe('DLQ alert throttle', () => {
     expect(alertThrottleKey(QUEUE)).toBe('ops/dlq-alert/pano-uploads-dlq-dev.json');
   });
 });
+
+describe('operator events', () => {
+  // One message through the uploads queue (or the DLQ) with the container answering
+  // `answer`, and the OPS_EVENTS data points it left: [event, detail] each.
+  const run = async (
+    id: string,
+    opts: {
+      answer?: () => Promise<Response>;
+      size?: number;
+      queue?: string;
+      manifestFor?: string;
+    } = {},
+  ) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const writeDataPoint = vi.fn<(p: AnalyticsEngineDataPoint) => void>();
+    const key = `panos/u1/${id}/original`;
+    await env.BUCKET.put(key, 'bytes');
+    const etag = (await env.BUCKET.head(key))!.etag;
+    if (opts.manifestFor) {
+      await env.BUCKET.put(
+        manifestKey(id),
+        JSON.stringify({ version: `t${TILER_OUTPUT_VERSION}-${etag}` }),
+      );
+    }
+    const fakeFetch = vi.fn(opts.answer ?? (async () => new Response('ok')));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    try {
+      const batch = createMessageBatch(opts.queue ?? 'pano-uploads-dev', [
+        {
+          id: `msg-${id}`,
+          timestamp: new Date(),
+          body: { object: { key, size: opts.size ?? 5, eTag: etag }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      const ctx = createExecutionContext();
+      await worker.queue(batch, { ...env, OPS_EVENTS: { writeDataPoint } }, ctx);
+      await getQueueResult(batch, ctx);
+    } finally {
+      getSpy.mockRestore();
+    }
+    return writeDataPoint.mock.calls.map(([p]) => [p.blobs?.[0], p.blobs?.[1], p.doubles?.[0]]);
+  };
+
+  it('records a tiled original with how long it took, and nothing that names the pano', async () => {
+    const events = await run('ev-ok');
+    expect(events).toHaveLength(1);
+    expect(events[0]?.slice(0, 2)).toEqual(['tile-ok', '']);
+    expect(events[0]?.[2]).toBeGreaterThanOrEqual(0);
+  });
+
+  it('records a retry by the container status, or `threw`', async () => {
+    expect(await run('ev-500', { answer: async () => new Response('x', { status: 500 }) })).toEqual(
+      [['tile-retry', '500', 0]],
+    );
+    expect(
+      await run('ev-threw', {
+        answer: async () => {
+          throw new Error('down');
+        },
+      }),
+    ).toEqual([['tile-retry', 'threw', 0]]);
+  });
+
+  it('records what can never be tiled, and a duplicate delivery', async () => {
+    expect(
+      await run('ev-422', { answer: async () => new Response('no', { status: 422 }) }),
+    ).toEqual([['tile-refused', 'unsupported', 0]]);
+    expect(await run('ev-big', { size: 200 * 1024 * 1024 })).toEqual([
+      ['tile-refused', 'oversize', 200 * 1024 * 1024],
+    ]);
+    expect(await run('ev-dup', { manifestFor: 'ev-dup' })).toEqual([['tile-skipped', '', 0]]);
+  });
+
+  it('records each dead-lettered job', async () => {
+    expect(await run('ev-dead', { queue: 'pano-uploads-dlq-dev' })).toEqual([['tile-dead', '', 0]]);
+  });
+});

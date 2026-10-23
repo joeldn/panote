@@ -1181,3 +1181,54 @@ describe('upload-url global daily ceiling', () => {
     });
   });
 });
+
+describe('operator events', () => {
+  const sink = () => {
+    const writeDataPoint = vi.fn<(p: AnalyticsEngineDataPoint) => void>();
+    return { writeDataPoint, events: () => writeDataPoint.mock.calls.map(([p]) => p.blobs) };
+  };
+
+  it('records each upload URL it hands out, by kind and size, and nothing about who', async () => {
+    const s = sink();
+    expect((await call(validBody, { OPS_EVENTS: s })).status).toBe(200);
+    expect(s.events()).toEqual([['upload-url', 'new', 'upload-api', 'o1']]);
+    expect(s.writeDataPoint.mock.calls[0]?.[0].doubles).toEqual([1024]);
+  });
+
+  it('records a refusal with its reason', async () => {
+    const s = sink();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: Request | string) => {
+        const reqUrl = typeof input === 'string' ? input : input.url;
+        return new Response(null, { status: reqUrl.endsWith('/disabled.json') ? 200 : 404 });
+      }),
+    );
+    expect((await call(validBody, { OPS_EVENTS: s })).status).toBe(403);
+    expect(s.events()).toEqual([['upload-refused', 'account disabled', 'upload-api', 'o1']]);
+  });
+
+  it('records a rate-limit refusal once, as rate-limited', async () => {
+    const s = sink();
+    const limit = async () => ({ success: false });
+    expect((await call(validBody, { OPS_EVENTS: s, UPLOAD_URL_LIMITER: { limit } })).status).toBe(
+      429,
+    );
+    expect(s.events()).toEqual([['rate-limited', 'UPLOAD_URL_LIMITER', 'upload-api', 'o1']]);
+  });
+
+  it('records nothing for a bad request, a usage read or another path', async () => {
+    const s = sink();
+    await call({ contentType: 'image/gif', size: 1 }, { OPS_EVENTS: s });
+    await run(
+      new Request('https://x/api/upload-url', { headers: { Authorization: 'Bearer good' } }),
+      {
+        ...env,
+        UPLOAD_URL_LIMITER: unlimited,
+        OPS_EVENTS: s,
+      },
+    );
+    await run(new Request('https://x/api/nope', { method: 'POST' }), { ...env, OPS_EVENTS: s });
+    expect(s.events()).toEqual([]);
+  });
+});

@@ -17,6 +17,7 @@ import {
   authenticateOptional,
   rateLimit,
   rateLimitKeyForIp,
+  recordOps,
   type RateLimiter,
 } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
@@ -43,10 +44,17 @@ export const RATE_PERIOD_SECONDS = 60;
 // Per client IP, an IPv6 client per /64 (worker-kit's ip-key.ts). Cloudflare always sets
 // CF-Connecting-IP in front of a Worker; without it (a test, a local dev
 // request) every caller shares one key.
-const limitByIp = (pick: (env: Env) => RateLimiter) =>
+// A refusal is also an operator event (@internal/contracts ops-events.ts), by limiter name.
+type Limiter = keyof { [K in keyof Env as Env[K] extends RateLimiter ? K : never]: true };
+const SERVICE = 'public-api';
+const limitByIp = (limiter: Limiter) =>
   createMiddleware<{ Bindings: Env }>(async (c, next) => {
     const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
-    const limited = await rateLimit(pick(c.env), rateLimitKeyForIp(ip), RATE_PERIOD_SECONDS);
+    const limited = await rateLimit(c.env[limiter], rateLimitKeyForIp(ip), RATE_PERIOD_SECONDS, {
+      sink: c.env.OPS_EVENTS,
+      service: SERVICE,
+      limiter,
+    });
     if (limited) return limited;
     await next();
   });
@@ -97,22 +105,10 @@ app.post('/api/tours/:tourId/events', sameOriginOnly);
 app.post('/api/errors', sameOriginOnly);
 
 // Rate limits, one per route, run before the handlers below.
-app.post(
-  '/api/tours/:tourId/view',
-  limitByIp((env) => env.VIEW_LIMITER),
-);
-app.post(
-  '/api/tours/:tourId/events',
-  limitByIp((env) => env.EVENTS_LIMITER),
-);
-app.post(
-  '/api/tours/:tourId/like',
-  limitByIp((env) => env.LIKE_LIMITER),
-);
-app.post(
-  '/api/errors',
-  limitByIp((env) => env.ERRORS_LIMITER),
-);
+app.post('/api/tours/:tourId/view', limitByIp('VIEW_LIMITER'));
+app.post('/api/tours/:tourId/events', limitByIp('EVENTS_LIMITER'));
+app.post('/api/tours/:tourId/like', limitByIp('LIKE_LIMITER'));
+app.post('/api/errors', limitByIp('ERRORS_LIMITER'));
 
 app.post('/api/tours/:tourId/view', async (c) => {
   const body = await readBeaconBody(c.req.raw);
@@ -163,22 +159,21 @@ app.post('/api/tours/:tourId/like', async (c) => {
   });
 });
 
-// Frontend error reports (both SPAs). Logged to Workers Logs, stored nowhere else.
+// Frontend error reports (both SPAs). Logged to Workers Logs; the operator event
+// counts them by app and carries nothing from the report itself.
 app.post('/api/errors', async (c) => {
   const body = await readBeaconBody(c.req.raw);
   if (!body.ok) return c.json({ error: 'invalid body' }, body.status);
   const parsed = ClientErrorReportSchema.safeParse(body.value);
   if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
   logClientError(parsed.data);
+  recordOps(c.env.OPS_EVENTS, SERVICE, { event: 'client-error', detail: parsed.data.app });
   return c.body(null, 204);
 });
 
 // Not checked against the bundle: a read stores nothing (an unknown id reads zeros
 // from an empty Durable Object), and the dashboard reads counts for unpublished tours.
-app.get(
-  '/api/tours/:tourId/stats',
-  limitByIp((env) => env.STATS_LIMITER),
-);
+app.get('/api/tours/:tourId/stats', limitByIp('STATS_LIMITER'));
 app.get('/api/tours/:tourId/stats', async (c) => {
   const res = await stat(c, c.req.param('tourId')).fetch('https://do/');
   return new Response(res.body, {
@@ -193,10 +188,7 @@ app.get('/api/tours/:tourId/stats', async (c) => {
 // off the list can stay on a cached page this long, but its link stops working at once.
 export const EXPLORE_MAX_AGE_SECONDS = 60;
 
-app.get(
-  EXPLORE_PATH,
-  limitByIp((env) => env.EXPLORE_LIMITER),
-);
+app.get(EXPLORE_PATH, limitByIp('EXPLORE_LIMITER'));
 app.get(EXPLORE_PATH, async (c) => {
   const cursor = c.req.query('cursor');
   if (cursor !== undefined && !EXPLORE_CURSOR_PATTERN.test(cursor)) {
