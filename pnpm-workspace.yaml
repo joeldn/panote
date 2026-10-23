@@ -111,9 +111,10 @@ cleanupUnusedCatalogs: true
 # instead of installing several copies of the same peer.
 dedupePeers: true
 
-# Refuse to install any package version published less than 24h ago. Blunt but
-# effective mitigation against a freshly-published compromised release.
-minimumReleaseAge: 1440
+# Refuse to install any package version published less than 3 days ago. Blunt
+# but effective mitigation against a freshly-published compromised release.
+# renovate.json5's minimumReleaseAge mirrors this.
+minimumReleaseAge: 4320
 
 # Fail the install if a dependency has a build (install/postinstall) script
 # that is neither allowlisted below nor explicitly ignored. New native deps

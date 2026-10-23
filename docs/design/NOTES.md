@@ -84,6 +84,13 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   browser (WebP, or JPG where the browser can't encode WebP, at most 2048 px on its
   long side and 4 MB) before it goes up, which also drops its photo metadata. See
   `docs/decisions.md` for where it is stored.
+- **Suggest positions.** Not in the prototype. A button on the Map card lays out
+  the panos not on the plan yet from their links: each link's yaw, less its pano's
+  north, is the compass bearing to the linked pano (or the link back, turned round,
+  when only the other end's north is set), and each pano goes one step along it
+  from the panos already placed. Panos with no direction to go by sit beside a
+  linked one, or near the middle. Placed dots never move, and the whole layout is
+  one tour edit. It is a first draft for the creator to drag into place.
 - **Editor layout.** The design has no editor screen for the plan. It is a third
   card under Points and Tour, collapsed to its title (with an "n of m placed"
   count) until opened, so the side column keeps its room.

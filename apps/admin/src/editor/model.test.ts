@@ -351,6 +351,33 @@ describe('editor model: the floor plan', () => {
     ]);
   });
 
+  it('puts suggested positions on the unplaced scenes in one edit, converting older units first', () => {
+    const legacy = {
+      ...server,
+      tour: {
+        ...server.tour,
+        scenes: [
+          { panoId: 'a', mapX: 10, mapY: 0 },
+          { panoId: 'b', mapX: 30, mapY: 20 },
+          { panoId: 'gone' },
+        ],
+      },
+    };
+    const before = fromServer(legacy);
+    const docs = editorReducer(before, {
+      type: 'map/suggest',
+      // A suggestion for a placed scene is ignored: placed dots never move.
+      positions: { a: { x: 0.5, y: 0.5 }, gone: { x: 0.3, y: 0.123456 } },
+    })!;
+    expect(scenesOf(docs)).toEqual([
+      { panoId: 'a', mapX: 0.08, mapY: 0.08 },
+      { panoId: 'b', mapX: 0.92, mapY: 0.92 },
+      { panoId: 'gone', mapX: 0.3, mapY: 0.1235 },
+    ]);
+    expect(dirtyKeys(docs)).toEqual(['tour']);
+    expect(before.tour.current.scenes[2]).toEqual({ panoId: 'gone' });
+  });
+
   it('sets and removes the plan image', () => {
     const plan = { id: 'pl1', type: 'image/webp' as const, width: 800, height: 600 };
     let docs = run({ type: 'tour/plan', plan });

@@ -56,6 +56,9 @@
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.dev",
+        // Without the LIKER_HASH_KEY secret, likes use an unkeyed hash here ("allow");
+        // production refuses them instead (src/stats.ts, docs/deploy.md "Likes").
+        "LIKER_HASH_FALLBACK": "allow",
       },
     },
     "production": {
@@ -102,6 +105,8 @@
         // only with the real tenant URL, never another fake name.
         "OAUTH_ISSUER": "https://YOUR_PROD_TENANT.auth0.com/",
         "OAUTH_AUDIENCE": "https://api.panote.io",
+        // Never "allow": without LIKER_HASH_KEY a like answers 503 (src/stats.ts).
+        "LIKER_HASH_FALLBACK": "refuse",
       },
     },
   },

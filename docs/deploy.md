@@ -20,7 +20,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
-| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | none |
+| `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
 | `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
@@ -195,8 +195,10 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 `@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
 `style-src 'self'`, `img-src 'self' <cdn> https: data: blob:`, `media-src 'self' <cdn> https:`, `connect-src 'self' <cdn> <auth0 domain>`
 (admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com https://player.vimeo.com` (admin adds `'self'`),
-`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
-`strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
+`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff`,
+`strict-origin-when-cross-origin` and `Strict-Transport-Security: max-age=31536000;
+includeSubDomains` (no `preload`; every host on both zones is HTTPS-only behind Cloudflare, and
+HSTS is per host, so the apex's `_headers` covers the `/s/*` and API responses on it too). Every path gets `frame-ancestors 'none'` except the website's
 `/s/:slug/embed`, whose rule removes the inherited CSP (`! Content-Security-Policy`) and sets
 the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
 the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
@@ -654,7 +656,12 @@ variant counts as a *different* address, and a mismatch makes `send()` fail with
 destinations are allowed. Unset, the consumer skips the email with a warning and everything else
 works.
 
-Repeat with `--env production` once production is provisioned. `public-api` needs no secrets.
+Repeat with `--env production` once production is provisioned. `public-api` takes one secret,
+`LIKER_HASH_KEY` (see "Likes" below; optional in dev, required for likes in production):
+
+```bash
+openssl rand -base64 32 | pnpm --filter @service/public-api exec wrangler secret put LIKER_HASH_KEY --env dev
+```
 `admin-api` reads R2 through the native binding, not the S3 API, but needs `CF_ANALYTICS_TOKEN`
 for tour insights (see "Insights (unit B5)" below), the optional `CF_PURGE_TOKEN` (see "CDN
 purge on delete" below) and the optional `OPERATOR_TOKEN` (see "Takedown" and "Backups" below;
@@ -843,9 +850,12 @@ cut-over below, `dev`'s `tiler-consumer` couldn't attach to `pano-uploads-dev` w
 pano-viewer `pano-tiler-dev` Worker still held the slot (a queue allows exactly one consumer), so
 an automatic dev deploy would have failed on every trigger (see the `deploy-tiler-consumer` job
 comment) — that's why every deploy, dev included, stayed a deliberate manual action until then.
-`production` is additionally
-hard-guarded to `main` — the `resolve-environment` job's "Guard production to main" step fails
-the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main` — hard-stops
+Every deploy, `dev`
+included, is hard-guarded to `main` — the `resolve-environment` job's "Guard deploys to main"
+step fails the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main`, so a
+`workflow_dispatch` from any other branch never gets the `dev` token (it is on the same
+Cloudflare account as production and can't be scoped to dev's resources). `production` also
+hard-stops
 unless the repo variable `PRODUCTION_PROVISIONED` is the literal string `true` (the
 `resolve-environment` job's "Fail unless production is provisioned" step) — and fails closed if
 any of the four services' or two apps' `wrangler.jsonc` `env.production` block, or either app's
@@ -857,10 +867,13 @@ and both apps' configs (and the apps' `.env.production`) rather than duplicated 
 per-service check, and would otherwise deploy to production regardless of the other three
 services' placeholders. Before this workflow can succeed:
 
-- GitHub Environment `dev` (created automatically on first use if it doesn't exist yet).
+- GitHub Environment `dev` (created automatically on first use if it doesn't exist yet), with a
+  deployment-branch policy restricted to `main`, the same as `production`'s, so the `dev` secret
+  is only released to a job running from `main` even if the workflow guard is edited away on a
+  branch.
 - GitHub Environment `production`, with required reviewers configured and a
   deployment-branch policy restricted to `main` — the approval gate the workflow relies on. The
-  `resolve-environment` job's "Guard production to main" step is a workflow-level backstop, not
+  `resolve-environment` job's "Guard deploys to main" step is a workflow-level backstop, not
   a substitute for this Environment protection rule.
 - `CLOUDFLARE_API_TOKEN` as an environment secret on **both** `dev` and `production` (scoped
   separately per environment, even though today both would point at the same Cloudflare
@@ -1340,9 +1353,11 @@ name.
   so one delete removes every way that person signed in. A secondary that was never linked (an
   unverified email, an Apple relay address) is a separate user with its own data and is not
   touched.
-- **Likes this user gave on other people's tours.** A signed-in like stores `liked:<sub>` in that
-  tour's `TourStats`, and there's no index from a user to the tours they liked. The privacy page
-  says so.
+- **Likes this user gave on other people's tours.** A signed-in like stores a keyed hash of the
+  sub (`likedh:<HMAC>`, see "Likes") in that tour's `TourStats`, and there's no index from a user
+  to the tours they liked. The hash can't be tied back to the sub without `LIKER_HASH_KEY`. A
+  like given before the hash was stored raw (`liked:<sub>`) until that tour's `TourStats` next
+  gets a request, which rewrites it. The privacy page says likes stay.
 - **Analytics Engine events** for the deleted tours. They're keyed by tourId, hold nothing about
   the owner, and age out with AE's three-month retention (see Insights).
 - **Redirect aliases a tour dropped before every alias was tracked** (`MAX_ALIASES` was 20 and
@@ -1650,8 +1665,30 @@ by a `429` keeps the refused documents unsaved, and pressing Save again sends ju
 `X-Client-Id` that isn't a lowercase v4 UUID (`CLIENT_ID_PATTERN` in `@internal/contracts`; the
 website mints `crypto.randomUUID()` and replaces a stored id that doesn't match). A signed-in like
 still dedupes by sub and ignores the header. Inside `TourStats`, one tour keeps at most
-`MAX_LIKES_PER_TOUR` (100,000) `liked:<who>` keys; past that a new liker is neither counted nor
+`MAX_LIKES_PER_TOUR` (100,000) `likedh:<hash>` keys; past that a new liker is neither counted nor
 stored, so storage per tour is bounded.
+
+The dedupe key never holds the liker's id: it is `likedh:` plus the hex HMAC-SHA-256 of the sub or
+client id under the `LIKER_HASH_KEY` secret (`src/stats.ts`). Set it once per env and never
+rotate it: a new key forgets who liked what, so everyone could like each tour once more. What
+happens while it's unset depends on the `LIKER_HASH_FALLBACK` var (`wrangler.jsonc`):
+
+- **dev (`allow`)**: `TourStats` uses an unkeyed SHA-256 of `panote:liker:v1:<who>` and logs
+  `LIKER_HASH_KEY is not set` once per isolate. Likes keep working and no raw id is stored, but
+  anyone who knows a sub can recompute its hash.
+- **production (`refuse`)**: it fails closed. Every like answers `503 {"error":"likes
+  unavailable"}` and logs an error; views and stats still work. Set the secret before
+  production's first deploy.
+
+Setting the secret on an env that already has unkeyed hashes (dev) lets each earlier liker like
+again once. Keys stored raw before this change (`liked:<who>`) are rewritten as hashes, 128 per
+request to that tour's `TourStats` (any route: view, like, stats) until none are left; a raw key
+still waiting counts as a like. Nothing is stored to mark that done (a request that finds none
+sets an in-memory flag), so a read of any tour id, or one after an account delete, creates no
+state. The rewrite runs inside
+`blockConcurrencyWhile`, and a like is hashed before `counts` is read, so only storage operations
+(which hold the input gate) sit between that read and its write. With no way to hash (production
+without the secret) the raw keys are left alone until the secret is set.
 
 Likes, views (`POST .../view`) and Insights events (`POST .../events`) only count for a published
 tour. Each answers `404 {"error":"tour not found"}`, and creates no Durable Object state and writes
@@ -2233,9 +2270,19 @@ followed by an optional port and `/`, or a `host.tld` at the token start or afte
 characters. It drops everything from the first `?` or `#` after that point to the end of the
 token, keeping a frame's trailing `:line:col`; the token is never split at `=` or `,`, so later
 query values go too. A `?` in plain prose ("valid? no") is kept, and so is the query of a URL
-with none of those shapes (e.g. `api/x?y`, with no leading `/`). It masks emails as `<email>`, tour
-slugs as `/s/:slug` and `/slugs/:slug`, and tour ids as `/pub/tours/:tourId`, `/api/tours/:tourId`,
-`/api/admin/tours/:tourId` and `/app/t/:tourId` (any case). The scrub is linear in the text. The
+with none of those shapes (e.g. `api/x?y`, with no leading `/`). It masks emails as `<email>`
+(also `%40`-encoded, and with non-ASCII or punycode domains), the user and password of
+`scheme://user:pass@host` as `<userinfo>`, anything after `Bearer ` as `<token>`, JWTs (`eyJ...`)
+as `<jwt>`, and the value of `code=`, `state=`, `nonce=`, `password=`, `sig=`, `signature=`,
+`x-amz-*=`, `token=`, `secret=` and any `*_token=` / `*_secret=` pair wherever it appears (a
+fragment, a form body) as `<redacted>`. In R2 keys and CDN URLs it masks the owner segment after
+`panos/`, `tours/`, `accounts/` and `upload-log/` as `:owner`, pano ids after `tiles/` and
+`tile-gc/` as `:panoId`, tour ids after `pub/tours/`, `pub/plans/`, `tour-owners/`,
+`explore/tours/` and `explore/hidden/` as `:tourId`, and slugs after `slugs/` as `:slug`. In page
+and API paths it masks slugs as `/s/:slug`, tour ids as `/api/tours/:tourId`,
+`/api/admin/tours/:tourId` and `/app/t/:tourId`, and pano ids as `/api/admin/panos/:panoId` (any
+case). Any remaining UUID (pano and tour ids, a visitor's like id) becomes `<id>`. The scrub is
+linear in the text, and its tests time adversarial inputs of ~100k characters. The
 reporter slices each field to 4× its cap before scrubbing and drops the token that slice cut
 through (back to the last whitespace, if any), so half an email can't get past the mask. `public-api` validates
 the shape, scrubs again and re-caps each field, since masking can lengthen it.
@@ -2401,7 +2448,7 @@ the account has the resources the config names.
     **Status: outstanding.**
 
 11. **Rate limits and Analytics Engine: nothing to create.** The production `namespace_id`s
-    (`2101`, `2201`–`2204`, Rate limits) are already in config and only have to be unique in the
+    (`2101`, `2201`–`2205`, `2301`, Rate limits) are already in config and only have to be unique in the
     account; the `panote_events` dataset appears on the first write (Insights).
     Verify: `grep -rn namespace_id services/*/wrangler.jsonc` shows no id used twice.
     **Status: done in config.**

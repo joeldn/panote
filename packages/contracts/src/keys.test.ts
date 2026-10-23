@@ -21,6 +21,7 @@ import {
   panoPrefix,
   encodeId,
   PANO_PATTERN,
+  redactOwner,
   TILES_ROOT,
   tilesPrefix,
   tileVersionPrefix,
@@ -398,5 +399,85 @@ describe('backup keys', () => {
     expect(prefixes.some((p) => p.startsWith(BACKUP_ROOT) || BACKUP_ROOT.startsWith(p))).toBe(
       false,
     );
+  });
+});
+
+describe('redactOwner', () => {
+  it('replaces the owner segment of every panos/ key in the text', () => {
+    expect(
+      redactOwner('R2 DELETE panos/ae-_vTXvv70/p1/tile-failed -> 403; also panos/x/p2/original'),
+    ).toBe('R2 DELETE panos/<owner>/p1/tile-failed -> 403; also panos/<owner>/p2/original');
+  });
+
+  it('covers every owner-keyed root, including built keys', () => {
+    const sub = 'google-oauth2|123';
+    const owner = encodeId(sub);
+    for (const key of [
+      originalKey(sub, 'p1'),
+      tourKey(sub, 't1'),
+      accountDeletionKey(sub),
+      accountDisabledKey(sub),
+      uploadLogKey(sub, new Date(0), 'p1'),
+    ]) {
+      const redacted = redactOwner(`R2 PUT ${key} -> 500`);
+      expect(redacted).not.toContain(owner);
+      expect(redacted).toContain('/<owner>/');
+    }
+  });
+
+  it('redacts keys inside URLs and backup or quarantine copies', () => {
+    expect(redactOwner('PUT https://a.r2.cloudflarestorage.com/b/tours/abc/t1/tour.json')).toBe(
+      'PUT https://a.r2.cloudflarestorage.com/b/tours/<owner>/t1/tour.json',
+    );
+    expect(redactOwner(`${BACKUP_ROOT}2026-01-01/accounts/abc/deletion.json`)).toBe(
+      `${BACKUP_ROOT}2026-01-01/accounts/<owner>/deletion.json`,
+    );
+    expect(redactOwner(`${QUARANTINE_ROOT}case1/panos/abc/p1/original`)).toBe(
+      `${QUARANTINE_ROOT}case1/panos/<owner>/p1/original`,
+    );
+    // A case id that is also a route word doesn't hide the key after it.
+    for (const caseId of ['api', 'admin', 'app', 'pub', 'explore']) {
+      expect(redactOwner(`${QUARANTINE_ROOT}${caseId}/tours/abc/t1/tour.json`)).toBe(
+        `${QUARANTINE_ROOT}${caseId}/tours/<owner>/t1/tour.json`,
+      );
+    }
+  });
+
+  it('redacts an owner with spaces, @ or %, up to the next slash', () => {
+    expect(redactOwner('HEAD panos/a b/p1/original failed')).toBe(
+      'HEAD panos/<owner>/p1/original failed',
+    );
+    expect(redactOwner('panos/joel@example.com/p1/original')).toBe('panos/<owner>/p1/original');
+    expect(redactOwner('upload-log/secret%owner/x')).toBe('upload-log/<owner>/x');
+  });
+
+  it('stops at one segment and never crosses a line break', () => {
+    expect(redactOwner('panos/a b/p1/original and tiles/p1/x')).toBe(
+      'panos/<owner>/p1/original and tiles/p1/x',
+    );
+    expect(redactOwner('panos/no slash here\nnext line /x')).toBe(
+      'panos/no slash here\nnext line /x',
+    );
+  });
+
+  it('leaves owner-free keys and routes alone', () => {
+    for (const text of [
+      'R2 PUT tiles/p1/t1-abc/0/px/0-0.webp -> 500',
+      'GET /api/tours/t1/stats',
+      'PUT /api/admin/tours/t1/slug',
+      'at /app/panos/unused/x',
+      'pub/tours/t1.json',
+      'explore/tours/t1.json',
+      'contours/a/b',
+    ])
+      expect(redactOwner(text)).toBe(text);
+  });
+
+  it('is linear on adversarial input', () => {
+    const started = performance.now();
+    redactOwner('panos/'.repeat(20_000));
+    redactOwner(`panos/${'a'.repeat(100_000)}`);
+    redactOwner(`${'api/tours/'.repeat(10_000)}x`);
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });
