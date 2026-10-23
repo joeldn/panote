@@ -430,7 +430,7 @@ function EmbedTab({
           </label>
           <select
             id={langId}
-            className="pn-share__lang"
+            className="pn-input pn-share__lang"
             value={lang}
             onChange={(e) => setLang(e.target.value)}
           >

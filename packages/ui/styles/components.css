@@ -10,6 +10,16 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * One focus ring for everything focusable, shown when the keyboard moved focus. No
+ * specificity, so a component can still pull it inside its own edge (a menu item, a field)
+ * or recolour it on a dark surface (the upload chip) without fighting it.
+ */
+:where(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* --- Button --- */
 .pn-btn {
   display: inline-flex;
@@ -29,13 +39,6 @@
 }
 .pn-btn:hover:not(:disabled) {
   filter: brightness(1.08);
-}
-.pn-btn:focus-visible,
-.pn-seg__opt:focus-visible,
-.pn-chip:focus-visible,
-.pn-modal__close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 .pn-btn:disabled {
   cursor: default;
@@ -60,6 +63,18 @@
   filter: none;
   background: var(--ink-06);
 }
+/* Quiet and bordered: beside a primary button, or on a tinted Notice. */
+.pn-btn--secondary {
+  background: #fff;
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--ink-13);
+}
+.pn-btn--secondary:hover:not(:disabled) {
+  filter: none;
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--ink-40);
+}
 .pn-btn--glass {
   background: var(--cbg-solid);
   color: var(--ink);
@@ -79,6 +94,19 @@
 }
 .pn-btn--pill {
   border-radius: var(--r-pill);
+}
+/* A text action in a row or a sentence: no box, whatever the size. */
+.pn-btn.pn-btn--link {
+  padding: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--accent);
+  font: 500 13px/1.3 var(--fbody);
+}
+.pn-btn--link:hover:not(:disabled) {
+  filter: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .pn-btn__spinner {
   width: 13px;
@@ -124,6 +152,11 @@
   background: var(--paper);
   border-bottom: 1px solid var(--ink-10);
 }
+/* A long tour name in the title or subtitle wraps instead of pushing the × out. */
+.pn-modal__header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .pn-modal__title {
   margin: 0;
   font: 600 17px/1.3 var(--fbody);
@@ -148,6 +181,21 @@
 .pn-modal__close:disabled {
   cursor: default;
   opacity: 0.4;
+}
+
+/* A phone: a modal rises from the bottom edge as a sheet, clear of the home indicator. */
+@media (max-width: 600px) {
+  .pn-scrim {
+    align-items: flex-end;
+    padding: calc(16px + env(safe-area-inset-top, 0px)) 0 0;
+  }
+  .pn-modal {
+    max-width: none;
+    max-height: 92%;
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px)
+      env(safe-area-inset-left, 0px);
+    border-radius: var(--pn-modal-radius, var(--r-modal)) var(--pn-modal-radius, var(--r-modal)) 0 0;
+  }
 }
 
 /* --- ConfirmModal --- */
@@ -392,12 +440,6 @@ button.pn-chip {
   cursor: default;
   opacity: 0.7;
 }
-.pn-signin__option:focus-visible,
-.pn-account__avatar:focus-visible,
-.pn-account__item:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 .pn-signin__glyph {
   display: flex;
   align-items: center;
@@ -526,4 +568,221 @@ button.pn-chip {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* --- Text field: input, select and textarea --- */
+.pn-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--ink-13);
+  border-radius: var(--r-field);
+  background: #fff;
+  font: 400 13.5px/1.35 var(--fbody);
+  color: var(--ink);
+}
+.pn-input::placeholder {
+  color: var(--ink-45);
+}
+/* A field shows where typing goes however it was focused: the ring sits on its edge. */
+.pn-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.pn-input[aria-invalid='true'] {
+  border-color: var(--accent);
+}
+.pn-input:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.pn-input--mono {
+  font: 400 13px/1.35 var(--fmono);
+}
+select.pn-input {
+  cursor: pointer;
+}
+textarea.pn-input {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+/* --- Menu: a menu button's list (the editor's and a point's ⋯, a tour card's ⋯) --- */
+.pn-menu {
+  display: grid;
+  min-width: 190px;
+  padding: 6px;
+  border-radius: var(--r-card);
+  background: var(--cbg-solid);
+  box-shadow: var(--shadow-popover);
+  font-family: var(--fbody);
+  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+}
+.pn-menu__item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: none;
+  font: 500 14px var(--fbody);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.pn-menu__item > i {
+  width: 16px;
+  color: var(--ink-55);
+  text-align: center;
+}
+.pn-menu__item:hover,
+.pn-menu__item:focus-visible {
+  background: var(--ink-06);
+}
+/* Inside the menu's rounded box, not over its neighbours. */
+.pn-menu__item:focus-visible {
+  outline-offset: -2px;
+}
+.pn-menu__item--danger,
+.pn-menu__item--danger > i {
+  color: var(--accent);
+}
+.pn-menu__item[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.5;
+}
+/* A short mono tag at the item's end, e.g. the language being edited. */
+.pn-menu__tag {
+  margin-left: auto;
+  font: 500 12px var(--fmono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-55);
+}
+
+/* --- IconButton --- */
+.pn-icon-btn {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: none;
+  color: var(--ink-45);
+  font-size: 14px;
+  cursor: pointer;
+}
+.pn-icon-btn:hover:not(:disabled) {
+  background: var(--ink-06);
+  color: var(--ink);
+}
+.pn-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.pn-icon-btn--sm {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-xs);
+  font-size: 13px;
+}
+/* Drawn small, pressed at 32px: the target reaches past the button's edge. */
+.pn-icon-btn--sm::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+}
+
+/* --- Notice: a message in the page's flow, with what can be done about it --- */
+.pn-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-row);
+  font: 400 13.5px/1.5 var(--fbody);
+  text-align: left;
+}
+.pn-notice__icon {
+  flex: none;
+  font-size: 13px;
+}
+/* Narrow, the actions drop under the text rather than squeeze it. */
+.pn-notice__text {
+  flex: 1 1 16em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pn-notice__text > p {
+  margin: 0;
+}
+.pn-notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.pn-notice--info {
+  background: var(--ink-05);
+  color: var(--ink-70);
+}
+.pn-notice--warn,
+.pn-notice--error {
+  background: color-mix(in srgb, var(--accent) 8%, #fff);
+  color: var(--ink);
+}
+.pn-notice--error {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.pn-notice--warn .pn-notice__icon,
+.pn-notice--error .pn-notice__icon {
+  color: var(--accent);
+}
+
+/*
+ * Touch: the main controls get a finger-sized target (44px), menu items too, and
+ * icon buttons reach 44px past their drawn edge. Fields type at 16px so iOS doesn't zoom.
+ */
+@media (pointer: coarse) {
+  .pn-btn:not(.pn-btn--sm, .pn-btn--link),
+  .pn-menu__item {
+    min-height: 44px;
+  }
+  .pn-seg__opt {
+    min-height: 36px;
+  }
+  .pn-icon-btn::before {
+    content: '';
+    position: absolute;
+    inset: -6px;
+  }
+  .pn-modal__close,
+  .pn-account__avatar {
+    position: relative;
+  }
+  .pn-modal__close::before,
+  .pn-account__avatar::before {
+    content: '';
+    position: absolute;
+    inset: -11px;
+  }
+  .pn-account__avatar::before {
+    inset: -3px;
+  }
+  .pn-input,
+  .pn-input--mono {
+    font-size: 16px;
+  }
 }

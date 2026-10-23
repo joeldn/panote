@@ -113,6 +113,7 @@
 }
 .pn-share__slug {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
   margin-top: 9px;
@@ -131,11 +132,15 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
   border: 0;
   padding: 0;
   background: none;
   font: 500 12px var(--fmono);
   color: var(--ink);
+  text-align: left;
+  /* A 40-character slug has nowhere else to break on a phone. */
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 .pn-share__slug-value:hover {
@@ -245,19 +250,9 @@
 .pn-share__section[for] {
   display: block;
 }
+/* A .pn-input. */
 .pn-share__lang {
-  width: 100%;
   margin-bottom: 18px;
-  padding: 9px 12px;
-  border: 1px solid var(--ink-13);
-  border-radius: var(--r-field);
-  background: #fff;
-  color: var(--ink);
-  font: 400 14px var(--fbody);
-}
-.pn-share__lang:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 .pn-share__scopes {
   display: grid;
@@ -278,9 +273,11 @@
   cursor: pointer;
 }
 .pn-share__scope {
+  min-width: 0;
   padding: 11px 12px;
   border-radius: var(--r-row);
   text-align: left;
+  overflow-wrap: anywhere;
 }
 .pn-share__height {
   flex: 1;
@@ -292,10 +289,6 @@
 .pn-share__height.is-active {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, #fff);
-}
-.pn-share__scope:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 .pn-share__scope:disabled {
   cursor: default;
@@ -409,4 +402,19 @@
   margin-top: 2px;
   font-size: 12px;
   color: var(--ink-40);
+}
+
+/* The narrowest phones: the four share targets and the padding give a little. */
+@media (max-width: 400px) {
+  .pn-share {
+    padding: 18px 16px;
+  }
+  .pn-share__socials {
+    gap: 6px;
+  }
+  .pn-share__social-icon {
+    width: 46px;
+    height: 46px;
+    font-size: 17px;
+  }
 }
