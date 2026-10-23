@@ -7,7 +7,13 @@ import wrangler from '../wrangler.jsonc?raw';
 import { RATE_PERIOD_SECONDS } from './index.js';
 
 type Config = {
-  env: Record<string, { ratelimits?: { name: string; simple: { period: number } }[] }>;
+  env: Record<
+    string,
+    {
+      ratelimits?: { name: string; simple: { period: number } }[];
+      vars?: Record<string, string>;
+    }
+  >;
 };
 const config = parseJsonc(wrangler) as Config;
 
@@ -23,5 +29,12 @@ describe('wrangler.jsonc ratelimits', () => {
     ]);
     for (const l of limiters)
       expect([l.name, l.simple.period]).toEqual([l.name, RATE_PERIOD_SECONDS]);
+  });
+});
+
+describe('wrangler.jsonc LIKER_HASH_FALLBACK', () => {
+  it('allows the unkeyed like hash in dev only; production fails closed', () => {
+    expect(config.env.dev?.vars?.LIKER_HASH_FALLBACK).toBe('allow');
+    expect(config.env.production?.vars?.LIKER_HASH_FALLBACK).toBe('refuse');
   });
 });

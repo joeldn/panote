@@ -13,6 +13,9 @@ export default defineWorkerTestConfig({
         // see auth.ts. NEVER set this in wrangler.jsonc; it must stay confined to
         // the test-only miniflare bindings here.
         TEST_JWT_SEAM: 'enabled',
+        // A Worker secret in a real env (docs/deploy.md); stats.test.ts checks
+        // the keyed hash against it.
+        LIKER_HASH_KEY: 'test-liker-key',
       },
     },
   },

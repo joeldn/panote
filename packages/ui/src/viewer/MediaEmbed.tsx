@@ -1,11 +1,11 @@
 import { isHttpsMediaUrl } from '@internal/contracts';
 import { useState } from 'react';
 
+import { IFRAME_SANDBOX } from '../constants.js';
 import type { ViewerMedia } from './types.js';
 
 const YOUTUBE_EMBED = 'https://www.youtube-nocookie.com/embed/';
 const VIMEO_EMBED = 'https://player.vimeo.com/video/';
-
 const LINK_LABEL = {
   image: 'Open image ↗',
   audio: 'Open audio ↗',
@@ -61,6 +61,7 @@ export function MediaEmbed({ media, title }: MediaEmbedProps) {
         }
         title={title}
         allow="encrypted-media; picture-in-picture; fullscreen"
+        sandbox={IFRAME_SANDBOX}
         referrerPolicy="strict-origin-when-cross-origin"
         loading="lazy"
       />
