@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { panoteViewerPreset } from './panote-viewer.js';
 import { PanoStage, type StagePreview } from './PanoStage.js';
+import { stagePage } from './stage-page.js';
 import { useStageEvents } from './stage-events.js';
 import { usePanoViewer } from './viewer-context.js';
 
@@ -1234,6 +1235,57 @@ describe('PanoStage', () => {
       expect(screen.getByRole('alert').textContent).toBe(
         'Your browser can’t display this 360° view.',
       );
+    });
+  });
+
+  describe('lost WebGL context notice', () => {
+    const LOST = 'The viewer ran out of graphics memory.';
+
+    it('says so while the context is lost, and goes once it is restored', () => {
+      const f = factory();
+      render(<PanoStage baseUrl="b/" panoId="hall" lostNotice createViewer={f.createViewer} />);
+      const v = f.last();
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() => v.emit('context-lost'));
+      expect(screen.getByRole('alert').textContent).toContain(LOST);
+      act(() => v.emit('context-restored'));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('reloads the page from its Reload button', () => {
+      const reload = vi.spyOn(stagePage, 'reload').mockImplementation(() => {});
+      try {
+        const f = factory();
+        render(<PanoStage baseUrl="b/" panoId="hall" lostNotice createViewer={f.createViewer} />);
+        act(() => f.last().emit('context-lost'));
+        fireEvent.click(screen.getByRole('button', { name: 'Reload' }));
+        expect(reload).toHaveBeenCalledTimes(1);
+      } finally {
+        reload.mockRestore();
+      }
+    });
+
+    it('stays silent without lostNotice, or with no pano on stage', () => {
+      const f = factory();
+      const { rerender } = render(
+        <PanoStage baseUrl="b/" panoId="hall" createViewer={f.createViewer} />,
+      );
+      act(() => f.last().emit('context-lost'));
+      expect(screen.queryByRole('alert')).toBeNull();
+      rerender(<PanoStage baseUrl="b/" panoId={null} lostNotice createViewer={f.createViewer} />);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('is cleared when the viewer is recreated', () => {
+      const f = factory();
+      const { rerender } = render(
+        <PanoStage baseUrl="b/" panoId="hall" lostNotice createViewer={f.createViewer} />,
+      );
+      act(() => f.last().emit('context-lost'));
+      expect(screen.getByRole('alert')).toBeTruthy();
+      rerender(<PanoStage baseUrl="c/" panoId="hall" lostNotice createViewer={f.createViewer} />);
+      expect(f.made).toHaveLength(2);
+      expect(screen.queryByRole('alert')).toBeNull();
     });
   });
 

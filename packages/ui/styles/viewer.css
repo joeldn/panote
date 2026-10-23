@@ -434,6 +434,28 @@
   font: 0.9em var(--fmono);
 }
 
+/* About this tour: the tour's and the scene's descriptions, plain text in the point panel's place. */
+.pn-info__text {
+  margin: 0;
+  font: 400 14.5px/1.55 var(--fbody);
+  color: var(--ink-82);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.pn-info__scene {
+  margin-top: 16px;
+}
+.pn-hspanel__head + .pn-info__scene {
+  margin-top: 0;
+}
+.pn-info__label {
+  margin: 0 0 6px;
+  font: 500 11px var(--fmono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-45);
+}
+
 @media (max-width: 600px) {
   .pn-hspanel {
     top: auto;

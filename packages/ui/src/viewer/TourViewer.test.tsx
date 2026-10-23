@@ -776,6 +776,78 @@ describe('TourViewer', () => {
     });
   });
 
+  it('says so over the stage when the WebGL context is lost, until it is back', () => {
+    const { viewer } = renderViewer();
+    act(() => viewer().emit('context-lost'));
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The viewer ran out of graphics memory.',
+    );
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
+    act(() => viewer().emit('context-restored'));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  describe('About this tour', () => {
+    const about = () => screen.queryByRole('button', { name: 'About this tour' });
+    const panel = () => screen.queryByRole('complementary', { name: 'About this tour' });
+
+    it('has no About button when neither the tour nor the scene has a description', () => {
+      renderViewer();
+      expect(about()).toBeNull();
+    });
+
+    it('opens the tour description and closes on Escape, handing focus back', () => {
+      renderViewer({ description: 'A walk round the old town.' });
+      const button = about()!;
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(button);
+      expect(button.getAttribute('aria-expanded')).toBe('true');
+      const aside = panel()!;
+      expect(button.getAttribute('aria-controls')).toBe(aside.id);
+      expect(within(aside).getByRole('heading', { name: 'Old town' })).toBeTruthy();
+      expect(within(aside).getByText('A walk round the old town.')).toBeTruthy();
+      expect(aside.contains(document.activeElement)).toBe(true);
+      fireEvent.keyDown(aside, { key: 'Escape' });
+      expect(panel()).toBeNull();
+      expect(document.activeElement).toBe(button);
+    });
+
+    it("shows the scene's description as plain text, line breaks kept, and follows the scene", async () => {
+      renderViewer({
+        data: data({
+          descriptions: { square: 'Market days:\nTue <b>and</b> Sat', church: 'From 1702.' },
+        }),
+      });
+      fireEvent.click(about()!);
+      const text = within(panel()!).getByText(/Market days/);
+      expect(text.textContent).toBe('Market days:\nTue <b>and</b> Sat');
+      expect(text.querySelector('b')).toBeNull();
+      expect(within(panel()!).getByRole('heading', { name: 'Square' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      expect(await within(panel()!).findByText('From 1702.')).toBeTruthy();
+      expect(within(panel()!).getByRole('heading', { name: 'Church' })).toBeTruthy();
+    });
+
+    it('drops the button on a scene with nothing to say', async () => {
+      renderViewer({ data: data({ descriptions: { square: 'Busy on Saturdays.' } }) });
+      expect(about()).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(about()).toBeNull());
+    });
+
+    it('takes the place of an open point, and the other way round', () => {
+      renderViewer({ description: 'A walk round the old town.' });
+      fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+      expect(screen.getByRole('complementary', { name: 'Fountain' })).toBeTruthy();
+      fireEvent.click(about()!);
+      expect(screen.queryByRole('complementary', { name: 'Fountain' })).toBeNull();
+      expect(panel()).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
+      expect(panel()).toBeNull();
+      expect(screen.getByRole('complementary', { name: 'Fountain' })).toBeTruthy();
+    });
+  });
+
   it('renders overlay and children', async () => {
     renderViewer({
       overlay: (panoId) => <p>overlay {panoId}</p>,
