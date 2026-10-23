@@ -645,10 +645,6 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
           },
         )
       : { prefixes: [], files: await stub.unpublish(sub, tourId, true, true) };
-  if (scenes.length) {
-    const originals = new Set(scenes.map((s) => originalKey(sub, s.panoId)));
-    await deleteFromTrash(meter.bucket, userPanosPrefix(sub), (k) => originals.has(k));
-  }
   const planned = purge.prefixes.length + purge.files.length;
   const room =
     SUBREQUEST_LIMIT -
@@ -662,6 +658,19 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
     deadline: Date.now() + OPERATOR_PURGE_DEADLINE_MS,
     priority: true,
   }).catch((): CdnPurgeOutcome => ({ status: 'failed', purged: 0, pending: 0, failed: planned }));
+  // After the purge, and never failing the takedown: the tour's data is already gone, so a
+  // 500 here would leave a retry nothing to find. A copy left behind ages out of the trash.
+  if (scenes.length) {
+    const originals = new Set(scenes.map((s) => originalKey(sub, s.panoId)));
+    try {
+      await deleteFromTrash(meter.bucket, userPanosPrefix(sub), (k) => originals.has(k));
+    } catch (e) {
+      console.error(
+        `[takedown] trash copies for tour ${tourId} not deleted:`,
+        e instanceof Error ? e.name : 'unknown error',
+      );
+    }
+  }
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
   console.warn(`[takedown] operator ${action} of tour ${tourId} done; cdn purge ${outcome.status}`);
   return c.json({ action, purged: planned, purge: outcome });
@@ -697,7 +706,7 @@ app.post(OPERATOR_BACKFILL_PATH, async (c) => {
   if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
     return c.json({ error: 'not found' }, 404);
   }
-  const body = OperatorBackfillRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = OperatorBackfillRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const out = await backfillTours(c.env.BUCKET, body.data, (tourId) =>
     publisher(c.env, tourId).refreshExplore(tourId),

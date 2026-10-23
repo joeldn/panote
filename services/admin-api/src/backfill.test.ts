@@ -18,6 +18,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runBackfill } from '../scripts/backfill-covers-lib.ts';
 import { backfillTours } from './backfill.js';
+import { MAX_WRITE_BODY_BYTES } from './limits.js';
 
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
@@ -282,5 +283,17 @@ describe('POST /api/admin/operator/backfill', () => {
     expect((await backfill({}, 'wrong')).status).toBe(404);
     expect((await backfill({ cursor: 'panos/x' })).status).toBe(400);
     expect((await backfill({ limit: 26 })).status).toBe(400);
+  });
+
+  it('is a 413 for a body past the write cap', async () => {
+    const res = await SELF.fetch(`https://x${OPERATOR_BACKFILL_PATH}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        [OPERATOR_TOKEN_HEADER]: 'test-operator-token',
+      },
+      body: JSON.stringify({ apply: false, pad: 'x'.repeat(MAX_WRITE_BODY_BYTES) }),
+    });
+    expect(res.status).toBe(413);
   });
 });

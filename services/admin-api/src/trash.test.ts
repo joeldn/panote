@@ -216,6 +216,45 @@ describe('a takedown deletes for real', () => {
     expect(await keysUnder(TRASH_ROOT)).toEqual([trashKey('2026-10-19', originalKey(SUB, 'p3'))]);
   });
 
+  it('still answers and purges when deleting the trash copies fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await json(tourKey(SUB, 't2'), { tourId: 't2', title: 't', scenes: [{ panoId: 'p1' }] });
+    await putOriginal(SUB, 'p1');
+    const broken = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop) as unknown;
+        if (prop === 'list') {
+          return (opts?: R2ListOptions) =>
+            opts?.prefix?.startsWith(TRASH_ROOT)
+              ? Promise.reject(new Error('r2 down'))
+              : target.list(opts);
+        }
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(
+      new Request(`https://x${OPERATOR_TAKEDOWN_PATH}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          [OPERATOR_TOKEN_HEADER]: 'test-operator-token',
+        },
+        body: JSON.stringify({ sub: SUB, tourId: 't2', action: 'delete' }),
+      }),
+      { ...env, BUCKET: broken },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+
+    expect(res.status).toBe(200);
+    // The purge ran (skipped here: the test env has no purge token) and was reported.
+    expect(await res.json()).toMatchObject({ action: 'delete', purge: { status: 'skipped' } });
+    expect(await env.BUCKET.head(originalKey(SUB, 'p1'))).toBeNull();
+    expect(error.mock.calls.flat().join(' ')).toContain('trash copies for tour t2 not deleted');
+  });
+
   it('closing a disabled owner’s account (takedown.ts --close-account) skips the trash', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await putOriginal(SUB, 'p1');
