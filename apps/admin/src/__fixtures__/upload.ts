@@ -83,6 +83,8 @@ export function fakeBackend() {
           });
     }
     if (method === 'GET' && path === '/api/admin/shared-tours') return json({ tours: [] });
+    // The dashboard's usage read for its totals line; not part of the upload.
+    if (method === 'GET' && path === '/api/upload-url') return json({ error: 'not here' }, 404);
     // The editor's own load of the tour (it sits under /app/t/:id); not part of the upload.
     if (method === 'GET' && /\?include=configs$/.test(path)) {
       if (!path.startsWith('/api/admin/tours/tour-1')) return json({ error: 'not found' }, 404);

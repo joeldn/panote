@@ -2,16 +2,20 @@
 .dash {
   max-width: 1120px;
   margin: 0 auto;
-  padding: 48px 30px 80px;
+  padding: 36px 30px 80px;
 }
 
+/* Title and totals at the left, New tour at the right, even on a phone. */
 .dash__head {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  flex-wrap: wrap;
-  margin-bottom: 30px;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.dash__intro {
+  min-width: 0;
 }
 
 .dash__kicker {
@@ -26,9 +30,11 @@
   margin: 0;
   font-family: var(--fdisp);
   font-weight: 400;
-  font-size: clamp(34px, 5vw, 52px);
-  line-height: 1;
+  font-size: clamp(26px, 3.4vw, 34px);
+  line-height: 1.1;
   letter-spacing: -0.015em;
+  /* A name that is an email address has no spaces to wrap at. */
+  overflow-wrap: anywhere;
 }
 
 .dash__head .pn-btn,
@@ -36,41 +42,56 @@
   text-decoration: none;
 }
 
+.dash__head .pn-btn {
+  flex: none;
+}
+
 .dash__totals {
+  margin: 8px 0 0;
+  font: 400 12.5px var(--fmono);
+  color: var(--ink-50);
+}
+
+/* Your tours · Shared with you · Unused panos: only the lists with something in them. */
+.dash__filters {
   display: flex;
   flex-wrap: wrap;
-  gap: 32px;
-  width: max-content;
-  max-width: 100%;
-  box-sizing: border-box;
-  margin: 0 0 38px;
-  padding: 18px 22px;
-  background: #fff;
-  border: 1px solid var(--ink-09);
-  border-radius: var(--r-lg);
+  gap: 6px;
+  margin: 0 0 20px;
 }
 
-.dash__total {
-  display: flex;
-  flex-direction: column-reverse;
+.dash__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid var(--ink-10);
+  border-radius: 999px;
+  background: transparent;
+  font: 500 13px var(--fbody);
+  color: var(--ink-62);
+  cursor: pointer;
 }
 
-.dash__total + .dash__total {
-  padding-left: 32px;
-  border-left: 1px solid var(--ink-10);
+.dash__filter:hover {
+  color: var(--ink);
+  border-color: var(--ink-13);
 }
 
-.dash__total dd {
-  margin: 0;
-  font-family: var(--fdisp);
-  font-size: 30px;
-  line-height: 1;
+.dash__filter[aria-pressed='true'] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
 }
 
-.dash__total dt {
-  margin-top: 2px;
-  font: 400 12.5px var(--fbody);
-  color: var(--ink-50);
+.dash__filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dash__filter-n {
+  font: 500 11.5px var(--fmono);
+  opacity: 0.7;
 }
 
 .dash__banner {
@@ -136,7 +157,6 @@
 /* --- Tour card --- */
 .dash-card {
   position: relative;
-  overflow: hidden;
   background: #fff;
   border: 1px solid var(--ink-09);
   border-radius: var(--r-lg);
@@ -145,16 +165,27 @@
     transform 0.15s;
 }
 
-.dash-card:hover,
-.dash-card:focus-within {
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
+/* No lift on touch, where a tap would leave it lifted. */
+@media (hover: hover) {
+  .dash-card:hover,
+  .dash-card:focus-within {
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.12);
+    transform: translateY(-2px);
+  }
+}
+
+/* An open menu runs past the card's edge: over the next card, not under it. */
+.dash-card:focus-within,
+.dash-card:has([aria-expanded='true']) {
+  z-index: 3;
 }
 
 .dash-card__cover {
   position: relative;
   height: 132px;
   overflow: hidden;
+  /* The card doesn't clip (its menu would be cut off), so the cover rounds its own top. */
+  border-radius: calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0 0;
   background: hsl(30 20% 20%);
 }
 
@@ -208,21 +239,6 @@
   text-transform: uppercase;
 }
 
-.dash-card__badge {
-  position: absolute;
-  right: 11px;
-  bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  border-radius: 7px;
-  background: rgba(20, 18, 14, 0.7);
-  color: rgba(255, 255, 255, 0.92);
-  font: 600 10px var(--fmono);
-  letter-spacing: 0.03em;
-}
-
 .dash-card__body {
   padding: 15px 16px 16px;
 }
@@ -265,6 +281,25 @@
   color: var(--ink-50);
 }
 
+/* Above the card's link overlay: the views open the tour's insights. */
+.dash-card__views {
+  position: relative;
+  z-index: 2;
+  color: inherit;
+  text-decoration: none;
+}
+
+.dash-card__views:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.dash-card__views:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 .dash-card__foot {
   display: flex;
   flex-wrap: wrap;
@@ -277,17 +312,46 @@
 }
 
 .dash-card__updated {
+  min-width: 0;
+  overflow: hidden;
   font: 400 11.5px var(--fbody);
   color: var(--ink-40);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dash-card__actions {
   position: relative;
   z-index: 2;
   display: flex;
-  gap: 3px;
-  /* On a narrow card the five actions take their own line, still at the right. */
+  align-items: center;
+  gap: 2px;
   margin-left: auto;
+}
+
+/* The card's one visible action; the rest wait in its menu. */
+.dash-card__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: transparent;
+  font: 500 12.5px var(--fbody);
+  color: var(--ink-70);
+  cursor: pointer;
+}
+
+.dash-card__copy:hover {
+  background: rgba(26, 24, 21, 0.07);
+  color: var(--ink);
+}
+
+.dash-card__copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .dash-card__action {
@@ -320,65 +384,90 @@
   color: var(--ink);
 }
 
-.dash-card__action--danger:hover {
-  background: rgba(181, 72, 58, 0.1);
-  color: var(--accent);
-}
-
-.dash-card__action:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
 .dash-card__action:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
+/* --- A tour card's "⋯" menu --- */
+.dash-menu {
+  position: relative;
+}
+
+.dash-menu__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 6;
+  display: grid;
+  min-width: 190px;
+  padding: 6px;
+  border-radius: var(--r-card);
+  background: var(--cbg-solid);
+  box-shadow: var(--shadow-popover);
+  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+}
+
+.dash-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: none;
+  font: 500 14px var(--fbody);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.dash-menu__item > i {
+  width: 16px;
+  color: var(--ink-55);
+  text-align: center;
+}
+
+.dash-menu__item:hover,
+.dash-menu__item:focus-visible {
+  background: var(--ink-06);
+  outline: none;
+}
+
+.dash-menu__item--danger,
+.dash-menu__item--danger > i {
+  color: var(--accent);
+}
+
+.dash-menu__item[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.5;
+}
+
 @media (max-width: 600px) {
   .dash {
-    padding: 32px 16px 64px;
-  }
-
-  .dash__totals {
-    gap: 20px;
-  }
-
-  .dash__total + .dash__total {
-    padding-left: 20px;
+    padding: 22px 16px 64px;
   }
 }
 
-/* --- Unused panos (/app/panos/unused) --- */
-.dash__more {
-  margin: -24px 0 30px;
-  font: 400 13.5px var(--fbody);
-}
-
-.dash__more a,
+/* Links back to the dashboard from the pages built on its header. */
 .unused__back {
   color: var(--ink-62);
   text-decoration: none;
 }
 
-.dash__more a:hover,
 .unused__back:hover {
   color: var(--ink);
   text-decoration: underline;
 }
 
-.unused__intro {
-  max-width: 56ch;
-  margin: 14px 0 0;
-  font: 400 14px/1.55 var(--fbody);
-  color: var(--ink-62);
-}
-
-.unused__count,
-.unused__empty {
+/* --- The "Unused panos" filter --- */
+.unused__note {
+  max-width: 60ch;
   margin: 0 0 14px;
-  font: 400 14px var(--fbody);
-  color: var(--ink-50);
+  font: 400 14px/1.55 var(--fbody);
+  color: var(--ink-55);
 }
 
 .unused__list {
@@ -437,52 +526,27 @@
   color: var(--ink-50);
 }
 
-/* Tours other people shared with this account to edit. */
-.dash__shared {
-  margin-top: 44px;
+.unused__delete {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: transparent;
+  font: 500 12.5px var(--fbody);
+  color: var(--ink-62);
+  cursor: pointer;
 }
 
-.dash__shared-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  background: #fff;
-  border: 1px solid var(--ink-09);
-  border-radius: var(--r-lg);
+.unused__delete:hover {
+  background: rgba(181, 72, 58, 0.1);
+  color: var(--accent);
 }
 
-.dash__shared-list li + li {
-  border-top: 1px solid var(--ink-08);
-}
-
-.dash__shared-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 16px;
-  padding: 14px 18px;
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.dash__shared-row:hover .dash__shared-title {
-  text-decoration: underline;
-}
-
-.dash__shared-title {
-  font: 500 15px var(--fbody);
-  overflow-wrap: anywhere;
-}
-
-.dash__shared-meta {
-  font: 400 12.5px var(--fmono);
-  color: var(--ink-55);
-  overflow-wrap: anywhere;
-}
-
-.dash__shared-error {
-  margin: 36px 0 0;
-  font: 400 13px var(--fbody);
-  color: var(--ink-55);
+.unused__delete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

@@ -1,16 +1,11 @@
-import './dashboard.css';
-
 import type { PanoSummary } from './types.js';
-import { Button, ConfirmModal } from '@internal/ui';
-import { tilesBaseUrl } from '@internal/web-kit';
+import { ConfirmModal } from '@internal/ui';
 import { useRef, useState } from 'react';
-import { Link } from 'react-router';
+import { Navigate } from 'react-router';
 
-import { useConfig } from '../config-context.js';
-import { useSession } from '../session.js';
 import { coverImage, coverStyle, type Cover } from './cover.js';
-import { plural, relativeTime } from './format.js';
-import { isProcessing, panoTitle, useUnusedPanos } from './use-unused-panos.js';
+import { relativeTime } from './format.js';
+import { isProcessing, panoTitle } from './use-unused-panos.js';
 
 function Thumb({ cover }: { cover: Cover | null }) {
   const [failed, setFailed] = useState<string | null>(null);
@@ -58,34 +53,39 @@ function Row({
       </div>
       <button
         type="button"
-        className="dash-card__action dash-card__action--danger"
-        title="Delete"
+        className="unused__delete"
         aria-label={`Delete “${title}”`}
         onClick={() => onDelete(pano)}
       >
         <i className="fa-solid fa-trash-can" aria-hidden="true" />
+        Delete
       </button>
     </li>
   );
 }
 
-/** Panos none of the owner's tours use (left behind when a scene is removed), with delete. */
-export function UnusedPanos() {
-  const { api } = useSession();
-  const config = useConfig();
-  const unused = useUnusedPanos(api);
-  const [now] = useState(() => Date.now());
+export interface UnusedPanosProps {
+  /** Already filtered to the unused ones, newest first. */
+  panos: PanoSummary[];
+  tilesBase: string;
+  now: number;
+  deletePano(pano: PanoSummary): Promise<void>;
+}
+
+/**
+ * The dashboard's "Unused panos" filter: panos none of the owner's tours use (left behind
+ * when a scene is removed), with delete.
+ */
+export function UnusedPanos({ panos, tilesBase, now, deletePano }: UnusedPanosProps) {
   const [confirm, setConfirm] = useState<PanoSummary | null>(null);
   const inFlight = useRef<Promise<void> | null>(null);
-  const tilesBase = tilesBaseUrl(config);
 
   const confirmDelete = (): Promise<void> => {
-    // Same double-click guard as the tour delete on the dashboard.
+    // Same double-click guard as the tour delete.
     if (inFlight.current) return inFlight.current;
     const pano = confirm;
     if (!pano) return Promise.resolve();
-    const run = unused
-      .deletePano(pano)
+    const run = deletePano(pano)
       .then(() => setConfirm(null))
       .finally(() => {
         inFlight.current = null;
@@ -94,72 +94,29 @@ export function UnusedPanos() {
     return run;
   };
 
-  let body;
-  if (unused.status === 'loading') {
-    body = (
-      <p className="app-status" role="status">
-        Loading your panos…
-      </p>
-    );
-  } else if (unused.status === 'error') {
-    body = (
-      <div className="dash__banner dash__banner--warn" role="alert">
-        <span>Couldn’t load your panos.</span>
-        <Button size="sm" variant="ghost" onClick={unused.reload}>
-          Try again
-        </Button>
-      </div>
-    );
-  } else {
-    body = (
-      <>
-        {unused.notice && (
-          <div className="dash__banner" role="status">
-            <span>{unused.notice}</span>
-            <Button size="sm" variant="ghost" onClick={unused.dismissNotice}>
-              Dismiss
-            </Button>
-          </div>
-        )}
-        {unused.panos.length === 0 ? (
-          <p className="unused__empty">Every pano you’ve uploaded is in a tour.</p>
-        ) : (
-          <>
-            <p className="unused__count">{plural(unused.panos.length, 'unused pano')}</p>
-            <ul className="unused__list">
-              {unused.panos.map((pano) => (
-                <Row
-                  key={pano.panoId}
-                  pano={pano}
-                  thumb={coverImage(tilesBase, pano)}
-                  now={now}
-                  onDelete={setConfirm}
-                />
-              ))}
-            </ul>
-          </>
-        )}
-      </>
-    );
-  }
-
   return (
-    <section className="dash">
-      <header className="dash__head">
-        <div>
-          <p className="dash__kicker">
-            <Link to="/" className="unused__back">
-              <i className="fa-solid fa-arrow-left" aria-hidden="true" /> Your tours
-            </Link>
-          </p>
-          <h1 className="dash__title">Unused panos</h1>
-          <p className="unused__intro">
+    <>
+      {panos.length === 0 ? (
+        <p className="unused__note">Every pano you’ve uploaded is in a tour.</p>
+      ) : (
+        <>
+          <p className="unused__note">
             Panos none of your tours use, such as ones removed from a tour. Deleting one removes its
             image for good.
           </p>
-        </div>
-      </header>
-      {body}
+          <ul className="unused__list">
+            {panos.map((pano) => (
+              <Row
+                key={pano.panoId}
+                pano={pano}
+                thumb={coverImage(tilesBase, pano)}
+                now={now}
+                onDelete={setConfirm}
+              />
+            ))}
+          </ul>
+        </>
+      )}
       <ConfirmModal
         open={confirm !== null}
         title="Delete this pano?"
@@ -172,6 +129,11 @@ export function UnusedPanos() {
         onConfirm={confirmDelete}
         onCancel={() => setConfirm(null)}
       />
-    </section>
+    </>
   );
+}
+
+/** The old /panos/unused page: now the dashboard with that filter on. */
+export function UnusedPanosRedirect() {
+  return <Navigate to={{ pathname: '/', search: '?view=unused' }} replace />;
 }

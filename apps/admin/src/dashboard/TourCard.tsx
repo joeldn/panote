@@ -3,10 +3,17 @@ import { Chip, shareUrl, useCopy, VISIBILITY_META, type CopyState } from '@inter
 import { useState } from 'react';
 import { Link } from 'react-router';
 
+import { CardMenu, type CardMenuItem } from './CardMenu.js';
 import { coverStyle, fallbackHue, type Cover } from './cover.js';
 import { writeCurrentTour } from './current-tour.js';
 import { formatCount, plural, relativeTime } from './format.js';
-import { SHARED_PANOS_NOTE } from './use-dashboard.js';
+
+/** What only the owner may do to a tour. */
+export interface OwnerActions {
+  onVisibility(tour: TourSummary, visibility: Visibility): Promise<void>;
+  onDuplicate(tour: TourSummary): Promise<void>;
+  onDelete(tour: TourSummary): void;
+}
 
 export interface TourCardProps {
   tour: TourSummary;
@@ -17,13 +24,21 @@ export interface TourCardProps {
   now: number;
   /** The public site's origin, for the share link (`VITE_SITE_ORIGIN`). */
   siteOrigin: string;
-  onVisibility(tour: TourSummary, visibility: Visibility): Promise<void>;
-  onDuplicate(tour: TourSummary): Promise<void>;
-  onDelete(tour: TourSummary): void;
+  /** The owner's controls. Absent on a tour someone shared with this account. */
+  owner?: OwnerActions;
+  /** On a tour someone shared with this account: whose it is (null when unknown). */
+  ownerEmail?: string | null;
+  /** Kept on the insights link, so closing it comes back to the same filter. */
+  search?: string;
 }
 
-const COPY_TITLE: Record<CopyState, string> = {
+const COPY_LABEL: Record<CopyState, string> = {
   idle: 'Copy link',
+  copied: 'Copied',
+  failed: 'Couldn’t copy',
+};
+const COPY_SAID: Record<CopyState, string> = {
+  idle: '',
   copied: 'Copied ✓',
   failed: 'Couldn’t copy. Open the tour and copy it from Share.',
 };
@@ -35,37 +50,18 @@ const COPY_ICON: Record<CopyState, string> = {
 
 const NEXT: Record<Visibility, Visibility> = { public: 'unlisted', unlisted: 'public' };
 
-function VisibilityChip({
-  tour,
-  pending,
-  onToggle,
-}: {
-  tour: TourSummary;
-  pending: boolean;
-  onToggle(v: Visibility): void;
-}) {
+/** Who can see it: a label, changed from the card's menu. */
+function VisibilityChip({ tour }: { tour: TourSummary }) {
   if (!tour.publish) {
     return (
-      <Chip
-        className="dash-card__vis"
-        icon="fa-solid fa-pen"
-        title="Not shared yet. Save it in the editor to get a link."
-      >
+      <Chip className="dash-card__vis" icon="fa-solid fa-pen">
         Draft
       </Chip>
     );
   }
-  const current = tour.publish.visibility;
-  const meta = VISIBILITY_META[current];
-  const next = NEXT[current];
+  const meta = VISIBILITY_META[tour.publish.visibility];
   return (
-    <Chip
-      className="dash-card__vis"
-      icon={meta.icon}
-      title={`Click to make it ${VISIBILITY_META[next].label}`}
-      aria-label={`${meta.label}. Make “${tour.title}” ${VISIBILITY_META[next].label}`}
-      onClick={pending ? () => {} : () => onToggle(next)}
-    >
+    <Chip className="dash-card__vis" icon={meta.icon}>
       {meta.label}
     </Chip>
   );
@@ -107,24 +103,18 @@ export function TourCard({
   current,
   now,
   siteOrigin,
-  onVisibility,
-  onDuplicate,
-  onDelete,
+  owner,
+  ownerEmail,
+  search = '',
 }: TourCardProps) {
   const [visPending, setVisPending] = useState(false);
   const [copied, copy] = useCopy();
   const live = tour.publish ? shareUrl(siteOrigin, tour.publish.slug) : null;
   const [duplicating, setDuplicating] = useState(false);
+  const insightsTo = `/insights/${tour.tourId}${search}`;
+  // A shared tour's title can be empty; the old shared list said this.
+  const title = tour.title || 'Untitled tour';
 
-  const toggle = (v: Visibility) => {
-    setVisPending(true);
-    void onVisibility(tour, v).finally(() => setVisPending(false));
-  };
-  const duplicate = () => {
-    if (duplicating) return;
-    setDuplicating(true);
-    void onDuplicate(tour).finally(() => setDuplicating(false));
-  };
   const viewsLabel =
     views === undefined
       ? '… views'
@@ -132,98 +122,105 @@ export function TourCard({
         ? '– views'
         : `${formatCount(views)} view${views === 1 ? '' : 's'}`;
 
+  const items: CardMenuItem[] = [];
+  if (live)
+    items.push({ label: 'Open live', icon: 'fa-solid fa-arrow-up-right-from-square', href: live });
+  items.push({ label: 'Insights', icon: 'fa-solid fa-chart-line', to: insightsTo });
+  if (owner) {
+    if (tour.publish) {
+      const next = NEXT[tour.publish.visibility];
+      items.push({
+        label: `Make ${VISIBILITY_META[next].label.toLowerCase()}`,
+        icon: VISIBILITY_META[next].icon,
+        disabled: visPending,
+        onSelect: () => {
+          setVisPending(true);
+          void owner.onVisibility(tour, next).finally(() => setVisPending(false));
+        },
+      });
+    }
+    items.push(
+      {
+        label: 'Duplicate',
+        icon: 'fa-solid fa-clone',
+        disabled: duplicating,
+        onSelect: () => {
+          setDuplicating(true);
+          void owner.onDuplicate(tour).finally(() => setDuplicating(false));
+        },
+      },
+      {
+        label: 'Delete',
+        icon: 'fa-solid fa-trash-can',
+        danger: true,
+        onSelect: () => owner.onDelete(tour),
+      },
+    );
+  }
+
+  const when = relativeTime(tour.updatedAt, now);
+
   return (
     <article className="dash-card">
       <div className="dash-card__cover">
         <CoverImage tour={tour} cover={cover} />
         <div className="dash-card__scrim" />
-        <VisibilityChip tour={tour} pending={visPending} onToggle={toggle} />
+        <VisibilityChip tour={tour} />
         {current && (
           <Chip className="dash-card__current" tone="accent" mono>
             Current
           </Chip>
         )}
-        <span className="dash-card__badge">
-          <i className="fa-solid fa-panorama" aria-hidden="true" />
-          360°
-        </span>
       </div>
       <div className="dash-card__body">
         <h2 className="dash-card__title">
           <Link
             className="dash-card__link"
             to={`/t/${tour.tourId}`}
-            onClick={() => writeCurrentTour(tour.tourId)}
+            // "Current" marks the owner's own last tour; opening a shared one leaves it be.
+            {...(owner && { onClick: () => writeCurrentTour(tour.tourId) })}
           >
-            {tour.title}
+            {title}
           </Link>
         </h2>
         <p className="dash-card__meta">
-          {plural(tour.sceneCount, 'pano')} · {viewsLabel}
+          {plural(tour.sceneCount, 'pano')} ·{' '}
+          <Link
+            className="dash-card__views"
+            to={insightsTo}
+            aria-label={`Insights for “${title}”, ${viewsLabel}`}
+          >
+            {viewsLabel}
+          </Link>
         </p>
         <div className="dash-card__foot">
-          <span className="dash-card__updated">Updated {relativeTime(tour.updatedAt, now)}</span>
+          <span className="dash-card__updated">
+            {owner ? `Updated ${when}` : `${ownerEmail ?? 'Shared with you'} · updated ${when}`}
+          </span>
           <div className="dash-card__actions">
-            {live && (
-              <a
-                className="dash-card__action"
-                href={live}
-                target="_blank"
-                rel="noopener"
-                title="View live"
-                aria-label={`View “${tour.title}” live`}
-              >
-                <i className="fa-solid fa-arrow-up-right-from-square" aria-hidden="true" />
-              </a>
-            )}
             {live && (
               <button
                 type="button"
-                className="dash-card__action"
-                title={COPY_TITLE[copied]}
-                aria-label={`Copy the link to “${tour.title}”`}
+                className="dash-card__copy"
+                aria-label={`Copy link to “${title}”`}
+                title={copied === 'failed' ? COPY_SAID.failed : undefined}
                 onClick={() => void copy(live)}
               >
                 <i className={COPY_ICON[copied]} aria-hidden="true" />
+                {COPY_LABEL[copied]}
               </button>
             )}
             {/* Beside the button, not in it: its aria-label would hide what this says. */}
             {live && (
               <span className="dash-card__sr" role="status">
-                {copied === 'idle' ? '' : COPY_TITLE[copied]}
+                {COPY_SAID[copied]}
               </span>
             )}
-            <Link
-              className="dash-card__action"
-              to={`/insights/${tour.tourId}`}
-              title="Insights"
-              aria-label={`Insights for “${tour.title}”`}
-            >
-              <i className="fa-solid fa-chart-line" aria-hidden="true" />
-            </Link>
-            <button
-              type="button"
-              className="dash-card__action"
-              title={`Duplicate. ${SHARED_PANOS_NOTE}`}
-              aria-label={`Duplicate “${tour.title}”`}
-              aria-busy={duplicating || undefined}
-              disabled={duplicating}
-              onClick={duplicate}
-            >
-              <i
-                className={duplicating ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-clone'}
-                aria-hidden="true"
-              />
-            </button>
-            <button
-              type="button"
-              className="dash-card__action dash-card__action--danger"
-              title="Delete"
-              aria-label={`Delete “${tour.title}”`}
-              onClick={() => onDelete(tour)}
-            >
-              <i className="fa-solid fa-trash-can" aria-hidden="true" />
-            </button>
+            <CardMenu
+              label={`More for “${title}”`}
+              items={items}
+              busy={duplicating || visPending}
+            />
           </div>
         </div>
       </div>

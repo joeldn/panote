@@ -46,13 +46,26 @@ describe('admin routes', () => {
   it('opens insights over the dashboard too', async () => {
     renderAt('/app/insights/tour-1');
     expect(await screen.findByRole('dialog', { name: 'Insights' })).toBeTruthy();
-    expect(screen.getByText('Your tours')).toBeTruthy();
+    expect(screen.getByText(/^Welcome.*Maya Larsson\.$/)).toBeTruthy();
+  });
+
+  it('sends the old unused panos page to the dashboard with that filter on', async () => {
+    const { router } = renderAt('/app/panos/unused');
+    expect(await screen.findByRole('heading', { name: /^Welcome.*Maya Larsson\.$/ })).toBeTruthy();
+    expect(router.state.location.pathname).toMatch(/^\/app\/?$/);
+    expect(router.state.location.search).toBe('?view=unused');
+  });
+
+  it('puts the invite page in the shell’s main, not a second one', async () => {
+    renderAt('/app/invite#tour-1.short');
+    expect(await screen.findByRole('heading', { name: 'Tour invite' })).toBeTruthy();
+    expect(screen.getAllByRole('main')).toHaveLength(1);
   });
 
   it('opens the account window over the dashboard at /app/account', async () => {
     renderAt('/app/account');
     expect(await screen.findByRole('dialog', { name: 'Account' })).toBeTruthy();
-    expect(screen.getByText('Your tours')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /^Welcome/ })).toBeTruthy();
   });
 
   it('404s an unknown share tab and unknown paths', async () => {

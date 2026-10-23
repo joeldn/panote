@@ -106,10 +106,12 @@ export function InsightsRoute({ over = 'editor' }: { over?: 'editor' | 'dashboar
   }, [api, publicApi, tourId, attempt]);
 
   const query = search.toString();
+  // The search goes back too: the dashboard's filter, or the editor's state.
   const close = () =>
-    void navigate(
-      over === 'dashboard' ? '/' : { pathname: `/t/${tourId}`, search: query ? `?${query}` : '' },
-    );
+    void navigate({
+      pathname: over === 'dashboard' ? '/' : `/t/${tourId}`,
+      search: query ? `?${query}` : '',
+    });
   const retry = () => {
     setInsights({ status: 'loading' });
     setViews({ status: 'loading' });

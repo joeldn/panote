@@ -103,7 +103,7 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   tour, the tour is the only thing that is published, shared or embedded, and
   a pano has no public page of its own. A pano removed from a tour that no
   other tour uses isn't deleted; it shows up under **Unused panos** on the
-  dashboard (`/panos/unused`), where the owner can put it back into a tour
+  dashboard (`/?view=unused`), where the owner can put it back into a tour
   from the editor's library or delete it for good. (Deleting a whole tour
   deletes the panos only it used.)
 - **Embed `allow` list.** The README's embed snippet asks for

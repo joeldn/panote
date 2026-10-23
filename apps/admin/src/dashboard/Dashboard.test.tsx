@@ -1,9 +1,17 @@
-import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  configure,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import type { FetchLike } from '@internal/web-kit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderAdmin } from '../__fixtures__/auth.js';
-import type { PanoSummary, TourSummary } from './types.js';
+import type { PanoSummary, SharedTourSummary, TourSummary } from './types.js';
 import { resetResumedTombstones } from './use-dashboard.js';
 
 const json = (body: unknown, status = 200) =>
@@ -56,14 +64,38 @@ function server(routes: Record<string, Handler>) {
   return { fetch, calls };
 }
 
-const lists = (tours: TourSummary[], panos: PanoSummary[] = [pano()]) => ({
+const shared = (over: Partial<SharedTourSummary> = {}): SharedTourSummary => ({
+  ...tour({ tourId: 's1', title: 'Harbour walk', coverPanoId: null }),
+  ownerEmail: 'ana@example.com',
+  ...over,
+});
+
+const lists = (
+  tours: TourSummary[],
+  panos: PanoSummary[] = [pano({ referenced: true })],
+  sharedTours: SharedTourSummary[] = [],
+) => ({
   'GET /api/admin/tours': () => json({ tours, cursor: null }),
   'GET /api/admin/panos': () => json({ panoIds: panos.map((p) => p.panoId), panos, cursor: null }),
+  'GET /api/admin/shared-tours': () => json({ tours: sharedTours }),
   'GET /api/tours/t1/stats': () => json({ views: 4400, likes: 3 }),
   'GET /api/tours/t2/stats': () => json({ views: 12, likes: 0 }),
+  'GET /api/tours/s1/stats': () => json({ views: 7, likes: 0 }),
 });
 
 const card = (title: string) => screen.getByRole('link', { name: title }).closest('article')!;
+/** The dashboard's own pano loads, not the later one that asks which are unused. */
+const mainPanoLoads = (calls: (key: string) => unknown[][]) =>
+  calls('GET /api/admin/panos').filter(([input]) => !String(input).includes('include='));
+const totals = () => document.querySelector('.dash__totals')?.textContent;
+
+/** Opens a card's "⋯" menu and returns it. */
+const openMenu = (title: string) => {
+  fireEvent.click(within(card(title)).getByRole('button', { name: `More for “${title}”` }));
+  return within(card(title)).getByRole('menu');
+};
+const pickFromMenu = (title: string, item: string) =>
+  fireEvent.click(within(openMenu(title)).getByRole('menuitem', { name: item }));
 
 // The first render in a cold worker can exceed the 1s default under a loaded `turbo test`.
 configure({ asyncUtilTimeout: 5000 });
@@ -75,11 +107,201 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Dashboard', () => {
-  it('links to the unused panos page', async () => {
-    const { fetch } = server(lists([tour()]));
-    renderAdmin('/app/', { fetch });
-    const link = await screen.findByRole('link', { name: 'Unused panos' });
-    expect(link.getAttribute('href')).toBe('/app/panos/unused');
+  describe('filters', () => {
+    it('shows none when the owner’s own tours are all there is', async () => {
+      const { fetch, calls } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      await waitFor(() => expect(calls('GET /api/admin/shared-tours')).toHaveLength(1));
+      expect(screen.queryByRole('group', { name: 'Show' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Your tours/ })).toBeNull();
+    });
+
+    it('counts shared tours and unused panos, and hides a list with nothing in it', async () => {
+      const { fetch } = server(
+        lists(
+          [tour()],
+          [
+            pano({ referenced: true }),
+            pano({ panoId: 'p2', title: 'Old porch', referenced: false }),
+          ],
+          [shared()],
+        ),
+      );
+      renderAdmin('/app/', { fetch });
+      // The unused count comes in after the rest.
+      await screen.findByRole('button', { name: 'Unused panos 1' });
+      const filters = screen.getByRole('group', { name: 'Show' });
+      const chips = within(filters).getAllByRole('button');
+      expect(chips.map((c) => c.textContent)).toEqual([
+        'Your tours 1',
+        'Shared with you 1',
+        'Unused panos 1',
+      ]);
+      expect(chips[0]!.getAttribute('aria-pressed')).toBe('true');
+      cleanup();
+
+      const second = server(lists([tour()], [pano({ referenced: true })], [shared()]));
+      renderAdmin('/app/', { fetch: second.fetch });
+      const only = await screen.findByRole('group', { name: 'Show' });
+      expect(
+        within(only)
+          .getAllByRole('button')
+          .map((c) => c.textContent),
+      ).toEqual(['Your tours 1', 'Shared with you 1']);
+    });
+
+    it('shows tours shared with this account as cards, with their owner and no owner actions', async () => {
+      const writeText = vi.fn(async () => {});
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      const { fetch } = server(lists([tour()], undefined, [shared()]));
+      const { router } = renderAdmin('/app/', { fetch });
+      fireEvent.click(await screen.findByRole('button', { name: 'Shared with you 1' }));
+      await waitFor(() => expect(router.state.location.search).toBe('?view=shared'));
+
+      const link = await screen.findByRole('link', { name: 'Harbour walk' });
+      expect(link.getAttribute('href')).toBe('/app/t/s1');
+      expect(screen.queryByRole('link', { name: 'St Lawrence Jewry' })).toBeNull();
+      expect(card('Harbour walk').textContent).toContain('ana@example.com · updated');
+      await waitFor(() => expect(card('Harbour walk').textContent).toContain('7 views'));
+
+      fireEvent.click(
+        within(card('Harbour walk')).getByRole('button', { name: 'Copy link to “Harbour walk”' }),
+      );
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith('https://panote.dev/s/st-lawrence'),
+      );
+
+      const menu = openMenu('Harbour walk');
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((i) => i.textContent),
+      ).toEqual(['Open live', 'Insights']);
+      // Insights keeps the filter, so closing it comes back here.
+      expect(within(menu).getByRole('menuitem', { name: 'Insights' }).getAttribute('href')).toBe(
+        '/app/insights/s1?view=shared',
+      );
+      expect(card('Harbour walk').textContent).not.toContain('Current');
+    });
+
+    it('calls a shared tour with no title “Untitled tour”', async () => {
+      const { fetch } = server(lists([tour()], undefined, [shared({ title: '' })]));
+      renderAdmin('/app/?view=shared', { fetch });
+      const link = await screen.findByRole('link', { name: 'Untitled tour' });
+      expect(link.getAttribute('href')).toBe('/app/t/s1');
+      expect(
+        within(card('Untitled tour')).getByRole('button', { name: 'More for “Untitled tour”' }),
+      ).toBeTruthy();
+    });
+
+    it('still shows the shared tours when the owner’s own list fails', async () => {
+      const { fetch } = server({
+        ...lists([tour()], undefined, [shared()]),
+        'GET /api/admin/tours': () => json({ error: 'boom' }, 500),
+      });
+      renderAdmin('/app/?view=shared', { fetch });
+      expect(await screen.findByRole('link', { name: 'Harbour walk' })).toBeTruthy();
+      expect(screen.queryByText('Couldn’t load your tours.')).toBeNull();
+      // And the way back to the owner's tours, which says what went wrong.
+      fireEvent.click(screen.getByRole('button', { name: 'Your tours' }));
+      expect(await screen.findByText('Couldn’t load your tours.')).toBeTruthy();
+    });
+
+    it('says when the shared tours didn’t load, and retries', async () => {
+      let fail = true;
+      const { fetch, calls } = server({
+        ...lists([tour()]),
+        'GET /api/admin/shared-tours': () =>
+          fail ? json({ error: 'boom' }, 500) : json({ tours: [shared()] }),
+      });
+      renderAdmin('/app/', { fetch });
+      const said = await screen.findByText('Couldn’t load the tours shared with you.');
+      // The owner's own tours are still there.
+      expect(screen.getByRole('link', { name: 'St Lawrence Jewry' })).toBeTruthy();
+      fail = false;
+      fireEvent.click(within(said.parentElement!).getByRole('button', { name: 'Try again' }));
+      expect(await screen.findByRole('button', { name: 'Shared with you 1' })).toBeTruthy();
+      expect(screen.queryByText('Couldn’t load the tours shared with you.')).toBeNull();
+      expect(calls('GET /api/admin/shared-tours')).toHaveLength(2);
+    });
+
+    it('asks which panos are unused only after the tours show, then adds the chip', async () => {
+      let release: () => void = () => {};
+      const panos = [
+        pano({ referenced: true }),
+        pano({ panoId: 'p2', title: 'Old porch', referenced: false }),
+      ];
+      const body = () => json({ panoIds: ['p1', 'p2'], panos, cursor: null });
+      const { fetch, calls } = server({
+        ...lists([tour()], panos, [shared()]),
+        'GET /api/admin/panos': (url) =>
+          url.searchParams.get('include') === 'references'
+            ? new Promise<Response>((resolve) => {
+                release = () => resolve(body());
+              })
+            : body(),
+      });
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const include = (i: number) =>
+        new URL(
+          String(calls('GET /api/admin/panos')[i]![0]),
+          'https://panote.test',
+        ).searchParams.get('include');
+      // The first load doesn't wait on reading every tour.
+      expect(include(0)).toBeNull();
+      await screen.findByRole('button', { name: 'Shared with you 1' });
+      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      expect(include(1)).toBe('references');
+      expect(screen.queryByRole('button', { name: /Unused panos/ })).toBeNull();
+
+      release();
+      fireEvent.click(await screen.findByRole('button', { name: 'Unused panos 1' }));
+      expect(await screen.findByText('Old porch')).toBeTruthy();
+      expect(screen.queryByText('Nave')).toBeNull();
+      expect(screen.queryByRole('link', { name: 'St Lawrence Jewry' })).toBeNull();
+      // The view reuses that answer.
+      expect(calls('GET /api/admin/panos')).toHaveLength(2);
+    });
+
+    it('leaves the unused chip out when that request fails', async () => {
+      const panos = [pano({ panoId: 'p2', title: 'Old porch', referenced: false })];
+      const { fetch, calls } = server({
+        ...lists([tour()], panos, [shared()]),
+        'GET /api/admin/panos': (url) =>
+          url.searchParams.get('include') === 'references'
+            ? json({ error: 'boom' }, 500)
+            : json({ panoIds: ['p2'], panos, cursor: null }),
+      });
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('button', { name: 'Shared with you 1' });
+      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      await Promise.resolve();
+      expect(screen.queryByRole('button', { name: /Unused panos/ })).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('keeps the chip in use after its list empties, so there is a way back', async () => {
+      const { fetch } = server({
+        ...lists(
+          [tour()],
+          [
+            pano({ referenced: true }),
+            pano({ panoId: 'p2', title: 'Old porch', referenced: false }),
+          ],
+        ),
+        'DELETE /api/admin/panos/p2': () => noContent(),
+      });
+      renderAdmin('/app/?view=unused', { fetch });
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete “Old porch”' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Delete pano' }));
+      expect(await screen.findByText('Every pano you’ve uploaded is in a tour.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Unused panos 0' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Your tours 1' }));
+      expect(await screen.findByRole('link', { name: 'St Lawrence Jewry' })).toBeTruthy();
+      expect(screen.queryByRole('group', { name: 'Show' })).toBeNull();
+    });
   });
 
   it('shows an empty state that starts the upload flow', async () => {
@@ -101,7 +323,7 @@ describe('Dashboard', () => {
     browse.mockRestore();
   });
 
-  it('renders cards with totals, views and an editor link', async () => {
+  it('renders cards with a one-line total, views and an editor link', async () => {
     const { fetch } = server(lists([tour(), tour({ tourId: 't2', title: 'Town Hall' })]));
     renderAdmin('/app/', { fetch, strict: true });
     const link = await screen.findByRole('link', { name: 'St Lawrence Jewry' });
@@ -111,28 +333,81 @@ describe('Dashboard', () => {
     );
     await waitFor(() => expect(card('St Lawrence Jewry').textContent).toContain('4.4k views'));
     expect(card('St Lawrence Jewry').textContent).toContain('3 panos');
-    const totals = document.querySelector('.dash__totals')!;
-    await waitFor(() => expect(totals.textContent).toContain('total views4.4k'));
-    expect(totals.textContent).toContain('tours2');
-    expect(totals.textContent).toContain('panos1');
+    // Every card is a 360° tour; saying so on each told no one anything.
+    expect(card('St Lawrence Jewry').textContent).not.toContain('360°');
+    await waitFor(() => expect(totals()).toBe('2 tours · 1 pano · 4.4k views'));
+  });
+
+  describe('limits in the totals line', () => {
+    const usage = (maxPanos: number | null) => ({
+      panos: 1,
+      bytes: 1024,
+      uploadsToday: 0,
+      limits: { maxPanos, maxBytes: null, maxUploadsPerDay: null },
+    });
+
+    it('adds them once the usage call answers, after the first paint', async () => {
+      let release: () => void = () => {};
+      const { fetch, calls } = server({
+        ...lists([tour()]),
+        'GET /api/upload-url': () =>
+          new Promise<Response>((resolve) => {
+            release = () => resolve(json(usage(500)));
+          }),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(totals()).toBe('1 tour · 1 pano · 4.4k views'));
+      expect(calls('GET /api/upload-url')).toHaveLength(1);
+      release();
+      await waitFor(() => expect(totals()).toBe('1 / 200 tours · 1 / 500 panos · 4.4k views'));
+      expect(totals()).not.toMatch(/unlimited/i);
+    });
+
+    it('leaves out a limit that isn’t set', async () => {
+      const { fetch } = server({
+        ...lists([tour()]),
+        'GET /api/upload-url': () => json(usage(null)),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(totals()).toBe('1 / 200 tours · 1 pano · 4.4k views'));
+    });
+
+    it('keeps the plain counts when the usage call fails', async () => {
+      const { fetch, calls } = server({
+        ...lists([tour()]),
+        'GET /api/upload-url': () => json({ error: 'boom' }, 500),
+      });
+      renderAdmin('/app/', { fetch });
+      await waitFor(() => expect(calls('GET /api/upload-url')).toHaveLength(1));
+      await waitFor(() => expect(totals()).toBe('1 tour · 1 pano · 4.4k views'));
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
+
+  it('leaves the totals out until there is something to count', async () => {
+    const { fetch } = server(lists([], []));
+    renderAdmin('/app/', { fetch });
+    await screen.findByRole('heading', { name: 'No tours yet' });
+    expect(totals()).toBeUndefined();
   });
 
   describe('card actions', () => {
-    it('opens a published tour live, copies its link and opens its insights', async () => {
+    it('keeps Copy link on the card and the rest in its menu', async () => {
       const writeText = vi.fn(async () => {});
       Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
       const { fetch } = server(lists([tour()]));
-      const { router } = renderAdmin('/app/', { fetch });
+      renderAdmin('/app/', { fetch });
       await screen.findByRole('link', { name: 'St Lawrence Jewry' });
       const actions = within(card('St Lawrence Jewry'));
+      // One visible action besides the menu: no row of icon buttons.
+      expect(actions.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+        'Copy link to “St Lawrence Jewry”',
+        'More for “St Lawrence Jewry”',
+      ]);
 
-      const live = actions.getByRole('link', { name: 'View “St Lawrence Jewry” live' });
-      expect(live.getAttribute('href')).toBe('https://panote.dev/s/st-lawrence');
-      expect(live.getAttribute('target')).toBe('_blank');
-
-      fireEvent.click(
-        actions.getByRole('button', { name: 'Copy the link to “St Lawrence Jewry”' }),
-      );
+      const copyButton = actions.getByRole('button', { name: 'Copy link to “St Lawrence Jewry”' });
+      expect(copyButton.textContent).toBe('Copy link');
+      fireEvent.click(copyButton);
       await waitFor(() =>
         expect(writeText).toHaveBeenCalledWith('https://panote.dev/s/st-lawrence'),
       );
@@ -140,11 +415,32 @@ describe('Dashboard', () => {
       // Its own live region, not text inside the labelled button.
       expect(said.getAttribute('role')).toBe('status');
       expect(said.closest('button')).toBeNull();
-      expect(said.parentElement?.className).toBe('dash-card__actions');
+      expect(copyButton.textContent).toBe('Copied');
 
-      const insights = actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' });
-      expect(insights.getAttribute('href')).toBe('/app/insights/t1');
-      fireEvent.click(insights);
+      const menu = openMenu('St Lawrence Jewry');
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((i) => i.textContent),
+      ).toEqual(['Open live', 'Insights', 'Make unlisted', 'Duplicate', 'Delete']);
+      const live = within(menu).getByRole('menuitem', { name: 'Open live' });
+      expect(live.getAttribute('href')).toBe('https://panote.dev/s/st-lawrence');
+      expect(live.getAttribute('target')).toBe('_blank');
+      expect(within(menu).getByRole('menuitem', { name: 'Insights' }).getAttribute('href')).toBe(
+        '/app/insights/t1',
+      );
+    });
+
+    it('opens insights from the views count', async () => {
+      const { fetch } = server(lists([tour()]));
+      const { router } = renderAdmin('/app/', { fetch });
+      // Named for its tour: "4.4k views" alone says nothing in a list of links.
+      const views = await within(await screen.findByRole('article')).findByRole('link', {
+        name: 'Insights for “St Lawrence Jewry”, 4.4k views',
+      });
+      expect(views.textContent).toBe('4.4k views');
+      expect(views.getAttribute('href')).toBe('/app/insights/t1');
+      fireEvent.click(views);
       await waitFor(() => expect(router.state.location.pathname).toBe('/app/insights/t1'));
     });
 
@@ -152,10 +448,81 @@ describe('Dashboard', () => {
       const { fetch } = server(lists([tour({ publish: null })]));
       renderAdmin('/app/', { fetch });
       await screen.findByRole('link', { name: 'St Lawrence Jewry' });
-      const actions = within(card('St Lawrence Jewry'));
-      expect(actions.queryByRole('link', { name: /live/ })).toBeNull();
-      expect(actions.queryByRole('button', { name: /Copy the link/ })).toBeNull();
-      expect(actions.getByRole('link', { name: 'Insights for “St Lawrence Jewry”' })).toBeTruthy();
+      expect(
+        within(card('St Lawrence Jewry')).queryByRole('button', { name: /Copy link/ }),
+      ).toBeNull();
+      const menu = openMenu('St Lawrence Jewry');
+      expect(
+        within(menu)
+          .getAllByRole('menuitem')
+          .map((i) => i.textContent),
+      ).toEqual(['Insights', 'Duplicate', 'Delete']);
+    });
+
+    it('works the menu from the keyboard and closes it with Escape', async () => {
+      const { fetch } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const button = within(card('St Lawrence Jewry')).getByRole('button', {
+        name: 'More for “St Lawrence Jewry”',
+      });
+      expect(button.getAttribute('aria-haspopup')).toBe('menu');
+      fireEvent.click(button);
+      expect(button.getAttribute('aria-expanded')).toBe('true');
+      const menu = screen.getByRole('menu');
+      const items = within(menu).getAllByRole('menuitem');
+      await waitFor(() => expect(document.activeElement).toBe(items[0]));
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(document.activeElement).toBe(items[1]);
+      fireEvent.keyDown(menu, { key: 'ArrowUp' });
+      fireEvent.keyDown(menu, { key: 'ArrowUp' });
+      expect(document.activeElement).toBe(items[items.length - 1]);
+      fireEvent.keyDown(menu, { key: 'Home' });
+      expect(document.activeElement).toBe(items[0]);
+      fireEvent.keyDown(menu, { key: 'Escape' });
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(document.activeElement).toBe(button);
+      expect(button.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('closes the menu on a press outside it', async () => {
+      const { fetch } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      openMenu('St Lawrence Jewry');
+      fireEvent.pointerDown(document.body);
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    });
+
+    it('opens from the keyboard with ArrowDown or ArrowUp', async () => {
+      const { fetch } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const button = within(card('St Lawrence Jewry')).getByRole('button', {
+        name: 'More for “St Lawrence Jewry”',
+      });
+      fireEvent.keyDown(button, { key: 'ArrowDown' });
+      const items = within(screen.getByRole('menu')).getAllByRole('menuitem');
+      await waitFor(() => expect(document.activeElement).toBe(items[0]));
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+      expect(screen.queryByRole('menu')).toBeNull();
+      fireEvent.keyDown(button, { key: 'ArrowUp' });
+      const again = within(screen.getByRole('menu')).getAllByRole('menuitem');
+      await waitFor(() => expect(document.activeElement).toBe(again[again.length - 1]));
+    });
+
+    it('closes when focus moves out of it', async () => {
+      const { fetch } = server(lists([tour()]));
+      renderAdmin('/app/', { fetch });
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      const menu = openMenu('St Lawrence Jewry');
+      const first = within(menu).getAllByRole('menuitem')[0]!;
+      await waitFor(() => expect(document.activeElement).toBe(first));
+      // Within the menu it stays open.
+      fireEvent.keyDown(menu, { key: 'ArrowDown' });
+      expect(screen.getByRole('menu')).toBeTruthy();
+      act(() => screen.getByRole('link', { name: 'St Lawrence Jewry' }).focus());
+      expect(screen.queryByRole('menu')).toBeNull();
     });
   });
 
@@ -242,7 +609,7 @@ describe('Dashboard', () => {
       await waitFor(() => expect(screen.queryByText(/Finishing an interrupted delete/)).toBeNull());
       expect(screen.queryByRole('button', { name: 'Finish deleting' })).toBeNull();
       // A tombstoned pano doesn't count towards the totals.
-      expect(document.querySelector('.dash__totals')!.textContent).toContain('panos1');
+      expect(totals()).toContain('1 pano ·');
     });
 
     it('does not report a resumed delete the server rolled back (409) as stuck', async () => {
@@ -265,9 +632,9 @@ describe('Dashboard', () => {
       renderAdmin('/app/', { fetch });
       await waitFor(() => expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1));
       // Deleting a tour refreshes the pano list, which still reports the tombstone.
-      fireEvent.click(screen.getByRole('button', { name: 'Delete “St Lawrence Jewry”' }));
+      pickFromMenu('St Lawrence Jewry', 'Delete');
       fireEvent.click(screen.getByRole('button', { name: 'Delete tour' }));
-      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      await waitFor(() => expect(mainPanoLoads(calls)).toHaveLength(2));
       expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1);
     });
 
@@ -281,7 +648,7 @@ describe('Dashboard', () => {
       cleanup();
       renderAdmin('/app/', { fetch });
       await screen.findByRole('link', { name: 'St Lawrence Jewry' });
-      await waitFor(() => expect(calls('GET /api/admin/panos')).toHaveLength(2));
+      await waitFor(() => expect(mainPanoLoads(calls)).toHaveLength(2));
       expect(calls('DELETE /api/admin/panos/p-dead')).toHaveLength(1);
     });
 
@@ -302,17 +669,26 @@ describe('Dashboard', () => {
     });
   });
 
-  describe('visibility chip', () => {
-    it('toggles Public to Unlisted through the visibility endpoint', async () => {
+  describe('visibility', () => {
+    const chip = (title: string) => card(title).querySelector('.dash-card__vis')!;
+
+    it('shows it on the cover, and changes it from the menu', async () => {
       const { fetch, calls } = server({
         ...lists([tour()]),
         'PATCH /api/admin/tours/t1/visibility': () => json({ visibility: 'unlisted' }),
       });
       renderAdmin('/app/', { fetch });
-      fireEvent.click(await screen.findByRole('button', { name: /^Public\. Make/ }));
-      expect(await screen.findByRole('button', { name: /^Unlisted\. Make/ })).toBeTruthy();
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      // A label, not a control hiding behind a tooltip.
+      expect(chip('St Lawrence Jewry').tagName).toBe('SPAN');
+      expect(chip('St Lawrence Jewry').textContent).toBe('Public');
+      pickFromMenu('St Lawrence Jewry', 'Make unlisted');
+      await waitFor(() => expect(chip('St Lawrence Jewry').textContent).toBe('Unlisted'));
       const [, init] = calls('PATCH /api/admin/tours/t1/visibility')[0]!;
       expect(init?.body).toBe('{"visibility":"unlisted"}');
+      expect(
+        within(openMenu('St Lawrence Jewry')).getByRole('menuitem', { name: 'Make public' }),
+      ).toBeTruthy();
     });
 
     it('reverts and explains a failure', async () => {
@@ -321,9 +697,10 @@ describe('Dashboard', () => {
         'PATCH /api/admin/tours/t1/visibility': () => json({ error: 'boom' }, 500),
       });
       renderAdmin('/app/', { fetch });
-      fireEvent.click(await screen.findByRole('button', { name: /^Public\. Make/ }));
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      pickFromMenu('St Lawrence Jewry', 'Make unlisted');
       expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t change who');
-      expect(screen.getByRole('button', { name: /^Public\. Make/ })).toBeTruthy();
+      expect(chip('St Lawrence Jewry').textContent).toBe('Public');
     });
 
     it('drops to Draft on 409 not published', async () => {
@@ -332,17 +709,20 @@ describe('Dashboard', () => {
         'PATCH /api/admin/tours/t1/visibility': () => json({ error: 'not published' }, 409),
       });
       renderAdmin('/app/', { fetch });
-      fireEvent.click(await screen.findByRole('button', { name: /^Public\. Make/ }));
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      pickFromMenu('St Lawrence Jewry', 'Make unlisted');
       expect((await screen.findByRole('alert')).textContent).toContain('isn’t shared yet');
-      expect(card('St Lawrence Jewry').textContent).toContain('Draft');
+      expect(chip('St Lawrence Jewry').textContent).toBe('Draft');
     });
 
-    it('shows unpublished tours as a non-interactive Draft chip', async () => {
+    it('shows an unpublished tour as Draft, with nothing to change', async () => {
       const { fetch } = server(lists([tour({ publish: null })]));
       renderAdmin('/app/', { fetch });
       await screen.findByRole('link', { name: 'St Lawrence Jewry' });
-      expect(card('St Lawrence Jewry').textContent).toContain('Draft');
-      expect(screen.queryByRole('button', { name: /Make/ })).toBeNull();
+      expect(chip('St Lawrence Jewry').textContent).toBe('Draft');
+      expect(
+        within(openMenu('St Lawrence Jewry')).queryByRole('menuitem', { name: /Make/ }),
+      ).toBeNull();
     });
   });
 
@@ -374,7 +754,8 @@ describe('Dashboard', () => {
       },
     });
     renderAdmin('/app/', { fetch });
-    fireEvent.click(await screen.findByRole('button', { name: 'Duplicate “St Lawrence Jewry”' }));
+    await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+    pickFromMenu('St Lawrence Jewry', 'Duplicate');
     expect(await screen.findByRole('link', { name: 'St Lawrence Jewry (copy)' })).toBeTruthy();
     const body = JSON.parse(String(calls('POST /api/admin/tours')[0]![1]?.body)) as Record<
       string,
@@ -386,7 +767,9 @@ describe('Dashboard', () => {
       startPanoId: 'p2',
       settings,
     });
-    expect(card('St Lawrence Jewry (copy)').textContent).toContain('Draft');
+    expect(card('St Lawrence Jewry (copy)').querySelector('.dash-card__vis')!.textContent).toBe(
+      'Draft',
+    );
     expect(screen.getByRole('alert').textContent).toContain(
       'changes to a scene’s points show in both',
     );
@@ -404,7 +787,8 @@ describe('Dashboard', () => {
       'POST /api/admin/tours': () => json({ error: 'tour limit reached' }, 403),
     });
     renderAdmin('/app/', { fetch });
-    fireEvent.click(await screen.findByRole('button', { name: 'Duplicate “St Lawrence Jewry”' }));
+    await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+    pickFromMenu('St Lawrence Jewry', 'Duplicate');
     expect((await screen.findByRole('alert')).textContent).toContain(
       'Couldn’t duplicate “St Lawrence Jewry”. This account has reached its limit of 200 tours.',
     );
@@ -421,7 +805,8 @@ describe('Dashboard', () => {
           }),
       });
       renderAdmin('/app/', { fetch });
-      fireEvent.click(await screen.findByRole('button', { name: 'Delete “St Lawrence Jewry”' }));
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      pickFromMenu('St Lawrence Jewry', 'Delete');
       const dialog = screen.getByRole('dialog', { name: 'Delete this tour?' });
       expect(dialog.textContent).toContain('unless another of your tours uses them');
       expect(dialog.textContent).toContain('Its share link stops working');
@@ -450,7 +835,8 @@ describe('Dashboard', () => {
         'DELETE /api/admin/tours/t1': () => json({ error: 'nope' }, status),
       });
       renderAdmin('/app/', { fetch });
-      fireEvent.click(await screen.findByRole('button', { name: 'Delete “St Lawrence Jewry”' }));
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      pickFromMenu('St Lawrence Jewry', 'Delete');
       const dialog = screen.getByRole('dialog');
       fireEvent.click(within(dialog).getByRole('button', { name: 'Delete tour' }));
       expect((await within(dialog).findByRole('alert')).textContent).toContain(message);
@@ -463,12 +849,10 @@ describe('Dashboard', () => {
         'DELETE /api/admin/tours/t1': () => noContent(),
       });
       renderAdmin('/app/', { fetch });
-      const totals = () => document.querySelector('.dash__totals')!.textContent;
-      await waitFor(() => expect(totals()).toContain('total views4.4k'));
-      fireEvent.click(screen.getByRole('button', { name: 'Delete “St Lawrence Jewry”' }));
+      await waitFor(() => expect(totals()).toBe('2 tours · 1 pano · 4.4k views'));
+      pickFromMenu('St Lawrence Jewry', 'Delete');
       fireEvent.click(screen.getByRole('button', { name: 'Delete tour' }));
-      await waitFor(() => expect(totals()).toContain('total views12'));
-      expect(totals()).toContain('tours1');
+      await waitFor(() => expect(totals()).toBe('1 tour · 1 pano · 12 views'));
     });
 
     it('treats a 404 as already deleted', async () => {
@@ -477,11 +861,29 @@ describe('Dashboard', () => {
         'DELETE /api/admin/tours/t1': () => json({ error: 'not found' }, 404),
       });
       renderAdmin('/app/', { fetch });
-      fireEvent.click(await screen.findByRole('button', { name: 'Delete “St Lawrence Jewry”' }));
+      await screen.findByRole('link', { name: 'St Lawrence Jewry' });
+      pickFromMenu('St Lawrence Jewry', 'Delete');
       fireEvent.click(screen.getByRole('button', { name: 'Delete tour' }));
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(screen.queryByRole('link', { name: 'St Lawrence Jewry' })).toBeNull();
     });
+  });
+
+  it('moves Current to an own tour opened from its card, but not to a shared one', async () => {
+    window.localStorage.setItem('panote.currentTour', 't2');
+    const { fetch } = server(
+      lists([tour(), tour({ tourId: 't2', title: 'Town Hall' })], undefined, [shared()]),
+    );
+    const { router } = renderAdmin('/app/?view=shared', { fetch });
+    fireEvent.click(await screen.findByRole('link', { name: 'Harbour walk' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/s1'));
+    expect(window.localStorage.getItem('panote.currentTour')).toBe('t2');
+    cleanup();
+
+    const again = renderAdmin('/app/', { fetch });
+    fireEvent.click(await screen.findByRole('link', { name: 'St Lawrence Jewry' }));
+    await waitFor(() => expect(again.router.state.location.pathname).toBe('/app/t/t1'));
+    expect(window.localStorage.getItem('panote.currentTour')).toBe('t1');
   });
 
   it('marks the last tour opened in the editor as Current', async () => {

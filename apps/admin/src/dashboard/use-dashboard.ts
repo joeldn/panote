@@ -1,12 +1,16 @@
-import type { PanoSummary, TourSummary, Visibility } from './types.js';
+import type { PanoSummary, SharedTourSummary, TourSummary, Usage, Visibility } from './types.js';
 import {
   ApiError,
   isAuthError,
+  panoDeleteErrorOf,
   type AdminApi,
   type PublicApi,
   type TourDocInput,
+  type UploadApi,
 } from '@internal/web-kit';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { deletePanoErrorMessage, panoTitle, unusedPanos } from './use-unused-panos.js';
 
 const PAGE_LIMIT = 100;
 // Bounds a runaway cursor loop; 50 pages of 100 is far beyond any real library.
@@ -82,12 +86,28 @@ export function deleteErrorMessage(e: unknown): string {
 
 export type LoadStatus = 'loading' | 'ready' | 'error';
 
+/** Tours other people invited this account to edit. Loaded apart: a failure here leaves
+ * the owner's own tours alone. */
+export type SharedTours =
+  { status: 'loading' | 'error'; tours: null } | { status: 'ready'; tours: SharedTourSummary[] };
+
+/**
+ * The panos no tour uses. Asked for after the dashboard is up: finding them reads every
+ * tour on the server, which the first paint shouldn't wait for.
+ */
+export type UnusedPanos =
+  { status: 'loading' | 'error'; panos: null } | { status: 'ready'; panos: PanoSummary[] };
+
 export interface Dashboard {
   status: LoadStatus;
   tours: TourSummary[];
   /** Live panos by id (tombstoned ones excluded); null until loaded or if the list failed. */
   panos: ReadonlyMap<string, PanoSummary> | null;
-  /** Views per tour: absent while loading, null when the stats call failed. */
+  unused: UnusedPanos;
+  /** The upload limits and usage, asked for after the dashboard is up; null until then. */
+  usage: Usage | null;
+  shared: SharedTours;
+  /** Views per tour, own and shared: absent while loading, null when the stats call failed. */
   views: Readonly<Record<string, number | null>>;
   /** Tombstoned panos whose interrupted delete is being re-issued. */
   resuming: readonly string[];
@@ -96,17 +116,33 @@ export interface Dashboard {
   notice: string | null;
   dismissNotice(): void;
   reload(): void;
+  reloadShared(): void;
+  reloadUnused(): void;
   finishDeleting(): Promise<void>;
   setVisibility(tour: TourSummary, visibility: Visibility): Promise<void>;
   duplicate(tour: TourSummary): Promise<void>;
   /** Rejects with a user-facing message; a 404 counts as already deleted. */
   deleteTour(tour: TourSummary): Promise<void>;
+  /**
+   * Deletes an unused pano. Resolves once it is gone, or was kept because a tour uses it
+   * again (a notice says so); rejects with a message to show in the confirm modal.
+   */
+  deletePano(pano: PanoSummary): Promise<void>;
 }
 
-export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
+export function useDashboard(
+  api: AdminApi,
+  publicApi: PublicApi,
+  upload: Pick<UploadApi, 'getUsage'>,
+): Dashboard {
   const [status, setStatus] = useState<LoadStatus>('loading');
   const [tours, setTours] = useState<TourSummary[]>([]);
   const [panos, setPanos] = useState<ReadonlyMap<string, PanoSummary> | null>(null);
+  const [unused, setUnused] = useState<UnusedPanos>({ status: 'loading', panos: null });
+  const [unusedKey, setUnusedKey] = useState(0);
+  const [usage, setUsage] = useState<Usage | null>(null);
+  const [shared, setShared] = useState<SharedTours>({ status: 'loading', tours: null });
+  const [sharedKey, setSharedKey] = useState(0);
   const [views, setViews] = useState<Record<string, number | null>>({});
   const [resuming, setResuming] = useState<string[]>([]);
   const [stuck, setStuck] = useState<string[]>([]);
@@ -159,9 +195,51 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
     };
   }, [api, applyPanos, reloadKey]);
 
+  // Once the tours are showing: the unused panos, for their filter chip and list. Asked on
+  // every visit on purpose: the chip only shows when there are some, so it needs the count,
+  // and a tour count is capped, so the server's walk of them stays bounded.
+  const ready = status === 'ready';
+  useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    listAllPanos(api, true).then(
+      (list) => live && setUnused({ status: 'ready', panos: unusedPanos(list) }),
+      () => live && setUnused({ status: 'error', panos: null }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, ready, unusedKey]);
+
+  // The limits for the totals line, the same way: a failure just leaves them out.
+  useEffect(() => {
+    if (!ready) return;
+    let live = true;
+    upload.getUsage().then(
+      (u) => live && setUsage(u),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [upload, ready]);
+
+  useEffect(() => {
+    let live = true;
+    api.listSharedTours().then(
+      (res) => live && setShared({ status: 'ready', tours: [...res.tours].sort(byNewest) }),
+      () => live && setShared({ status: 'error', tours: null }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, sharedKey]);
+
   // Views per card from the public stats route; never cancelled, so StrictMode keeps them.
   useEffect(() => {
-    const queue = tours.map((t) => t.tourId).filter((id) => !statsRequested.current.has(id));
+    const queue = [...tours, ...(shared.tours ?? [])]
+      .map((t) => t.tourId)
+      .filter((id) => !statsRequested.current.has(id));
     queue.forEach((id) => statsRequested.current.add(id));
     const worker = async () => {
       for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
@@ -174,7 +252,7 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
       }
     };
     for (let i = 0; i < Math.min(STATS_CONCURRENCY, queue.length); i++) void worker();
-  }, [tours, publicApi]);
+  }, [tours, shared.tours, publicApi]);
 
   const removeTour = (tourId: string) => setTours((ts) => ts.filter((t) => t.tourId !== tourId));
 
@@ -263,10 +341,45 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
     [api, refreshPanos],
   );
 
+  const deletePano = useCallback(
+    async (pano: PanoSummary) => {
+      // Either way it leaves the unused list; only a deleted one leaves the pano count.
+      const patch = (keep: boolean) => {
+        setUnused((u) =>
+          u.panos ? { status: 'ready', panos: u.panos.filter((p) => p.panoId !== pano.panoId) } : u,
+        );
+        if (keep) return;
+        setPanos((ps) => {
+          if (!ps?.has(pano.panoId)) return ps;
+          const next = new Map(ps);
+          next.delete(pano.panoId);
+          return next;
+        });
+      };
+      try {
+        await api.deletePano(pano.panoId);
+      } catch (e) {
+        const reason = panoDeleteErrorOf(e);
+        if (reason === 'in-use') {
+          // A tour started using it since the list loaded; the server kept it.
+          patch(true);
+          setNotice(`“${panoTitle(pano)}” is used by a tour now, so it was kept.`);
+          return;
+        }
+        if (reason !== 'not-found') throw new Error(deletePanoErrorMessage(e), { cause: e });
+      }
+      patch(false);
+    },
+    [api],
+  );
+
   return {
     status,
     tours,
     panos,
+    unused,
+    usage,
+    shared,
     views,
     resuming,
     stuck,
@@ -276,9 +389,18 @@ export function useDashboard(api: AdminApi, publicApi: PublicApi): Dashboard {
       setStatus('loading');
       setReloadKey((k) => k + 1);
     }, []),
+    reloadShared: useCallback(() => {
+      setShared({ status: 'loading', tours: null });
+      setSharedKey((k) => k + 1);
+    }, []),
+    reloadUnused: useCallback(() => {
+      setUnused({ status: 'loading', panos: null });
+      setUnusedKey((k) => k + 1);
+    }, []),
     finishDeleting: useCallback(() => resumeDeletes([...stuck]), [resumeDeletes, stuck]),
     setVisibility,
     duplicate,
     deleteTour,
+    deletePano,
   };
 }
