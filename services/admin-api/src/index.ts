@@ -267,8 +267,8 @@ app.use('/api/admin/*', async (c, next) => {
   return next();
 });
 
-// The operator area (ops-gate.ts): every route under /api/admin/ops, after the gate above.
-app.use('/api/admin/ops', requireOperator);
+// The operator area (ops-gate.ts): /api/admin/ops and every route under it, after the gate
+// above.
 app.use('/api/admin/ops/*', requireOperator);
 
 // The caller's sub: from the gate when it ran, else verified here.

@@ -62,21 +62,36 @@ describe('requireOperator', () => {
     expect(res.headers.get('Cache-Control')).toBe('private, no-store');
   });
 
-  it('answers anyone else with a plain 404', async () => {
+  it('answers anyone else as if the route did not exist', async () => {
     const res = await get('owner');
     expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: 'not found' });
+    expect(await res.text()).toBe('404 Not Found');
   });
 
   it('wants a signed-in user first', async () => {
     expect((await get()).status).toBe(401);
   });
+});
 
-  it('guards the real routes: a non-operator gets 404 under /api/admin/ops', async () => {
-    const res = await SELF.fetch('https://x/api/admin/ops', {
-      headers: { Authorization: 'Bearer owner' },
-    });
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: 'not found' });
+describe('the real /api/admin/ops routes', () => {
+  const real = (path: string, token: string) =>
+    SELF.fetch(`https://x${path}`, { headers: { Authorization: `Bearer ${token}` } });
+
+  it('look to a non-operator exactly like a path that does not exist', async () => {
+    const [ops, nope] = await Promise.all([
+      real('/api/admin/ops', 'owner'),
+      real('/api/admin/does-not-exist', 'owner'),
+    ]);
+    expect(ops.status).toBe(nope.status);
+    expect(ops.headers.get('content-type')).toBe(nope.headers.get('content-type'));
+    expect(await ops.text()).toBe(await nope.text());
+    expect(ops.headers.get('Cache-Control')).toBeNull();
+  });
+
+  it('let an operator through the gate', async () => {
+    for (const path of ['/api/admin/ops', '/api/admin/ops/anything']) {
+      const res = await real(path, 'operator');
+      expect(res.headers.get('Cache-Control')).toBe('private, no-store');
+    }
   });
 });

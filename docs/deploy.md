@@ -2970,9 +2970,9 @@ an email arrives about 10 minutes later; set it back and the recovery follows wi
 `/app/ops` in the admin app is the operator area: metrics and, later, support tools. It is for
 signed-in Auth0 users listed in `admin-api`'s `OPERATOR_SUB_SHA256` var (both env blocks of
 `services/admin-api/wrangler.jsonc`): the hex SHA-256 of each operator's Auth0 user id,
-comma-separated. Empty, the default, means nobody. Everyone else gets `404 {"error":"not found"}`
-from every `/api/admin/ops` route (`requireOperator` in `src/ops-gate.ts`) and "Page not found" at
-`/app/ops`; `GET /api/admin/account` says `operator: true` only for a listed user, and the
+comma-separated. Empty, the default, means nobody. Every other signed-in user gets the same `404`
+from every `/api/admin/ops` route as from a route that doesn't exist (`requireOperator` in
+`src/ops-gate.ts`; signed out, it's the usual `401`), and "Page not found" at `/app/ops`; `GET /api/admin/account` says `operator: true` only for a listed user, and the
 account page (`/app/account`) links to Operations from that. These routes are separate from the
 token-guarded `/api/admin/operator/*` routes the scripts call.
 

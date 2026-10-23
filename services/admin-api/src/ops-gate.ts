@@ -36,13 +36,14 @@ type GateEnv = {
 
 /**
  * Every /api/admin/ops route. Runs after the /api/admin/* gate (which has already
- * authenticated and rate limited the caller); anyone who isn't an operator gets the same
- * plain 404 as a route that doesn't exist, so the area doesn't announce itself.
+ * authenticated and rate limited the caller); any other signed-in user gets the app's own
+ * not-found answer, the same as for a route that doesn't exist, so the area doesn't
+ * announce itself.
  */
 export const requireOperator = createMiddleware<GateEnv>(async (c, next) => {
   const sub = c.get('sub') ?? (await authenticate(c.req.raw, c.env)).sub;
   if (!(await isOperatorSub(c.env.OPERATOR_SUB_SHA256, sub))) {
-    return c.json({ error: 'not found' }, 404);
+    return c.notFound();
   }
   c.header('Cache-Control', 'private, no-store');
   await next();
