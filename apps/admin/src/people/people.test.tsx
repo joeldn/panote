@@ -136,7 +136,9 @@ describe('People', () => {
       removeMember,
     });
     const dialog = await screen.findByRole('dialog', { name: 'People' });
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Cancel the invite for kim@example.com' }));
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Cancel the invite for kim@example.com' }),
+    );
     await waitFor(() => expect(revokeInvite).toHaveBeenCalledWith('tour-1', 'i1'));
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Remove ed@example.com' }));
