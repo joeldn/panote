@@ -1,5 +1,5 @@
 import { MAX_TITLE_LENGTH } from '@internal/contracts';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 export interface InlineTextProps {
   value: string;
@@ -32,6 +32,8 @@ export function InlineText({
   editOnMount = false,
 }: InlineTextProps) {
   const [draft, setDraft] = useState<string | null>(editOnMount && !disabled ? value : null);
+  // Selected once, as editing starts: coming back to the window keeps the cursor.
+  const selectAll = useCallback((el: HTMLInputElement | null) => el?.select(), []);
 
   const commit = () => {
     if (draft === null) return;
@@ -62,7 +64,7 @@ export function InlineText({
       {...(placeholder !== undefined && { placeholder })}
       maxLength={MAX_TITLE_LENGTH}
       autoFocus
-      onFocus={(e) => e.currentTarget.select()}
+      ref={selectAll}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {

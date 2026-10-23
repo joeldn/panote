@@ -222,7 +222,9 @@ export function NewPanoOverlay() {
       }}
       onStarted={({ tourId }) => {
         const to = tourId ?? tour;
-        if (to) void navigate(`/t/${to}`);
+        // A new tour opens asking for its name, as it does from the dashboard.
+        const state = target.kind === 'new-tour' ? { newTour: true } : undefined;
+        if (to) void navigate(`/t/${to}`, { state });
       }}
     />
   );

@@ -10,7 +10,7 @@ export const UNTITLED_TOUR = 'Untitled tour';
  * PXL_20231004_153012, R0010042, DJI_0042 or 20231004_153012.
  */
 const CAMERA_NAME =
-  /^(?:img|dsc[nf]?|_?dsc|pxl|dji|gopr|gs|sam|mvimg|pano|photo|image|vid|r(?=\d{5}))?[\s_.-]*\d[\d\s_.-]*(?:pano|stitch(?:ed)?|edit(?:ed)?)?$/i;
+  /^(?:img|dsc[nf]?|_?dsc|pxl|dji|gopr|gs|mvimg|pano|photo|image|vid|r(?=\d{5}))?[\s_.-]*e?\d[\d\s_.-]*(?:(?:pano|stitch(?:ed)?|edit(?:ed)?|mp|\(\d+\))[\s_.-]*)*$/i;
 
 /**
  * "town_hall.jpg" -> "town hall"; the fallback when nothing is left. With `skipCameraNames`,

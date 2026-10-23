@@ -42,12 +42,16 @@ describe('titleFromFileName', () => {
       '20231004_153012.jpg',
       'PANO_20231004_1530.jpg',
       'DSC01234.jpg',
+      'PXL_20231004_153012345.MP.jpg',
+      'IMG_2041 (1).jpg',
+      'IMG_E2041.JPG',
     ]) {
       expect(titleFromFileName(name, 'Untitled tour', skip), name).toBe('Untitled tour');
     }
     // A name someone chose stays, numbers and all.
     expect(titleFromFileName('IMG_2041 town-hall.jpg', 'x', skip)).toBe('IMG 2041 town-hall');
     expect(titleFromFileName('R2D2.jpg', 'x', skip)).toBe('R2D2');
+    expect(titleFromFileName('Sam_2024.jpg', 'x', skip)).toBe('Sam 2024');
     // Panos keep the file's name: it tells several photos apart.
     expect(titleFromFileName('IMG_2041.JPG', 'x')).toBe('IMG 2041');
   });

@@ -1097,7 +1097,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           target={picker.target}
           {...(picker.problem && { problem: picker.problem })}
           onStarted={({ tourId }) => {
-            if (picker.target.kind === 'new-tour' && tourId) void navigate(`/t/${tourId}`);
+            if (picker.target.kind === 'new-tour' && tourId)
+              void navigate(`/t/${tourId}`, { state: { newTour: true } });
           }}
           {...(repick && picker.resume
             ? { resume: { take: takePendingFile, missingNotice: repickNotice(repick) } }

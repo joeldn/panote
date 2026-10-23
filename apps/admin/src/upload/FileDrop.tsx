@@ -4,6 +4,8 @@ import type { UploadTarget } from './resume-store.js';
 import { useUploads } from './upload-context.js';
 
 const carriesFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false;
+// An open dialog (the upload dialog, a replace, a confirm) owns the page while it's up.
+const dialogOpen = () => document.querySelector('[aria-modal="true"]') !== null;
 
 /**
  * Photos dragged anywhere over the page start uploading for `target` when dropped there,
@@ -24,7 +26,7 @@ export function FileDrop({ target, label }: { target: UploadTarget; label: strin
     const onEnter = (e: DragEvent) => {
       if (!carriesFiles(e)) return;
       depth++;
-      setOver(true);
+      setOver(!dialogOpen());
     };
     const onLeave = (e: DragEvent) => {
       if (!carriesFiles(e)) return;
@@ -42,6 +44,7 @@ export function FileDrop({ target, label }: { target: UploadTarget; label: strin
       // The upload dialog's drop zone already took it.
       if (e.defaultPrevented) return;
       e.preventDefault();
+      if (dialogOpen()) return;
       const files = [...(e.dataTransfer?.files ?? [])];
       if (files.length > 0) latest.current.uploads.drop(files, latest.current.target);
     };
