@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { json } from '../__fixtures__/helpers.js';
 import { AuthRequiredError } from '../auth.js';
 import { createAdminApi, panoDeleteErrorOf, publishErrorOf } from './admin.js';
-import { ApiError, ApiSchemaError, ConflictError } from './http.js';
+import { ApiError, ApiSchemaError, ConflictError, ReauthRequiredError } from './http.js';
 
 const status = {
   hasConfig: true,
@@ -242,6 +242,19 @@ describe('createAdminApi', () => {
     expect(JSON.parse(call(0).init.body as string)).toEqual({ confirm: 'delete my account' });
     await expect(api.deleteAccount('delete my account')).resolves.toEqual({ status: 'pending' });
     await expect(api.deleteAccount('nope')).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('deleteAccount tells a stale sign-in apart from any other 403', async () => {
+    const { api } = setup(
+      json({ error: 'reauthentication required' }, 403),
+      json({ error: 'account disabled' }, 403),
+    );
+    await expect(api.deleteAccount('delete my account')).rejects.toBeInstanceOf(
+      ReauthRequiredError,
+    );
+    const other = await api.deleteAccount('delete my account').catch((e: unknown) => e);
+    expect(other).toMatchObject({ status: 403 });
+    expect(other).not.toBeInstanceOf(ReauthRequiredError);
   });
 
   it('PATCHes visibility and surfaces a 409 as ApiError', async () => {

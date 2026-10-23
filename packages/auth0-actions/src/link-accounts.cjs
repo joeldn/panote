@@ -24,6 +24,14 @@
  * owner chose that (docs/decisions.md, "Account linking"). The provider allowlist is what
  * keeps it safe. It never blocks a login: if anything fails, the user signs in unlinked and
  * it is logged.
+ *
+ * It also puts two custom claims on every access token (admin-api reads them; the names
+ * match AUTH_TIME_CLAIM and LINKED_SUBS_CLAIM in packages/contracts/src/jwt.ts):
+ * - AUTH_TIME_CLAIM: when the user last actually signed in (epoch seconds). Account deletion
+ *   wants a recent one. Left off a refresh-token exchange, so a stolen refresh token can't
+ *   mint a "just signed in" token.
+ * - LINKED_SUBS_CLAIM: the user ids of the identities linked into this user, so account
+ *   deletion also removes Panote data made under one of them before it was linked.
  */
 
 /**
@@ -35,6 +43,12 @@
  * facebook.
  */
 const TRUSTED_PROVIDERS = Object.freeze(['email', 'google-oauth2', 'apple']);
+
+/** Custom access-token claims; Auth0 drops any claim not namespaced with a URL. */
+const AUTH_TIME_CLAIM = 'https://panote.io/auth_time';
+const LINKED_SUBS_CLAIM = 'https://panote.io/linked_subs';
+/** admin-api reads no more than this many linked subs (MAX_LINKED_SUBS in contracts). */
+const MAX_LINKED_SUBS = 10;
 
 /** Each Management API and token call gives up after this, so a hung API can't fail a login. */
 const TIMEOUT_MS = 5000;
@@ -68,6 +82,7 @@ const DEADLINE_MS = 10_000;
  * @property {User} user
  * @property {Record<string, string | undefined>} [secrets]
  * @property {{ protocol?: string }} [transaction]
+ * @property {{ methods?: { name?: string, timestamp?: string }[] }} [authentication]
  */
 
 /**
@@ -80,6 +95,7 @@ const DEADLINE_MS = 10_000;
 /**
  * @typedef {object} PostLoginApi
  * @property {{ setPrimaryUser: (primaryUserId: string) => void }} authentication
+ * @property {{ setCustomClaim: (name: string, value: unknown) => void }} [accessToken]
  * @property {ActionCache} [cache]
  */
 
@@ -159,6 +175,39 @@ function choosePrimary(current, found) {
   );
   const primary = candidates[0];
   return primary && primary.user_id !== current.user_id ? primary.user_id : null;
+}
+
+const isRefresh = (/** @type {PostLoginEvent} */ event) =>
+  event.transaction?.protocol === 'oauth2-refresh-token';
+
+/**
+ * The user ids of the identities linked into `u` (each as it was before the link:
+ * `<provider>|<id>`), plus `also`, without `u`'s own, at most MAX_LINKED_SUBS.
+ *
+ * @param {User} u
+ * @param {string[]} [also]
+ * @returns {string[]}
+ */
+function linkedSubsOf(u, also = []) {
+  const subs = [...(u.identities ?? []).map((id) => `${id.provider}|${id.user_id}`), ...also];
+  return [...new Set(subs)].filter((s) => s !== u.user_id).slice(0, MAX_LINKED_SUBS);
+}
+
+/**
+ * When the user last actually signed in, in epoch seconds: the latest of the session's
+ * authentication methods. Undefined on a refresh-token exchange, or when Auth0 gives none.
+ *
+ * @param {PostLoginEvent} event
+ * @returns {number | undefined}
+ */
+function authTimeOf(event) {
+  if (isRefresh(event)) return undefined;
+  let latest = -Infinity;
+  for (const m of event.authentication?.methods ?? []) {
+    const t = m.timestamp ? Date.parse(m.timestamp) : NaN;
+    if (t > latest) latest = t;
+  }
+  return Number.isFinite(latest) ? Math.floor(latest / 1000) : undefined;
 }
 
 /**
@@ -299,7 +348,7 @@ async function linkAccounts(event, api, { management, log, deadlineMs = DEADLINE
   const user = event.user;
   const email = user.email;
   // A refresh-token exchange already carries the user the login settled on.
-  if (event.transaction?.protocol === 'oauth2-refresh-token') return null;
+  if (isRefresh(event)) return null;
   // Only a user with a single identity is linked into another. One that already has
   // linked identities is a primary itself; merging two primaries is left to the operator.
   const identities = user.identities ?? [];
@@ -321,7 +370,8 @@ async function linkAccounts(event, api, { management, log, deadlineMs = DEADLINE
 
   const run = async () => {
     for (let attempt = 0; ; attempt++) {
-      const primary = choosePrimary(user, await management.usersByEmail(email, deadline));
+      const found = await management.usersByEmail(email, deadline);
+      const primary = choosePrimary(user, found);
       if (!primary) return null;
       try {
         await management.link(primary, secondary, deadline);
@@ -333,8 +383,12 @@ async function linkAccounts(event, api, { management, log, deadlineMs = DEADLINE
       // the primary, deadline or not. (A link aborted by the deadline that Auth0 still applied
       // can't be told apart from one it never got; that login fails and the next one works.)
       api.authentication.setPrimaryUser(primary);
+      // The token is the primary's now: its linked subs are the primary's, and this user.
+      const primaryUser = found.find((u) => u.user_id === primary) ?? { user_id: primary };
+      api.accessToken?.setCustomClaim(LINKED_SUBS_CLAIM, linkedSubsOf(primaryUser, [user.user_id]));
       // Ids only, never the email. Panote data stored under the secondary id (signed in
-      // before it was linked) stays there: docs/deploy.md, "Account linking".
+      // before it was linked) stays there, and account deletion reaches it through
+      // LINKED_SUBS_CLAIM: docs/deploy.md, "Account linking".
       log(LOG, `linked ${user.user_id} into ${primary}`);
       return primary;
     }
@@ -382,10 +436,22 @@ exports.onExecutePostLogin = async (event, api) => {
   // console.log is what the Action's real-time logs and Monitoring → Logs show.
   // eslint-disable-next-line no-console
   const log = console.log;
-  await linkAccounts(event, api, { management: managementFromSecrets(event, api), log });
+  const linkedInto = await linkAccounts(event, api, {
+    management: managementFromSecrets(event, api),
+    log,
+  });
+  // Linking set the primary's linked subs itself; otherwise they are this user's.
+  if (!linkedInto) api.accessToken?.setCustomClaim(LINKED_SUBS_CLAIM, linkedSubsOf(event.user));
+  const authTime = authTimeOf(event);
+  if (authTime !== undefined) api.accessToken?.setCustomClaim(AUTH_TIME_CLAIM, authTime);
 };
 
 exports.TRUSTED_PROVIDERS = TRUSTED_PROVIDERS;
+exports.AUTH_TIME_CLAIM = AUTH_TIME_CLAIM;
+exports.LINKED_SUBS_CLAIM = LINKED_SUBS_CLAIM;
+exports.MAX_LINKED_SUBS = MAX_LINKED_SUBS;
+exports.authTimeOf = authTimeOf;
+exports.linkedSubsOf = linkedSubsOf;
 exports.DEADLINE_MS = DEADLINE_MS;
 exports.ManagementError = ManagementError;
 exports.choosePrimary = choosePrimary;

@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   assertOwnsTour,
+  BAN_EMAIL_HINT,
   caseRecordKey,
   copyToQuarantine,
   decodeOwner,
@@ -755,6 +756,9 @@ describe('runTakedown', () => {
     expect(t.fetchFn).toHaveBeenCalledTimes(2);
     const firstDelete = t.events.findIndex((e) => e.startsWith('delete '));
     expect(t.events[0]).toBe(`put ${accountDisabledKey(SUB)}`);
+    // The sub-only block comes with the step that bans the email too.
+    expect(t.lines).toContain(BAN_EMAIL_HINT(SUB));
+    expect(BAN_EMAIL_HINT(SUB)).toContain('ban-email.cjs');
     expect(t.events.indexOf(`put ${caseRecordKey(CASE)}`)).toBeLessThan(firstDelete);
     expect(t.events.slice(firstDelete)).toEqual([
       'delete tour-1',
@@ -777,5 +781,6 @@ describe('runTakedown', () => {
     expect(t.events).toEqual([]);
     expect(t.fetchFn).not.toHaveBeenCalled();
     expect(t.lines.at(-1)).toMatch(/^DRY RUN: would disable owner, then copy everything/);
+    expect(t.lines).not.toContain(BAN_EMAIL_HINT(SUB));
   });
 });

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { TILE_FORMATS } from './manifest.js';
+import { MAX_LINKED_SUBS } from './jwt.js';
 import { BACKUP_DATE_PATTERN, isRestorableKey, PANO_PATTERN } from './keys.js';
 import { VisibilitySchema } from './publish.js';
 import { SceneConfigSchema, TourDocSchema } from './schema.js';
@@ -251,6 +252,15 @@ export type AccountDeleteRequest = z.infer<typeof AccountDeleteRequestSchema>;
 export const AccountDeleteOkSchema = z.object({ status: z.enum(['deleted', 'pending']) });
 export type AccountDeleteOk = z.infer<typeof AccountDeleteOkSchema>;
 
+// Account delete wants a sign-in this recent (the token's AUTH_TIME_CLAIM). The admin
+// app asks Auth0 for one with `prompt=login` and the same `max_age` before retrying.
+// Long enough to come back from Auth0 and type the phrase again.
+export const RECENT_AUTH_MAX_AGE_SECONDS = 600;
+// 403 from account delete when the sign-in isn't recent enough, or the token
+// doesn't say when it was (the Auth0 Action that adds the claim isn't deployed).
+export const REAUTH_REQUIRED_ERROR = 'reauthentication required';
+export const ReauthRequiredSchema = z.object({ error: z.literal(REAUTH_REQUIRED_ERROR) });
+
 // 410 from every owner write (and upload-url) once the account is marked.
 export const AccountDeletedSchema = z.object({ error: z.literal('account deleted') });
 
@@ -260,6 +270,9 @@ export const AccountDeletionRecordSchema = z.object({
   sub: z.string().min(1),
   requestedAt: z.string(),
   completedAt: z.string().optional(),
+  // Identities linked into this user (the token's LINKED_SUBS_CLAIM): their
+  // prefixes are deleted with the account's own.
+  linkedSubs: z.array(z.string().min(1)).max(MAX_LINKED_SUBS).optional(),
 });
 export type AccountDeletionRecord = z.infer<typeof AccountDeletionRecordSchema>;
 

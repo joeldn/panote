@@ -2,8 +2,13 @@ import type { PanoViewerApi } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Modal } from '../Modal.js';
 import { PanoViewerContext } from '../viewer-context.js';
-import { ViewerControls } from './ViewerControls.js';
+import {
+  PSEUDO_FULLSCREEN_CLASS,
+  ViewerControls,
+  type ViewerControlsProps,
+} from './ViewerControls.js';
 
 const viewer = {
   getView: () => ({ yaw: 0, pitch: 0, fov: 70 }),
@@ -15,10 +20,10 @@ function setFullscreenEnabled(value: boolean | undefined) {
   Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value });
 }
 
-function renderControls(target: HTMLElement) {
+function renderControls(target: HTMLElement, props: Partial<ViewerControlsProps> = {}) {
   render(
     <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
-      <ViewerControls fullscreenTarget={{ current: target }} />
+      <ViewerControls fullscreenTarget={{ current: target }} {...props} />
     </PanoViewerContext.Provider>,
   );
 }
@@ -62,6 +67,98 @@ describe('ViewerControls fullscreen', () => {
     expect(el.requestFullscreen).toHaveBeenCalled();
     expect(caught).toHaveBeenCalled();
     await act(async () => {});
+  });
+});
+
+describe('ViewerControls fullscreen fallback (iPhone Safari)', () => {
+  it('pins the target over the viewport, and the same button leaves it', () => {
+    setFullscreenEnabled(undefined);
+    const el = document.createElement('div');
+    renderControls(el, { fullscreenFallback: 'pseudo' });
+    const button = screen.getByRole('button', { name: 'Fullscreen' });
+    fireEvent.click(button);
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(true);
+    expect(button.getAttribute('aria-label')).toBe('Exit fullscreen');
+    expect(button.querySelector('i')?.className).toContain('fa-compress');
+    fireEvent.click(button);
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
+    expect(button.getAttribute('aria-label')).toBe('Fullscreen');
+  });
+
+  it('leaves on Escape, and when unmounted', () => {
+    setFullscreenEnabled(undefined);
+    const el = document.createElement('div');
+    renderControls(el, { fullscreenFallback: 'pseudo' });
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(true);
+    cleanup();
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
+  });
+
+  it('stays pinned when Escape closes a dialog open over it', () => {
+    setFullscreenEnabled(undefined);
+    const el = document.createElement('div');
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <ViewerControls fullscreenTarget={{ current: el }} fullscreenFallback="pseudo" />
+      </PanoViewerContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    // The share sheet opens over it after it went fullscreen.
+    rerender(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <ViewerControls fullscreenTarget={{ current: el }} fullscreenFallback="pseudo" />
+        <Modal open onClose={onClose} aria-label="Share">
+          <p>sheet</p>
+        </Modal>
+      </PanoViewerContext.Provider>,
+    );
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(true);
+    // With the sheet gone, Escape leaves fullscreen.
+    rerender(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <ViewerControls fullscreenTarget={{ current: el }} fullscreenFallback="pseudo" />
+      </PanoViewerContext.Provider>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
+  });
+
+  it('uses the real thing where the target can have it', () => {
+    setFullscreenEnabled(true);
+    const el = document.createElement('div');
+    el.requestFullscreen = vi.fn(async () => {});
+    renderControls(el, { fullscreenFallback: 'pseudo' });
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    expect(el.requestFullscreen).toHaveBeenCalled();
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
+  });
+
+  it('offers a link to open the page in a new tab instead (an embed)', () => {
+    setFullscreenEnabled(false);
+    renderControls(document.createElement('div'), {
+      fullscreenFallback: { href: '/s/old-town?pano=hall' },
+    });
+    expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();
+    const link = screen.getByRole('link', { name: 'Open fullscreen in a new tab' });
+    expect(link.getAttribute('href')).toBe('/s/old-town?pano=hall');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener');
+  });
+
+  it('offers no link where the target can go fullscreen itself', () => {
+    setFullscreenEnabled(true);
+    const el = document.createElement('div');
+    el.requestFullscreen = vi.fn(async () => {});
+    renderControls(el, { fullscreenFallback: { href: '/s/old-town' } });
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Fullscreen' })).toBeTruthy();
   });
 });
 
