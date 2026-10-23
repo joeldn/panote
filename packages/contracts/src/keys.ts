@@ -52,6 +52,23 @@ const ORIGINAL_KEY_RE = /^panos\/([^/]+)\/([^/]+)\/original$/;
 // Same base64url charset as encodeId's output (upload-prefix.ts's OWNER_CHARSET_RE).
 const OWNER_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 
+/**
+ * The raw id an owner segment encodes (encodeId's inverse), or null for a segment encodeId
+ * could not have written. For operator tooling that finds owners by listing keys.
+ */
+export const decodeId = (segment: string): string | null => {
+  if (!OWNER_SEGMENT_RE.test(segment)) return null;
+  try {
+    const b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return encodeId(raw) === segment ? raw : null;
+  } catch {
+    return null;
+  }
+};
+
 // Shared by both exports below - parses and validates both segments once.
 // The errors never echo the key or the owner segment: callers log them, and
 // the owner is base64url(sub), which is reversible.
@@ -228,6 +245,14 @@ export type PlanImageType = keyof typeof PLAN_EXTENSIONS;
 export const PLAN_IMAGE_TYPES = Object.keys(PLAN_EXTENSIONS) as PlanImageType[];
 export const planKey = (t: string, planId: string, type: PlanImageType): string =>
   `${planPrefix(t)}${assertValidId(planId, 'planId')}.${PLAN_EXTENSIONS[type]}`;
+// A plan image's key, pub/plans/<tourId>/<planId>.<ext>, as a pattern with no anchors.
+const PLAN_KEY_PATTERN = `pub/plans/([A-Za-z0-9_-]+)/[A-Za-z0-9_-]+\\.(?:${Object.values(PLAN_EXTENSIONS).join('|')})`;
+const PLAN_KEY_RE = new RegExp(`^${PLAN_KEY_PATTERN}$`);
+/** The tourId a plan image's key names, or null for any other key. */
+export const tourIdOfPlanKey = (key: string): string | null => {
+  const tourId = PLAN_KEY_RE.exec(key)?.[1];
+  return tourId !== undefined && PANO_PATTERN.test(tourId) ? tourId : null;
+};
 export const SLUGS_ROOT = 'slugs/';
 export const slugKey = (slug: string): string => {
   if (!isValidSlug(slug)) throw new Error(`invalid or reserved slug ${JSON.stringify(slug)}`);
@@ -306,15 +331,17 @@ export const BACKUP_PROGRESS_KEY = `${BACKUP_ROOT}progress.json`;
 /**
  * What the backup copies: every key under `prefix` that `match` accepts. The JSON the app
  * can't rebuild: tours and their publish records, each pano's config, the public bundles
- * and share links, the tour-owner index, Explore, and the account markers. Not originals
- * or tiles (large; tiles and manifests are rebuilt from originals by a re-tile), nor the
- * derived or operational prefixes (tile-gc/, upload-log/, quarantine/, ops/).
+ * and share links, the tour-owner index, Explore, and the account markers; and the tours'
+ * floor-plan images (at most MAX_PLAN_BYTES each, plan.ts). Not originals or tiles (large;
+ * tiles and manifests are rebuilt from originals by a re-tile, and a deleted original waits
+ * in trash/ instead), nor the derived or operational prefixes (tile-gc/, upload-log/,
+ * quarantine/, trash/, ops/).
  */
 export const BACKUP_SOURCES: readonly { prefix: string; match: RegExp }[] = [
   { prefix: ACCOUNTS_ROOT, match: /^accounts\/[^/]+\/(deletion|disabled)\.json$/ },
   { prefix: EXPLORE_ROOT, match: /^explore\/(index|tours|hidden)\/[^/]+\.json$/ },
   { prefix: 'panos/', match: /^panos\/[^/]+\/[^/]+\/config\.json$/ },
-  { prefix: 'pub/', match: /^pub\/.+\.json$/ },
+  { prefix: 'pub/', match: new RegExp(`^(?:pub/.+\\.json|${PLAN_KEY_PATTERN})$`) },
   { prefix: SLUGS_ROOT, match: /^slugs\/[^/]+\.json$/ },
   { prefix: TOUR_OWNERS_ROOT, match: /^tour-owners\/[^/]+\.json$/ },
   { prefix: 'tours/', match: /^tours\/[^/]+\/[^/]+\/[^/]+\.json$/ },
@@ -329,5 +356,27 @@ export const isBackedUpKey = (key: string): boolean =>
  */
 export const isRestorableKey = (key: string): boolean =>
   isBackedUpKey(key) && !key.startsWith(ACCOUNTS_ROOT);
+
+// Deleted originals (admin-api's trash.ts): every delete of a pano's original moves it,
+// metadata and all, to trash/<YYYY-MM-DD>/<its key> first, and the daily sweep deletes a
+// day's trash TRASH_RETENTION_DAYS later, so a deleted photo can be restored by the operator
+// until then. Private: outside the WAF's public prefixes (only tiles/, pub/ and slugs/
+// pass), outside the R2 notification's panos/ prefix (no tiling job), and outside
+// panos/<owner>/, so it never lists as a pano or counts toward the owner's storage quota.
+export const TRASH_ROOT = 'trash/';
+export const TRASH_RETENTION_DAYS = 30;
+/** One day's trash: trash/<YYYY-MM-DD>/. */
+export const trashDayPrefix = (date: string): string => `${TRASH_ROOT}${assertBackupDate(date)}/`;
+/** Where a deleted `key` waits out the retention. */
+export const trashKey = (date: string, key: string): string => `${trashDayPrefix(date)}${key}`;
+/** True for a pano's original key (panos/<owner segment>/<panoId>/original), the only thing trashed. */
+export const isOriginalKey = (key: string): boolean => {
+  try {
+    parseOriginalKey(key);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 export { PANO_PATTERN };

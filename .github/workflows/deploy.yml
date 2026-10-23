@@ -437,6 +437,7 @@ jobs:
           expect 401 -X POST "$site/api/upload-url"
           expect 403 -I "$cdn/panos/x"
           expect 403 -I "$cdn/tours/x"
+          expect 403 -I "$cdn/trash/x"
           expect 403 -I "$cdn/"
           expect 404 -I "$cdn/tiles/smoke-test/manifest.json"
           if [ "$TARGET_ENVIRONMENT" = production ]; then

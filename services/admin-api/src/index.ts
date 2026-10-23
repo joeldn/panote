@@ -10,9 +10,11 @@ import {
   isContentId,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
+  OPERATOR_BACKFILL_PATH,
   OPERATOR_RESTORE_PATH,
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
+  OperatorBackfillRequestSchema,
   OperatorRestoreRequestSchema,
   OperatorTakedownRequestSchema,
   originalKey,
@@ -24,6 +26,7 @@ import {
   tilesPrefix,
   TourDocSchema,
   tourKey,
+  tourOwnerKey,
   userPanosPrefix,
   VisibilityPatchRequestSchema,
   type CdnPurgeOutcome,
@@ -38,6 +41,7 @@ import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding'
 import { Hono, type Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 
+import { backfillTours } from './backfill.js';
 import { BACKUP_CRON, BACKUP_RUN_BUDGET, restoreFromBackup } from './backup.js';
 import {
   conditionalGet,
@@ -79,10 +83,12 @@ import {
   type AccessRefusal,
 } from './members.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
+import { sweepUnsavedPlans } from './plan-sweep.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
 import { checkTileGcStatus, runBackupThenTileGc } from './tile-gc.js';
+import { deleteFromTrash, restoreFromTrash, sweepTrash } from './trash.js';
 import {
   meteredBucket,
   PENDING_RECORD_MAX_ITEMS,
@@ -178,6 +184,11 @@ type AppEnv = {
 const app = new Hono<AppEnv>();
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const OPERATOR_PATHS = new Set([
+  OPERATOR_TAKEDOWN_PATH,
+  OPERATOR_RESTORE_PATH,
+  OPERATOR_BACKFILL_PATH,
+]);
 const READ_METHODS = new Set(['GET', 'HEAD']);
 const ACCOUNT_PATH = '/api/admin/account';
 export { PANO_DELETE_RATE_PERIOD_SECONDS, WRITE_RATE_PERIOD_SECONDS };
@@ -209,6 +220,7 @@ const operatorLimit = createMiddleware<AppEnv>(async (c, next) => {
 });
 app.use(OPERATOR_TAKEDOWN_PATH, operatorLimit);
 app.use(OPERATOR_RESTORE_PATH, operatorLimit);
+app.use(OPERATOR_BACKFILL_PATH, operatorLimit);
 
 // Every read is rate limited per owner too, on its own budget, before any R2 read: a
 // list costs R2 operations on every call, and nothing else would stop a loop on it.
@@ -228,7 +240,7 @@ app.use('/api/admin/*', async (c, next) => {
     return next();
   }
   if (!WRITE_METHODS.has(c.req.method)) return next();
-  if (c.req.path === OPERATOR_TAKEDOWN_PATH || c.req.path === OPERATOR_RESTORE_PATH) return next();
+  if (OPERATOR_PATHS.has(c.req.path)) return next();
   const auth = await authenticate(c.req.raw, c.env);
   const verified = auth.sub;
   const limited = await rateLimit(c.env.WRITE_LIMITER, verified, WRITE_RATE_PERIOD_SECONDS);
@@ -539,6 +551,16 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   if (!result.ok) {
     return c.json({ error: result.status === 404 ? 'not found' : 'conflict' }, result.status);
   }
+  // A tour with a plan image needs its owner pointer: the daily plan sweep (plan-sweep.ts)
+  // finds the tour.json through it, and leaves a tour without one alone. Create-only, so one
+  // HEAD after the first save; tours created before pointers existed get theirs here.
+  if (parsed.data.plan) {
+    c.executionCtx.waitUntil(
+      c.env.BUCKET.head(tourOwnerKey(tourId)).then((p) =>
+        p ? undefined : recordTourOwner(c.env.BUCKET, sub, tourId),
+      ),
+    );
+  }
   // Plan images the tour stopped using (replaced or removed): best-effort, after the answer.
   c.executionCtx.waitUntil(
     sweepPlans(c.env.BUCKET, sub, tourId, Date.now())
@@ -774,6 +796,12 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   // Metered, so the purge only spends the subrequests the delete left (a big tour's
   // delete is many R2 calls); what doesn't fit is queued, never lost.
   const meter = meteredBucket(c.env.BUCKET);
+  // A takedown's delete is for real: no trash copy (quarantine keeps what must be kept),
+  // and the trash copies of the tour's originals an owner deleted before it go too.
+  const scenes =
+    action === 'delete'
+      ? ((await getJson<TourDoc>(meter.bucket, tourKey(sub, tourId)))?.value.scenes ?? [])
+      : [];
   const purge =
     action === 'delete'
       ? await deleteTour(
@@ -782,6 +810,7 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
           tourId,
           () => stub.unpublish(sub, tourId, false, true),
           {
+            trash: false,
             tilesByUrl: true,
           },
         )
@@ -799,27 +828,62 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
     deadline: Date.now() + OPERATOR_PURGE_DEADLINE_MS,
     priority: true,
   }).catch((): CdnPurgeOutcome => ({ status: 'failed', purged: 0, pending: 0, failed: planned }));
+  // After the purge, and never failing the takedown: the tour's data is already gone, so a
+  // 500 here would leave a retry nothing to find. A copy left behind ages out of the trash.
+  if (scenes.length) {
+    const originals = new Set(scenes.map((s) => originalKey(sub, s.panoId)));
+    try {
+      await deleteFromTrash(meter.bucket, userPanosPrefix(sub), (k) => originals.has(k));
+    } catch (e) {
+      console.error(
+        `[takedown] trash copies for tour ${tourId} not deleted:`,
+        e instanceof Error ? e.name : 'unknown error',
+      );
+    }
+  }
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
   console.warn(`[takedown] operator ${action} of tour ${tourId} done; cdn purge ${outcome.status}`);
   return c.json({ action, purged: planned, purge: outcome });
 });
 
 // Operator restore (scripts/restore-backup.ts): copies keys back from a day's backup set,
-// through the binding so each object's metadata comes back exactly. Same token as takedown.
+// or originals from a day's trash, through the binding so each object's metadata comes
+// back exactly. Same token as takedown.
 app.post(OPERATOR_RESTORE_PATH, async (c) => {
   if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
     return c.json({ error: 'not found' }, 404);
   }
   const body = OperatorRestoreRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
-  const { date, keys, overwrite } = body.data;
-  const out = await restoreFromBackup(c.env.BUCKET, date, keys, overwrite);
+  const { from, date, keys, overwrite } = body.data;
+  const out =
+    from === 'trash'
+      ? await restoreFromTrash(c.env.BUCKET, date, keys, overwrite)
+      : await restoreFromBackup(c.env.BUCKET, date, keys, overwrite);
   // A share link or bundle that 404ed may be cached as such; the restored ones are purged.
   const files = out.restored.filter((k) => k.startsWith('pub/') || k.startsWith('slugs/'));
   purgeLater(c, { prefixes: [], files });
   // An audit line: counts only, keys carry the owner.
   console.warn(
-    `[restore] operator restore from ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused, ${out.failed.length} failed`,
+    `[restore] operator restore from ${from} ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused, ${out.failed.length} failed`,
+  );
+  return c.json(out);
+});
+
+// Operator backfill (scripts/backfill-covers.ts): covers, owner pointers and Explore entries
+// for tours written before them, a page at a time; reports only unless `apply`.
+app.post(OPERATOR_BACKFILL_PATH, async (c) => {
+  if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const body = OperatorBackfillRequestSchema.safeParse(await jsonBody(c.req.raw));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const out = await backfillTours(c.env.BUCKET, body.data, (tourId) =>
+    publisher(c.env, tourId).refreshExplore(tourId),
+  );
+  const changed = out.tours.filter((t) => t.changes.length).length;
+  console.warn(
+    `[backfill] ${body.data.apply ? 'updated' : 'would update'} ${changed} of ${out.tours.length} tour(s)`,
   );
   return c.json(out);
 });
@@ -829,8 +893,10 @@ app.onError(errorHandler);
 export default {
   fetch: app.fetch,
   // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
-  // finishes (or re-sweeps) every account marked for deletion, and checks the
-  // tile sweep has been finishing cleanly.
+  // finishes (or re-sweeps) every account marked for deletion, checks the tile
+  // sweep has been finishing cleanly, empties trash/ of originals deleted 30 days
+  // ago (trash.ts), and deletes plan images no tour will ever save
+  // (plan-sweep.ts), purged from the CDN.
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
   // The same invocation first retries queued CDN purges (purge.ts, at most
@@ -860,6 +926,11 @@ export default {
         // The sweep runs every 15 minutes (below); this only checks it is still
         // finishing cleanly, so a failing sweep still shows in the daily status.
         'tile-gc': () => checkTileGcStatus(env.BUCKET, now),
+        trash: () => sweepTrash(env.BUCKET, now),
+        'plan-sweep': () =>
+          sweepUnsavedPlans(env.BUCKET, now).then((r) =>
+            purgeCdn(env, { prefixes: [], files: r.deleted }),
+          ),
       }),
     );
   },

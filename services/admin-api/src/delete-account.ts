@@ -21,6 +21,8 @@ import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-k
 
 import { deletePano } from './delete-pano.js';
 import { forgetMembers, leaveAllTours } from './members.js';
+import { isAccountDisabled } from './operator.js';
+import { deleteFromTrash } from './trash.js';
 import { deletePlans } from './plans.js';
 import { readPublishRecord } from './publish.js';
 import { mergePurges, type CdnPurge } from './purge.js';
@@ -256,7 +258,8 @@ const deleteOwnedTour = async (
 
 /**
  * Deletes every tour (with its slug, aliases, public bundle and stats), every
- * pano (original, config, tiles) the owner has, and then upload-api's log of
+ * pano (original, to the trash unless the owner is disabled; config; tiles) the
+ * owner has, and then upload-api's log of
  * the upload URLs it issued them (upload-log/<owner>/). Idempotent: each tour's or pano's
  * own key or prefix goes last, so after an interruption it still lists and a
  * rerun finishes it. Adds what to purge from the CDN to `purge` as it goes, so a
@@ -276,6 +279,10 @@ export const deleteAccountData = async (
   await inBatches(tours, (tourId) => deleteOwnedTour(deps, sub, tourId, purge));
   if (tours.length < tourIds.length) return false;
 
+  // Originals go to the trash, as for any other delete, unless the operator disabled the
+  // owner: that is a takedown (takedown.ts --close-account needs --disable-owner), whose
+  // quarantine already keeps what must be kept, so nothing it closes lingers in trash/.
+  const options = { trash: !(await isAccountDisabled(bucket, sub)), now: new Date() };
   const panosRoot = userPanosPrefix(sub);
   const panoIds = await listChildren(bucket, panosRoot);
   const panos = take(panoIds, budget);
@@ -284,11 +291,13 @@ export const deleteAccountData = async (
       await deletePrefix(bucket, `${panosRoot}${panoId}/`);
       return;
     }
-    if ((await deletePano(bucket, sub, panoId)).tilesDeleted) {
+    if ((await deletePano(bucket, sub, panoId, options)).tilesDeleted) {
       purge.prefixes.push(tilesPrefix(panoId));
     }
   });
   if (panos.length < panoIds.length) return false;
+  // A closed account's originals the owner deleted before the takedown went to the trash.
+  if (!options.trash) await deleteFromTrash(bucket, panosRoot);
   // Off every tour they edit for someone else; at most MAX_MEMBERSHIPS, so not budgeted.
   await leaveAllTours(bucket, sub);
   // Small records, one per pano an editor uploaded here: not counted against the budget.

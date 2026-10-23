@@ -40,9 +40,15 @@ import {
   isBackedUpKey,
   isRestorableKey,
   publishKey,
+  planKey,
   pubTourKey,
   sharingStoppedKey,
   slugKey,
+  tourIdOfPlanKey,
+  trashDayPrefix,
+  trashKey,
+  isOriginalKey,
+  decodeId,
 } from './keys.js';
 
 describe('keys', () => {
@@ -367,6 +373,9 @@ describe('backup keys', () => {
     exploreHiddenKey('t1'),
     accountDeletionKey(sub),
     accountDisabledKey(sub),
+    planKey('t1', 'pl1', 'image/webp'),
+    planKey('t1', 'pl1', 'image/jpeg'),
+    planKey('t1', 'pl1', 'image/png'),
   ])('backs up %s', (key) => {
     expect(isBackedUpKey(key)).toBe(true);
   });
@@ -383,8 +392,55 @@ describe('backup keys', () => {
     'ops/dlq-alert/q.json',
     backupKey('2026-10-22', tourKey(sub, 't1')),
     BACKUP_PROGRESS_KEY,
+    'pub/plans/t1/pl1.gif',
+    'pub/plans/t1/nested/pl1.webp',
+    'pub/plans/t1/',
   ])('leaves %s out', (key) => {
     expect(isBackedUpKey(key)).toBe(false);
+  });
+
+  it('restores plan images like any other public key', () => {
+    expect(isRestorableKey(planKey('t1', 'pl1', 'image/png'))).toBe(true);
+  });
+
+  it('reads the tourId back from a plan image key, and only from one', () => {
+    expect(tourIdOfPlanKey(planKey('t-1_a', 'pl1', 'image/webp'))).toBe('t-1_a');
+    for (const key of [
+      'pub/plans/t1/pl1.gif',
+      'pub/plans/t1/a/pl1.webp',
+      'pub/plans/t1.webp',
+      pubTourKey('t1'),
+      'pub/plans/../pl1.png',
+    ]) {
+      expect(tourIdOfPlanKey(key)).toBeNull();
+    }
+  });
+
+  it('keeps trash outside every owner prefix, every public prefix and the backup', () => {
+    const key = trashKey('2026-10-22', originalKey(sub, 'p1'));
+    expect(key).toBe(`trash/2026-10-22/${originalKey(sub, 'p1')}`);
+    expect(key.startsWith(userPanosPrefix(sub))).toBe(false);
+    expect(key.startsWith('panos/')).toBe(false);
+    expect(['tiles/', 'pub/', 'slugs/'].some((p) => key.startsWith(p))).toBe(false);
+    expect(isBackedUpKey(key)).toBe(false);
+    expect(trashDayPrefix('2026-10-22')).toBe('trash/2026-10-22/');
+    expect(() => trashDayPrefix('2026-10-22/..')).toThrow();
+  });
+
+  it('decodes an owner segment back to the id, and nothing encodeId could not write', () => {
+    for (const raw of ['auth0|abc', 'google-oauth2|1234', 'email|ünï ✓']) {
+      expect(decodeId(encodeId(raw))).toBe(raw);
+    }
+    for (const bad of ['', 'a/b', 'YQ==', '_w', encodeId('x') + '%']) {
+      expect(decodeId(bad)).toBeNull();
+    }
+  });
+
+  it('knows an original key from anything else', () => {
+    expect(isOriginalKey(originalKey(sub, 'p1'))).toBe(true);
+    for (const k of [configKey(sub, 'p1'), 'panos/a b/p1/original', 'panos/abc/p.1/original']) {
+      expect(isOriginalKey(k)).toBe(false);
+    }
   });
 
   it('never restores the account markers', () => {

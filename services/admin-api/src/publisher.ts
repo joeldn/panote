@@ -9,7 +9,7 @@ import { getJson } from '@internal/worker-kit/r2-binding';
 import { DurableObject } from 'cloudflare:workers';
 
 import { parseHoldDays } from './account-age.js';
-import { setExploreHidden } from './explore.js';
+import { setExploreHidden, syncExplore } from './explore.js';
 import {
   NOT_FOUND,
   parseAliasDays,
@@ -88,6 +88,21 @@ export class TourPublisher extends DurableObject<Env> {
   ): Promise<string[]> {
     if (!(await this.owns(sub, tourId, true))) return [];
     return this.serial(() => unpublish(this.env.BUCKET, sub, tourId, { stopSharing, takedown }));
+  }
+
+  // The operator's backfill (backfill.ts): re-syncs the tour's Explore entry from its live
+  // bundle, in this queue like a publish. A tour listed for the first time this way takes its
+  // last publish time as its place in the list, so a backfill doesn't put old tours on top.
+  async refreshExplore(tourId: string): Promise<boolean> {
+    return this.serial(async () => {
+      const got = await getJson<PublishedTour>(this.env.BUCKET, pubTourKey(tourId));
+      if (!got) return false;
+      const now = Date.now();
+      const publishedAt = Date.parse(got.value.publishedAt);
+      const at = Number.isFinite(publishedAt) && publishedAt < now ? publishedAt : now;
+      await syncExplore(this.env.BUCKET, got.value, new Date(at));
+      return true;
+    });
   }
 
   // The operator's hide from (or unhide on) Explore; the tour stays live by link.

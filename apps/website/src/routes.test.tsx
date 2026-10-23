@@ -148,7 +148,15 @@ describe('website routes', () => {
     expect(await textOf('Backups')).toContain(
       'a tour or account you delete can remain in these private backups for up to 31 days',
     );
+    expect(await textOf('Backups')).toContain(
+      'we keep the original photo in the same private storage for up to 31 days',
+    );
+    expect(await textOf('Backups')).toContain('Content we remove after a report is not kept');
     expect(await textOf('How long we keep things')).toContain('Backups: up to 31 days.');
+    expect(await textOf('How long we keep things')).toContain(
+      'The original photos of deleted panoramas: up to 31 days.',
+    );
+    expect(await textOf('Your choices')).toContain('original photos are gone within 31 days');
     const basis = await textOf('Why we’re allowed to');
     expect(basis).toContain('our contract with you');
     expect(basis).toContain('legitimate interest');

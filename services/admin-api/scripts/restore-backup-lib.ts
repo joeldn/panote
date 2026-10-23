@@ -23,15 +23,19 @@ import {
   OPERATOR_RESTORE_MAX_KEYS,
   OPERATOR_RESTORE_PATH,
   OPERATOR_TOKEN_HEADER,
+  isOriginalKey,
   OperatorRestoreOkSchema,
   PANO_PATTERN,
   PublishRecordSchema,
   pubTourKey,
   SlugRecordSchema,
   storedSlugKey,
+  tourIdOfPlanKey,
   tourOwnerKey,
+  TRASH_ROOT,
   type BackupCompleteRecord,
   type OperatorRestoreOk,
+  type OperatorRestoreSource,
 } from '@internal/contracts';
 import type { R2S3Client } from '@internal/worker-kit/r2-s3';
 
@@ -47,6 +51,19 @@ export type RestoreScope =
 
 export type RestoreArgs =
   | { mode: 'list'; r2: R2Config }
+  | { mode: 'trash-list'; sub: string | undefined; r2: R2Config }
+  | {
+      mode: 'trash-restore';
+      /** Empty: every original in the trash of `sub`. */
+      panos: string[];
+      sub: string | undefined;
+      /** Only this day's trash; otherwise the newest copy of each original. */
+      date: string | undefined;
+      overwrite: boolean;
+      apply: boolean;
+      r2: R2Config;
+      api: { origin: string; token: string } | undefined;
+    }
   | {
       mode: 'restore';
       date: string;
@@ -62,12 +79,15 @@ export const USAGE =
   'usage: restore-backup.ts --list [--allow-bucket <bucket>]\n' +
   '       restore-backup.ts --date <YYYY-MM-DD> (--tour <tourId> [--sub <auth0 user id>] |\n' +
   '                         --sub <auth0 user id> | --all) [--overwrite] [--apply] [--allow-bucket <bucket>]\n' +
+  '       restore-backup.ts --list-trash [--sub <auth0 user id>] [--allow-bucket <bucket>]\n' +
+  '       restore-backup.ts --from-trash (--pano <panoId>... [--sub <auth0 user id>] | --sub <auth0 user id>)\n' +
+  '                         [--date <YYYY-MM-DD>] [--overwrite] [--apply] [--allow-bucket <bucket>]\n' +
   '       Lists what it would restore unless --apply. Only keys missing now are restored;\n' +
-  '       --overwrite also replaces ones that exist with the backed-up copy.';
+  '       --overwrite also replaces ones that exist with the backed-up (or trashed) copy.';
 
 const VALUE_FLAGS = ['--date', '--tour', '--sub', '--allow-bucket'] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
-const BOOLEAN_FLAGS = ['--list', '--all', '--overwrite', '--apply'];
+const BOOLEAN_FLAGS = ['--list', '--all', '--overwrite', '--apply', '--list-trash', '--from-trash'];
 
 export function parseRestoreArgs(
   argv: readonly string[],
@@ -75,10 +95,17 @@ export function parseRestoreArgs(
 ): RestoreArgs {
   const values: Partial<Record<ValueFlag, string>> = {};
   const flags = new Set<string>();
+  const panos: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (BOOLEAN_FLAGS.includes(arg)) {
       flags.add(arg);
+    } else if (arg === '--pano') {
+      const value = argv[++i];
+      if (value === undefined || !PANO_PATTERN.test(value)) {
+        throw new Error(`--pano must match ${PANO_PATTERN}`);
+      }
+      panos.push(value);
     } else if ((VALUE_FLAGS as readonly string[]).includes(arg)) {
       const value = argv[++i];
       if (value === undefined || value.startsWith('--')) throw new Error(`${arg} needs a value`);
@@ -93,6 +120,10 @@ export function parseRestoreArgs(
   }
   const r2 = r2ConfigFromEnv(env, values['--allow-bucket']);
   const { '--date': date, '--tour': tourId, '--sub': sub } = values;
+  if (flags.has('--list-trash') || flags.has('--from-trash')) {
+    return parseTrashArgs(flags, panos, values, env, r2);
+  }
+  if (panos.length) throw new Error('--pano only goes with --from-trash');
   if (flags.has('--list')) {
     const extra = ['--all', '--overwrite', '--apply'].some((f) => flags.has(f));
     if (extra || date !== undefined || tourId !== undefined || sub !== undefined) {
@@ -121,6 +152,48 @@ export function parseRestoreArgs(
     mode: 'restore',
     date,
     scope,
+    overwrite: flags.has('--overwrite'),
+    apply,
+    r2,
+    api: apply ? operatorApiFromEnv(env, r2.bucket, values['--allow-bucket']) : undefined,
+  };
+}
+
+function parseTrashArgs(
+  flags: Set<string>,
+  panos: string[],
+  values: Partial<Record<ValueFlag, string>>,
+  env: Record<string, string | undefined>,
+  r2: R2Config,
+): RestoreArgs {
+  const { '--date': date, '--tour': tourId, '--sub': sub } = values;
+  if (flags.has('--list-trash') && flags.has('--from-trash')) {
+    throw new Error('--list-trash and --from-trash are exclusive');
+  }
+  if (tourId !== undefined || flags.has('--all') || flags.has('--list')) {
+    throw new Error(
+      'the trash holds originals: name them with --pano or --sub, not --tour or --all',
+    );
+  }
+  if (date !== undefined && !BACKUP_DATE_PATTERN.test(date)) {
+    throw new Error('--date must be YYYY-MM-DD');
+  }
+  if (flags.has('--list-trash')) {
+    const extra = ['--overwrite', '--apply'].some((f) => flags.has(f));
+    if (extra || panos.length || date !== undefined) {
+      throw new Error('--list-trash takes only --sub and --allow-bucket');
+    }
+    return { mode: 'trash-list', sub, r2 };
+  }
+  if (panos.length === 0 && sub === undefined) {
+    throw new Error('name what to restore from the trash: --pano, or --sub for all of an owner');
+  }
+  const apply = flags.has('--apply');
+  return {
+    mode: 'trash-restore',
+    panos: [...new Set(panos)],
+    sub,
+    date,
     overwrite: flags.has('--overwrite'),
     apply,
     r2,
@@ -204,7 +277,7 @@ const scenePanoIds = (doc: unknown): string[] => {
 
 /**
  * The tour's keys outside its owner's prefix, as the set has them: public bundle, owner
- * index, Explore pointer, entry and hidden marker, and each share link (live slug and
+ * index, Explore pointer, entry and hidden marker, floor-plan images, and each share link (live slug and
  * aliases from its backed-up publish record) that the backup shows pointing at it.
  */
 async function tourPublicKeys(
@@ -223,6 +296,8 @@ async function tourPublicKeys(
   for (const k of inSet) {
     if (k.startsWith(EXPLORE_INDEX_ROOT) && exploreCursorOf(k)?.endsWith(`-${tourId}`))
       keys.push(k);
+    // Its floor-plan images, the live one and any the tour had not swept yet.
+    if (tourIdOfPlanKey(k) === tourId) keys.push(k);
   }
   if (owner !== null) {
     const record = PublishRecordSchema.safeParse(
@@ -411,7 +486,7 @@ export async function existingNow(
 export async function requestRestore(
   fetchFn: FetchLike,
   api: { origin: string; token: string },
-  body: { date: string; keys: string[]; overwrite: boolean },
+  body: { from?: OperatorRestoreSource; date: string; keys: string[]; overwrite: boolean },
   sleep?: Sleep,
 ): Promise<OperatorRestoreOk> {
   const res = await fetchWaitingOut429(
@@ -458,6 +533,7 @@ const describeScope = (scope: RestoreScope): string =>
  * listing each one; the batches that went through stay restored.
  */
 export async function runRestore(args: RestoreArgs, deps: RestoreDeps): Promise<number> {
+  if (args.mode === 'trash-list' || args.mode === 'trash-restore') return runTrash(args, deps);
   const { store, log } = deps;
   const sets = await listBackupSets(store);
   if (args.mode === 'list') {
@@ -535,4 +611,148 @@ export async function runRestore(args: RestoreArgs, deps: RestoreDeps): Promise<
     return 1;
   }
   return 0;
+}
+
+/** One original in the trash. */
+export interface TrashedOriginal {
+  /** The day it was deleted: trash/<date>/. */
+  date: string;
+  /** Its own key, panos/<owner>/<panoId>/original. */
+  key: string;
+  owner: string;
+  panoId: string;
+  size: number;
+}
+
+const TRASHED_RE =
+  /^trash\/(\d{4}-\d{2}-\d{2})\/(panos\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/original)$/;
+
+/** Every original in the trash, oldest day first. */
+export async function listTrash(store: RestoreStore): Promise<TrashedOriginal[]> {
+  const out: TrashedOriginal[] = [];
+  for (const o of await store.listObjects(TRASH_ROOT)) {
+    const m = TRASHED_RE.exec(o.key);
+    if (!m || !isOriginalKey(m[2]!)) continue;
+    out.push({ date: m[1]!, key: m[2]!, owner: m[3]!, panoId: m[4]!, size: o.size });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
+}
+
+/**
+ * The trashed originals to restore: the named panos (of `sub`, if given) or all of `sub`'s,
+ * each its newest copy, or the one from `date`. Throws if the owner is marked for deletion
+ * now, as a backup restore does.
+ */
+export async function planTrashRestore(
+  store: RestoreStore,
+  want: { panos: string[]; sub: string | undefined; date: string | undefined },
+): Promise<{ picks: TrashedOriginal[]; notes: string[] }> {
+  const [trashed, deleted] = await Promise.all([listTrash(store), deletedOwners(store)]);
+  const owner = want.sub === undefined ? undefined : encodeId(want.sub);
+  const named = new Set(want.panos);
+  const newest = new Map<string, TrashedOriginal>();
+  for (const t of trashed) {
+    if (owner !== undefined && t.owner !== owner) continue;
+    if (named.size && !named.has(t.panoId)) continue;
+    if (want.date !== undefined && t.date !== want.date) continue;
+    // Oldest day first, so the last one seen is the newest.
+    newest.set(t.key, t);
+  }
+  const picks = [...newest.values()];
+  const notes: string[] = [];
+  const found = new Set(picks.map((p) => p.panoId));
+  for (const p of named) {
+    if (!found.has(p))
+      notes.push(`pano ${p}: not in the trash${want.date ? ` of ${want.date}` : ''}`);
+  }
+  const panoOwners = new Map<string, Set<string>>();
+  for (const p of picks)
+    panoOwners.set(p.panoId, (panoOwners.get(p.panoId) ?? new Set()).add(p.owner));
+  for (const [panoId, owners] of panoOwners) {
+    if (owners.size > 1)
+      throw new Error(`pano ${panoId} is in the trash under ${owners.size} owners; pass --sub`);
+  }
+  for (const p of picks) {
+    if (deleted.has(p.owner)) {
+      throw new Error(
+        `pano ${p.panoId}'s owner is marked for deletion: the daily sweep would delete a restore again. Nothing done.`,
+      );
+    }
+  }
+  return { picks, notes };
+}
+
+// Originals per request: each is streamed through admin-api, up to 150 MB.
+export const TRASH_RESTORE_BATCH = 10;
+
+async function runTrash(
+  args: Extract<RestoreArgs, { mode: 'trash-list' | 'trash-restore' }>,
+  deps: RestoreDeps,
+): Promise<number> {
+  const { store, log } = deps;
+  if (args.mode === 'trash-list') {
+    const owner = args.sub === undefined ? undefined : encodeId(args.sub);
+    const trashed = (await listTrash(store)).filter(
+      (t) => owner === undefined || t.owner === owner,
+    );
+    if (trashed.length === 0) log(`nothing in the trash of ${args.r2.bucket}`);
+    for (const t of trashed) log(`${t.date} pano ${t.panoId} (${t.size} bytes) ${t.key}`);
+    return 0;
+  }
+  const { picks, notes } = await planTrashRestore(store, args);
+  for (const note of notes) log(note);
+  const existing = await existingNow(
+    store,
+    picks.map((p) => p.key),
+  );
+  const send = args.overwrite ? picks : picks.filter((p) => !existing.has(p.key));
+  for (const p of picks) {
+    const what = !existing.has(p.key) ? 'restore' : args.overwrite ? 'replace' : 'keep (exists)';
+    log(`${args.apply ? '' : 'would '}${what} ${p.key} from the trash of ${p.date}`);
+  }
+  if (!args.apply) {
+    log(
+      `DRY RUN: nothing written to ${args.r2.bucket}; pass --apply to restore ${send.length} original(s)`,
+    );
+    return 0;
+  }
+  const total: OperatorRestoreOk = {
+    restored: [],
+    existing: [],
+    missing: [],
+    refused: [],
+    failed: [],
+  };
+  const byDate = new Map<string, string[]>();
+  for (const p of send) byDate.set(p.date, [...(byDate.get(p.date) ?? []), p.key]);
+  for (const [date, keys] of byDate) {
+    for (let i = 0; i < keys.length; i += TRASH_RESTORE_BATCH) {
+      const batch = keys.slice(i, i + TRASH_RESTORE_BATCH);
+      try {
+        const out = await requestRestore(deps.fetch, args.api!, {
+          from: 'trash',
+          date,
+          keys: batch,
+          overwrite: args.overwrite,
+        });
+        for (const k of ['restored', 'existing', 'missing', 'refused', 'failed'] as const)
+          total[k].push(...out[k]);
+      } catch (e) {
+        log(
+          `a request failed (${e instanceof Error ? e.message : String(e)}); its keys are listed below`,
+        );
+        total.failed.push(...batch);
+      }
+    }
+  }
+  log(
+    `restored ${total.restored.length} original(s); ${total.existing.length} appeared since the plan and were left; ${total.missing.length} gone from the trash; ${total.refused.length} refused (account marked for deletion); ${total.failed.length} failed`,
+  );
+  for (const key of total.failed) log(`FAILED ${key}`);
+  if (total.restored.length) {
+    log(
+      'each restored original re-tiles on its own (the R2 notification); its title and hotspots are in its config.json, which a backup restore (--date <day before the delete> --tour or --sub) brings back',
+    );
+  }
+  return total.failed.length ? 1 : 0;
 }

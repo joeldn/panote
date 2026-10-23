@@ -13,6 +13,7 @@ import { forgetTourOwner } from './operator.js';
 import { deletePlans } from './plans.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY, referencedPanoIds } from './references.js';
+import type { DiscardOptions } from './trash.js';
 
 const deleteUnreferenced = async (
   bucket: R2Bucket,
@@ -20,6 +21,7 @@ const deleteUnreferenced = async (
   panoIds: readonly string[],
   referenced: Set<string>,
   purgePrefixes: string[],
+  options: DiscardOptions,
   tileKeys: string[] | undefined,
 ): Promise<string[]> => {
   const stillReferenced: string[] = [];
@@ -28,7 +30,10 @@ const deleteUnreferenced = async (
     await Promise.all(
       batch.map(async (panoId) => {
         if (referenced.has(panoId)) stillReferenced.push(panoId);
-        else if ((await deletePano(bucket, sub, panoId, tileKeys)).tilesDeleted && !tileKeys) {
+        else if (
+          (await deletePano(bucket, sub, panoId, options, tileKeys)).tilesDeleted &&
+          !tileKeys
+        ) {
           purgePrefixes.push(tilesPrefix(panoId));
         }
       }),
@@ -41,12 +46,17 @@ const deleteUnreferenced = async (
 // must go through the TourPublisher. Returns what to purge from the CDN, in one batch (B6):
 // a prefix per pano whose tiles went, or with `tilesByUrl` (the operator's takedown) every
 // tile key instead, so the purge doesn't draw on the account's small prefix-purge budget.
+// The panos' originals go to the trash unless `trash` is false (a takedown).
 export const deleteTour = async (
   bucket: R2Bucket,
   sub: string,
   tourId: string,
   unpublishTour: () => Promise<string[]>,
-  { tilesByUrl = false }: { tilesByUrl?: boolean } = {},
+  {
+    trash = true,
+    now = new Date(),
+    tilesByUrl = false,
+  }: Partial<DiscardOptions> & { tilesByUrl?: boolean } = {},
 ): Promise<CdnPurge> => {
   // Unpublish first so a deleted tour never stays public, even on a partial delete.
   const files = await unpublishTour();
@@ -54,6 +64,7 @@ export const deleteTour = async (
   await bucket.delete(sharingStoppedKey(sub, tourId));
   const prefixes: string[] = [];
   const tileKeys = tilesByUrl ? files : undefined;
+  const options: DiscardOptions = { trash, now };
   const result = (): CdnPurge => mergePurges({ prefixes, files });
   // TOCTOU: a concurrent save can add a scene referencing a pano deleted here; the editor shows "Missing pano" for it, the same as any other missing config.
   const own = await getJson<TourDoc>(bucket, tourKey(sub, tourId));
@@ -76,6 +87,7 @@ export const deleteTour = async (
     ownPanoIds,
     referenced,
     prefixes,
+    options,
     tileKeys,
   );
   await bucket.delete(tourKey(sub, tourId));
@@ -88,6 +100,6 @@ export const deleteTour = async (
   // (see PR body); a rarer 3+-way overlap can still leak storage, not safety.
   if (deferred.length === 0) return result();
   const referencedAfter = await referencedPanoIds(bucket, sub, tourId);
-  await deleteUnreferenced(bucket, sub, deferred, referencedAfter, prefixes, tileKeys);
+  await deleteUnreferenced(bucket, sub, deferred, referencedAfter, prefixes, options, tileKeys);
   return result();
 };

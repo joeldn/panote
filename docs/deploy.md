@@ -21,9 +21,9 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, and sweeps accounts marked for deletion, recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); var `NEW_ACCOUNT_HOLD_DAYS` (`7`, days a new account's public tours stay off Explore and `noindex`, see Explore; `"0"` turns it off); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and expired slug holds under `slug-holds/`, sweeps accounts marked for deletion, empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts), queueing what still failed under `ops/cdn-purge/pending/` for the 15-minute cron to retry (CDN purge on delete); `PANO_DELETE_LIMITER` and `WRITE_LIMITER` rate limits (Rate limits); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | `UPLOAD_CEILING` — Durable Object, class `UploadCeiling` (one instance, the global daily upload ceiling, see Owner quotas; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); otherwise none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check, and DLQ alerts the throttle held back) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
 are `false` in both `dev` and `production`: from the first dev deploy
@@ -744,7 +744,8 @@ panoIds) can keep loading its images until the pano is deleted. That is by desig
 every unpublish would cost a full tiling job); the owner is told so in the Stop sharing confirm and
 on the privacy page. A tour save that leaves a plan image unused (replaced
 or removed, and no longer on the share link) deletes and purges it by URL too, once it is an hour
-old. A `429`, a `5xx`, a network error or the 5s timeout is retried twice in the request (after
+old, and so does the daily sweep of plan images nobody saved ("Unsaved floor-plan images").
+A `429`, a `5xx`, a network error or the 5s timeout is retried twice in the request (after
 1s and 4s, or the `Retry-After`, capped at 10s), and a purge stops starting requests 20s after
 it began (`DEFAULT_DEADLINE_MS`), so one in `waitUntil` always has time left to queue the rest
 and record the failure. Each failure is logged (`cdn purge failed …`,
@@ -1378,7 +1379,8 @@ caller's own owner-scoped prefix (`panos/<owner>/<panoId>/`) and never touches `
 a config-only pano (one whose original was never actually uploaded) still deletes and stays
 deleted, and a repeat DELETE of an already-deleted pano is a no-op 204 rather than a 404. With
 proof, `deletePano` (`services/admin-api/src/delete-pano.ts`) writes a tombstone key first
-(`panos/<owner>/<panoId>/deleting`, skipped if one is already there), deletes the original, sweeps
+(`panos/<owner>/<panoId>/deleting`, skipped if one is already there), moves the original to the
+trash ("Trash for deleted originals"; a takedown deletes it outright), sweeps
 `tiles/<panoId>/` once, then deletes the rest of the owner prefix, tombstone included, in one
 prefix delete. Every step before that final delete is safe to redo, so an
 interrupted DELETE (a client disconnect, or a step that throws) is recovered by **re-running
@@ -1528,7 +1530,8 @@ operator's `delete-account.ts --sub` marks the primary sub only; to cover a link
    live tour comes down before its images do. Tour ids share pano ids' generator and validator
    (`crypto.randomUUID()`, `PANO_PATTERN`); an id that fails it can't have been published, so only
    its counters and prefix are deleted.
-3. Each pano: the same `deletePano` as a single pano delete (tombstone, original, one sweep of
+3. Each pano: the same `deletePano` as a single pano delete (tombstone, original moved to the
+   trash unless the owner is disabled, one sweep of
    `tiles/<panoId>/` and of its superseded-version records under `tile-gc/<panoId>/`, which name the
    owner's original key, then the owner prefix). No reference or recent-upload checks: everything
    goes. A record a tiler job writes in the moment after that is dropped by the tile sweep 24-48
@@ -1599,6 +1602,9 @@ name.
 - **The nightly backup's copies** of the account's tours, configs and markers (see "Backups"),
   for up to 31 days: the delete never touches `backup/`, and each dated set goes when it ages
   out. The privacy policy states this.
+- **The originals, in `trash/`** for up to 31 days ("Trash for deleted originals"), unless the
+  operator had disabled the owner (a takedown), when they are deleted for real. The privacy policy
+  states this too.
 
 ### Operator: the account-delete script
 
@@ -1633,6 +1639,35 @@ trailing whitespace is refused. The next daily sweep (03:17 UTC) then does the w
 
 For a deletion requested by email: `--sub` to mark it, `--status` the next day, then delete the
 Auth0 user as above and reply to the request.
+
+
+### Operator: account storage
+
+There is no admin screen listing accounts. `services/admin-api/scripts/account-storage.ts` lists
+every account the bucket has anything for, largest first, with its tours (`tour.json`s), panos
+(directories under `panos/<owner>/` without a delete tombstone, as the quota counts them), the
+bytes of their originals (the figure `MAX_BYTES_PER_OWNER` caps), the bytes of its deleted
+originals in `trash/` (not counted toward the quota), and whether it is marked for deletion or
+disabled. `--tiles` adds each account's tile bytes and its **untiled** panos (an original with no
+`tiles/<panoId>/manifest.json`: a failed or lost tiling job, or one still running; retry them
+with `retile.ts --pano`), and a line for tile dirs that belong to no pano (left by a delete that
+raced a tiling job, "Deleted panos"), at the cost of one more listing, of all of `tiles/`, which is
+most of the bucket's keys. It is **read-only**: it only lists keys over the R2 S3 API, never reads
+or writes an object, so it has no dry run because it needs none, and an R2 API token with Object
+Read is enough. Same `R2_*` variables and `--allow-bucket` rule as the other scripts.
+
+```bash
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+cd services/admin-api
+node scripts/account-storage.ts             # a table, with a totals row
+node scripts/account-storage.ts --top 20    # the 20 largest
+node scripts/account-storage.ts --json --tiles > storage.json
+```
+
+The account column is the Auth0 user id, decoded from the key's owner segment, so treat the
+output like the case log: keep it private. Listing costs one Class A operation per 1,000 keys.
+
+Bulk re-tiling already has a script: `retile.ts` ("Re-tiling").
 
 ---
 
@@ -1683,12 +1718,14 @@ define user content to a private, dated prefix in the **same** bucket every day
 
 **What's in a set.** `BACKUP_SOURCES` in `@internal/contracts` (`keys.ts`): every `tours/<owner>/<tourId>/*.json`
 (`tour.json`, `publish.json`, `sharing-stopped.json`), each pano's `panos/<owner>/<panoId>/config.json`,
-`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, and the
-account markers `accounts/<owner>/{deletion,disabled}.json`. Not in it: floor-plan images (`pub/plans/`, not JSON, so a restored `tour.json` can name a plan image that is gone; re-upload it in the editor), originals (large, and the
-only copy of the photo, so a lost original is still lost), tiles and manifests (rebuilt from the
-original by a re-tile, "Re-tiling" above), and the derived or operational prefixes `tile-gc/`,
-`upload-log/`, `quarantine/`, `ops/`, `slug-holds/` and the account-age record
-`accounts/<owner>/since.json` (worked out again from the originals if lost). Each copy keeps the object's content type, cache control
+`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, the
+account markers `accounts/<owner>/{deletion,disabled}.json`, and the tours' floor-plan images
+`pub/plans/<tourId>/<planId>.{webp,jpg,png}` (at most 4 MiB each, `MAX_PLAN_BYTES`). Not in it:
+originals (large; a deleted one waits 30 days in `trash/` instead, see "Trash for deleted
+originals" below), tiles and manifests (rebuilt from the original by a re-tile, "Re-tiling"
+above), and the derived or operational prefixes `tile-gc/`, `upload-log/`, `quarantine/`,
+`trash/`, `ops/`, `slug-holds/` and the account-age record `accounts/<owner>/since.json`
+(worked out again from the originals if lost). Each copy keeps the object's content type, cache control
 and custom metadata (titles, visibility, an alias's expiry), since the app reads those.
 
 **Layout.** `backup/<YYYY-MM-DD>/<original key>`, with `backup/<YYYY-MM-DD>/complete.json`
@@ -1718,7 +1755,9 @@ than today, but never the newest **good** set (complete, no failed copy, at leas
 however old, and nothing at all if there is no good set; a prune cut short by the budget finishes
 after the next set. A copy that fails is counted (`failed`), left
 out and tried again in the next day's set; an object over 8 MiB is counted as `skipped` and never
-copied (nothing the app writes is close).
+copied (nothing the app writes is close: plan images, the largest objects in a set, are capped at
+4 MiB by `upload-api`). A copy is read whole into memory, 10 at a time, so a batch of plan images
+is at most 40 MB.
 
 **Logs** (`admin-api` observability), each starting `[backup]`, never with a key (the owner segment
 is reversible): `set <date>: N object(s) copied this run, M so far; the next run carries on` while
@@ -1741,7 +1780,10 @@ figure in Cloudflare's Workers limits docs first); CPU is not the constraint (co
 milliseconds).
 
 **Cost.** Per set, one Class A operation (the PUT) and one Class B (the GET) per object, plus
-the listing; storage is 31 copies of the JSON. Pre-launch that is well inside R2's free tier.
+the listing; storage is 31 copies of the JSON and of the plan images. A tour has one live plan
+image (a few hundred KB to 4 MiB), so plans are most of a set's bytes: 1,000 tours with plans is
+roughly 1 to 4 GB per set, 31 to 120 GB kept. That is the figure to watch on the R2 bill; the
+operation count barely moves (one object per tour). Pre-launch that is well inside R2's free tier.
 At 40,000 objects it is about 1.2 million Class A operations a month (about $1 past the free
 million, shared with everything else) and 31 × the JSON's total size in storage.
 
@@ -1770,8 +1812,9 @@ node scripts/restore-backup.ts --date 2026-10-21 --all --apply
 ```
 
 - A tour is its `tours/<owner>/<tourId>/` records, the configs of the panos its tour and bundle
-  show, its bundle, its owner pointer, its Explore pointer, entry and hidden marker, and the share
-  links its backed-up publish record names that point at it. An owner is every tour and config
+  show, its bundle, its owner pointer, its Explore pointer, entry and hidden marker, every
+  floor-plan image the set holds under `pub/plans/<tourId>/`, and the share links its backed-up
+  publish record names that point at it. An owner is every tour and config
   under their prefix, with those tours' public keys.
 - **Create-only by default**: a key that exists now is left as it is and only missing keys come
   back. `--overwrite` replaces existing keys with the backed-up copy too (an owner's edits since
@@ -1781,7 +1824,7 @@ node scripts/restore-backup.ts --date 2026-10-21 --all --apply
   `--all` before applying it.
 - It refuses an owner whose account is marked for deletion now (the daily sweep would delete the
   restore again); `--all` leaves such owners out, with their tours' public keys. The route checks
-  each key too: a public, share-link, Explore or owner-pointer key is matched to its owner through
+  each key too: a public, plan-image, share-link, Explore or owner-pointer key is matched to its owner through
   the tour's `tour-owners/` pointer (the set's, or else the live one), and refused if that owner is
   marked for deletion or can't be found (a tour older than the pointers: its owner re-publishing
   writes them again). Remove the marker first only if the deletion itself was the mistake. The
@@ -1793,9 +1836,10 @@ node scripts/restore-backup.ts --date 2026-10-21 --all --apply
 - Restored bundles and share links are purged from the CDN (as an unpublish is), and Explore
   re-checks each entry, so a restored tour shows up within a minute. The writes bypass the tour's
   `TourPublisher`, so don't restore a tour its owner is editing at that moment.
-- It doesn't bring back originals or tiles. If the originals are still there but tiles or
-  manifests are gone, re-tile them ("Re-tiling"); a config whose original is gone shows as a
-  missing pano in the editor.
+- It doesn't bring back originals or tiles from a backup set. A deleted original is in the trash
+  for 30 days (`--from-trash`, "Trash for deleted originals" below). If the originals are still
+  there but tiles or manifests are gone, re-tile them ("Re-tiling"); a config whose original is
+  gone shows as a missing pano in the editor.
 
 **TODO (Joel): a second copy outside this bucket.** These backups live in the same bucket, under
 the same account and the same API tokens, so they protect only against mistakes in code and
@@ -1808,6 +1852,129 @@ bucket exists, or the deploy fails), or a scheduled copy over the S3 API with th
 token. A bucket lock (retention) rule on the second bucket would also stop its copies being
 deleted early, by anyone. The separation of credentials is what protects them; the same-bucket
 sets stay as the quick path for everyday mistakes.
+
+## Trash for deleted originals
+
+Originals (up to 150 MB each) are not in the nightly backup: copying them every night would
+double the bucket. Instead, every code path in `admin-api` that deletes an original moves it to a
+private trash first (`services/admin-api/src/trash.ts`): it copies `panos/<owner>/<panoId>/original`,
+body streamed and content type and custom metadata kept, to
+`trash/<YYYY-MM-DD>/panos/<owner>/<panoId>/original` (the UTC day of the delete), and only then
+deletes it. A copy that fails throws before the delete, so the original stays and the delete is
+retried like any other interrupted one. The paths, all through `deletePano`:
+
+- the owner's pano delete (`DELETE /api/admin/panos/:panoId`, Library's "Delete");
+- tour delete, for the panos no other tour of the owner uses;
+- account delete, and the daily sweep that finishes it.
+
+**What skips it.**
+
+- **Takedowns delete for real.** The operator route's `delete` action
+  (`takedown.ts --delete`, `--quarantine`, `--all-tours`) passes `trash: false`, and an account
+  delete skips the trash when the owner has the operator's `disabled.json` marker, which
+  `takedown.ts --close-account` always sets first (it needs `--disable-owner`). Content taken down
+  for legal reasons must not linger anywhere the owner or a restore could bring it back from:
+  `--quarantine` already keeps the copy that must be kept, in `quarantine/<caseId>/`, and
+  `--nothing-to-preserve` is the operator's word that nothing should be. A disabled owner who deletes
+  their own account is deleted for real too.
+- **Trash copies made before the takedown go with it.** An owner may delete a reported pano before
+  the operator acts, leaving its original only in `trash/`. `--quarantine` copies the trash copies
+  of the tour's scenes' originals (with `--all-tours`, every trashed original the owner has) as
+  `quarantine/<caseId>/trash/<date>/...`. The route's `delete` then deletes the trash copies of
+  the originals its `tour.json` names, and closing a disabled owner's account deletes every
+  trashed original under their `panos/<owner>/`. That is one listing per day held plus a batch
+  delete, about 64 R2 operations at most. Gap: a pano removed from the tour and deleted before
+  the takedown, on an account that stays open, is not in the tour, so it stays in `trash/` until
+  it ages out (31 days at most). Close the account, or find it with
+  `restore-backup.ts --list-trash --sub`, if it must go sooner.
+- **Oversized originals** (`tiler-consumer`'s `deleteOversizedOriginal`, "Tiling failure marker"
+  below) are not trashed. They are not a delete anyone asked for: the file is over the size the
+  app accepts, could only arrive by bypassing the web app, can never be tiled, and keeping it 30
+  days would keep exactly the bytes that cleanup exists to drop. That code is also the tiler's.
+- **A replace** (a new upload over the same pano) overwrites the original in place; that is
+  `upload-api`'s presigned PUT, not a delete, and the old bytes are not kept.
+- The no-proof branch of a pano delete (no original, no tombstone) has no original to move.
+
+**Private, and not the owner's.** `trash/` is outside the CDN WAF rule's three public prefixes
+(`/tiles/`, `/pub/`, `/slugs/`, fail-closed, "CDN custom domain"), so it is never served; the
+deploy smoke test and the post-provision check both expect `403` for `cdn.<domain>/trash/x`. It is
+outside `panos/`, so it never lists as a pano, never fires the R2 notification (no tiling job),
+and doesn't count toward the owner's storage quota (`upload-api` lists `panos/<owner>/` only). It
+is not in the backup (`BACKUP_SOURCES`).
+
+**Retention.** The daily cron's `trash` task (`sweepTrash`, `17 3 * * *`, through `runDailyCron`)
+deletes every `trash/<date>/` whose date is `TRASH_RETENTION_DAYS` (30) or more days before today.
+A delete on day D is gone on day D+30 at 03:17 UTC: kept at least 29 days, never more than 31,
+which is what the privacy policy says. A run spends at most `TRASH_SWEEP_BUDGET` (100) R2
+operations (one per listing page or batch delete of up to 1,000 keys); what it doesn't reach is
+still the oldest trash the next day, so it carries on from there. It logs `[trash] deleted N
+object(s) past 30 days` and, when the budget ran out, `budget reached, the rest go tomorrow`.
+Storage cost is 30 days of deleted originals, at most about 31 x a day's deletes.
+
+**Restoring an original.** `restore-backup.ts` lists and restores the trash through the same
+operator route (`POST /api/admin/operator/restore` with `"from": "trash"`). It needs the same
+`R2_*` variables, and `OPERATOR_TOKEN` with `--apply`:
+
+```bash
+cd services/admin-api
+# What is in the trash (one owner with --sub)
+node scripts/restore-backup.ts --list-trash
+node scripts/restore-backup.ts --list-trash --sub 'google-oauth2|1234'
+# One pano (the newest copy; --date <YYYY-MM-DD> picks a day), then everything of one owner
+node scripts/restore-backup.ts --from-trash --pano <panoId>
+node scripts/restore-backup.ts --from-trash --pano <panoId> --apply
+node scripts/restore-backup.ts --from-trash --sub 'google-oauth2|1234' --apply
+```
+
+It is create-only unless `--overwrite` (an original uploaded since stays), refuses an owner whose
+account is marked for deletion (remove the marker first only if the delete itself was the
+mistake), and keeps the trash copy until it ages out. A restored original fires the R2
+notification like an upload, so the pano re-tiles on its own. Its `config.json` (title, hotspots)
+went with the pano: bring it back from the backup set of the day before the delete
+(`--date <day> --tour <tourId>` or `--sub <sub>`; create-only, so nothing current is touched), and a
+tour that still names the pano shows it again once both are back.
+
+## Unsaved floor-plan images
+
+A tour save sweeps that tour's plan images ("CDN purge on delete"), but an upload nobody saves
+(an editor closed before Save, a draft never restored) would wait for a save that may never come.
+The daily cron's `plan-sweep` task (`sweepUnsavedPlans`, `services/admin-api/src/plan-sweep.ts`)
+lists `pub/plans/` and judges each tour's images:
+
+- **No owner pointer** (no readable `tour-owners/<tourId>.json`): nothing goes. Without the
+  pointer the sweep can't find the `tour.json`, and a saved but unpublished tour would look
+  deleted, so it has no evidence either way. These tours are counted and logged.
+- **The tour is gone** (the pointer names an owner whose `tour.json` isn't there, and there is
+  no live bundle `pub/tours/<tourId>.json`): its images older than a day go. Deletes take
+  `tour.json` before the pointer, so this is a delete that stopped half-way or raced an upload.
+- **The tour exists**: images older than **7 days** that neither the stored `tour.json` nor the
+  live bundle names go. 7 days is the editor's draft-autosave window (`DRAFT_MAX_AGE_MS`), so a
+  plan a local draft holds survives as long as the draft can be restored (an image is aged from
+  its upload, not from the draft's last autosave, so a draft kept alive past a week by editing
+  can lose a plan it never saved).
+- **Can't tell**: a `tour.json` or bundle that isn't JSON, or a `plan` that doesn't parse, might
+  name any image, so all of that tour's images stay.
+
+A tour whose images are all younger than a day costs nothing beyond the listing; one being judged
+costs up to 4 R2 operations (pointer, `tour.json`, bundle, one batch delete), or 1 with no
+pointer. A run spends at most
+`PLAN_SWEEP_BUDGET` (400) operations; if it runs out it saves where it got to in
+`ops/plan-sweep/cursor.json` (`{ v, startAfter }`, private like the rest of `ops/`) and the next
+day's run carries on from there. A pass that reaches the end deletes the cursor, so the next one
+starts from the top. Deleted images are purged from the CDN by URL, as the per-save sweep does.
+It logs `[plan-sweep] deleted N unsaved plan image(s) of M tour(s)`, with `budget reached, the
+next run carries on` on a partial run, and `left N tour(s) alone with no owner pointer` when it
+skipped any.
+
+The sweep can only judge a tour through its owner pointer, which tours created before pointers
+existed (#121) don't have unless they were published since, and which a save writes only
+best-effort. Every tour save that carries a plan writes the pointer if it is missing (one `HEAD`
+after the first), and the cover backfill (`backfill-covers.ts`, "Cover and Explore backfill")
+writes the missing pointers of every tour. **Run `backfill-covers --apply` once after deploying
+this, in each environment, before relying on the sweep:** until then tours without a pointer
+are skipped, so their unsaved images stay (safe, but not swept). A `left N tour(s) alone` line
+in the logs after the backfill means a pointer write failed since; running the backfill again
+fixes it.
 
 ---
 
@@ -1858,7 +2025,7 @@ page, so change both if the var changes. The public bundle `pub/tours/<tourId>.j
 the bundle: listed while the bundle is Public, the start scene's manifest exists (a ready scene)
 and there is no hidden marker; removed otherwise. These writes are best-effort: a failure is
 logged as `[explore] index update failed` and the publish still succeeds, so at worst a tour is
-missing from Explore until its next Save. Removal on unpublish is not best-effort: the owner's
+missing from Explore until its next Save (or the backfill below). Removal on unpublish is not best-effort: the owner's
 Stop sharing, tour delete, account delete (and its daily sweep), and the operator's `unpublish`
 and `delete` (so also any later takedown mode built on them) all go through `unpublish` in
 `publish.ts`, which deletes the bundle, then the entry and (except for a Stop sharing or operator
@@ -1892,6 +2059,51 @@ writes the hidden marker, then removes the entry. Publish never relists a hidden
 read side drops it even if an entry slipped through. `--show-on-explore` deletes the marker and
 relists the tour from its current bundle if it is still published and Public. The marker is
 owner-free and is left behind by a tour or account delete (tourIds are never reused).
+
+### Cover and Explore backfill
+
+Some tours carry state from before the code that writes it, and only their owner's next Save
+fixes it: a Public tour published before Explore existed (#126) isn't listed at all; an Explore
+card's cover names a tile version, so after a re-tile and the tile sweep it points at a version
+that is gone and the card shows its placeholder; a tour saved before start-scene covers (#111)
+shows its first scene on the dashboard instead of the starred one; and a tour created before
+owner pointers (#121), never published since, has no `tour-owners/<tourId>.json`. Link previews
+(`og:image`) need nothing: the website reads the start scene's manifest on every request, and a
+pano with no `og.jpg` is the og.jpg backfill's job ("Link-preview image").
+
+`services/admin-api/scripts/backfill-covers.ts` fixes all of it, idempotently: a tour already up
+to date needs nothing, so a second run reports no changes. It calls `admin-api`'s operator route
+`POST /api/admin/operator/backfill` (`OPERATOR_TOKEN`, the takedown route's secret), which walks
+`tours/` through the binding a page at a time (`{ cursor, limit, apply }`, 10 tours a request by
+default, at most 25), so it needs no R2 credentials: `R2_BUCKET` only picks the environment and
+its admin-api origin, with the usual `--allow-bucket` for anything but a `-dev` bucket. For each
+`tour.json` it:
+
+- rewrites the tour's `customMetadata` (title, scene count, cover) when it differs from what a
+  Save would write, with the same body and only over the version it read (`If-Match`), so a Save
+  in between wins. An editor open on that tour then gets the usual "changed elsewhere" conflict
+  on its next Save, so run it at a quiet time;
+- writes the owner pointer if there is none (create-only, the sub decoded from the key's owner
+  segment). The daily plan sweep skips any tour without one ("Unsaved floor-plan images"), so
+  run this with `--apply` before relying on that sweep;
+- re-syncs the Explore entry through the tour's `TourPublisher`, as a publish does, when the tour
+  is Public, published, not hidden, has a ready start scene, and has no entry or an entry whose
+  cover differs from the start scene's current one. A tour listed for the first time this way
+  takes its last publish time as its place, so old tours don't jump to the top.
+
+```bash
+export R2_BUCKET=pano-content-dev OPERATOR_TOKEN=...
+cd services/admin-api
+# What each tour needs, changing nothing
+node scripts/backfill-covers.ts
+# Do it
+node scripts/backfill-covers.ts --apply
+```
+
+It prints one line per tour that needs (or got) something, `update <tourId>: cover,
+owner-pointer, explore`, and the totals. A skipped tour (a `tour.json` that doesn't parse) is
+listed with the reason, and so is a tour whose cover fix lost a race with a save (`tour.json
+changed since read`: the save wrote the right cover itself). Not run against any environment yet.
 
 ---
 
@@ -2071,7 +2283,8 @@ auth, rate limit, body checks and the account markers. Three vars, set in both e
 Each var is optional: unset or empty means unlimited, and costs nothing. With the pano or byte
 limit set, the owner's `panos/` prefix is listed (S3 `ListObjectsV2`, one Class A operation per
 1,000 objects) in full on every upload-URL request: that is a known cost. A pano with a delete
-tombstone (`deleting`) counts toward neither. Over a limit: `403 {"error":"pano limit reached"}`,
+tombstone (`deleting`) counts toward neither, and neither does a deleted original waiting in
+`trash/` (it is outside `panos/<owner>/`). Over a limit: `403 {"error":"pano limit reached"}`,
 `403 {"error":"storage limit reached"}` or `403 {"error":"daily upload limit reached"}`, checked
 in that order; the admin app words each one (`packages/web-kit/src/api/http.ts`). A listing or
 log write that fails is a `502` with no URL, and a value that isn't a non-negative integer refuses
@@ -2198,7 +2411,9 @@ Two ways to stop abuse, usually together:
   `skipped` (no `CF_PURGE_TOKEN`/`CDN_ZONE_ID`). `unpublish` removes the share link, bundle and slug and keeps the tour and panos (their
   tiles under `tiles/<panoId>/` and the tour's floor-plan image under `pub/plans/<tourId>/` stay
   reachable by anyone who has the URL); `delete` also deletes the tour, its floor-plan images and
-  every pano no other tour of that owner uses, tiles included, purged from the CDN. Both
+  every pano no other tour of that owner uses, tiles included, purged from the CDN. Unlike the
+  owner's own delete it keeps no trash copy of the originals, and deletes the trash copies of the
+tour's originals the owner had already deleted ("Trash for deleted originals"). Both
   also take the tour off Explore, and so does every script mode built on them (`--quarantine`,
   `--all-tours`, `--close-account`'s sweep). Their released slugs (live and aliases) are held for
   `SLUG_HOLD_DAYS` (30) for **no** owner (`owner: "takedown"` in `slug-holds/`), so not even the
@@ -2496,8 +2711,12 @@ the US Copyright Office.
   (`{ lastSentAt, held }`): no new resource, `ops/` is outside the CDN WAF rule's three public
   prefixes and the R2 notification's `panos/` prefix, and the DLQ consumer's `max_concurrency: 1`
   keeps its read-then-write from racing. If the state can't be read the email goes out anyway.
-  Failures held back by the throttle are only emailed when a later batch arrives after the window:
-  there is no timer that flushes them on its own. This uses the structured `send({ to, from, subject, text })`
+  Failures held back by the throttle no longer wait for a later batch: the Worker's 5-minute cron
+  (the health check's) also runs `flushHeldDlqAlerts`, which emails `[panote] tiling failed
+  permanently (N earlier) - <queue>` once a queue's window is over with failures still held, and
+  resets the count (one `GET` per DLQ name when nothing is held; nothing at all while email isn't
+  configured). A send that fails keeps the count for the next run. The DLQ consumer and the cron
+  can both touch the state at once; at worst one failure is counted once too often or too few. This uses the structured `send({ to, from, subject, text })`
   API ([Workers API](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/)).
   Chosen over a Tail Worker (needs log-string matching) and over Workers Observability / Cloudflare
   Notifications (no alert type for this, per current docs). **This is code and config only — it
@@ -2629,7 +2848,8 @@ change alone leaves it as it is; CI checks for drift).
 ### Daily cron and CDN purge failures
 
 - **Daily cron.** `admin-api`'s `scheduled` handler runs its tasks (`slug-aliases`,
-  `account-deletions` with its CDN purge, `tile-gc`) through `runDailyCron`
+  `account-deletions` with its CDN purge, `tile-gc`, `trash`, `plan-sweep` with its CDN purge)
+  through `runDailyCron`
   (`services/admin-api/src/cron-status.ts`). Each task that throws logs
   `[cron] daily task failed task=<name> error=<error name>`, and every run writes
   `ops/cron/admin-api-daily.json`: `{ lastRunAt, lastOkAt, failed }`, where `lastOkAt` only moves
@@ -2840,7 +3060,7 @@ the account has the resources the config names.
    `wrangler r2 bucket domain add pano-content --domain cdn.panote.io --zone-id <panote.io zone id>`).
    Only once step 4's rule is enabled.
    Verify, straight away, while the bucket is still empty:
-   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/backup/x`, `/` and
+   - `curl -sI https://cdn.panote.io/panos/x`, `/tours/x`, `/accounts/x`, `/backup/x`, `/trash/x`, `/` and
      `/tiles/../panos/x` (that one with `curl --path-as-is`, or curl collapses the `..` itself):
      all `403`.
    - `curl -sI https://cdn.panote.io/tiles/x`: `404` from R2, not `403`.
@@ -2947,7 +3167,7 @@ Run after step 12, before telling anyone the site exists. The first group is wha
 
 ```bash
 # Private prefixes stay private (step 4): every line 403
-for p in panos/x tours/x accounts/x ops/x explore/index/x backup/x '' tiles/../panos/x; do
+for p in panos/x tours/x accounts/x ops/x explore/index/x backup/x trash/x '' tiles/../panos/x; do
   curl -sI --path-as-is -o /dev/null -w "%{http_code} /$p\n" "https://cdn.panote.io/$p"; done
 # Public prefixes pass through to R2: 404 for a key that doesn't exist, not 403
 curl -sI -o /dev/null -w '%{http_code}\n' https://cdn.panote.io/tiles/x/manifest.json

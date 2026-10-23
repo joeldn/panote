@@ -4,7 +4,7 @@ import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { containerEnvVars } from './container-env.js';
 import { deriveUploadTarget, errorText, panoIdForLog } from './upload-prefix.js';
 import { deleteOversizedOriginal, writeFailureMarker } from './failure-marker.js';
-import { sendDlqAlert, type DeadLetteredItem } from './alert.js';
+import { flushHeldDlqAlerts, sendDlqAlert, type DeadLetteredItem } from './alert.js';
 import { runHealthCheck } from './health.js';
 
 export class Tiler extends Container<Env> {
@@ -214,8 +214,10 @@ export default {
     await handleUploadsBatch(batch, env);
   },
   // Every 5 minutes: probes the site and APIs, checks admin-api's daily cron and CDN
-  // purges, and emails when something goes down or comes back (src/health.ts).
+  // purges, and emails when something goes down or comes back (src/health.ts); and emails
+  // dead-lettered failures the DLQ alert throttle held back once their window is over.
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(runHealthCheck(env, controller.scheduledTime));
+    ctx.waitUntil(flushHeldDlqAlerts(env, controller.scheduledTime, DLQ_QUEUE_NAMES));
   },
 };

@@ -24,6 +24,7 @@ import {
   tourKey,
   tourOwnerKey,
   TourOwnerRecordSchema,
+  TRASH_ROOT,
   userPanosPrefix,
   userToursPrefix,
   type AccountDisabledRecord,
@@ -434,6 +435,27 @@ const scenePanoIds = (doc: unknown): string[] => {
 const panoKeys = (sub: string, panoIds: Iterable<string>): string[] =>
   [...panoIds].flatMap((p) => [originalKey(sub, p), configKey(sub, p)]);
 
+/**
+ * The trash copies (trash/<date>/panos/<owner>/<panoId>/original) of the owner's originals,
+ * of `panoIds` only when given: an original the owner deleted before the takedown is only
+ * there, and the takedown's delete removes it from there too. One listing per day held.
+ */
+async function trashedOriginalKeys(
+  store: TakedownStore,
+  sub: string,
+  panoIds?: readonly string[],
+): Promise<string[]> {
+  const wanted = panoIds && new Set(panoIds.map((p) => originalKey(sub, p)));
+  const keys: string[] = [];
+  for (const day of await store.listPrefixes(TRASH_ROOT)) {
+    for (const o of await store.listObjects(`${day}${userPanosPrefix(sub)}`)) {
+      const key = o.key.slice(day.length);
+      if (wanted ? wanted.has(key) : key.endsWith('/original')) keys.push(o.key);
+    }
+  }
+  return keys;
+}
+
 export interface TourContent {
   /** Every key worth keeping, whether or not it exists. */
   keys: string[];
@@ -443,7 +465,7 @@ export interface TourContent {
 /**
  * What a tour is made of: its tour.json, publish record, public bundle, share links,
  * floor-plan images, and each scene's original and config (scenes from the tour and from the bundle, which
- * may still show one since removed from the tour).
+ * may still show one since removed from the tour), with any trash copy of those originals.
  */
 export async function tourContent(
   store: TakedownStore,
@@ -470,17 +492,21 @@ export async function tourContent(
     ...slugs.filter((k): k is string => k !== null),
     ...plans.map((o) => o.key),
     ...panoKeys(sub, panoIds),
+    ...(await trashedOriginalKeys(store, sub, panoIds)),
   ];
   return { keys: [...new Set(keys)], panoIds };
 }
 
-/** Every pano the owner has, in a tour or not: originals and configs. */
+/** Every pano the owner has, in a tour or not: originals and configs, and every trashed original. */
 export async function ownerPanoContent(store: TakedownStore, sub: string): Promise<TourContent> {
   const prefix = userPanosPrefix(sub);
   const panoIds = (await store.listPrefixes(prefix))
     .map((p) => p.slice(prefix.length, -1))
     .filter((id) => PANO_PATTERN.test(id));
-  return { keys: panoKeys(sub, panoIds), panoIds };
+  return {
+    keys: [...panoKeys(sub, panoIds), ...(await trashedOriginalKeys(store, sub))],
+    panoIds,
+  };
 }
 
 // A single-part PUT's ETag is the body's MD5 on S3 and R2; a multipart one ("…-N") isn't.

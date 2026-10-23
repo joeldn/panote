@@ -13,6 +13,8 @@
     "takedown": "node scripts/takedown.ts",
     "retile": "node scripts/retile.ts",
     "restore-backup": "node scripts/restore-backup.ts",
+    "backfill-covers": "node scripts/backfill-covers.ts",
+    "account-storage": "node scripts/account-storage.ts",
     "types": "wrangler types env.d.ts --env dev --strict-vars=false --include-runtime=false",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",

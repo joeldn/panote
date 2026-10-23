@@ -8,6 +8,7 @@ import {
   MAX_SCENE_DESCRIPTION_LENGTH,
   MAX_SCENE_TRANSLATION_CHARS,
   MAX_TITLE_LENGTH,
+  OPERATOR_BACKFILL_PATH,
   OPERATOR_RESTORE_PATH,
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
@@ -201,7 +202,7 @@ describe('Insights', () => {
 describe('operator routes: per-IP limit', () => {
   const IP = '203.0.113.9';
 
-  it.each([OPERATOR_TAKEDOWN_PATH, OPERATOR_RESTORE_PATH])(
+  it.each([OPERATOR_TAKEDOWN_PATH, OPERATOR_RESTORE_PATH, OPERATOR_BACKFILL_PATH])(
     '%s counts a wrong token against the client IP',
     async (path) => {
       const op = limiter(true);
@@ -236,6 +237,19 @@ describe('operator routes: per-IP limit', () => {
     expect(r.headers.get('Retry-After')).toBe(String(WRITE_RATE_PERIOD_SECONDS));
     expect(await env.BUCKET.head(tourKey(SUB, 'op-limited'))).not.toBeNull();
     expect(write.limit).not.toHaveBeenCalled();
+  });
+
+  it('429s a backfill past the limit even with the right token', async () => {
+    const r = await call(
+      OPERATOR_BACKFILL_PATH,
+      {
+        method: 'POST',
+        headers: { 'CF-Connecting-IP': IP, [OPERATOR_TOKEN_HEADER]: 'test-operator-token' },
+        body: JSON.stringify({ apply: true }),
+      },
+      { OPERATOR_LIMITER: limiter(false) },
+    );
+    expect(r.status).toBe(429);
   });
 });
 

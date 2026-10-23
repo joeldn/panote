@@ -62,9 +62,10 @@ export function Privacy() {
         served from our content network. A tour you publish can be opened by anyone with its link; a
         public tour is also listed on Explore (its title, cover image and scene count, never your
         name) and can appear in search, once your account is a week old. When you delete a tour or
-        panorama we remove it from storage and our caches, except for content held after a report
-        (see below). When you unpublish a tour, its link and embeds stop working, but people who
-        already viewed it may still be able to load its panorama images until you delete them.
+        panorama we remove it from storage and our caches, except for the private copies described
+        under Backups and content held after a report (see below). When you unpublish a tour, its
+        link and embeds stop working, but people who already viewed it may still be able to load its
+        panorama images until you delete them.
       </p>
 
       <h2>Visitors and analytics</h2>
@@ -124,6 +125,12 @@ export function Privacy() {
         fault and are never shown publicly. So a tour or account you delete can remain in these
         private backups for up to 31 days before it is gone.
       </p>
+      <p>
+        When you delete a panorama, or a tour or account that removes it, we keep the original photo
+        in the same private storage for up to 31 days, so it can be put back if it was deleted by
+        mistake, and then delete it. It is never shown publicly. Content we remove after a report is
+        not kept this way.
+      </p>
 
       <h2>Who helps us run Panote</h2>
       <ul>
@@ -142,8 +149,9 @@ export function Privacy() {
         You can edit, unpublish or delete your tours at any time. You can also delete your whole
         account yourself: once signed in, open the account menu and choose Delete account. That
         removes your tours, panoramas, share links and visit counts, and your sign-in record is
-        removed within 30 days. Content held after a report is the one exception, below. To ask what
-        we hold about you, email <Mail />.
+        removed within 30 days. Private backups and the original photos are gone within 31 days (see
+        Backups). Content held after a report is the one exception, below. To ask what we hold about
+        you, email <Mail />.
       </p>
 
       <h2>Reports and legal holds</h2>
@@ -162,6 +170,7 @@ export function Privacy() {
         <li>Your account, tours and panoramas: until you delete them, or we close the account.</li>
         <li>Your sign-in record: up to 30 days after you delete your account.</li>
         <li>Backups: up to 31 days.</li>
+        <li>The original photos of deleted panoramas: up to 31 days.</li>
         <li>
           Visit counts and likes: until the account that owns the tour is deleted. The anonymous
           visit records behind them: about three months.

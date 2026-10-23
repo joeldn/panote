@@ -60,7 +60,7 @@ export const deleteOwnedPano = async (
       await bucket.delete(tombstone.key);
       return conflict('in-use');
     }
-    return deletePano(bucket, sub, panoId);
+    return deletePano(bucket, sub, panoId, { trash: true, now: new Date(now) });
   }
 
   if (await isReferenced(bucket, sub, panoId)) return conflict('in-use');
@@ -84,5 +84,5 @@ export const deleteOwnedPano = async (
   }
   // No original means no ownership proof, so no tombstone: deletePano then
   // only sweeps the caller's own prefix and never the owner-free tiles/.
-  return deletePano(bucket, sub, panoId);
+  return deletePano(bucket, sub, panoId, { trash: true, now: new Date(now) });
 };

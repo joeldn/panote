@@ -167,3 +167,51 @@ export const sendDlqAlert = async (
     console.error(`DLQ alert for ${queue} failed: ${errorName(e)}`);
   }
 };
+
+/**
+ * Every 5 minutes (the health check's cron): emails the failures the throttle held back once
+ * their window has passed, so they no longer wait for a later batch that may never come.
+ * One GET per queue when nothing is held. Never throws. Unconfigured email sends nothing and
+ * says nothing (sendDlqAlert already warns when a batch arrives). The DLQ consumer could write
+ * the state between this read and write; at worst one failure is counted twice or once less.
+ */
+export const flushHeldDlqAlerts = async (
+  env: Env,
+  now: number,
+  queues: Iterable<string>,
+): Promise<void> => {
+  const to = env.ALERT_EMAIL_TO;
+  const from = env.ALERT_EMAIL_FROM;
+  if (!to || !from || !env.ALERT_EMAIL) return;
+  for (const queue of queues) {
+    try {
+      const state = await readThrottle(env.BUCKET, queue);
+      const age = now - state.lastSentAt;
+      // A lastSentAt ahead of this clock is skipped too: the DLQ batch path, which treats it
+      // as an expired window, sends it with the next failure.
+      if (state.held === 0 || (state.lastSentAt && age < ALERT_THROTTLE_MS)) continue;
+      const since = state.lastSentAt ? ` since ${new Date(state.lastSentAt).toISOString()}` : '';
+      const text = [
+        `${state.held} tile job(s) failed permanently and were dead-lettered${since}, held back`,
+        `by the alert throttle (one email per ${ALERT_THROTTLE_MS / 60_000} minutes) with no later`,
+        'failure to carry them.',
+        '',
+        `Queue: ${queue}`,
+        `Time (UTC): ${new Date(now).toISOString()}`,
+        '',
+        'Their keys are in the Worker logs (tile job dead-lettered) and their tile-failed markers.',
+      ].join('\n');
+      await env.ALERT_EMAIL.send({
+        to,
+        from,
+        subject: `[panote] tiling failed permanently (${state.held} earlier) - ${queue}`,
+        text,
+      });
+      console.warn(`DLQ alert sent for ${queue}: ${state.held} held failure(s)`);
+      await writeThrottle(env.BUCKET, queue, { lastSentAt: now, held: 0 });
+    } catch (e) {
+      // The name only: the error message may echo the recipient address.
+      console.error(`DLQ held alert for ${queue} failed: ${errorName(e)}`);
+    }
+  }
+};

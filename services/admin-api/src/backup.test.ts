@@ -18,6 +18,7 @@ import {
   OPERATOR_RESTORE_PATH,
   OPERATOR_TOKEN_HEADER,
   originalKey,
+  planKey,
   publishKey,
   pubTourKey,
   slugKey,
@@ -57,6 +58,7 @@ const OTHER = 'auth0|backup-other';
 const NOW = new Date('2026-10-22T00:15:00Z');
 const DATE = '2026-10-22';
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PLAN_BYTES = new Uint8Array([82, 73, 70, 70, 0, 1, 2, 255]);
 
 // Every case starts from an empty bucket: the backup lists whole prefixes.
 const wipe = async () => {
@@ -98,6 +100,7 @@ const seedContent = async (sub = SUB, tourId = 't1', panoId = 'p1', slug = 'my-t
     exploreTourKey(tourId),
     exploreHiddenKey(tourId),
     accountDisabledKey(sub),
+    planKey(tourId, 'pl1', 'image/webp'),
   ];
   const notBackedUp = [
     originalKey(sub, panoId),
@@ -109,6 +112,9 @@ const seedContent = async (sub = SUB, tourId = 't1', panoId = 'p1', slug = 'my-t
     `quarantine/case-1/${tourKey(sub, tourId)}`,
     'ops/dlq-alert/q.json',
   ];
+  await env.BUCKET.put(planKey(tourId, 'pl1', 'image/webp'), PLAN_BYTES, {
+    httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=31536000' },
+  });
   await put(tourKey(sub, tourId), { tourId, title: 'Café' }, { title: 'Café', sceneCount: '1' });
   await put(
     publishKey(sub, tourId),
@@ -182,6 +188,12 @@ describe('runBackup', () => {
     expect(copy!.httpMetadata).toMatchObject({
       contentType: 'application/json',
       cacheControl: 'public, max-age=30',
+    });
+    const plan = await env.BUCKET.get(backupKey(DATE, planKey('t1', 'pl1', 'image/webp')));
+    expect(new Uint8Array(await plan!.arrayBuffer())).toEqual(PLAN_BYTES);
+    expect(plan!.httpMetadata).toMatchObject({
+      contentType: 'image/webp',
+      cacheControl: 'public, max-age=31536000',
     });
     const done = BackupCompleteRecordSchema.parse(
       JSON.parse((await text(backupCompleteKey(DATE)))!),
@@ -623,6 +635,31 @@ describe('restore', () => {
     expect(out.refused).toEqual([...ofTour('t1', 'my-tour'), pubTourKey('orphan')]);
     expect(out.restored).toEqual([...ofTour('t2', 'other-tour'), pubTourKey('late')]);
     for (const key of ofTour('t1', 'my-tour')) expect(await text(key)).toBeNull();
+  });
+
+  it("restores a plan image through its tour's owner pointer, and refuses one it can't place", async () => {
+    await seedContent();
+    await seedContent(OTHER, 't2', 'p2', 'other-tour');
+    await env.BUCKET.put(planKey('orphan', 'pl1', 'image/png'), PLAN_BYTES);
+    await runBackup(env.BUCKET, NOW);
+    const plans = [
+      planKey('t1', 'pl1', 'image/webp'),
+      planKey('t2', 'pl1', 'image/webp'),
+      planKey('orphan', 'pl1', 'image/png'),
+    ];
+    await env.BUCKET.delete(plans);
+    await put(accountDeletionKey(SUB), { v: 1, sub: SUB, requestedAt: NOW.toISOString() });
+
+    const res = await restore({ date: DATE, keys: plans });
+
+    expect(await res.json()).toMatchObject({
+      restored: [planKey('t2', 'pl1', 'image/webp')],
+      refused: [planKey('t1', 'pl1', 'image/webp'), planKey('orphan', 'pl1', 'image/png')],
+    });
+    const back = await env.BUCKET.get(planKey('t2', 'pl1', 'image/webp'));
+    expect(new Uint8Array(await back!.arrayBuffer())).toEqual(PLAN_BYTES);
+    expect(back!.httpMetadata?.contentType).toBe('image/webp');
+    expect(await env.BUCKET.head(planKey('t1', 'pl1', 'image/webp'))).toBeNull();
   });
 
   it('reports a key whose R2 call fails, and still restores the rest', async () => {
