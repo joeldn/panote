@@ -322,8 +322,8 @@ export function Embedding() {
           share it again.
         </li>
         <li>
-          Visitors can go full screen from the controls. iPhone browsers don’t offer full screen to
-          web pages, so the button doesn’t show there.
+          Visitors can go full screen from the controls. Where the browser can’t do that inside an
+          embed, as on iPhone, the button opens the tour in a new tab instead.
         </li>
       </ul>
 
