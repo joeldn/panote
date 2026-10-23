@@ -215,7 +215,12 @@ const defaultTimers: Timers = {
 };
 
 export interface UploadDeps {
-  presign(req: { contentType: string; size: number; panoId?: string }): Promise<UploadUrlOk>;
+  presign(req: {
+    contentType: string;
+    size: number;
+    panoId?: string;
+    tourId?: string;
+  }): Promise<UploadUrlOk>;
   put(
     url: string,
     file: Blob,

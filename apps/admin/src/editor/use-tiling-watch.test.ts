@@ -27,7 +27,12 @@ describe('useTilingWatch', () => {
   it('checks a pano that is not a target once on Check again, then stops', async () => {
     const getPanoStatus = vi.fn(async () => status('pending'));
     const { result } = renderHook(() =>
-      useTilingWatch({ api: { getPanoStatus }, targets: [], tilesBase: 'https://cdn.test/' }),
+      useTilingWatch({
+        api: { getPanoStatus },
+        tourId: 't1',
+        targets: [],
+        tilesBase: 'https://cdn.test/',
+      }),
     );
     act(() => result.current.checkAgain('p1'));
     await tick();
@@ -43,7 +48,12 @@ describe('useTilingWatch', () => {
       .mockResolvedValueOnce(status('pending'))
       .mockResolvedValue(status('failed'));
     const { result } = renderHook(() =>
-      useTilingWatch({ api: { getPanoStatus }, targets: ['p1'], tilesBase: 'https://cdn.test/' }),
+      useTilingWatch({
+        api: { getPanoStatus },
+        tourId: 't1',
+        targets: ['p1'],
+        tilesBase: 'https://cdn.test/',
+      }),
     );
     await tick();
     expect(result.current.polled.p1).toEqual({ state: 'pending' });

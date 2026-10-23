@@ -82,6 +82,7 @@ export function fakeBackend() {
             cursor: null,
           });
     }
+    if (method === 'GET' && path === '/api/admin/shared-tours') return json({ tours: [] });
     // The editor's own load of the tour (it sits under /app/t/:id); not part of the upload.
     if (method === 'GET' && /\?include=configs$/.test(path)) {
       if (!path.startsWith('/api/admin/tours/tour-1')) return json({ error: 'not found' }, 404);
@@ -113,7 +114,7 @@ export function fakeBackend() {
       state.tour = { ...(body as typeof state.tour), tourId: 'tour-1' };
       return json({ tourId: 'tour-1' }, 201);
     }
-    if (method === 'GET' && /^\/api\/admin\/panos\/[^/?]+\?status=1$/.test(path)) {
+    if (method === 'GET' && /^\/api\/admin\/panos\/[^/?]+\?status=1&tourId=[^&]+$/.test(path)) {
       if (state.statusStatus !== 200) return json({ error: 'nope' }, state.statusStatus);
       return json({
         status: {
@@ -129,11 +130,11 @@ export function fakeBackend() {
     if (method === 'GET' && /^\/api\/admin\/panos\/[^/?]+$/.test(path)) {
       return json({ error: 'config not found', deleting: false, hasOriginal: true }, 404);
     }
-    if (method === 'PUT' && /^\/api\/admin\/panos\/[^/]+\/config$/.test(path)) {
+    if (method === 'PUT' && /^\/api\/admin\/panos\/[^/]+\/config(\?tourId=[^&]+)?$/.test(path)) {
       if (headers['if-none-match'] === '*' && state.hasConfig)
         return json({ error: 'conflict' }, 412);
       state.hasConfig = true;
-      const panoId = path.split('/')[4]!;
+      const panoId = path.split('?')[0]!.split('/')[4]!;
       state.configs[panoId] ??= { title: (body as { title: string }).title };
       return json({ etag: 'c1' });
     }

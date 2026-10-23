@@ -49,11 +49,14 @@ describe('runSave', () => {
       'a',
       expect.objectContaining({ title: 'Plaza' }),
       'ea',
+      // Scoped to the tour, so an editor's Save writes the tour owner's configs.
+      { tourId: 't1' },
     );
     // An untitled original has no config yet: created create-only, never with If-Match: *.
     expect(api.createPanoConfig).toHaveBeenCalledWith(
       'new',
       expect.objectContaining({ title: 'Cellar' }),
+      { tourId: 't1' },
     );
     expect(api.putPanoConfig).not.toHaveBeenCalledWith('new', expect.anything(), '*');
     expect(api.putTour).toHaveBeenCalledTimes(1);

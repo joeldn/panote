@@ -12,6 +12,7 @@ import { useSession } from '../session.js';
 import { coverImage } from './cover.js';
 import { readCurrentTour } from './current-tour.js';
 import { formatCount, plural } from './format.js';
+import { SharedTours } from './SharedTours.js';
 import { TourCard } from './TourCard.js';
 import { useDashboard, type Dashboard as DashboardData } from './use-dashboard.js';
 
@@ -181,6 +182,7 @@ export function Dashboard() {
             ))}
           </div>
         )}
+        <SharedTours api={api} now={now} />
       </>
     );
   }

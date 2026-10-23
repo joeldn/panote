@@ -17,6 +17,7 @@ function setup() {
           <MoreMenu
             lang="de"
             langName="German"
+            peopleTo="people"
             insightsTo="insights"
             previewTo="/t/t1/preview?lang=de"
             onLanguages={onLanguages}
@@ -45,6 +46,7 @@ describe('MoreMenu', () => {
     expect(screen.getAllByRole('menuitem').map((m) => m.textContent)).toEqual([
       'Languagede',
       'Tour settings',
+      'People',
       'Insights',
       'Preview',
     ]);

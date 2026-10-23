@@ -47,11 +47,13 @@ const settled = (p: PolledTiling | undefined): boolean =>
  */
 export function useTilingWatch(opts: {
   api: Pick<AdminApi, 'getPanoStatus'>;
+  /** The tour the panos are in: an editor reads the owner's panos through it. */
+  tourId: string;
   targets: readonly string[];
   tilesBase: string;
   fetch?: FetchLike | undefined;
 }): TilingWatch {
-  const { api, targets, tilesBase, fetch } = opts;
+  const { api, tourId, targets, tilesBase, fetch } = opts;
   const [polled, setPolled] = useState<Record<string, PolledTiling>>({});
   const polledRef = useRef(polled);
   const [reloadKeys, setReloadKeys] = useState<Record<string, string>>({});
@@ -59,9 +61,9 @@ export function useTilingWatch(opts: {
   // The panos the editor wants watched now: a loop for any other (a Check again on a
   // pano that isn't a target) answers once and stops.
   const wanted = useRef(new Set<string>());
-  const live = useRef({ api, tilesBase, fetch });
+  const live = useRef({ api, tourId, tilesBase, fetch });
   useEffect(() => {
-    live.current = { api, tilesBase, fetch };
+    live.current = { api, tourId, tilesBase, fetch };
   });
 
   const put = useCallback((panoId: string, p: PolledTiling | null) => {
@@ -113,7 +115,9 @@ export function useTilingWatch(opts: {
         let tiling: string;
         let version: string | undefined;
         try {
-          const status = await live.current.api.getPanoStatus(panoId);
+          const status = await live.current.api.getPanoStatus(panoId, {
+            tourId: live.current.tourId,
+          });
           tiling = status.tiling;
           version = status.manifest?.version;
         } catch (e) {

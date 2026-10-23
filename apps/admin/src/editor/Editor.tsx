@@ -157,8 +157,8 @@ function EditorMessage({ title, children }: { title: string; children?: ReactNod
 
 // The tab-close prompt lives in useEditor (the re-auth redirect has to disarm it).
 function useUnsavedGuards(dirty: boolean, tourId: string) {
-  // Share and insights open over the editor; anything else unmounts it.
-  const inside = new RegExp(`/t/${tourId}(/(share/[a-z]+|insights))?/?$`);
+  // Share, insights and people open over the editor; anything else unmounts it.
+  const inside = new RegExp(`/t/${tourId}(/(share/[a-z]+|insights|people))?/?$`);
   return useBlocker(
     ({ currentLocation, nextLocation }) =>
       dirty &&
@@ -294,6 +294,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   );
   const watch = useTilingWatch({
     api: session.api,
+    tourId: docs.tourId,
     targets: watchTargets,
     tilesBase: tilesBaseUrl(config),
     fetch: authFetch,
@@ -745,6 +746,9 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               >
                 <i className="fa-solid fa-sliders" aria-hidden="true" />
               </button>
+              <Link className="ed-glass-btn" to="people">
+                People
+              </Link>
               <Link className="ed-glass-btn" to="insights">
                 Insights
               </Link>
@@ -755,6 +759,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             <MoreMenu
               lang={lang ?? defaultLang}
               langName={languageName(lang ?? defaultLang)}
+              peopleTo="people"
               insightsTo="insights"
               previewTo={previewTo}
               onLanguages={() => {
@@ -767,9 +772,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
               }}
             />
             <SaveButton editor={editor} />
-            <Link className="pn-btn pn-btn--accent pn-btn--pill" to="share/link">
-              Share
-            </Link>
+            {/* Sharing is the owner's: an editor's Save still updates a live tour. */}
+            {editor.role === 'owner' && (
+              <Link className="pn-btn pn-btn--accent pn-btn--pill" to="share/link">
+                Share
+              </Link>
+            )}
             <OwnerAccountMenu session={session} />
           </div>
         </header>
@@ -818,7 +826,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             onRetry={() => void editor.save()}
           />
           <Notices
-            notices={editor.notices}
+            // Share links go to the owner's controls: an editor gets the text alone.
+            notices={
+              editor.role === 'owner'
+                ? editor.notices
+                : editor.notices.map(({ link: _, ...n }) => n)
+            }
             onDismiss={editor.dismiss}
             busy={editor.publishing}
             onRepublish={() => void editor.republish()}
@@ -1019,7 +1032,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             currentId && dispatch({ type: 'link/nudge', from: currentId, to, delta })
           }
           onDisconnect={(to) => currentId && dispatch({ type: 'link/remove', from: currentId, to })}
-          onAddFromLibrary={() => setLibraryOpen(true)}
+          // The library is the signed-in user's own panos: not for someone else's tour.
+          {...(editor.role === 'owner' && { onAddFromLibrary: () => setLibraryOpen(true) })}
           onAddPano={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
         />
         <MapPanel

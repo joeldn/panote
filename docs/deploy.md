@@ -1702,6 +1702,13 @@ Everything stays in the owner's account: an editor works on the owner's `tours/<
   the link. It works for 7 days, once, and only for someone signed in with that address as their
   verified email claim (`https://panote.io/email`, "Account linking"). Inviting the same address
   again replaces the link; the owner can revoke it.
+- **In the admin app.** The editor's People button (`/app/t/<tourId>/people`) lists the owner,
+  editors and pending invites; the owner invites, cancels and removes there, and an editor can
+  leave (`GET …/members` marks the caller's own entry with `you`). An invite link is
+  `/app/invite#<token>`: the token stays in the fragment, so it never reaches a server log or a
+  Referer. Tours shared with someone show on their dashboard under "Shared with you". For an
+  editor the editor hides Share and Add from library, and every pano call and upload carries the
+  tour (`?tourId=`, or `tourId` in the upload body).
 - **Limits.** Uploads by an editor count against the owner's panorama and storage quotas, and
   against both people's daily upload limit. One person can edit at most 50 shared tours.
 - **Deletion and takedown.** Deleting a tour (owner, operator or account deletion) removes its

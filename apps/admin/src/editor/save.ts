@@ -94,10 +94,11 @@ export async function runSave(api: SaveApi, tourId: string, plan: SavePlan): Pro
       }
       try {
         // No stored config yet: create-only, so a concurrent create 412s instead of being overwritten.
+        // Scoped to the tour, so an editor's Save writes the owner's configs.
         const res =
           etag === null
-            ? await api.createPanoConfig(panoId, config)
-            : await api.putPanoConfig(panoId, config, etag);
+            ? await api.createPanoConfig(panoId, config, { tourId })
+            : await api.putPanoConfig(panoId, config, etag, { tourId });
         out.configs[panoId] = { etag: res.etag, sent: config };
       } catch (e) {
         out.failures[key] = failureOf(e);

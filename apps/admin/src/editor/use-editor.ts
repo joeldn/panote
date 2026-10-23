@@ -1,4 +1,4 @@
-import type { TourPublishState } from '@internal/contracts';
+import type { TourPublishState, TourRole } from '@internal/contracts';
 import type { AdminApi } from '@internal/web-kit';
 import { isAuthError } from '@internal/web-kit';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -195,6 +195,8 @@ export function useEditor(
   const pastTourEtags = useRef(new Set<string>());
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [publish, setPublish] = useState<TourPublishState | null>(null);
+  // An editor of someone else's tour: owner-only controls (sharing, delete) stay hidden.
+  const [role, setRole] = useState<TourRole>('owner');
   const publishRef = useRef<TourPublishState | null>(null);
   const [notices, setNotices] = useState<EditorNotice[]>([]);
   // The last publish attempt hit only `not-ready` for these panos: once their tiles are
@@ -282,6 +284,7 @@ export function useEditor(
         dispatch({ type: 'load', docs: fresh });
         publishRef.current = res.data.publish ?? null;
         setPublish(publishRef.current);
+        setRole(res.data.role ?? 'owner');
         setLoaded({ key, state: { status: 'ready' } });
       } catch (e) {
         if (cancelled) return;
@@ -631,7 +634,7 @@ export function useEditor(
         const { tour, etag } = res.data;
         return { etag, doc: { etag, base: tour, current: tour } };
       }
-      const res = await api.getPano(panoId);
+      const res = await api.getPano(panoId, { tourId });
       if (res.status === 'ok') {
         const { config, etag } = res.data;
         return { etag, doc: { kind: 'config', etag, base: config, current: config } };
@@ -742,6 +745,7 @@ export function useEditor(
 
   return {
     load,
+    role,
     retryLoad: () => setAttempt((n) => n + 1),
     docs,
     dispatch,

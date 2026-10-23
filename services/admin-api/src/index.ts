@@ -670,7 +670,7 @@ app.get('/api/admin/tours/:tourId/members', async (c) => {
   if (idError) return c.json({ error: idError }, 400);
   const access = await tourAccessFor(c.env.BUCKET, caller, tourId);
   if (isRefusal(access)) return refuse(c, access);
-  return c.json(await getMembers(c.env.BUCKET, access, tourId));
+  return c.json(await getMembers(c.env.BUCKET, access, caller, tourId));
 });
 
 app.post('/api/admin/tours/:tourId/invites', async (c) => {

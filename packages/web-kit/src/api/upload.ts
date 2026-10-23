@@ -22,6 +22,8 @@ export interface PresignRequest {
   size: number;
   /** Set to replace an existing pano's image (re-tiles in place). */
   panoId?: string;
+  /** The tour it is for: an editor's upload goes into the tour owner's account. */
+  tourId?: string;
 }
 
 export const PlanUrlOkSchema = z.object({

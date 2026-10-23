@@ -609,14 +609,17 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         });
       }
       const onChange = (s: UploadState) => onMachine(j, s);
-      // Notes a limit on this job, so its failure can stop the queue behind it.
+      // Notes a limit on this job, so its failure can stop the queue behind it. The tour
+      // goes with every call: an editor's upload lands in the tour owner's account.
+      const { tourId } = target;
       const jd: UploadDeps = {
         ...d,
         presign: (req) =>
-          d.presign(req).catch((e: unknown) => {
+          d.presign({ ...req, tourId }).catch((e: unknown) => {
             j.limited = limitOf(e);
             throw e;
           }),
+        getPanoStatus: (id) => live.current.session.api.getPanoStatus(id, { tourId }),
       };
       j.ctl =
         'resume' in source

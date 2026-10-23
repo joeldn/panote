@@ -95,6 +95,32 @@ describe('editor: load and missing panos', () => {
   });
 });
 
+describe('editor: someone else’s tour', () => {
+  it('leaves sharing and the library to the owner, and scopes pano calls to the tour', async () => {
+    server.role = 'editor';
+    const { ui } = openTab();
+    await loaded(ui);
+    expect(ui.queryByRole('link', { name: 'Share' })).toBeNull();
+    expect(ui.queryByRole('button', { name: 'From library' })).toBeNull();
+    expect(ui.getAllByRole('link', { name: 'People' }).length).toBeGreaterThan(0);
+
+    await rename(ui, /Pano name: Square/, 'Main square');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText('Saved');
+    expect(server.writes().map((w) => `${w.method} ${w.path}`)).toContain(
+      'PUT /api/admin/panos/square/config?tourId=t1',
+    );
+  });
+
+  it('shows the owner Share, People and the library', async () => {
+    server.role = 'owner';
+    const { ui } = openTab();
+    await loaded(ui);
+    expect(ui.getByRole('link', { name: 'Share' })).toBeTruthy();
+    expect(ui.getByRole('button', { name: 'From library' })).toBeTruthy();
+  });
+});
+
 describe('editor: save', () => {
   it('sends one PUT per dirty doc with If-Match, then publishes', async () => {
     const tourEtag = server.tour!.etag;
@@ -109,7 +135,7 @@ describe('editor: save', () => {
 
     const writes = server.writes();
     expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
-      'PUT /api/admin/panos/square/config',
+      'PUT /api/admin/panos/square/config?tourId=t1',
       'PUT /api/admin/tours/t1',
       'POST /api/admin/tours/t1/publish',
     ]);
@@ -247,7 +273,9 @@ describe('editor: save', () => {
     await rename(a.ui, /Pano name: Untitled pano/, 'Hall (A)');
     fireEvent.click(a.ui.getByRole('button', { name: 'Save' }));
     await a.ui.findByText('Saved');
-    const create = server.writes().find((w) => w.path === '/api/admin/panos/hall/config')!;
+    const create = server
+      .writes()
+      .find((w) => w.path === '/api/admin/panos/hall/config?tourId=t1')!;
     expect(create).toMatchObject({ ifNoneMatch: '*', ifMatch: null });
     const etagA = server.configs.get('hall')!.etag;
 
@@ -262,7 +290,7 @@ describe('editor: save', () => {
     await b.ui.findByText('Saved');
     const last = server
       .writes()
-      .filter((w) => w.path === '/api/admin/panos/hall/config')
+      .filter((w) => w.path === '/api/admin/panos/hall/config?tourId=t1')
       .pop();
     expect(last).toMatchObject({ ifMatch: `"${etagA}"`, ifNoneMatch: null });
     expect(server.configs.get('hall')!.body.title).toBe('Hall (B)');
@@ -536,7 +564,7 @@ describe('editor: a Save that fails in part never publishes a mixed tour', () =>
     'network error': () => {
       const record = server.intercept;
       server.intercept = (r) => {
-        if (r.method === 'PUT' && r.path === '/api/admin/panos/square/config') {
+        if (r.method === 'PUT' && r.path === '/api/admin/panos/square/config?tourId=t1') {
           throw new TypeError('Failed to fetch');
         }
         return record?.(r);
@@ -594,7 +622,10 @@ describe('editor: a Save that fails in part never publishes a mixed tour', () =>
           .writes()
           .slice(before)
           .map((w) => `${w.method} ${w.path}`),
-      ).toEqual(['PUT /api/admin/panos/square/config', 'POST /api/admin/tours/t1/publish']);
+      ).toEqual([
+        'PUT /api/admin/panos/square/config?tourId=t1',
+        'POST /api/admin/tours/t1/publish',
+      ]);
       expect(recorded).toEqual([{ tour: 'New town', square: 'New square' }]);
       expect(localStorage.getItem(DRAFT)).toBeNull();
     },
@@ -617,7 +648,9 @@ describe('editor: a Save that fails in part never publishes a mixed tour', () =>
     const published = recordPublishes();
     const record = server.intercept!;
     server.intercept = (r) =>
-      r.method === 'PUT' && r.path === '/api/admin/panos/square/config' ? held : record(r);
+      r.method === 'PUT' && r.path === '/api/admin/panos/square/config?tourId=t1'
+        ? held
+        : record(r);
     await rename(ui, /Tour title: First/, 'Second');
     await rename(ui, /Pano name: Square/, 'New square');
     fireEvent.click(ui.getByRole('button', { name: 'Save' }));

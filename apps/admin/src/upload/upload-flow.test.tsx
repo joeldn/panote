@@ -84,7 +84,11 @@ describe('fresh upload from /app/new', () => {
     expect(router.state.location.pathname).toBe('/app/t/tour-1');
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    expect(backend.presigns()[0]?.body).toEqual({ contentType: 'image/png', size: 4000 });
+    expect(backend.presigns()[0]?.body).toEqual({
+      contentType: 'image/png',
+      size: 4000,
+      tourId: 'tour-1',
+    });
     expect(backend.presigns()[0]?.headers.authorization).toBe('Bearer jwt-token');
     const xhr = FakeXhr.last;
     expect(xhr.method).toBe('PUT');
@@ -122,7 +126,7 @@ describe('fresh upload from /app/new', () => {
     expect(backend.writes()).toHaveLength(2);
     const [config, tour] = backend.writes();
     expect(config).toMatchObject({
-      url: '/api/admin/panos/pano-1/config',
+      url: '/api/admin/panos/pano-1/config?tourId=tour-1',
       headers: { 'if-none-match': '*' },
       body: { title: 'Town hall' },
     });
@@ -180,7 +184,11 @@ describe('fresh upload from /app/new', () => {
     fireEvent.click(within(chip()).getByRole('button', { name: 'Try again' }));
     await tick();
     expect(backend.presigns()).toHaveLength(2);
-    expect(backend.presigns()[1]?.body).toEqual({ contentType: 'image/png', size: 2000 });
+    expect(backend.presigns()[1]?.body).toEqual({
+      contentType: 'image/png',
+      size: 2000,
+      tourId: 'tour-1',
+    });
     expect(FakeXhr.all).toHaveLength(2);
     expect(chipTitle()).toBe('Uploading panorama');
   });
@@ -198,6 +206,7 @@ describe('fresh upload from /app/new', () => {
       contentType: 'image/png',
       size: 2000,
       panoId: 'pano-1',
+      tourId: 'tour-1',
     });
     expect(chipTitle()).toBe('Uploading panorama');
   });
@@ -280,7 +289,7 @@ describe('fresh upload from /app/new', () => {
     backend.state.manifests = [manifest('t1-abc')];
     await tick(5_000);
     expect(backend.writes().map((w) => w.url)).toEqual([
-      '/api/admin/panos/pano-1/config',
+      '/api/admin/panos/pano-1/config?tourId=tour-1',
       '/api/admin/tours/tour-1',
     ]);
     expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
@@ -371,7 +380,7 @@ describe('several photos at once', () => {
     expect(
       backend
         .writes()
-        .filter((w) => w.url.endsWith('/config'))
+        .filter((w) => w.url.endsWith('/config?tourId=tour-1'))
         .map((w) => w.body),
     ).toEqual([{ title: 'Hall' }, { title: 'Kitchen' }, { title: 'Cellar' }]);
     expect(chipTitle()).toBe('Processing on our side');
@@ -586,7 +595,11 @@ describe('editor links into /app/new', () => {
     expect(screen.getByRole('dialog', { name: 'Add pano' })).toBeTruthy();
     await pick();
     expect(backend.state.calls.some((c) => c.url === '/api/admin/tours')).toBe(false);
-    expect(backend.presigns()[0]?.body).toEqual({ contentType: 'image/png', size: 2000 });
+    expect(backend.presigns()[0]?.body).toEqual({
+      contentType: 'image/png',
+      size: 2000,
+      tourId: 'tour-1',
+    });
     expect(router.state.location.pathname).toBe('/app/t/tour-1');
 
     backend.state.manifests = [manifest('t1-abc')];
@@ -594,7 +607,7 @@ describe('editor links into /app/new', () => {
     await tick(1_000);
     expect(chipTitle()).toBe('Ready at full resolution');
     expect(backend.writes().map((w) => w.url)).toEqual([
-      '/api/admin/panos/pano-1/config',
+      '/api/admin/panos/pano-1/config?tourId=tour-1',
       '/api/admin/tours/tour-1',
     ]);
   });
@@ -1224,7 +1237,7 @@ describe('sign-in during an upload', () => {
     const { backend } = await uploadThroughPut();
     // The scene went into the tour at landing, before the session ran out.
     expect(backend.writes().map((w) => w.url)).toEqual([
-      '/api/admin/panos/pano-1/config',
+      '/api/admin/panos/pano-1/config?tourId=tour-1',
       '/api/admin/tours/tour-1',
     ]);
     backend.state.statusStatus = 401;
@@ -1304,7 +1317,7 @@ describe('the scene joins its tour when the image lands', () => {
     // pano-old was appended before the reload (and may have been removed since).
     expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-1' }]);
     expect(backend.writes().map((w) => w.url)).toEqual([
-      '/api/admin/panos/pano-1/config',
+      '/api/admin/panos/pano-1/config?tourId=tour-1',
       '/api/admin/tours/tour-1',
     ]);
     // pano-1's slot is marked too, so another reload won't append it again.

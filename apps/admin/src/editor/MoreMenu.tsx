@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 
 /**
  * Below this width the editor's top bar has no room for every control: language, tour
- * settings, Insights and Preview fold into this menu (editor.css hides one or the other at
+ * settings, People, Insights and Preview fold into this menu (editor.css hides one or the other at
  * the same width; `editor-layout.test.ts` keeps the two in step).
  */
 export const BAR_MENU_MAX_WIDTH = 860;
@@ -12,6 +12,7 @@ export interface MoreMenuProps {
   /** The language being edited, as its tag (`en`). */
   lang: string;
   langName: string;
+  peopleTo: string;
   insightsTo: string;
   previewTo: string;
   onLanguages: () => void;
@@ -22,6 +23,7 @@ export interface MoreMenuProps {
 export function MoreMenu({
   lang,
   langName,
+  peopleTo,
   insightsTo,
   previewTo,
   onLanguages,
@@ -128,6 +130,15 @@ export function MoreMenu({
             <i className="fa-solid fa-sliders" aria-hidden="true" />
             Tour settings
           </button>
+          <Link
+            role="menuitem"
+            className="ed-more__item"
+            to={peopleTo}
+            onClick={() => close(false)}
+          >
+            <i className="fa-solid fa-user-group" aria-hidden="true" />
+            People
+          </Link>
           <Link
             role="menuitem"
             className="ed-more__item"

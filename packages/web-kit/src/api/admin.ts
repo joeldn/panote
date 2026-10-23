@@ -3,6 +3,10 @@ import {
   DEFAULT_INSIGHTS_DAYS,
   InsightsOkSchema,
   InsightsUnavailableSchema,
+  InviteAcceptOkSchema,
+  InviteCreateOkSchema,
+  InviteRefusedSchema,
+  MembersOkSchema,
   NotPublishedSchema,
   SharingStoppedSchema,
   PANO_PATTERN,
@@ -21,12 +25,17 @@ import {
   TooManyRenamesSchema,
   SlugPutOkSchema,
   SlugTakenSchema,
+  SharedToursOkSchema,
   TourNotFoundSchema,
   TourOkSchema,
   ToursListOkSchema,
   TourWithConfigsOkSchema,
   type AccountDeleteOk,
   type InsightsOk,
+  type InviteAcceptOk,
+  type InviteCreateOk,
+  type InviteRefused,
+  type MembersOk,
   type PanoDeleteConflict,
   type PanosListOk,
   type PanoStatus,
@@ -35,6 +44,7 @@ import {
   type PublishOk,
   type PublishRequest,
   type SceneConfigSchema,
+  type SharedToursOk,
   type SlugPutOk,
   type TourDocSchema,
   type ToursListOk,
@@ -93,6 +103,18 @@ export interface ConditionalQuery {
   ifNoneMatch?: string;
 }
 
+/**
+ * The tour a pano call is made for. An editor reaches the tour owner's panos only this way;
+ * the owner may pass it too.
+ */
+export interface PanoScope {
+  tourId?: string;
+}
+
+/** An invite accept the server refused, with the address the invite is for when it says. */
+export type InviteAcceptResult =
+  { status: 'ok'; data: InviteAcceptOk } | { status: 'refused'; refusal: InviteRefused };
+
 export interface AdminApiOptions {
   getToken: TokenGetter;
   /** API origin; `''` (default) is same-origin. */
@@ -105,8 +127,11 @@ export interface AdminApi {
   listPanos(q?: PanoListQuery): Promise<PanosListOk>;
   getTour(tourId: string, q?: ConditionalQuery): Promise<GetResult<TourOk>>;
   getTourWithConfigs(tourId: string, q?: ConditionalQuery): Promise<GetResult<TourWithConfigsOk>>;
-  getPano(panoId: string, q?: ConditionalQuery): Promise<GetResult<PanoWithStatusOk, PanoNotFound>>;
-  getPanoStatus(panoId: string): Promise<PanoStatus>;
+  getPano(
+    panoId: string,
+    q?: ConditionalQuery & PanoScope,
+  ): Promise<GetResult<PanoWithStatusOk, PanoNotFound>>;
+  getPanoStatus(panoId: string, scope?: PanoScope): Promise<PanoStatus>;
   createTour(doc: TourDocInput): Promise<{ tourId: string }>;
   /** `ifMatch` is the etag from the last load; a stale one throws `ConflictError`. */
   putTour(tourId: string, doc: TourDocInput, ifMatch: string): Promise<{ etag: string }>;
@@ -115,9 +140,14 @@ export interface AdminApi {
     panoId: string,
     config: SceneConfigInput,
     ifMatch: string,
+    scope?: PanoScope,
   ): Promise<{ etag: string }>;
   /** Create-only (`If-None-Match: *`): throws `ConflictError` if the config already exists. */
-  createPanoConfig(panoId: string, config: SceneConfigInput): Promise<{ etag: string }>;
+  createPanoConfig(
+    panoId: string,
+    config: SceneConfigInput,
+    scope?: PanoScope,
+  ): Promise<{ etag: string }>;
   deleteTour(tourId: string): Promise<void>;
   /** Refusals are an `ApiError`; classify them with `panoDeleteErrorOf`. */
   deletePano(panoId: string): Promise<void>;
@@ -133,6 +163,16 @@ export interface AdminApi {
    * Throws `ReauthRequiredError` when the server wants a more recent sign-in.
    */
   deleteAccount(confirm: string): Promise<AccountDeleteOk>;
+  /** The tour's owner, editors and (for the owner) pending invites. */
+  getMembers(tourId: string): Promise<MembersOk>;
+  /** Owner only. The returned token is the only copy: the link is built from it. */
+  createInvite(tourId: string, email: string): Promise<InviteCreateOk>;
+  revokeInvite(tourId: string, inviteId: string): Promise<void>;
+  /** The owner removes an editor; an editor removes themselves (leaves the tour). */
+  removeMember(tourId: string, memberId: string): Promise<void>;
+  acceptInvite(token: string): Promise<InviteAcceptResult>;
+  /** Tours other people shared with the signed-in user. */
+  listSharedTours(): Promise<SharedToursOk>;
 }
 
 /** A publish, slug or visibility failure the share UI reacts to (plan 3.2). */
@@ -202,6 +242,18 @@ const assertId = (id: string, name: string): string => {
 };
 
 const tourPath = (tourId: string): string => `/api/admin/tours/${assertId(tourId, 'tourId')}`;
+
+const panoPath = (panoId: string, scope: PanoScope = {}, query = ''): string => {
+  const params = new URLSearchParams(query);
+  if (scope.tourId !== undefined) params.set('tourId', assertId(scope.tourId, 'tourId'));
+  const qs = params.toString();
+  return `/api/admin/panos/${assertId(panoId, 'panoId')}${qs ? `?${qs}` : ''}`;
+};
+
+const configPath = (panoId: string, scope: PanoScope = {}): string => {
+  const [path, qs] = panoPath(panoId, scope).split('?');
+  return `${path}/config${qs ? `?${qs}` : ''}`;
+};
 
 const listPath = (path: string, q: PanoListQuery = {}): string => {
   const params = new URLSearchParams();
@@ -312,35 +364,19 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
         tourNotFound,
       ),
     getPano: async (panoId, q = {}) =>
-      conditionalGet(
-        `/api/admin/panos/${assertId(panoId, 'panoId')}`,
-        PanoWithStatusOkSchema,
-        q,
-        (url, body) => {
-          const nf = parseWith(PanoConfigNotFoundSchema, url, body);
-          return { status: 'not-found', deleting: nf.deleting, hasOriginal: nf.hasOriginal };
-        },
-      ),
-    getPanoStatus: async (panoId) =>
-      (
-        await getJson(
-          `/api/admin/panos/${assertId(panoId, 'panoId')}?status=1`,
-          PanoStatusOnlyOkSchema,
-        )
-      ).status,
+      conditionalGet(panoPath(panoId, q), PanoWithStatusOkSchema, q, (url, body) => {
+        const nf = parseWith(PanoConfigNotFoundSchema, url, body);
+        return { status: 'not-found', deleting: nf.deleting, hasOriginal: nf.hasOriginal };
+      }),
+    getPanoStatus: async (panoId, scope) =>
+      (await getJson(panoPath(panoId, scope, 'status=1'), PanoStatusOnlyOkSchema)).status,
     createTour: async (doc) => write('POST', '/api/admin/tours', doc, TourCreatedSchema),
     putTour: async (tourId, doc, ifMatch) =>
       write('PUT', `/api/admin/tours/${assertId(tourId, 'tourId')}`, doc, EtagOkSchema, ifMatch),
-    putPanoConfig: async (panoId, config, ifMatch) =>
-      write(
-        'PUT',
-        `/api/admin/panos/${assertId(panoId, 'panoId')}/config`,
-        config,
-        EtagOkSchema,
-        ifMatch,
-      ),
-    createPanoConfig: async (panoId, config) => {
-      const path = `/api/admin/panos/${assertId(panoId, 'panoId')}/config`;
+    putPanoConfig: async (panoId, config, ifMatch, scope) =>
+      write('PUT', configPath(panoId, scope), config, EtagOkSchema, ifMatch),
+    createPanoConfig: async (panoId, config, scope) => {
+      const path = configPath(panoId, scope);
       const res = await send('PUT', path, { body: config, headers: { 'If-None-Match': '*' } });
       if (res.res.status === 412) throw new ConflictError(res.body);
       if (!res.res.ok) throw new ApiError(res.res.status, res.body);
@@ -363,6 +399,25 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       if (!res.ok) throw new ApiError(res.status, body);
       return parseWith(AccountDeleteOkSchema, url, body);
     },
+    getMembers: async (tourId) => getJson(`${tourPath(tourId)}/members`, MembersOkSchema),
+    createInvite: async (tourId, email) =>
+      write('POST', `${tourPath(tourId)}/invites`, { email }, InviteCreateOkSchema),
+    revokeInvite: async (tourId, inviteId) =>
+      del(`${tourPath(tourId)}/invites/${assertId(inviteId, 'inviteId')}`),
+    removeMember: async (tourId, memberId) =>
+      del(`${tourPath(tourId)}/members/${assertId(memberId, 'memberId')}`),
+    acceptInvite: async (token) => {
+      const { res, url, body } = await send('POST', '/api/admin/invites/accept', {
+        body: { token },
+      });
+      if (!res.ok) {
+        const refused = InviteRefusedSchema.safeParse(body);
+        if (refused.success) return { status: 'refused', refusal: refused.data };
+        throw new ApiError(res.status, body);
+      }
+      return { status: 'ok', data: parseWith(InviteAcceptOkSchema, url, body) };
+    },
+    listSharedTours: async () => getJson('/api/admin/shared-tours', SharedToursOkSchema),
     getInsights: async (tourId, days = DEFAULT_INSIGHTS_DAYS) => {
       const { res, url, body } = await send('GET', `${tourPath(tourId)}/insights?days=${days}`);
       if (res.status === 404) {
