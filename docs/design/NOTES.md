@@ -112,7 +112,9 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   shouldn't imply one, while `gyroscope` and `accelerometer` let a visitor
   look around by tilting their phone inside the embed. Embeds already pasted
   with an older list keep working; without those two the browser gives the
-  embed no motion readings, and the tilt control hides itself once tried. On an iPhone, where the frame can't go fullscreen, the embed's
+  embed no motion readings, and the tilt control turns itself off again
+  when tried (it stays, so it can be tried again; only a refused permission
+  hides it). On an iPhone, where the frame can't go fullscreen, the embed's
   fullscreen button opens the tour page in a new tab instead.
 
 ## Auth

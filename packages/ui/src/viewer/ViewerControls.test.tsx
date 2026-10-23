@@ -2,6 +2,7 @@ import type { PanoViewerApi } from '@panote/viewer';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Modal } from '../Modal.js';
 import { PanoViewerContext } from '../viewer-context.js';
 import {
   PSEUDO_FULLSCREEN_CLASS,
@@ -94,6 +95,38 @@ describe('ViewerControls fullscreen fallback (iPhone Safari)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
     expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(true);
     cleanup();
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
+  });
+
+  it('stays pinned when Escape closes a dialog open over it', () => {
+    setFullscreenEnabled(undefined);
+    const el = document.createElement('div');
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <ViewerControls fullscreenTarget={{ current: el }} fullscreenFallback="pseudo" />
+      </PanoViewerContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    // The share sheet opens over it after it went fullscreen.
+    rerender(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <ViewerControls fullscreenTarget={{ current: el }} fullscreenFallback="pseudo" />
+        <Modal open onClose={onClose} aria-label="Share">
+          <p>sheet</p>
+        </Modal>
+      </PanoViewerContext.Provider>,
+    );
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(true);
+    // With the sheet gone, Escape leaves fullscreen.
+    rerender(
+      <PanoViewerContext.Provider value={viewer as unknown as PanoViewerApi}>
+        <ViewerControls fullscreenTarget={{ current: el }} fullscreenFallback="pseudo" />
+      </PanoViewerContext.Provider>,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
     expect(el.classList.contains(PSEUDO_FULLSCREEN_CLASS)).toBe(false);
   });
 

@@ -58,14 +58,15 @@ export function ViewerControls({
     const el = fullscreenTarget?.current;
     if (!pseudoOn || !el) return;
     el.classList.add(PSEUDO_FULLSCREEN_CLASS);
-    // Escape leaves it, as it leaves real fullscreen; a dialog open over it handles its own.
+    // Escape leaves it, as it leaves real fullscreen. On window, so it hears the key after
+    // a dialog open over it (whose listener is on document) has, and leaves one it handled.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.defaultPrevented) setPseudo(false);
     };
-    document.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey);
     return () => {
       el.classList.remove(PSEUDO_FULLSCREEN_CLASS);
-      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey);
     };
   }, [pseudoOn, fullscreenTarget]);
 

@@ -190,6 +190,29 @@ describe('nested modals', () => {
     );
   }
 
+  it('marks an Escape it handles, so what is under it leaves the key alone', () => {
+    const onClose = vi.fn();
+    render(
+      <Modal open onClose={onClose} aria-label="Share">
+        <p>inside</p>
+      </Modal>,
+    );
+    const seen = vi.fn((e: KeyboardEvent) => e.defaultPrevented);
+    window.addEventListener('keydown', seen);
+    try {
+      const event = new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(event);
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      window.removeEventListener('keydown', seen);
+    }
+  });
+
   it('Escape closes only the topmost modal', () => {
     const onOuter = vi.fn();
     const onInner = vi.fn();
