@@ -9,13 +9,11 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from 'react';
-import { Link } from 'react-router';
 
 import type { PendingUpload } from '../upload/upload-context.js';
 import { findLink, yawDegrees, type EditorDocs } from './model.js';
 import { pendingLine, pendingPct, type SceneStatus } from './scene-status.js';
 import { dropIndex, keyMoveIndex, movedLine } from './scene-order.js';
-import { replaceImagePath } from './upload-links.js';
 
 // Each nudge turns a connection by this much (design: "nudge ±degrees").
 export const NUDGE_DEG = 5;
@@ -49,6 +47,8 @@ export interface TourPanelProps {
    * scene on the server and the editor folds it into the draft (useEditor's syncAppended).
    */
   onAddPano: () => void;
+  /** Replace a pano's image in place (same panoId, new tiles): opens the file dialog. */
+  onReplace: (panoId: string) => void;
 }
 
 const STATUS_LABEL: Record<SceneStatus, string> = {
@@ -88,6 +88,7 @@ export function TourPanel({
   onDisconnect,
   onAddFromLibrary,
   onAddPano,
+  onReplace,
 }: TourPanelProps) {
   const scenes = docs.tour.current.scenes;
   const current = currentId ? docs.scenes[currentId] : undefined;
@@ -178,14 +179,7 @@ export function TourPanel({
               From library
             </Button>
           )}
-          <Button
-            variant="accent"
-            size="sm"
-            pill
-            icon="fa-solid fa-plus"
-            aria-haspopup="dialog"
-            onClick={onAddPano}
-          >
+          <Button variant="accent" size="sm" pill icon="fa-solid fa-plus" onClick={onAddPano}>
             Add pano
           </Button>
         </div>
@@ -300,14 +294,15 @@ export function TourPanel({
                   </button>
                 )}
                 {!missing && !busy && (
-                  <Link
+                  <button
+                    type="button"
                     className="ed-icon-btn"
-                    to={replaceImagePath(docs.tourId, panoId)}
                     aria-label={`Replace the image of ${name}`}
                     title="Replace image"
+                    onClick={() => onReplace(panoId)}
                   >
                     <i className="fa-solid fa-camera" aria-hidden="true" />
-                  </Link>
+                  </button>
                 )}
                 {isCurrent && <span className="ed-scene__badge">Current</span>}
                 <button

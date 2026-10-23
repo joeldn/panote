@@ -49,8 +49,10 @@ describe('editor: first run', () => {
     expect(tourCard(ui).getByRole('note').textContent).toContain(
       'This tour has no panos yet. Add pano uploads a 360° photo',
     );
+    const browse = vi.spyOn(HTMLInputElement.prototype, 'click');
     fireEvent.click(ui.getByRole('button', { name: 'Upload a pano' }));
-    expect(await screen.findByRole('dialog', { name: 'Add pano' })).toBeTruthy();
+    expect(browse.mock.contexts).toContain(screen.getByTestId('upload-picker'));
+    browse.mockRestore();
   });
 
   it('one pano with no points says what Add point does, and that a second pano makes a tour', async () => {

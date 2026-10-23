@@ -14,6 +14,8 @@ export interface InlineTextProps {
    * one, a blank commit is allowed (it clears the translation).
    */
   placeholder?: string;
+  /** Starts in edit mode, all selected: a new tour whose name says nothing yet. */
+  editOnMount?: boolean;
 }
 
 /**
@@ -27,8 +29,9 @@ export function InlineText({
   className,
   disabled,
   placeholder,
+  editOnMount = false,
 }: InlineTextProps) {
-  const [draft, setDraft] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(editOnMount && !disabled ? value : null);
 
   const commit = () => {
     if (draft === null) return;
@@ -59,6 +62,7 @@ export function InlineText({
       {...(placeholder !== undefined && { placeholder })}
       maxLength={MAX_TITLE_LENGTH}
       autoFocus
+      onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {

@@ -76,6 +76,44 @@ afterEach(() => {
 });
 
 describe('fresh upload from /app/new', () => {
+  it('New tour on the dashboard opens the file dialog and lands in the editor, asking for a name', async () => {
+    const browse = vi.spyOn(HTMLInputElement.prototype, 'click');
+    const { backend, router } = setup('/app/');
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'New tour' }));
+    const picker = screen.getByTestId('upload-picker');
+    expect(browse.mock.contexts).toContain(picker);
+    browse.mockRestore();
+    fireEvent.change(picker, { target: { files: [pngFile('IMG_2041.JPG')] } });
+    await tick();
+    expect(backend.state.calls[0]).toMatchObject({
+      method: 'POST',
+      url: '/api/admin/tours',
+      body: { title: 'Untitled tour', scenes: [] },
+    });
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+    // The camera's name said nothing: the title is open for typing, all selected.
+    await tick();
+    const title = screen.getByRole('textbox', { name: 'Tour title' }) as HTMLInputElement;
+    expect(title.value).toBe('Untitled tour');
+    expect(document.activeElement).toBe(title);
+  });
+
+  it('photos dropped on the dashboard start a new tour', async () => {
+    const { backend, router } = setup('/app/');
+    await tick();
+    expect(screen.getByRole('button', { name: 'New tour' })).toBeTruthy();
+    const files = [pngFile('Hall.png')];
+    const dataTransfer = { types: ['Files'], files };
+    fireEvent.dragEnter(window, { dataTransfer });
+    expect(screen.getByText('Drop 360° photos to start a new tour')).toBeTruthy();
+    fireEvent.drop(window, { dataTransfer });
+    await tick();
+    expect(screen.queryByText('Drop 360° photos to start a new tour')).toBeNull();
+    expect(backend.state.calls[0]).toMatchObject({ method: 'POST', url: '/api/admin/tours' });
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
+  });
+
   it('creates the tour, presigns, PUTs with the pinned type, adds the pano once it lands, then polls', async () => {
     const { backend, router } = setup();
     await tick();
@@ -464,19 +502,31 @@ describe('several photos at once', () => {
     errors.mockRestore();
   });
 
-  it('one photo failing the checks stops the whole pick, and says which', async () => {
+  it('one photo failing the checks is left out, and the rest upload', async () => {
     const { backend } = setup();
     await tick();
     const files = three();
     files.splice(1, 0, new File(['GIF89a'], 'Loft.gif', { type: 'image/gif' }));
     await pickMany(files);
     const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('Nothing was uploaded. Pick again without these photos:');
+    expect(alert.textContent).toContain('The other photos are uploading. This one was left out:');
     expect(
       within(alert)
         .getAllByRole('listitem')
         .map((li) => li.textContent),
     ).toEqual(['Loft.gif: Use a JPG, PNG or WebP image.']);
+    expect(backend.presigns()).toHaveLength(1);
+    expect(within(chip()).getByText('2 more waiting')).toBeTruthy();
+  });
+
+  it('nothing is sent when no photo passes the checks', async () => {
+    const { backend } = setup();
+    await tick();
+    const gif = (name: string) => new File(['GIF89a'], name, { type: 'image/gif' });
+    await pickMany([gif('Loft.gif'), gif('Roof.gif')]);
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('None of these photos could be uploaded:');
+    expect(within(alert).getAllByRole('listitem')).toHaveLength(2);
     expect(backend.state.calls).toEqual([]);
   });
 
@@ -824,7 +874,7 @@ describe('sign-in during an upload', () => {
   it('/app/new?resume=upload with nothing stashed asks for the photo', async () => {
     const { backend } = setup('/app/new?resume=upload');
     await tick();
-    expect(screen.getByRole('dialog', { name: 'New pano' }).textContent).toContain(
+    expect(screen.getByRole('dialog', { name: 'New tour' }).textContent).toContain(
       'You’re signed in. Choose your photo again to upload it.',
     );
     expect(backend.state.calls).toEqual([]);
@@ -1067,7 +1117,7 @@ describe('sign-in during an upload', () => {
     await tick();
     // Only an unowned (landing) stash may start without a matching record.
     expect(pending.take).toHaveBeenCalledWith(null);
-    expect(screen.getByRole('dialog', { name: 'New pano' }).textContent).toContain(
+    expect(screen.getByRole('dialog', { name: 'New tour' }).textContent).toContain(
       'Choose your photo again to upload it.',
     );
     expect(backend.state.calls).toEqual([]);

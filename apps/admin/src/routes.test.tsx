@@ -25,7 +25,7 @@ describe('admin routes', () => {
   it('opens the upload overlay over the dashboard', async () => {
     renderAt('/app/new');
     expect(await screen.findByRole('heading', { name: /^Welcome.*Maya Larsson\.$/ })).toBeTruthy();
-    expect(screen.getByRole('dialog', { name: 'New pano' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'New tour' })).toBeTruthy();
   });
 
   it.each(['link', 'privacy', 'embed'])('opens the %s share tab over the editor', async (tab) => {

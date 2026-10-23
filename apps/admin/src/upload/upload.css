@@ -256,3 +256,29 @@
     animation: none;
   }
 }
+
+/* Photos dragged over the dashboard or the editor (FileDrop.tsx). Presses pass through. */
+.up-page-drop {
+  position: fixed;
+  inset: 12px;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--r-lg);
+  background: rgba(250, 248, 244, 0.72);
+  pointer-events: none;
+  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+}
+
+.up-page-drop__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  border-radius: var(--r-row);
+  background: var(--cbg-solid);
+  box-shadow: var(--shadow-glass);
+  font-weight: 600;
+  font-size: 15px;
+}

@@ -2,13 +2,28 @@ import { ApiError, ConflictError, MAX_TOUR_SCENES, type AdminApi } from '@intern
 
 const MAX_TITLE = 100;
 
-/** "IMG_2041 town-hall.jpg" -> "IMG 2041 town-hall"; the fallback when nothing is left. */
-export function titleFromFileName(name: string, fallback: string): string {
-  const base = name
-    .replace(/\.[A-Za-z0-9]{1,5}$/, '')
-    .replace(/_+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+/** The tour title a new tour gets when its first photo's name says nothing. */
+export const UNTITLED_TOUR = 'Untitled tour';
+
+/**
+ * A camera's own name for a photo: a maker prefix (or none) and numbers, like IMG_2041,
+ * PXL_20231004_153012, R0010042, DJI_0042 or 20231004_153012.
+ */
+const CAMERA_NAME =
+  /^(?:img|dsc[nf]?|_?dsc|pxl|dji|gopr|gs|sam|mvimg|pano|photo|image|vid|r(?=\d{5}))?[\s_.-]*\d[\d\s_.-]*(?:pano|stitch(?:ed)?|edit(?:ed)?)?$/i;
+
+/**
+ * "town_hall.jpg" -> "town hall"; the fallback when nothing is left. With `skipCameraNames`,
+ * a camera's own name ("IMG_2041.jpg") gets the fallback too.
+ */
+export function titleFromFileName(
+  name: string,
+  fallback: string,
+  { skipCameraNames = false } = {},
+): string {
+  const stem = name.replace(/\.[A-Za-z0-9]{1,5}$/, '');
+  if (skipCameraNames && CAMERA_NAME.test(stem.trim())) return fallback;
+  const base = stem.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
   return base.slice(0, MAX_TITLE).trim() || fallback;
 }
 

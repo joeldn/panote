@@ -9,6 +9,8 @@ import { Link, Outlet } from 'react-router';
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { useSession } from '../session.js';
+import { FileDrop } from '../upload/FileDrop.js';
+import { useUploads } from '../upload/upload-context.js';
 import { coverImage } from './cover.js';
 import { readCurrentTour } from './current-tour.js';
 import { formatCount, plural } from './format.js';
@@ -62,6 +64,7 @@ function PendingDeletes({ dash }: { dash: DashboardData }) {
 }
 
 function Empty() {
+  const uploads = useUploads();
   return (
     <div className="dash__empty">
       <div className="dash__empty-icon">
@@ -69,13 +72,18 @@ function Empty() {
       </div>
       <h2>No tours yet</h2>
       <p>Upload a 360° photo and it becomes your first tour. Add more panos to it later.</p>
-      <Link to="/new" className="pn-btn pn-btn--primary">
-        <i className="fa-solid fa-arrow-up-from-bracket" aria-hidden="true" />
+      <Button
+        variant="primary"
+        icon="fa-solid fa-arrow-up-from-bracket"
+        onClick={() => uploads.pick({ kind: 'new-tour' })}
+      >
         Upload a pano
-      </Link>
+      </Button>
     </div>
   );
 }
+
+const NEW_TOUR = { kind: 'new-tour' } as const;
 
 function deleteBody(tour: TourSummary): string {
   const panos =
@@ -106,6 +114,7 @@ export function Dashboard() {
     [env.apiBase, env.fetch],
   );
   const dash = useDashboard(api, publicApi);
+  const uploads = useUploads();
   const [now] = useState(() => Date.now());
   const [currentTour] = useState(readCurrentTour);
   const [confirm, setConfirm] = useState<TourSummary | null>(null);
@@ -194,11 +203,16 @@ export function Dashboard() {
           <p className="dash__kicker">Your tours</p>
           <h1 className="dash__title">{greeting(dash, name)}</h1>
         </div>
-        <Link to="/new" className="pn-btn pn-btn--primary pn-btn--lg">
-          <i className="fa-solid fa-plus" aria-hidden="true" />
+        <Button
+          variant="primary"
+          size="lg"
+          icon="fa-solid fa-plus"
+          onClick={() => uploads.pick({ kind: 'new-tour' })}
+        >
           New tour
-        </Link>
+        </Button>
       </header>
+      <FileDrop target={NEW_TOUR} label="Drop 360° photos to start a new tour" />
       {body}
       <ConfirmModal
         open={confirm !== null}

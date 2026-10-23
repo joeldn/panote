@@ -13,6 +13,7 @@ import {
   replacedVersionOf,
   startUpload,
   tilesBaseUrl,
+  UPLOAD_CONTENT_TYPES,
   type PreviewDecoder,
   type PreviewKeeper,
   type UploadController,
@@ -50,9 +51,17 @@ import {
   FinalizeError,
   SignedOutBatchError,
   titleFromFileName,
+  UNTITLED_TOUR,
   tourRoomMessage,
 } from './finalize.js';
 import { repickNotice } from './repick-notice.js';
+import {
+  checkFiles,
+  noneValid,
+  someSkipped,
+  startProblem,
+  type StartProblem,
+} from './start-files.js';
 import {
   clearBackgroundRecord,
   clearResumeRecord,
@@ -221,6 +230,14 @@ const finalizeFailure = (e: unknown): Extract<FinalizeState, { status: 'failed' 
   return { status: 'failed', auth: false, message: 'Please try again.', retryable: true };
 };
 
+interface Picker {
+  target: UploadTarget;
+  resume: boolean;
+  /** Remounts the dialog for each new prompt, so it starts from its own problem. */
+  seq: number;
+  problem?: StartProblem;
+}
+
 /**
  * Owns the uploads: drives each with the web-kit upload machine (its onChange is
  * the chip's only state), finishes it, and resumes it after sign-in.
@@ -269,11 +286,21 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const [bootBg] = useState(readBackgroundRecords);
   const bootRepick = boot?.kind === 'repick' ? boot.rec : null;
   // On /app/new the route's own overlay takes the file back instead (one dialog, not two).
-  const [picker, setPicker] = useState<{ target: PanoTarget; resume: boolean } | null>(() =>
+  // The upload dialog: after a sign-in redirect, or to say what went wrong with a pick.
+  const [picker, setPicker] = useState<Picker | null>(() =>
     bootRepick && bootRepick.target.kind !== 'new-tour' && pathname !== '/new'
-      ? { target: bootRepick.target, resume: true }
+      ? { target: bootRepick.target, resume: true, seq: 0 }
       : null,
   );
+  const pickerSeq = useRef(0);
+  const openPicker = useCallback((target: UploadTarget, problem?: StartProblem) => {
+    setPicker({
+      target,
+      resume: false,
+      seq: ++pickerSeq.current,
+      ...(problem && { problem }),
+    });
+  }, []);
   const [repick, setRepick] = useState<Uploads['repick']>(() =>
     bootRepick
       ? { target: bootRepick.target, fileName: bootRepick.fileName, reason: 'signed-out' }
@@ -699,7 +726,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       let panoTarget: PanoTarget;
       try {
         if (target.kind === 'new-tour') {
-          const title = titleFromFileName(file.name, 'Untitled tour');
+          const title = titleFromFileName(file.name, UNTITLED_TOUR, { skipCameraNames: true });
           const { tourId } = await s.api.createTour({ title, scenes: [] });
           panoTarget = { kind: 'add', tourId };
         } else {
@@ -826,10 +853,35 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         return;
       case 'repick':
         setRepick({ target: j.target, fileName: j.fileName, reason: 'retry' });
-        setPicker({ target: j.target, resume: false });
+        openPicker(j.target);
         return;
     }
   };
+
+  // Photos picked from the system's dialog or dropped on the page: start the ones that pass
+  // the checks, open a new tour's editor, and say what was left out or went wrong.
+  const fileInput = useRef<HTMLInputElement>(null);
+  const pickFor = useRef<UploadTarget | null>(null);
+  const startFiles = useCallback(
+    async (picked: readonly File[], target: UploadTarget) => {
+      const files = target.kind === 'replace' ? picked.slice(0, 1) : picked;
+      const check = await checkFiles(files);
+      if (check.valid.length === 0) {
+        openPicker(target, noneValid(check));
+        return;
+      }
+      try {
+        const { tourId } = await begin(check.valid, target);
+        if (target.kind === 'new-tour' && tourId) {
+          void navigate(`/t/${tourId}`, { state: { newTour: true } });
+        }
+        if (check.skipped.length > 0) openPicker(target, someSkipped(check.skipped));
+      } catch (e) {
+        openPicker(target, startProblem(e));
+      }
+    },
+    [begin, navigate, openPicker],
+  );
 
   // Another user's stash (from a sign-in that never came back) would otherwise sit there.
   useEffect(() => {
@@ -980,7 +1032,16 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       active,
       busy: isInFlight(active),
       begin,
-      pick: (target) => setPicker({ target, resume: false }),
+      pick: (target) => {
+        // The system's file dialog straight from the click (it needs the user's gesture).
+        const input = fileInput.current;
+        if (!input) return;
+        pickFor.current = target;
+        input.multiple = target.kind !== 'replace';
+        input.click();
+      },
+      drop: (files, target) => void startFiles(files, target),
+      report: openPicker,
       repick,
       clearRepick: () => {
         forget();
@@ -995,7 +1056,18 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     };
     // rev: the jobs behind previewFor and pendingFor changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, begin, repick, forget, takePendingFile, reloadKeys, lastAdded, rev]);
+  }, [
+    active,
+    begin,
+    repick,
+    forget,
+    takePendingFile,
+    reloadKeys,
+    lastAdded,
+    rev,
+    openPicker,
+    startFiles,
+  ]);
 
   const closePicker = () => {
     if (repick) value.clearRepick();
@@ -1005,9 +1077,28 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   return (
     <UploadsContext value={value}>
       {children}
+      <input
+        ref={fileInput}
+        type="file"
+        hidden
+        accept={UPLOAD_CONTENT_TYPES.join(',')}
+        data-testid="upload-picker"
+        onChange={(e) => {
+          const files = [...(e.target.files ?? [])];
+          e.target.value = '';
+          const target = pickFor.current;
+          pickFor.current = null;
+          if (target && files.length > 0) void startFiles(files, target);
+        }}
+      />
       {picker && (
         <UploadOverlay
+          key={picker.seq}
           target={picker.target}
+          {...(picker.problem && { problem: picker.problem })}
+          onStarted={({ tourId }) => {
+            if (picker.target.kind === 'new-tour' && tourId) void navigate(`/t/${tourId}`);
+          }}
           {...(repick && picker.resume
             ? { resume: { take: takePendingFile, missingNotice: repickNotice(repick) } }
             : { notice: repick ? repickNotice(repick) : undefined })}

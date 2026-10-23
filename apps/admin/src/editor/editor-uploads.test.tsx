@@ -170,18 +170,23 @@ describe('editor and the upload chip', () => {
     expect(screen.queryByText(/changed elsewhere/)).toBeNull();
   });
 
-  it('Add pano with unsaved edits opens over the editor; several land and the edits stay', async () => {
+  it('Add pano with unsaved edits opens the file dialog; several land and the edits stay', async () => {
     const { backend, router } = setup('/app/t/tour-1');
     backend.state.newPanoIds = ['pano-a', 'pano-b'];
     await tick();
     await renameTour('Town hall', 'Harbour walk');
     const add = screen.getByRole('button', { name: 'Add pano' }) as HTMLButtonElement;
     expect(add.disabled).toBe(false);
+    const browse = vi.spyOn(HTMLInputElement.prototype, 'click');
     fireEvent.click(add);
-    // A dialog over the editor: no navigation, so nothing asks to save first.
-    expect(screen.getByRole('dialog', { name: 'Add pano' })).toBeTruthy();
+    // The system's file dialog, from the click: no navigation, so nothing asks to save first.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const picker = screen.getByTestId('upload-picker') as HTMLInputElement;
+    expect(browse.mock.contexts).toContain(picker);
+    expect(picker.multiple).toBe(true);
+    browse.mockRestore();
     const files = [pngFile('Hall.png'), pngFile('Kitchen.png')];
-    fireEvent.change(screen.getByTestId('upload-input'), { target: { files } });
+    fireEvent.change(picker, { target: { files } });
     await tick();
     expect(router.state.location.pathname).toBe('/app/t/tour-1');
     expect(screen.queryByRole('dialog')).toBeNull();

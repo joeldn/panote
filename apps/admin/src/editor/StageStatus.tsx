@@ -1,5 +1,4 @@
 import { Button } from '@internal/ui';
-import { Link } from 'react-router';
 
 import type { SceneStatus } from './scene-status.js';
 
@@ -9,8 +8,8 @@ export interface StageStatusProps {
   name: string;
   /** The line to show while uploading (a pending card's, with its progress). */
   uploadLine?: string;
-  /** Where Replace image goes; absent for an upload that has no scene yet. */
-  replaceTo?: string;
+  /** Replace image (opens the file dialog); absent for an upload that has no scene yet. */
+  onReplace?: () => void;
   onRemove?: () => void;
   /** Timed-out only: poll again. Absent while still checking on its own. */
   onCheckAgain?: () => void;
@@ -30,7 +29,7 @@ export function StageStatus({
   status,
   name,
   uploadLine,
-  replaceTo,
+  onReplace,
   onRemove,
   onCheckAgain,
   problem = false,
@@ -79,10 +78,10 @@ export function StageStatus({
               Check again
             </Button>
           )}
-          {replaceTo && (
-            <Link className="pn-btn pn-btn--primary pn-btn--sm" to={replaceTo}>
+          {onReplace && (
+            <Button variant="primary" size="sm" onClick={onReplace}>
               Replace image
-            </Link>
+            </Button>
           )}
           {onRemove && (
             <Button variant="danger" size="sm" onClick={onRemove}>
