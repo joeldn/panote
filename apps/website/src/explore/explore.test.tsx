@@ -214,7 +214,7 @@ describe('Explore in the privacy page', () => {
     renderSite('/privacy');
     await screen.findByRole('heading', { name: 'What we keep' });
     const text = screen.getByRole('article').textContent?.replace(/\s+/g, ' ') ?? '';
-    expect(text).toContain('A public tour is also listed on Explore');
+    expect(text).toContain('a public tour is also listed on Explore');
     expect(text).toContain('never your name');
   });
 });

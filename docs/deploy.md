@@ -2611,10 +2611,8 @@ illegal, other), what you did and when, and the outcome. Nothing in the bucket r
 
 **Copyright notice.**
 
-1. Check the notice has everything the policy lists: the reporter's name, postal address, phone
-   and email; the work; the Panote link; the good-faith statement; the accuracy and authority
-   statement under penalty of perjury; a signature (a typed name will do). If anything is missing,
-   reply asking for it and do nothing else yet.
+1. Check the report has the tour's link, which work is the reporter's, and a way to reach them.
+   If anything is missing, reply asking for it and do nothing else yet.
 2. Run the report-only command on the link to find the tour and owner, then
    `--unpublish` (the case log, not the bucket, records why). That takes the share link down and
    keeps the tour in the owner's account so it can be restored, **but it leaves
@@ -2624,22 +2622,17 @@ illegal, other), what you did and when, and the outcome. Nothing in the bucket r
    case is open if they shouldn't. For the infringing image
    itself, use `--disable-owner --quarantine <case id>` (keeps a copy for the dispute and deletes
    the tour, its panos and their tiles, purged) or, if nothing needs keeping,
-   `--delete --nothing-to-preserve`. A counter-notice can then only restore from the quarantine
-   copy, by hand.
+   `--delete --nothing-to-preserve`. A dispute can then only restore from the quarantine copy, by
+   hand.
 3. Email the owner (their address is on their Auth0 user): which tour, that it was taken offline
-   after a copyright notice, a copy of the notice, and how to send a counter-notice.
+   after a copyright report, what the report said, and that they can reply if it was a mistake.
 4. Log it, and check the log for the owner's earlier upheld notices (see repeat infringers).
 
-**Counter-notice.**
-
-1. Check it has the owner's name, postal address, phone and email; what was removed and its link;
-   the statement under penalty of perjury that it was a mistake or misidentification; consent to
-   the courts named on the policy page and to service from the reporter; a signature.
-2. Forward it to the reporter, saying the content may go back in 10 to 14 working days unless they
-   tell you they have started legal action.
-3. If they haven't by then, tell the owner they may share the tour again from its share modal
-   (it was only unpublished; the takedown left the sharing-stopped marker, so the editor's Saves
-   don't republish it on their own), and log it. If they have, leave it down and log that.
+**Disputes.** If the owner replies that it was a mistake (it is their own work, or they have
+permission), weigh both sides and decide. Panote follows no formal counter-notice process. To put
+it back, tell the owner they may share the tour again from its share modal (it was only
+unpublished; the takedown left the sharing-stopped marker, so the editor's Saves don't republish
+it on their own), and log it. Otherwise leave it down and log that.
 
 **Illegal images (child sexual abuse material above all).**
 
@@ -2657,7 +2650,7 @@ illegal, other), what you did and when, and the outcome. Nothing in the bucket r
    then either; the disabled marker keeps that sign-in blocked meanwhile.
 
 **Repeat infringers.** The case log is the record. Before closing a copyright case, count the
-owner's earlier upheld notices (ones not reversed by a counter-notice). At the third, close the
+owner's earlier upheld notices (ones not reversed on dispute). At the third, close the
 account: `--sub '<sub>' --disable-owner --reason '<case id>' --all-tours --unpublish`, then
 `--sub '<sub>' --disable-owner --close-account --nothing-to-preserve` once nothing is in dispute,
 and tell the owner.

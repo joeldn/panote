@@ -243,7 +243,7 @@ jobs:
               .filter((line) => !/^(\/\/|\/\*|\*|\{\s*\/\*)/.test(line.trim()))
               .filter((line) => /\bYOUR_[A-Z0-9_]+/.test(line));
             for (const hit of hits) {
-              console.log(`::error::${file}: ${hit.trim()} is still a YOUR_ placeholder. Fill in the operator's real details (docs/deploy.md, Takedown) before deploying production.`);
+              console.log(`::error::${file}: ${hit.trim()} is still a YOUR_ placeholder. Replace it with real text before deploying production.`);
             }
             if (hits.length > 0) failed = true;
           }

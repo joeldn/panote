@@ -46,8 +46,8 @@ export function Privacy() {
         </li>
         <li>
           <strong>What you upload.</strong> Panoramas, tours and their text. Anyone with a published
-          tour’s link can open it. A public tour is also listed on Explore (title, cover image and
-          scene count, never your name) and can appear in search once your account is a week old.
+          tour’s link can open it. Once your account is a week old, a public tour is also listed on
+          Explore (title, cover image and scene count, never your name) and can appear in search.
         </li>
         <li>
           <strong>Likes.</strong> Signed out, a random id in your browser’s local storage, so a like
@@ -182,8 +182,8 @@ export function ContentPolicy() {
 
       <h2>What happens next</h2>
       <p>
-        When something is taken down, its owner is told why. If you think it was a mistake, reply to
-        that email. Accounts that keep breaking the rules are closed.
+        Except for illegal images, when something is taken down its owner is told why. If you think
+        it was a mistake, reply to that email. Accounts that keep breaking the rules are closed.
       </p>
 
       <h2>Illegal images</h2>
