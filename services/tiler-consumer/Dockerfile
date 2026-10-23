@@ -25,7 +25,10 @@
 # @cloudflare/containers DO lifecycle, which need wrangler/Cloudflare; and any
 # run against real Cloudflare R2.
 
-FROM --platform=linux/amd64 node:24-slim AS build
+# Both stages pin the node:24-slim multi-arch index by digest (node v24.22.1 when
+# pinned), so a retagged or compromised upstream image can't change what ships;
+# Renovate bumps the digest (renovate.json5, pinDigests).
+FROM --platform=linux/amd64 node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS build
 RUN corepack enable
 WORKDIR /repo
 COPY . .
@@ -42,7 +45,7 @@ RUN pnpm --filter "@service/tiler-consumer..." build
 # lockfile, or pnpm-workspace.yaml.
 RUN pnpm --filter "@service/tiler-consumer" --config.inject-workspace-packages=true --prod deploy /out
 
-FROM --platform=linux/amd64 node:24-slim
+FROM --platform=linux/amd64 node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 # No apt packages: sharp ships its own prebuilt libvips (8.16.1) and never
 # dlopens the system one. Debian's libvips42 (8.14.1) was ~156 MB of dead
 # weight and is deliberately not installed.

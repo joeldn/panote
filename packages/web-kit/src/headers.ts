@@ -18,6 +18,12 @@ export interface HeadersFileOptions {
 // this, Workers assets send `max-age=0, must-revalidate` and every visit revalidates.
 const IMMUTABLE = 'Cache-Control: public, max-age=31536000, immutable';
 
+// Both apps are only ever served over HTTPS, as is every other host on the zone
+// (cdn.* is an R2 custom domain), so includeSubDomains is safe. Not `preload`:
+// that is a one-way submission to browsers' built-in lists, a decision for later.
+// Browsers ignore it on http://localhost.
+const HSTS = 'Strict-Transport-Security: max-age=31536000; includeSubDomains';
+
 const PLACEHOLDER = /YOUR_/i;
 
 const originOf = (url: string): string => new URL(url).origin;
@@ -77,6 +83,7 @@ export function buildHeadersFile(
     assetsBase = '/',
   } = options;
   const common = [
+    HSTS,
     'X-Content-Type-Options: nosniff',
     'Referrer-Policy: strict-origin-when-cross-origin',
     ...(indexable ? [] : [`X-Robots-Tag: ${NOINDEX}`]),

@@ -195,8 +195,10 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 `@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
 `style-src 'self'`, `img-src 'self' <cdn> https: data: blob:`, `media-src 'self' <cdn> https:`, `connect-src 'self' <cdn> <auth0 domain>`
 (admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com https://player.vimeo.com` (admin adds `'self'`),
-`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
-`strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
+`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff`,
+`strict-origin-when-cross-origin` and `Strict-Transport-Security: max-age=31536000;
+includeSubDomains` (no `preload`; every host on both zones is HTTPS-only behind Cloudflare, and
+HSTS is per host, so the apex's `_headers` covers the `/s/*` and API responses on it too). Every path gets `frame-ancestors 'none'` except the website's
 `/s/:slug/embed`, whose rule removes the inherited CSP (`! Content-Security-Policy`) and sets
 the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
 the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
@@ -843,9 +845,12 @@ cut-over below, `dev`'s `tiler-consumer` couldn't attach to `pano-uploads-dev` w
 pano-viewer `pano-tiler-dev` Worker still held the slot (a queue allows exactly one consumer), so
 an automatic dev deploy would have failed on every trigger (see the `deploy-tiler-consumer` job
 comment) — that's why every deploy, dev included, stayed a deliberate manual action until then.
-`production` is additionally
-hard-guarded to `main` — the `resolve-environment` job's "Guard production to main" step fails
-the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main` — hard-stops
+Every deploy, `dev`
+included, is hard-guarded to `main` — the `resolve-environment` job's "Guard deploys to main"
+step fails the run with an `::error::` annotation if `github.ref` isn't `refs/heads/main`, so a
+`workflow_dispatch` from any other branch never gets the `dev` token (it is on the same
+Cloudflare account as production and can't be scoped to dev's resources). `production` also
+hard-stops
 unless the repo variable `PRODUCTION_PROVISIONED` is the literal string `true` (the
 `resolve-environment` job's "Fail unless production is provisioned" step) — and fails closed if
 any of the four services' or two apps' `wrangler.jsonc` `env.production` block, or either app's
@@ -857,10 +862,13 @@ and both apps' configs (and the apps' `.env.production`) rather than duplicated 
 per-service check, and would otherwise deploy to production regardless of the other three
 services' placeholders. Before this workflow can succeed:
 
-- GitHub Environment `dev` (created automatically on first use if it doesn't exist yet).
+- GitHub Environment `dev` (created automatically on first use if it doesn't exist yet), with a
+  deployment-branch policy restricted to `main`, the same as `production`'s, so the `dev` secret
+  is only released to a job running from `main` even if the workflow guard is edited away on a
+  branch.
 - GitHub Environment `production`, with required reviewers configured and a
   deployment-branch policy restricted to `main` — the approval gate the workflow relies on. The
-  `resolve-environment` job's "Guard production to main" step is a workflow-level backstop, not
+  `resolve-environment` job's "Guard deploys to main" step is a workflow-level backstop, not
   a substitute for this Environment protection rule.
 - `CLOUDFLARE_API_TOKEN` as an environment secret on **both** `dev` and `production` (scoped
   separately per environment, even though today both would point at the same Cloudflare
@@ -2401,7 +2409,7 @@ the account has the resources the config names.
     **Status: outstanding.**
 
 11. **Rate limits and Analytics Engine: nothing to create.** The production `namespace_id`s
-    (`2101`, `2201`–`2204`, Rate limits) are already in config and only have to be unique in the
+    (`2101`, `2201`–`2205`, `2301`, Rate limits) are already in config and only have to be unique in the
     account; the `panote_events` dataset appears on the first write (Insights).
     Verify: `grep -rn namespace_id services/*/wrangler.jsonc` shows no id used twice.
     **Status: done in config.**
