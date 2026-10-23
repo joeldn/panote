@@ -184,7 +184,7 @@ export function Explore() {
           <i className="fa-solid fa-compass" aria-hidden="true" />
           <h2>No public tours yet</h2>
           <p>Tours their owners set to Public show up here. Yours could be the first.</p>
-          <UploadLink className="explore__cta">Upload a pano</UploadLink>
+          <UploadLink className="explore__cta">Upload a photo</UploadLink>
         </div>
       )}
 

@@ -74,11 +74,11 @@ function Hero({
           </div>
         )}
         <h1 className="landing-hero__title">
-          Your 360° tours. Full resolution. <em>Free.</em>
+          Host 360° tours at full resolution. <em>Free.</em>
         </h1>
         <p className="landing-hero__lede">
-          Upload a panorama, link your scenes, add hotspots, share a link. Generous limits, no
-          watermark, no paywall.
+          Upload the photos from your Insta360, Theta or any 360 camera, link them into a tour, add
+          hotspots, then share a link or embed it. No watermark, no card.
         </p>
         <div className="landing-hero__actions">
           <DropTarget />
@@ -151,13 +151,11 @@ function DropTarget() {
           <span className="landing-drop__icon" aria-hidden="true">
             ↑
           </span>
-          {/* Someone signed in already has an account, and maybe tours: not their first. */}
+          {/* Someone signed in already has an account: no need to say it's free or to sign in. */}
           <span>
-            <span className="landing-drop__title">
-              {signedIn ? 'Upload a new tour' : 'Upload your first tour'}
-            </span>{' '}
+            <span className="landing-drop__title">Upload a 360° photo</span>{' '}
             <span className="landing-drop__sub">
-              {signedIn ? 'free, opens in your dashboard' : 'free, sign in and go live in seconds'}
+              {signedIn ? 'opens in your dashboard' : 'free, sign in and start building'}
             </span>
           </span>
         </>
@@ -179,8 +177,8 @@ function Pillars() {
   return (
     <section className="landing-wrap landing-pillars">
       <SectionHead
-        title="Hosted ease, without the free-tier catches."
-        aside="Free hosts cap your resolution and stamp a watermark on your work. Panote doesn’t."
+        title="A 360° host without the free-tier catches."
+        aside="Every pixel kept, limits stated up front, nothing stamped on your work."
       />
       <div className="landing-pillars__grid">
         {PILLARS.map((p) => (
@@ -209,7 +207,7 @@ function HowItWorks() {
             <em className="landing-muted">in four moves.</em>
           </>
         }
-        aside="No rig, no stitching software, no plug-ins. Just the photo your 360 camera already made."
+        aside="No plug-ins, no app to install. Just the 360° photo your camera already saves."
       />
       <ol className="landing-steps">
         {STEPS.map((s) => (
@@ -249,7 +247,7 @@ function Comparison() {
   return (
     <section className="landing-wrap landing-wrap--narrow landing-compare">
       <div className="landing-compare__head">
-        <div className="landing-eyebrow">Panote vs. the typical free tier</div>
+        <div className="landing-eyebrow">Panote vs. a typical free tier</div>
         <h2 className="landing-h2 landing-h2--center">
           Same idea. <em className="landing-muted">None of the gates.</em>
         </h2>
@@ -291,9 +289,9 @@ function WhyFree() {
         <div>
           <div className="landing-eyebrow landing-eyebrow--dark">The honest part</div>
           <h2 className="landing-h2">
-            How is this
+            How is
             <br />
-            actually free?
+            this free?
           </h2>
         </div>
         <div>
@@ -312,8 +310,8 @@ function WhyFree() {
             ))}
           </ul>
           <p className="landing-free__callout">
-            Your tours stay live at full resolution, with no watermark and no upsell — for as long
-            as you want them up.
+            Your tours stay at full resolution, with no watermark and no upsell. If we ever have to
+            change how Panote runs, we’ll tell you in advance wherever we reasonably can.
           </p>
         </div>
       </div>
@@ -400,15 +398,15 @@ function FinalCta() {
   return (
     <section className="landing-wrap landing-final">
       <div className="landing-final__card">
-        <h2 className="landing-h2">Your tour. Full resolution. Free.</h2>
+        <h2 className="landing-h2">Put your first space online today.</h2>
         <p>
-          Upload a panorama and get a link people can step inside. No watermark, no paywall. Sign in
-          and you’re live.
+          Upload a 360° photo, sign in and start building a tour people can step inside. Free, with
+          no card and no watermark.
         </p>
         <UploadLink className="landing-final__cta">
           {(signedIn) => (
             <>
-              {signedIn ? 'Upload a new tour' : 'Upload your first tour, free'}{' '}
+              {signedIn ? 'Upload a 360° photo' : 'Upload a 360° photo, free'}{' '}
               <span aria-hidden="true">→</span>
             </>
           )}

@@ -103,7 +103,7 @@ export function Shell() {
             Explore
           </Link>
           <AccountNav />
-          <UploadLink className="app-shell__cta">Upload a pano</UploadLink>
+          <UploadLink className="app-shell__cta">Upload a photo</UploadLink>
         </div>
       </header>
       <main className="app-shell__main">

@@ -1,6 +1,12 @@
 // Landing copy (design README, screen 1). Free, not open source: no export/download promises.
 // Limits are real (copy-rule.test bans "unlimited"/"no limits"): state the numbers.
-import { MAX_HOTSPOTS, MAX_TOURS_PER_OWNER } from '@internal/contracts';
+import {
+  MAX_HOTSPOTS,
+  MAX_TOUR_LANGUAGES,
+  MAX_TOUR_MEMBERS,
+  MAX_TOUR_SCENES,
+  MAX_TOURS_PER_OWNER,
+} from '@internal/contracts';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS } from '@internal/web-kit';
 
 // Per-account quotas. panoramas, storageGb and uploadsPerDay mirror upload-api's
@@ -13,10 +19,13 @@ export const ACCOUNT_LIMITS = {
   uploadsPerDay: 50,
 } as const;
 
+const MEGAPIXELS = MAX_UPLOAD_PIXELS / 1e6;
+const MAX_FILE_MB = MAX_UPLOAD_BYTES / 1024 ** 2;
+
 export const NAV_SECTIONS = [
   { id: 'features', label: 'Features' },
   { id: 'how', label: 'How it works' },
-  { id: 'showcase', label: 'Showcase' },
+  { id: 'showcase', label: 'Use cases' },
   { id: 'faq', label: 'FAQ' },
 ] as const;
 
@@ -25,48 +34,48 @@ export const PILLARS = [
     icon: 'fa-solid fa-magnifying-glass-plus',
     tag: 'Full resolution',
     title: 'Every pixel you captured',
-    body: 'Other free hosts crush your panorama to 4K. We keep every pixel, so visitors zoom into the real detail.',
+    body: `Full 360° panoramas up to ${MEGAPIXELS} megapixels keep their full resolution, so visitors zoom into the real detail.`,
   },
   {
     icon: 'fa-solid fa-layer-group',
-    tag: 'Generous limits',
+    tag: 'Limits up front',
     title: 'Room for every project',
-    body: `Up to ${ACCOUNT_LIMITS.panoramas} panoramas, ${ACCOUNT_LIMITS.tours} tours and ${ACCOUNT_LIMITS.storageGb} GB per account, with ${MAX_HOTSPOTS} hotspots in every scene. No tiers to climb.`,
+    body: `${ACCOUNT_LIMITS.panoramas} panoramas, ${ACCOUNT_LIMITS.tours} tours and ${ACCOUNT_LIMITS.storageGb} GB per account, with ${MAX_HOTSPOTS} hotspots in every scene. One plan, no tiers to climb.`,
   },
   {
     icon: 'fa-solid fa-ban',
-    tag: 'No paywall',
-    title: 'No watermark, ever',
-    body: 'No “made with” badge. No upsell wall in front of basic features. Free means free.',
+    tag: 'No watermark',
+    title: 'Nothing on your tour but your tour',
+    body: 'No “made with” badge, no overlay, no upgrade prompt in front of the basics.',
   },
   {
     icon: 'fa-solid fa-lock-open',
-    tag: 'Yours to keep',
+    tag: 'You’re in control',
     title: 'Your work stays yours',
-    body: 'You keep full control of every tour — edit, unpublish or delete it whenever you like.',
+    body: 'Tours start unlisted. Make one public, stop sharing it or delete it whenever you like.',
   },
 ];
 
 export const STEPS = [
   {
     num: '01 / Upload',
-    title: 'Upload your panorama',
-    body: 'Drop an equirectangular photo from any 360 camera. It opens in the viewer right away.',
+    title: 'Upload a 360° photo',
+    body: 'Drop a JPG, PNG or WebP from any 360 camera. It opens in the viewer right away.',
   },
   {
     num: '02 / Process',
     title: 'We make it zoomable',
-    body: 'In the background we tile it for fast, full-resolution zoom on any device.',
+    body: 'While you build, we prepare it in the background for sharp, full-resolution zoom on any device.',
   },
   {
     num: '03 / Build',
     title: 'Link scenes & hotspots',
-    body: 'Connect panoramas into a tour and drop hotspots with rich content.',
+    body: 'Connect panoramas into a tour, then add hotspots with text, images, audio or video.',
   },
   {
     num: '04 / Share',
     title: 'Share or embed',
-    body: 'Publish a link, post to socials, or embed it anywhere. No watermark.',
+    body: 'Publish a link, post it to socials, or embed the tour on your own site.',
   },
 ];
 
@@ -74,42 +83,57 @@ export const FEATURES = [
   {
     icon: 'fa-solid fa-diagram-project',
     title: 'Multi-scene tours',
-    body: 'Link panoramas and walk between them with on-scene arrows.',
+    body: `Link up to ${MAX_TOUR_SCENES} panoramas and walk between them with on-scene arrows.`,
   },
   {
     icon: 'fa-solid fa-location-dot',
     title: 'Info hotspots',
-    body: 'Titles, rich Markdown content, and custom icons on any point.',
+    body: 'Titles, formatted text, images, audio and video, with a choice of icons.',
   },
   {
     icon: 'fa-solid fa-map',
     title: 'Mini-map & compass',
-    body: 'Show where each scene sits, and which way is north.',
+    body: 'Place scenes on your floor plan and show which way is north.',
   },
   {
     icon: 'fa-solid fa-magnifying-glass-plus',
     title: 'Full-resolution zoom',
-    body: 'Tiled streaming keeps detail crisp all the way in.',
+    body: 'Only the detail you’re looking at loads, so zoom stays sharp and fast.',
   },
   {
     icon: 'fa-solid fa-code',
-    title: 'One-click embed & share',
-    body: 'A link or an iframe. Works anywhere.',
+    title: 'Share & embed',
+    body: 'A link, a social post or an iframe on your own site.',
   },
   {
     icon: 'fa-solid fa-mobile-screen',
     title: 'Mobile ready',
-    body: 'Runs on phones, tablets and desktops, with no app.',
+    body: 'Runs in the browser on phones, tablets and desktops. Tilt your phone to look around.',
+  },
+  {
+    icon: 'fa-solid fa-user-group',
+    title: 'Edit together',
+    body: 'Invite editors to a tour, or hand the tour over to one of them.',
+  },
+  {
+    icon: 'fa-solid fa-globe',
+    title: 'Many languages',
+    body: `Offer a tour in up to ${MAX_TOUR_LANGUAGES} languages. Visitors pick theirs.`,
+  },
+  {
+    icon: 'fa-solid fa-chart-line',
+    title: 'Insights',
+    body: 'See views, time spent and which hotspots people open.',
   },
 ];
 
+// The other column is hedged on purpose: it describes free tiers in general, not a named rival.
 export const COMPARE_ROWS = [
-  { label: 'Max resolution', panote: 'Full', others: '4K cap' },
-  { label: 'Hotspots', panote: `${MAX_HOTSPOTS} per scene`, others: 'Limited' },
-  { label: 'Tours', panote: `${ACCOUNT_LIMITS.tours} per account`, others: 'Limited' },
-  { label: 'Watermark', panote: 'None', others: 'Yes' },
-  { label: 'Hosted + editor', panote: 'Yes', others: 'Yes' },
-  { label: 'Price', panote: 'Free', others: 'Free → paid' },
+  { label: 'Resolution', panote: `Up to ${MEGAPIXELS} MP, in full`, others: 'Often downscaled' },
+  { label: 'Hotspots', panote: `${MAX_HOTSPOTS} per scene`, others: 'Often capped' },
+  { label: 'Tours', panote: `${ACCOUNT_LIMITS.tours} per account`, others: 'Often capped' },
+  { label: 'Branding on your tour', panote: 'None', others: 'Often a badge' },
+  { label: 'Price', panote: 'Free', others: 'Free, then paid' },
 ];
 
 export const FREE_REASONS = [
@@ -119,12 +143,12 @@ export const FREE_REASONS = [
   },
   {
     icon: 'fa-solid fa-server',
-    text: 'Our hosting runs on infrastructure with no bandwidth fees, so serving your tours costs us almost nothing.',
+    text: 'Tours are served from storage with no bandwidth fees, so even a busy tour costs us very little.',
   },
   { icon: 'fa-solid fa-shield-halved', text: 'No ads. We don’t sell your data.' },
   {
     icon: 'fa-solid fa-building',
-    text: 'If we ever charge, it’s organizations that want private hosting or support — never the people sharing tours.',
+    text: 'We have no plans to charge people for sharing tours.',
   },
 ];
 
@@ -159,11 +183,19 @@ export const USE_CASES = [
 export const FAQS = [
   {
     q: 'Is it really free?',
-    a: `Yes. Uploading, hosting, hotspots, and tours are all free, and we don’t ask for a card. The limits are generous: up to ${ACCOUNT_LIMITS.panoramas} panoramas, ${ACCOUNT_LIMITS.tours} tours and ${ACCOUNT_LIMITS.storageGb} GB per account, ${MAX_HOTSPOTS} hotspots per scene, and files up to ${MAX_UPLOAD_BYTES / 1024 ** 2} MB.`,
+    a: `Yes. Uploading, hosting, hotspots and tours are all free, and we never ask for a card. The limits are real and stated up front: ${ACCOUNT_LIMITS.panoramas} panoramas, ${ACCOUNT_LIMITS.tours} tours and ${ACCOUNT_LIMITS.storageGb} GB per account, ${ACCOUNT_LIMITS.uploadsPerDay} uploads a day, ${MAX_TOUR_SCENES} scenes per tour, ${MAX_HOTSPOTS} hotspots per scene, and files up to ${MAX_FILE_MB} MB.`,
+  },
+  {
+    q: 'Who can see my tours?',
+    a: 'Tours are unlisted by default: anyone with the link can open one, but it isn’t listed anywhere. Make a tour public to show it on Explore. Stop sharing, and the link and every embed go offline.',
+  },
+  {
+    q: 'What happens if Panote shuts down?',
+    a: 'We have no plans to, and our terms say we’ll give notice where we reasonably can. Panote is a host, not a backup, so keep your original photos, as you would with any host.',
   },
   {
     q: 'Are there resolution limits?',
-    a: `We never downscale. Panoramas up to ${MAX_UPLOAD_PIXELS / 1e6} megapixels are tiled at full resolution, so visitors zoom into the real detail you captured.`,
+    a: `Full 360° panoramas up to ${MEGAPIXELS} megapixels are kept at their full resolution, so visitors zoom into the real detail you captured. A partial panorama is padded out to a full sphere first, and only scaled down if that takes it past the limit.`,
   },
   {
     q: 'Will you watermark my tours?',
@@ -174,12 +206,16 @@ export const FAQS = [
     a: 'Only to create and manage tours. You sign in with an account you already have, so there’s no new password to remember. Visitors never need one: a tour link just opens.',
   },
   {
+    q: 'Can other people work on a tour with me?',
+    a: `Yes. Invite up to ${MAX_TOUR_MEMBERS} editors to a tour and they can change it with you. You stay the owner, and you can hand the tour over to one of them.`,
+  },
+  {
     q: 'Do I own what I upload?',
-    a: 'Yes. Your panoramas stay yours — we make no claim on them and never reuse them elsewhere.',
+    a: 'Yes. Your panoramas stay yours. We only use them to show your tours to the people you share them with, and on Explore if you make a tour public.',
   },
   {
     q: 'Which cameras work?',
-    a: 'Any 360 camera that outputs an equirectangular image — Ricoh Theta, Insta360, GoPro Max, and others.',
+    a: `Any 360 camera whose app saves a stitched, equirectangular photo: Ricoh Theta, Insta360, GoPro Max and others. Upload JPG, PNG or WebP, up to ${MAX_FILE_MB} MB and ${MEGAPIXELS} megapixels.`,
   },
 ];
 
