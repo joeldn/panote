@@ -25,9 +25,10 @@
     schedule: ['before 6am on the first day of the month'],
   },
 
-  // Mirrors pnpm's minimumReleaseAge: 1440. Do not let Renovate propose a
-  // version that pnpm would then refuse to install.
-  minimumReleaseAge: '1 day',
+  // Mirrors pnpm's minimumReleaseAge: 4320. Do not let Renovate propose a
+  // version that pnpm would then refuse to install. Three days gives a
+  // compromised release time to be caught and pulled before it lands here.
+  minimumReleaseAge: '3 days',
 
   postUpdateOptions: ['pnpmDedupe'],
 
@@ -39,6 +40,11 @@
   },
 
   packageRules: [
+    {
+      description: 'Keep container base images pinned by digest, and keep the digest current.',
+      matchDatasources: ['docker'],
+      pinDigests: true,
+    },
     {
       description: 'TypeScript moves fast and breaks type-checks; keep it on its own PR.',
       matchPackageNames: ['typescript'],

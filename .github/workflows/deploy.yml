@@ -5,8 +5,8 @@ name: Deploy
 #
 # Two triggers: workflow_dispatch (choose the environment) and workflow_run
 # after CI succeeds on main, which always targets dev and only runs when
-# DEV_AUTO_DEPLOY is 'true' - see resolve-environment's gate. Production
-# is additionally gated to main below. Dev needs the panote.dev Cloudflare
+# DEV_AUTO_DEPLOY is 'true' - see resolve-environment's gate. Both
+# environments are additionally gated to main below. Dev needs the panote.dev Cloudflare
 # zone Active, since each service's `routes` block deploys for dev too.
 # Every deploy step passes --env, since wrangler.jsonc only defines
 # bindings under env blocks. tiler-consumer is a separate job below.
@@ -58,7 +58,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # Resolves the dispatch input once and gates production to main here, so
+  # Resolves the dispatch input once and gates every deploy to main here, so
   # every downstream job agrees on the target and none can bypass the rule.
   resolve-environment:
     name: Resolve target environment
@@ -109,16 +109,20 @@ jobs:
 
       # Fails loudly instead of skipping downstream jobs, since a skipped
       # job in the Actions UI looks the same as nothing needing to happen.
-      - name: Guard production to main
-        if: ${{ steps.resolve.outputs.environment == 'production' }}
+      # Dev too: its CLOUDFLARE_API_TOKEN is on the same account as
+      # production and can't be scoped to dev's Workers or bucket, so a
+      # dispatch from an unreviewed branch must not get to run with it. A
+      # workflow_run event always has github.ref = main (the default branch).
+      - name: Guard deploys to main
         env:
           REF: ${{ github.ref }}
+          TARGET: ${{ steps.resolve.outputs.environment }}
         run: |
           if [ "$REF" != refs/heads/main ]; then
-            echo "::error::production may only be deployed from main (current ref: $REF). Re-run this workflow from the main branch."
+            echo "::error::$TARGET may only be deployed from main (current ref: $REF). Re-run this workflow from the main branch."
             exit 1
           fi
-          echo "Deploying production from main - OK."
+          echo "Deploying $TARGET from main - OK."
 
       # Production is declared but not provisioned yet (see docs/deploy.md).
       # This variable is the manual confirmation that it's ready, so wrangler

@@ -23,8 +23,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege by default. Only the coverage job widens this, and only to
-# pull-requests: write, for its comment.
+# Least privilege, and no job here widens it: every job runs PR code, so none
+# gets a write token. The coverage comment is posted by coverage-comment.yml,
+# which runs from main's copy after this workflow and never runs PR code.
 permissions:
   contents: read
 
@@ -296,9 +297,6 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -315,41 +313,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: node .github/scripts/coverage-summary.mjs > coverage-comment.md
 
-      # Skipped for pull requests from forks: those get a read-only
-      # GITHUB_TOKEN, and a 403 on a comment must not be what fails the
-      # coverage job.
-      - name: Post coverage comment
-        if: >-
-          ${{ !cancelled()
-          && github.event_name == 'pull_request'
-          && github.event.pull_request.head.repo.full_name == github.repository }}
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      # Handed to coverage-comment.yml, which posts it with a write token this
+      # job never holds. The file is whatever this PR's code wrote, so that
+      # workflow treats it as untrusted text. Uploaded for every PR, forks
+      # included; coverage-comment.yml decides which ones get a comment.
+      - name: Upload coverage comment
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          script: |
-            const fs = require('node:fs');
-            const marker = '<!-- panote:coverage -->';
-            const body = fs.readFileSync('coverage-comment.md', 'utf8');
-            const { owner, repo } = context.repo;
-            const issue_number = context.issue.number;
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100,
-            });
-
-            // Match on the HTML marker the generator emits, not on a heading,
-            // so editing the wording never orphans the existing comment.
-            const existing = comments.find((comment) => comment.body?.includes(marker));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-            }
+          name: coverage-comment
+          path: coverage-comment.md
+          if-no-files-found: ignore
+          retention-days: 3
