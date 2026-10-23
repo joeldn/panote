@@ -1,3 +1,4 @@
+import { MAX_ASPECT_RATIO } from '@panote/core';
 import { validateUploadFile, type UploadValidationError } from './api/upload.js';
 
 /** Must match the tiler's decode cap (MAX_INPUT_PIXELS, packages/tiler/src/pyramid.ts). */
@@ -83,11 +84,15 @@ export async function readImageSize(file: Blob): Promise<ImageSize | null> {
   return null;
 }
 
-export type ImageValidationError = UploadValidationError | { code: 'pixels'; message: string };
+export type ImageValidationError =
+  UploadValidationError | { code: 'pixels' | 'aspect'; message: string };
+
+export const ASPECT_MESSAGE = `This photo is too long and thin to show as a panorama: one side is more than ${MAX_ASPECT_RATIO} times the other.`;
 
 /**
- * Everything checkable before a presign: type, bytes, then pixel count. An
- * unreadable header passes, since the tiler is the final judge.
+ * Everything checkable before a presign: type, bytes, pixel count, then shape
+ * (the tiler refuses past MAX_ASPECT_RATIO either way). An unreadable header
+ * passes, since the tiler is the final judge.
  */
 export async function validateUploadImage(
   file: Blob & { type: string },
@@ -101,6 +106,12 @@ export async function validateUploadImage(
       code: 'pixels',
       message: `This image is ${mp} megapixels; the limit is ${MAX_UPLOAD_PIXELS / 1e6}.`,
     };
+  }
+  if (
+    dims &&
+    (dims.width > MAX_ASPECT_RATIO * dims.height || dims.height > MAX_ASPECT_RATIO * dims.width)
+  ) {
+    return { code: 'aspect', message: ASPECT_MESSAGE };
   }
   return null;
 }

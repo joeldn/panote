@@ -145,6 +145,7 @@ export {
 } from './upload-machine.js';
 export { createUploadDeps, type UploadDepsOptions } from './upload-deps.js';
 export {
+  ASPECT_MESSAGE,
   MAX_UPLOAD_PIXELS,
   readImageSize,
   validateUploadImage,

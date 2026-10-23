@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build, setVipsConcurrency } from './build.js';
+import { SourceRejectedError } from './errors.js';
 import { TILER_OUTPUT_VERSION } from './version.js';
 import type { Manifest } from '@panote/core';
 import type * as OgModule from './og.js';
@@ -114,6 +115,7 @@ describe('build', () => {
     sharpCalls.length = 0;
     extendCalls.length = 0;
     toBuffer.mockReset();
+    metadata.mockReset();
     renderFace.mockClear();
     equirectSampler.mockClear();
   });
@@ -172,44 +174,116 @@ describe('build', () => {
 
     it('rejects a tileSize outside the allowed set', async () => {
       const outDir = await tmp();
-      metadata.mockResolvedValue({ width: 8192, height: 4096 });
+      metadata.mockResolvedValue({ format: 'png', width: 8192, height: 4096 });
       await expect(
         build({ src: 'fake-source.png', outDir, pano: 'ok-pano', tileSize: 128 }),
       ).rejects.toThrow(/tileSize/);
     });
 
     it('sizes the pyramid from the padded decode, so a very wide strip stays in bounds', async () => {
-      // 131072 x 1024 would ask for 32768px faces, over MAX_FACE_SIZE. It is a
-      // 128:1 strip, so it is padded to 2:1 and downscaled to fit the decode
-      // cap (equirect.ts), which takes the faces back under the bound: an
-      // explicit maxSize can't push a real source past assertPyramidBounds
-      // any more (pyramid.test.ts checks the bound itself).
+      // 48000 x 3000 (16:1, 144 MP) would ask for 16384px faces from its width,
+      // and maxSize 32768 would allow them. Padded to 2:1 it is downscaled to fit
+      // the decode cap (equirect.ts), which takes the faces down to the 8192 a
+      // real 150 MP 2:1 panorama gets.
       const outDir = await tmp();
-      metadata.mockResolvedValue({ width: 131_072, height: 1024 });
+      metadata.mockResolvedValue({ format: 'png', width: 48_000, height: 3000 });
       // Left to fail the decode: only what build() asked sharp for matters here.
       toBuffer.mockRejectedValue(new Error('decode stopped by test'));
+      const log: string[] = [];
       await expect(
-        build({ src: 'fake-source.png', outDir, pano: 'ok-pano', maxSize: 32768 }),
+        build({
+          src: 'fake-source.png',
+          outDir,
+          pano: 'ok-pano',
+          maxSize: 32768,
+          onProgress: (m) => log.push(m),
+        }),
       ).rejects.toThrow('decode stopped by test');
       const [w, h] = resizeCalls[0] as [number, number];
-      expect(w).toBeLessThan(131_072);
-      expect(h).toBe(Math.round((1024 * w) / 131_072));
+      expect(w).toBeLessThan(48_000);
+      expect(h).toBe(Math.round((3000 * w) / 48_000));
       const [ext] = extendCalls[0] as [{ top: number; bottom: number }];
       expect(w * (h + ext.top + ext.bottom)).toBeLessThanOrEqual(150_000_000);
       expect(h + ext.top + ext.bottom).toBe(Math.round(w / 2));
+      expect(log[0]).toMatch(/faceSize 8192,/);
     });
 
-    it('rejects the exact gap the old validator left: tileSize 128 reaching faceSize 16384 at maxLevel 7', async () => {
+    it('rejects a tileSize outside the allowed set on a wide strip too', async () => {
       const outDir = await tmp();
-      // width chosen so computeFaceSize(width, 128) lands exactly on 16384:
-      // width / 4 = 16384 → width = 65536. height kept small (not the
-      // realistic 2:1 equirect ratio) so width * height stays under the
-      // MAX_INPUT_PIXELS decode cap and this test exercises the tileSize
-      // check specifically, not the separate pixel-cap check.
-      metadata.mockResolvedValue({ width: 65_536, height: 2048 });
+      // A 16:1 strip, the widest accepted, under the pixel cap; tileSize 128 is
+      // refused by the allowlist before anything is decoded.
+      metadata.mockResolvedValue({ format: 'png', width: 32_768, height: 2048 });
       await expect(
         build({ src: 'fake-source.png', outDir, pano: 'ok-pano', tileSize: 128 }),
       ).rejects.toThrow(/tileSize/);
+    });
+  });
+
+  describe('source checks', () => {
+    // All of these throw before the raw decode: toBuffer is left unresolved.
+
+    it('opens the source with the pixel limit and failOn, for metadata and the decode', async () => {
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ format: 'jpeg', width: 2048, height: 1024 });
+      toBuffer.mockRejectedValue(new Error('decode stopped by test'));
+      await expect(build({ src: 'fake-source.jpg', outDir, pano: 'ok-pano' })).rejects.toThrow(
+        'decode stopped by test',
+      );
+      const opened = sharpCalls.filter(([src]) => src === 'fake-source.jpg');
+      expect(opened).toHaveLength(2);
+      for (const [, options] of opened)
+        expect(options).toEqual({ limitInputPixels: 150_000_000, failOn: 'warning' });
+    });
+
+    it.each(['svg', 'tiff', 'heif', 'gif', 'pdf', undefined])(
+      'rejects a %s source as a SourceRejectedError',
+      async (format) => {
+        const outDir = await tmp();
+        metadata.mockResolvedValue({ format, width: 2048, height: 1024 });
+        const err = await build({ src: 'fake-source.png', outDir, pano: 'ok-pano' }).catch(
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(SourceRejectedError);
+        expect((err as Error).message).toMatch(/is not one of jpeg, png, webp/);
+        expect(toBuffer).not.toHaveBeenCalled();
+      },
+    );
+
+    it('turns a source sharp cannot open into a SourceRejectedError', async () => {
+      const outDir = await tmp();
+      metadata.mockRejectedValue(new Error('Input image exceeds pixel limit'));
+      const err = await build({ src: 'fake-source.png', outDir, pano: 'ok-pano' }).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(SourceRejectedError);
+      expect((err as Error).message).toMatch(/exceeds pixel limit/);
+    });
+
+    it.each([
+      [65_536, 2288],
+      [16_001, 1000],
+      [1000, 16_001],
+    ])('rejects a %sx%s source, past 16:1', async (width, height) => {
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ format: 'png', width, height });
+      const err = await build({ src: 'fake-source.png', outDir, pano: 'ok-pano' }).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(SourceRejectedError);
+      expect((err as Error).message).toMatch(/more than 16:1/);
+      expect(toBuffer).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [16_000, 1000],
+      [1000, 16_000],
+    ])('accepts a %sx%s source, exactly 16:1', async (width, height) => {
+      const outDir = await tmp();
+      metadata.mockResolvedValue({ format: 'png', width, height });
+      toBuffer.mockRejectedValue(new Error('decode stopped by test'));
+      await expect(build({ src: 'fake-source.png', outDir, pano: 'ok-pano' })).rejects.toThrow(
+        'decode stopped by test',
+      );
     });
   });
 
@@ -221,10 +295,12 @@ describe('build', () => {
     it('rejects a source whose decoded pixel count exceeds MAX_INPUT_PIXELS', async () => {
       const outDir = await tmp();
       // 20,000 x 10,000 = 200,000,000 px > MAX_INPUT_PIXELS (150,000,000).
-      metadata.mockResolvedValue({ width: 20_000, height: 10_000 });
-      await expect(build({ src: 'fake-source.png', outDir, pano: 'ok-pano' })).rejects.toThrow(
-        /exceeds the 150000000px decode cap/,
+      metadata.mockResolvedValue({ format: 'png', width: 20_000, height: 10_000 });
+      const err = await build({ src: 'fake-source.png', outDir, pano: 'ok-pano' }).catch(
+        (e: unknown) => e,
       );
+      expect(err).toBeInstanceOf(SourceRejectedError);
+      expect((err as Error).message).toMatch(/exceeds the 150000000px decode cap/);
     });
 
     it('does not reject a source exactly at the pixel cap (only over it)', async () => {
@@ -235,7 +311,7 @@ describe('build', () => {
       // fail for that *later*, unrelated reason instead -- without actually
       // running a 150-megapixel image through the real remap/tiling loop,
       // which the mocked `sharp` in this file does not simulate anyway.
-      metadata.mockResolvedValue({ width: 15_000, height: 10_000 });
+      metadata.mockResolvedValue({ format: 'png', width: 15_000, height: 10_000 });
       toBuffer.mockResolvedValue({
         data: Buffer.alloc(8),
         info: { width: 15_000, height: 10_000, channels: 1 },
@@ -312,7 +388,7 @@ describe('build', () => {
     const HEIGHT = 1024;
 
     function mockSuccessfulDecode(): void {
-      metadata.mockResolvedValue({ width: WIDTH, height: HEIGHT });
+      metadata.mockResolvedValue({ format: 'png', width: WIDTH, height: HEIGHT });
       toBuffer.mockResolvedValue({
         data: Buffer.alloc(WIDTH * HEIGHT * 3),
         info: { width: WIDTH, height: HEIGHT, channels: 3 },
@@ -383,7 +459,7 @@ describe('build', () => {
   describe('partial panoramas', () => {
     it('pads a 4:1 strip to 2:1 before the faces, preview and og.jpg are cut from it', async () => {
       const outDir = await tmp();
-      metadata.mockResolvedValue({ width: 2048, height: 512 });
+      metadata.mockResolvedValue({ format: 'png', width: 2048, height: 512 });
       toBuffer.mockResolvedValue({
         data: Buffer.alloc(2048 * 1024 * 3),
         info: { width: 2048, height: 1024, channels: 3 },
@@ -399,7 +475,7 @@ describe('build', () => {
 
     it('does not pad a 2:1 source', async () => {
       const outDir = await tmp();
-      metadata.mockResolvedValue({ width: 2048, height: 1024 });
+      metadata.mockResolvedValue({ format: 'png', width: 2048, height: 1024 });
       toBuffer.mockResolvedValue({
         data: Buffer.alloc(2048 * 1024 * 3),
         info: { width: 2048, height: 1024, channels: 3 },
@@ -411,7 +487,7 @@ describe('build', () => {
 
   describe('build channel-count guard', () => {
     it('throws instead of silently corrupting output when the decode is not 3-channel RGB', async () => {
-      metadata.mockResolvedValue({ width: 8, height: 4 });
+      metadata.mockResolvedValue({ format: 'png', width: 8, height: 4 });
       toBuffer.mockResolvedValue({
         data: Buffer.alloc(8 * 4),
         info: { width: 8, height: 4, channels: 1 },

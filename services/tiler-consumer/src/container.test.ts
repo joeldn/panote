@@ -6,6 +6,7 @@ import {
   tilesPrefix,
   tileVersionPrefix,
 } from '@internal/contracts';
+import { SourceRejectedError } from '@internal/tiler/errors';
 
 /**
  * Exercises container.ts's actual `/tile` handler, not just the
@@ -680,6 +681,93 @@ describe('superseded version dirs after a confirmed swap', () => {
     expect(res.status).toBe(200);
     const logged = loggedText(spies);
     expect(logged).toContain(`failed to record superseded versions pano=${panoId}`);
+    expect(logged).not.toContain(OWNER);
+  });
+});
+
+describe('a failed job', () => {
+  const gcPuts = (): Array<[string, string]> =>
+    (r2PutMock.mock.calls as unknown as Array<[string, string]>).filter(([k]) =>
+      k.startsWith('tile-gc/'),
+    );
+
+  it('422s a source the tiler refused, so the consumer acks it, and records nothing', async () => {
+    const panoId = 'p-rejected';
+    setupManifestWritten(panoId);
+    buildMock.mockRejectedValueOnce(
+      new SourceRejectedError('source format svg is not one of jpeg, png, webp'),
+    );
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(422);
+    expect(res.body).toContain('source format svg');
+    expect(uploadDirMock).not.toHaveBeenCalled();
+    expect(gcPuts()).toEqual([]);
+  });
+
+  it('500s any other build failure, recording nothing: no tile was written', async () => {
+    const panoId = 'p-build-fails';
+    setupManifestWritten(panoId);
+    buildMock.mockRejectedValueOnce(new Error('vips: out of memory'));
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(500);
+    expect(gcPuts()).toEqual([]);
+  });
+
+  it('records the partial version dir for the sweep when the upload fails', async () => {
+    const panoId = 'p-upload-fails';
+    const key = `panos/abc/${panoId}/original`;
+    setupManifestWritten(panoId);
+    uploadDirMock.mockRejectedValueOnce(new Error('R2 PUT -> 503'));
+
+    const res = await postTile(JSON.stringify({ key }));
+
+    expect(res.status).toBe(500);
+    expect(res.body).toContain('R2 PUT -> 503');
+    const puts = gcPuts();
+    expect(puts.map(([k]) => k)).toEqual([tileGcKey(panoId, version)]);
+    expect(JSON.parse(puts[0]![1])).toMatchObject({
+      v: 1,
+      originalKey: key,
+      tilerVersion: MOCK_TILER_OUTPUT_VERSION,
+    });
+    expect(r2PutMock).not.toHaveBeenCalledWith(
+      manifestKey(panoId),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('records the dir when the manifest PUT itself fails', async () => {
+    const panoId = 'p-manifest-put-fails';
+    setupManifestWritten(panoId);
+    r2PutMock.mockImplementation(async (k: string) => {
+      if (k === manifestKey(panoId)) throw new Error('R2 PUT manifest -> 500');
+    });
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(500);
+    expect(gcPuts().map(([k]) => k)).toEqual([tileGcKey(panoId, version)]);
+  });
+
+  it('still 500s with the job error, logging without the owner, when recording fails too', async () => {
+    const panoId = 'p-upload-and-record-fail';
+    const key = `panos/${OWNER}/${panoId}/original`;
+    setupManifestWritten(panoId);
+    uploadDirMock.mockRejectedValueOnce(new Error('R2 PUT -> 503'));
+    r2PutMock.mockRejectedValue(new Error(`R2 PUT ${key} -> 500`));
+    const spies = spyOnAllConsole();
+
+    const res = await postTile(JSON.stringify({ key }));
+
+    expect(res.status).toBe(500);
+    expect(res.body).toContain('R2 PUT -> 503');
+    const logged = loggedText(spies);
+    expect(logged).toContain(`failed to record partial version pano=${panoId}`);
     expect(logged).not.toContain(OWNER);
   });
 });

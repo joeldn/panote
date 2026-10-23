@@ -21,9 +21,9 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | `LIKER_HASH_KEY` (see Likes; without it production refuses likes) |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, and deletes superseded tile versions (`tile-gc/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5), `REQUIRE_RECENT_AUTH` (`true`; account delete wants a recent sign-in, see Account deletion) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
-| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
+| `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, `retry_delay: 60`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
 All four: `observability.enabled: true` in both env blocks. `workers_dev` and `preview_urls`
 are `false` in both `dev` and `production`: from the first dev deploy
@@ -1081,7 +1081,10 @@ In order:
    truncated to 500 chars) and a thrown/rejected `stub.fetch()` (key and error message) — so a
    dead-lettered job's cause should be visible in `wrangler tail` (or observability logs) rather
    than a bare retry-until-DLQ with no trace of why. Those two are both *transient* failures, and
-   both are retried until they either succeed or exhaust `max_retries` and dead-letter. A key that
+   both are retried, 1, 2 and then 4 minutes apart (`retryDelaySeconds` in `consumer.ts`;
+   `retry_delay: 60` in `wrangler.jsonc` covers a retry the code didn't schedule), until they
+   either succeed or exhaust `max_retries` and dead-letter. A `422` from the container is not
+   retried: the tiler refused the source itself (see "Sources the tiler refuses" below). A key that
    doesn't match `panos/<owner>/<panoId>/original`, with both segments restricted to their valid
    charset, is a different, permanent case: the consumer validates every key with
    `deriveUploadTarget` before it ever reaches the container, logs why the key is invalid, and
@@ -1138,8 +1141,36 @@ with no original. Every message starts a container: the queue's `max_concurrency
 see "Tiling time and the queue limit" below for what that means for a large `--all`.
 
 Re-tiling identical bytes **without** a version bump yields the same ETag, so the derived version
-string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too — it re-tiles into the same version dir,
-rewriting identical keys rather than creating a new one.
+string (`t<TILER_OUTPUT_VERSION>-<etag>`) is unchanged too. The consumer reads the pano's manifest
+before starting a container and acks the message without tiling when the manifest already names
+that version (`alreadyTiled` in `services/tiler-consumer/src/consumer.ts`), so a duplicate delivery
+or a re-upload of the same bytes costs one R2 read. A manifest it can't read means it tiles as
+before. `retile.ts` is never skipped: its messages carry `force: true` (R2's never do), so a
+re-tile of the same bytes runs and rewrites every key of that version dir, which is how to repair
+a pano whose manifest is intact but whose tiles are missing.
+
+### Sources the tiler refuses
+
+`build()` (`packages/tiler/src/build.ts`) reads the original's header first and refuses, with a
+`SourceRejectedError`, a file that:
+
+- isn't JPEG, PNG or WebP by its bytes (whatever the upload's content-type said), or can't be read
+  as an image at all;
+- is over 150 MP (`MAX_INPUT_PIXELS`), also enforced by libvips through sharp's
+  `limitInputPixels` on every `sharp()` that opens the source, with `failOn: 'warning'`;
+- is more than 16:1 either way (`MAX_ASPECT_RATIO` in `packages/core/src/manifest.ts`). A 16:1
+  strip is a full sweep with a 22.5° vertical field of view; real partial panoramas are well
+  inside it. Wider strips are padded to 2:1 and, past the pixel cap, downscaled, so no accepted
+  source makes more work than a real 150 MP 2:1 panorama (8,192 px faces).
+
+The container answers `422` for these and the consumer acks the message once the
+`unsupported` failure marker is written (or not needed, because the original changed); if the
+marker write fails it retries, and the DLQ writes its own marker if retries run out. The original
+stays; a new upload replaces it. Every other failure is a `500` and is retried.
+
+The admin refuses the pixel and aspect cases before the upload starts
+(`validateUploadImage` in `packages/web-kit/src/image-size.ts`, reading the header), with the same
+`MAX_ASPECT_RATIO` from `@panote/core`, so only a client that skips it reaches the tiler's check.
 
 ### Old version dirs
 
@@ -1147,32 +1178,65 @@ Every successful re-tile leaves the previous version's tiles behind under `tiles
 job's manifest swap is confirmed (its post-PUT HEAD still sees the ETag it tiled), it records every
 other version dir it finds there at `tile-gc/<panoId>/<version>.json` (`{ v, originalKey,
 tilerVersion, supersededAt }`). Records are overwritten on every swap, so their time and tiler
-version always follow the latest one. `admin-api`'s daily cron (`17 3 * * *`, the same one as the
-slug-alias and account sweeps) deletes a recorded dir once the record is over 24 hours old, so a
-version goes 24-48 hours after it was superseded. Before deleting it checks, and keeps the dir if
+version always follow the latest one. A job that fails after it started uploading tiles records
+its own, partial, version dir the same way, so a pano whose jobs only ever failed doesn't keep
+them for good. `admin-api`'s 15-minute cron (`*/15 * * * *`, after the backup, in the same
+invocation) deletes a recorded dir once the record is over 24 hours old, so a version goes 24
+hours to 24 hours 15 minutes after it was superseded. Before deleting it checks, and keeps the dir if
 any check fails:
 
 - the manifest must be readable and name a different version (the version it names is never
   deleted; that record just goes);
 - the pano's current original must not tile into that dir again (same ETag, same tiler version as
-  the job that superseded it), since a job may be writing there;
+  the job that recorded it), since a job may be writing there; this holds with no manifest at all
+  too, for a first upload whose job failed;
 - nothing in the dir may have been written after the record (a re-upload of old bytes, or a tiler
   rollback, rewrote it); the record's time then moves to now.
 
-A pano whose original is gone has been deleted; its record and dir just go. A run acts on at most
-50 records (deleted or dropped) and looks at no more than 500; kept ones are checked again the next
-day. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+A pano whose original is gone has been deleted; its record and dir just go.
+
+**Limits.** The sweep shares the 15-minute invocation with the backup, and the two together, with
+the sweep's status record, make at most `BACKUP_RUN_BUDGET` (900) R2 operations, the figure the
+backup was already sized to keep under the per-invocation subrequest limit: the backup gets that
+total less 2, and the sweep whatever the backup run left (`runBackupThenTileGc` in
+`services/admin-api/src/tile-gc.ts`, which takes the total as `totalOps`, so another task on the
+same cron can spend part of it first and pass what is left). Once a day's backup set is
+complete a backup run costs 2 operations, so most runs give the sweep about 900. A record costs 3
+operations to check, plus one list per 1,000 objects in the dir to look for newer writes and one
+list and one delete per 1,000 to delete it: about 7 for a typical pano, 31 at most (a full
+16,384 px pyramid, 8,192 objects). A run starts a record only with 31 operations left, and also
+stops after acting on 200 records or looking at 500. That is roughly 125 typical records a run,
+about 12,000 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
+`tile-gc/`, moving on each quarter hour, and wraps round, so kept records listed early can't take
+every run's budget. Kept ones are checked again on a later run. CPU is not a constraint (a record
+is a few small JSON parses).
+
+**Monitoring.** Each 15-minute run records `{ lastRunAt, lastOkAt }` at
+`ops/cron/admin-api-tile-gc.json` (2 more R2 operations, taken out of the sweep's share). A run
+is clean when the backup didn't throw and the sweep finished. The daily cron's `tile-gc` task
+throws when the last clean run is over an hour old (four runs in a row) or none is recorded, so
+the health check's `admin-api daily cron` check alerts on a failing sweep, as before. Right
+after a deploy, a daily run before the first 15-minute run would report it once.
+
+A record the sweep keeps because the current original tiles into that dir (an in-flight job, or
+a pano whose jobs only failed) is rewritten with the time moved to now, so it is looked at again
+a day later rather than on every run.
+
+Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
 left over from before this existed are recorded the next time that pano re-tiles, so a
 `retile.ts --all` after deploying this clears them too, a day later.
 
 Records hold the owner-bearing original key, so deleting a pano (including through account
 deletion) deletes `tile-gc/<panoId>/` along with `tiles/<panoId>/`. A tiler job that confirmed its
-swap just before the delete can still write one afterwards; the sweep drops it 24-48 hours later
+swap just before the delete can still write one afterwards; the sweep drops it about a day later
 (the original is gone by then).
 
-After a tiler rollback, don't run `retile.ts` around the cron time (03:17 UTC). A job that starts
-writing into an old version dir while the sweep is deleting it would leave a manifest pointing at
-a half-deleted dir. The window is seconds, but there is no lock between the two.
+After a tiler rollback, a `retile.ts` job that starts writing into an old version dir while the
+sweep is deleting it would leave a manifest pointing at a half-deleted dir. The window is seconds
+per dir, but there is no lock between the two, and the sweep now runs every 15 minutes, so there is
+no quiet hour to aim for. If a pano shows missing tiles after such a re-tile, re-tile it again with
+`retile.ts --pano <pano-uuid> --apply`: its message is forced past the duplicate skip, and the job
+rewrites every key of that version.
 
 The grace period is for viewers: one that loaded the old manifest moments before the swap keeps
 fetching that version's tiles for the rest of its session. Edge-cached tiles would survive a delete
@@ -2045,17 +2109,18 @@ the US Copyright Office.
   owner-scoped shape as `configKey`/`deletingKey` (`packages/contracts/src/keys.ts`'s `tileFailedKey`,
   for a caller with the raw owner sub, and `tileFailedKeyFromOriginalKey`, for the consumer, which
   only has the already-encoded owner segment from the R2 notification key and must not re-encode
-  it). `reason` is one of `'dlq' | 'oversize' | 'unprocessable-key'`. `originalEtag` is the R2
+  it). `reason` is one of `'dlq' | 'oversize' | 'unprocessable-key' | 'unsupported'`. `originalEtag` is the R2
   `etag` (bare, native-binding form) of the original the failure was about — the read side (A2)
   must treat a marker whose `originalEtag` doesn't match the *current* original's etag as stale
   and ignore it (a later, different upload superseded the failed one). `reason` and `originalEtag`
   are also written as R2 `customMetadata` on the same object (review fix, 2026-09-26), so A2's list
   endpoint can read both off `bucket.list({ include: ['customMetadata'] })` with no extra GET — the
   same pattern the plan already uses for config/tour summaries (section 3.1).
-- **Written by** `services/tiler-consumer/src/consumer.ts` on three permanent-failure paths: a
+- **Written by** `services/tiler-consumer/src/consumer.ts` on four permanent-failure paths: a
   dead-lettered message (the Worker now also consumes `pano-uploads-dlq[-dev]` itself, branching on
   `batch.queue` against an exact set of the two real DLQ names, not a substring test), an oversized
-  original, and a key `deriveUploadTarget` rejects. A charset-invalid key (bad owner or panoId) now
+  original, a key `deriveUploadTarget` rejects, and a source the tiler refused (`422`,
+  reason `unsupported`, see "Sources the tiler refuses"). A charset-invalid key (bad owner or panoId) now
   gets no marker at all — `tileFailedKeyFromOriginalKey` validates both segments and the write is
   skipped with a log line, rather than writing a marker keyed on a junk panoId.
 - **Oversized originals are deleted.** Once the `oversize` marker is written, the consumer
