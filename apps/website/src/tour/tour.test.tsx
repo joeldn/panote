@@ -27,6 +27,7 @@ import { StageFactoryContext } from './stage-factory.js';
 type ViewerOptions = Parameters<ViewerFactory>[1];
 type LoadOptions = Parameters<PanoViewer['load']>[1];
 type PanoViewer = ReturnType<ViewerFactory>;
+type View = ReturnType<PanoViewer['getView']>;
 
 const CDN = 'https://cdn.test/';
 const config = loadConfig({
@@ -85,14 +86,24 @@ class FakeViewer implements PanoViewer {
     return true;
   });
   setView = vi.fn();
-  getView = () => ({ yaw: 0, pitch: 0, fov: 70 });
+  /** The camera getView() reports; a test moves it, then draws a frame. */
+  view = { yaw: 0, pitch: 0, fov: 70 };
+  getView = () => this.view;
   isSettled = () => false;
   focus = vi.fn();
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   setLabel = vi.fn();
   dispose = vi.fn();
-  onRender = () => () => {};
+  renders = new Set<(view: Readonly<View>) => void>();
+  onRender = (cb: (view: Readonly<View>) => void) => {
+    this.renders.add(cb);
+    return () => {
+      this.renders.delete(cb);
+    };
+  };
+  /** Draws a frame; the camera counts as at rest a moment after the last one. */
+  draw = () => act(() => this.renders.forEach((cb) => cb(this.view)));
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
@@ -779,6 +790,125 @@ describe('slug aliases fetched by the SPA (no Worker)', () => {
   });
 });
 
+describe('the scene and view in the URL', () => {
+  const SETTLED = { timeout: 2000 };
+  const deg = Math.PI / 180;
+  /**
+   * Draws a frame and runs the clock past the viewer's settle wait (on fake timers, so no
+   * real wait), then lets the router's navigation, if any, finish.
+   */
+  const rest = async () => {
+    vi.useFakeTimers();
+    try {
+      lastViewer().draw();
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+    }
+    await act(async () => {});
+  };
+  const settle = async (router: ReturnType<typeof renderAt>, search: string) => {
+    lastViewer().draw();
+    await waitFor(() => expect(router.state.location.search).toBe(search), SETTLED);
+  };
+
+  it('pushes an entry per scene, so Back and Forward step through scenes', async () => {
+    const router = renderAt('/s/old-town');
+    await shown('square');
+    expect(router.state.location.search).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?pano=church'));
+    expect(router.state.historyAction).toBe('PUSH');
+    const viewer = lastViewer();
+
+    await act(() => router.navigate(-1));
+    expect(router.state.location.search).toBe('');
+    await waitFor(() => expect(viewer.crossfade).toHaveBeenLastCalledWith('square', undefined));
+    expect(screen.getByText('Square').getAttribute('aria-current')).toBe('location');
+    // Landing back on it is not a new entry.
+    expect(router.state.historyAction).toBe('POP');
+
+    await act(() => router.navigate(1));
+    await waitFor(() => expect(viewer.crossfade).toHaveBeenLastCalledWith('church', undefined));
+    expect(router.state.location.search).toBe('?pano=church');
+    expect(router.state.historyAction).toBe('POP');
+    // Still the one viewer: Back moved within the tour, it didn't reload it.
+    expect(lastViewer()).toBe(viewer);
+  });
+
+  it('replaces the entry with the camera once it comes to rest, in whole degrees', async () => {
+    const router = renderAt('/s/old-town?lang=en');
+    await shown('square');
+    // Where the scene opened: nothing to write.
+    await rest();
+    expect(router.state.location.search).toBe('?lang=en');
+    lastViewer().view = { yaw: 12.4 * deg, pitch: -5.2 * deg, fov: 59.6 };
+    await settle(router, '?lang=en&pano=square&yaw=12&pitch=-5&fov=60');
+    expect(router.state.historyAction).toBe('REPLACE');
+    // Past ±180 the yaw wraps.
+    lastViewer().view = { yaw: 190 * deg, pitch: 0, fov: 60 };
+    await settle(router, '?lang=en&pano=square&yaw=-170&pitch=0&fov=60');
+  });
+
+  it('opens a shared view', async () => {
+    renderAt('/s/old-town?pano=church&yaw=90&pitch=10&fov=50');
+    await waitFor(() => expect(lastViewer().load).toHaveBeenCalled());
+    const [pano, opts] = lastViewer().load.mock.calls[0]!;
+    expect(pano).toBe('church');
+    expect(opts?.view?.yaw).toBeCloseTo(Math.PI / 2, 6);
+    expect(opts?.view?.pitch).toBeCloseTo(10 * deg, 6);
+    expect(opts?.view?.fov).toBe(50);
+  });
+
+  it('ignores camera values out of range', async () => {
+    renderAt('/s/old-town?pano=church&yaw=x&pitch=95&fov=500');
+    await shown('church');
+  });
+
+  it("leaves the URL alone in an embed, whose entries would join the host page's history", async () => {
+    const router = renderAt('/s/old-town/embed');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', { yaw: 1 }));
+    lastViewer().view = { yaw: 1, pitch: 0.1, fov: 60 };
+    await rest();
+    expect(router.state.location.search).toBe('');
+    expect(router.state.historyAction).toBe('POP');
+  });
+});
+
+describe('fullscreen without the Fullscreen API (iPhone)', () => {
+  beforeEach(() =>
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: false }),
+  );
+  afterEach(() => Reflect.deleteProperty(document, 'fullscreenEnabled'));
+
+  it('pins the tour over the page, hiding its bar', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    expect(document.querySelector('.pn-tour')?.classList.contains('pn-pseudo-fullscreen')).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Exit fullscreen' }));
+    expect(document.querySelector('.pn-pseudo-fullscreen')).toBeNull();
+  });
+
+  it('opens the tour page in a new tab from an embed, at the scene on screen', async () => {
+    renderAt('/s/old-town/embed?lang=en');
+    await shown('square');
+    const link = screen.getByRole('link', { name: 'Open fullscreen in a new tab' });
+    expect(link.getAttribute('href')).toBe('/s/old-town?lang=en&pano=square');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+
+  it('offers no way out of an embed pinned to one scene', async () => {
+    renderAt('/s/old-town/embed?pano=square');
+    await shown('square');
+    expect(screen.queryByRole('link', { name: 'Open fullscreen in a new tab' })).toBeNull();
+  });
+});
+
 describe('/s/:slug/embed', () => {
   it('lets a plain wheel scroll the host page until the viewer is engaged', async () => {
     renderAt('/s/old-town/embed');
@@ -873,6 +1003,28 @@ describe('visitor share', () => {
     expect(screen.getByRole('toolbar', { name: 'View' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy();
   };
+
+  it('shares the tour by default, or this view: the scene and camera at rest', async () => {
+    renderAt('/s/old-town');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(lastViewer().crossfade).toHaveBeenCalledWith('church', { yaw: 1 }));
+    lastViewer().view = { yaw: Math.PI / 4, pitch: 0, fov: 65 };
+    // The camera comes to rest a moment after the last frame (on fake timers: no real wait).
+    vi.useFakeTimers();
+    try {
+      lastViewer().draw();
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share this tour' }, LAZY);
+    const link = within(dialog).getByLabelText('Share link');
+    expect(link.textContent).toBe('panote.test/s/old-town');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /This view.*Church/ }));
+    expect(link.textContent).toBe('panote.test/s/old-town?pano=church&yaw=45&pitch=0&fov=65');
+  });
 
   it('loads the sheet on demand, warming it up when the visitor reaches for Share', async () => {
     renderAt('/s/old-town');

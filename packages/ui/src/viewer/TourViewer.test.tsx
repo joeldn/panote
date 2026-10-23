@@ -72,7 +72,12 @@ class FakeViewer implements PanoViewerApi {
   setNorth = vi.fn();
   setAutoRotate = vi.fn();
   dispose = vi.fn();
-  onRender = () => () => {};
+  /** What onRender subscribed: a test draws a frame by calling them. */
+  renders = new Set<(view: Readonly<View>) => void>();
+  onRender = (cb: (view: Readonly<View>) => void) => {
+    this.renders.add(cb);
+    return () => this.renders.delete(cb);
+  };
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
@@ -869,5 +874,297 @@ describe('TourViewer', () => {
     expect(screen.getByText('overlay square')).toBeTruthy();
     expect(screen.getByText('after the stage')).toBeTruthy();
     await act(async () => {});
+  });
+});
+
+describe('TourViewer navigation from the page', () => {
+  const props = (viewers: FakeViewer[]): TourViewerProps => ({
+    data: data(),
+    title: 'Old town',
+    baseUrl: 'https://cdn.test/tiles/',
+    start: 'square',
+    createViewer: (el: HTMLElement, options: ViewerOptions) => {
+      const v = new FakeViewer(el, options);
+      viewers.push(v);
+      return v;
+    },
+  });
+
+  it("opens on a view a link asks for, over the scene's own", async () => {
+    const { viewer } = renderViewer({ startView: { pitch: 0.2, fov: 50 } });
+    await waitFor(() =>
+      expect(viewer().load).toHaveBeenCalledWith('square', {
+        view: { yaw: 0.5, pitch: 0.2, fov: 50 },
+      }),
+    );
+  });
+
+  it('goes to a scene the page asks for (Back), with the view it asks for', async () => {
+    const viewers: FakeViewer[] = [];
+    const base = props(viewers);
+    const onSceneChange = vi.fn();
+    const { rerender } = render(
+      <TourViewer {...base} scene="square" onSceneChange={onSceneChange} />,
+    );
+    await waitFor(() => expect(onSceneChange).toHaveBeenCalledWith('square'));
+    rerender(
+      <TourViewer
+        {...base}
+        scene="church"
+        sceneView={{ yaw: 1, pitch: 0 }}
+        onSceneChange={onSceneChange}
+      />,
+    );
+    await waitFor(() => expect(onSceneChange).toHaveBeenCalledWith('church'));
+    expect(viewers[0]!.crossfade).toHaveBeenCalledWith('church', { yaw: 1, pitch: 0 });
+    // Back to the first: no view asked, so the scene's own.
+    rerender(<TourViewer {...base} scene="square" onSceneChange={onSceneChange} />);
+    await waitFor(() => expect(screen.getByLabelText('Old town: Square')).toBeTruthy());
+    expect(viewers[0]!.crossfade).toHaveBeenLastCalledWith('square', { yaw: 0.5 });
+  });
+
+  it("leaves the visitor's own move alone when the page catches up with it", async () => {
+    const viewers: FakeViewer[] = [];
+    const base = props(viewers);
+    const { rerender } = render(<TourViewer {...base} scene="square" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(screen.getByLabelText('Old town: Church')).toBeTruthy());
+    const loads = viewers[0]!.crossfade.mock.calls.length;
+    rerender(<TourViewer {...base} scene="church" />);
+    await act(async () => {});
+    expect(viewers[0]!.crossfade.mock.calls.length).toBe(loads);
+    // An unknown scene is ignored.
+    rerender(<TourViewer {...base} scene="gone" />);
+    await act(async () => {});
+    expect(viewers[0]!.crossfade.mock.calls.length).toBe(loads);
+  });
+
+  it('reports the camera once it has stopped drawing', async () => {
+    vi.useFakeTimers();
+    try {
+      const onViewSettle = vi.fn();
+      const { viewer } = renderViewer({ onViewSettle });
+      await act(async () => {});
+      const draw = () => viewer().renders.forEach((cb) => cb({ yaw: 0, pitch: 0, fov: 70 }));
+      act(() => draw());
+      act(() => vi.advanceTimersByTime(300));
+      act(() => draw());
+      act(() => vi.advanceTimersByTime(300));
+      expect(onViewSettle).not.toHaveBeenCalled();
+      act(() => vi.advanceTimersByTime(100));
+      expect(onViewSettle).toHaveBeenCalledTimes(1);
+      expect(onViewSettle).toHaveBeenCalledWith('square', { yaw: 0, pitch: 0, fov: 70 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('TourViewer settled view during a scene change', () => {
+  it("reports nothing while a change is in flight, so no scene gets the next one's camera", async () => {
+    const onViewSettle = vi.fn();
+    const { viewer } = renderViewer({ onViewSettle });
+    await waitFor(() => expect(viewer().load).toHaveBeenCalled());
+    vi.useFakeTimers();
+    try {
+      const v = viewer();
+      v.defer = true;
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      expect(v.crossfade).toHaveBeenCalledWith('church', { yaw: 1 });
+      // The viewer has cut to the church's camera while the square is still the scene shown.
+      const church = { yaw: 1, pitch: 0, fov: 70 };
+      v.getView = () => church;
+      const draw = () => act(() => v.renders.forEach((cb) => cb(church)));
+      draw();
+      act(() => vi.advanceTimersByTime(500));
+      expect(onViewSettle).not.toHaveBeenCalled();
+      // Landed: the next rest is the church's, with its camera.
+      await act(async () => v.pending[0]!.resolve());
+      draw();
+      act(() => vi.advanceTimersByTime(500));
+      expect(onViewSettle).toHaveBeenCalledTimes(1);
+      expect(onViewSettle).toHaveBeenCalledWith('church', church);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('TourViewer fullscreen fallback', () => {
+  afterEach(() => Reflect.deleteProperty(document, 'fullscreenEnabled'));
+  const noFullscreen = () =>
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: false });
+
+  it('pins the full page over the viewport where it has no fullscreen', () => {
+    noFullscreen();
+    renderViewer();
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    expect(document.querySelector('.pn-tour')?.classList.contains('pn-pseudo-fullscreen')).toBe(
+      true,
+    );
+    expect(screen.getByRole('button', { name: 'Exit fullscreen' })).toBeTruthy();
+  });
+
+  it('closes About on Escape without leaving pseudo-fullscreen', () => {
+    noFullscreen();
+    renderViewer({ description: 'A walk round the old town.' });
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'About this tour' }));
+    const about = screen.getByRole('complementary', { name: 'About this tour' });
+    fireEvent.keyDown(about, { key: 'Escape' });
+    expect(screen.queryByRole('complementary', { name: 'About this tour' })).toBeNull();
+    expect(document.querySelector('.pn-tour')?.classList.contains('pn-pseudo-fullscreen')).toBe(
+      true,
+    );
+    // The next Escape, with About closed, leaves it.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(document.querySelector('.pn-tour')?.classList.contains('pn-pseudo-fullscreen')).toBe(
+      false,
+    );
+  });
+
+  it('links an embed to its page in a new tab, for the scene on screen', async () => {
+    noFullscreen();
+    renderViewer({ embed: true, fullscreenHref: (id) => `/s/old-town?pano=${id}` });
+    expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();
+    const link = await screen.findByRole('link', { name: 'Open fullscreen in a new tab' });
+    expect(link.getAttribute('href')).toBe('/s/old-town?pano=square');
+    fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+    await waitFor(() => expect(link.getAttribute('href')).toBe('/s/old-town?pano=church'));
+  });
+
+  it('offers an embed nothing without a page to open', () => {
+    noFullscreen();
+    renderViewer({ embed: true });
+    expect(screen.queryByRole('button', { name: 'Fullscreen' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open fullscreen in a new tab' })).toBeNull();
+  });
+});
+
+describe('TourViewer tilt to look around', () => {
+  const NAME = 'Look around by tilting your phone';
+  const tilt = (alpha: number, beta: number, gamma: number) =>
+    act(() => {
+      window.dispatchEvent(Object.assign(new Event('deviceorientation'), { alpha, beta, gamma }));
+    });
+
+  function supportGyro(requestPermission?: () => Promise<string>) {
+    class DeviceOrientationEvent extends Event {}
+    if (requestPermission) Object.assign(DeviceOrientationEvent, { requestPermission });
+    vi.stubGlobal('DeviceOrientationEvent', DeviceOrientationEvent);
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q === '(pointer: coarse)' }));
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('is not offered where the device gives no orientation', () => {
+    renderViewer();
+    expect(screen.queryByRole('button', { name: NAME })).toBeNull();
+  });
+
+  it('is not offered on a desktop browser that has the event but no sensor', () => {
+    supportGyro();
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    renderViewer();
+    expect(screen.queryByRole('button', { name: NAME })).toBeNull();
+  });
+
+  it('steers the camera from where it faces, smoothly, once turned on', async () => {
+    supportGyro();
+    const { viewer } = renderViewer({
+      data: data({ settings: { ...settings, autoRotate: true } }),
+    });
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: NAME });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    tilt(0, 90, 0);
+    expect(viewer().setView).not.toHaveBeenCalled();
+
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    // Auto-rotate would fight it: off, and its button says so.
+    expect(screen.getByRole('button', { name: 'Auto-rotate' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(viewer().setAutoRotate).toHaveBeenLastCalledWith(false);
+    // Upright facing north: the camera stays at the yaw it had (0), at the horizon.
+    tilt(0, 90, 0);
+    const first = viewer().setView.mock.calls.at(-1)![0];
+    expect(first.yaw).toBeCloseTo(0, 6);
+    expect(first.pitch).toBeCloseTo(0, 6);
+    // A quarter turn right moves the camera right, part of the way at first.
+    tilt(-90, 90, 0);
+    const next = viewer().setView.mock.calls.at(-1)![0];
+    expect(next.yaw).toBeGreaterThan(0);
+    expect(next.yaw).toBeLessThan(Math.PI / 2);
+  });
+
+  it('turns off when the visitor drags the view, or presses it again', async () => {
+    supportGyro();
+    const { viewer } = renderViewer();
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: NAME });
+    fireEvent.click(button);
+    tilt(0, 90, 0);
+    fireEvent.pointerDown(document.querySelector('.pn-stage__viewer')!);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    const calls = viewer().setView.mock.calls.length;
+    tilt(-90, 90, 0);
+    expect(viewer().setView.mock.calls.length).toBe(calls);
+
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('turns auto-rotate back on only by turning tilting off', async () => {
+    supportGyro();
+    renderViewer();
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: NAME });
+    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-rotate' }));
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('asks iOS for permission from the tap, and goes on once granted', async () => {
+    const requestPermission = vi.fn(async () => 'granted');
+    supportGyro(requestPermission);
+    renderViewer();
+    await act(async () => {});
+    const button = screen.getByRole('button', { name: NAME });
+    fireEvent.click(button);
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(button.getAttribute('aria-pressed')).toBe('true'));
+  });
+
+  it('goes away when iOS permission is refused', async () => {
+    supportGyro(vi.fn(async () => 'denied'));
+    renderViewer();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: NAME }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: NAME })).toBeNull());
+  });
+
+  it('turns off when no reading comes, but stays offered for another try', async () => {
+    // Say, an embed without allow="gyroscope", or a sensor slow to wake.
+    supportGyro();
+    const { viewer } = renderViewer();
+    await act(async () => {});
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: NAME }));
+    act(() => vi.advanceTimersByTime(1600));
+    const button = screen.getByRole('button', { name: NAME });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    // A second tap tries again, and readings that come now steer the camera.
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    tilt(0, 90, 0);
+    expect(viewer().setView).toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1600));
+    expect(button.getAttribute('aria-pressed')).toBe('true');
   });
 });

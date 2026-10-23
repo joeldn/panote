@@ -44,7 +44,9 @@ export function InfoPanel({
   }, []);
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
+    // Handled here: pseudo-fullscreen's Escape (on window) leaves it alone.
     e.stopPropagation();
+    e.preventDefault();
     onClose();
   };
 
