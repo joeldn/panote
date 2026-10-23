@@ -514,7 +514,12 @@ describe('healthSection', () => {
       dailyCron: null,
       tileGc: null,
       cdnPurge: { lastFailure: null, pending: 0, pendingCapped: false, dead: 0, deadCapped: false },
-      backup: { lastCompleteDate: null, lastCompleteDaysAgo: null, inProgress: null },
+      backup: {
+        lastCompleteDate: null,
+        lastCompleteDaysAgo: null,
+        hasRun: false,
+        inProgress: null,
+      },
     });
   });
 
@@ -572,6 +577,7 @@ describe('healthSection', () => {
     expect(h.backup).toEqual({
       lastCompleteDate: '2026-10-21',
       lastCompleteDaysAgo: 2,
+      hasRun: true,
       inProgress: { date: '2026-10-22', objects: 1234, runs: 2 },
     });
   });
@@ -583,6 +589,12 @@ describe('the last complete backup', () => {
     const h = await healthSection(env.BUCKET, new Date('2026-12-01T01:00:00Z'));
     expect(h.backup.lastCompleteDate).toBe('2026-11-30');
     expect(h.backup.lastCompleteDaysAgo).toBe(1);
+  });
+
+  it('says it has run when the only complete sets are older than last month', async () => {
+    await env.BUCKET.delete('backup/progress.json');
+    const h = await healthSection(env.BUCKET, new Date('2027-06-01T01:00:00Z'));
+    expect(h.backup).toMatchObject({ lastCompleteDate: null, hasRun: true, inProgress: null });
   });
 });
 

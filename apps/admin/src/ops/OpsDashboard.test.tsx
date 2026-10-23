@@ -30,6 +30,7 @@ const METRICS: OpsMetrics = {
       backup: {
         lastCompleteDate: '2026-10-22',
         lastCompleteDaysAgo: 3,
+        hasRun: true,
         inProgress: { date: '2026-10-23', objects: 1234, runs: 1 },
       },
     },

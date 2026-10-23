@@ -48,6 +48,11 @@ export const OpsHealthSchema = z.object({
     lastCompleteDate: z.string().nullable(),
     /** Whole UTC days since that date; the backup runs daily, so 1 is on time. */
     lastCompleteDaysAgo: count().nullable(),
+    /**
+     * With no complete set in this month or last: whether the backup has run before (an
+     * older set or one in progress). True there means it has been failing for weeks.
+     */
+    hasRun: z.boolean(),
     /** The set being written (backup/progress.json), if one is: its day and objects so far. */
     inProgress: z.object({ date: z.string(), objects: count(), runs: count() }).nullable(),
   }),

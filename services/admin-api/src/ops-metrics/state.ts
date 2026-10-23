@@ -68,6 +68,14 @@ const lastCompleteBackup = async (bucket: R2Bucket, now: Date): Promise<string |
   return null;
 };
 
+/** Whether any day's set exists under backup/, however old (the first page is enough). */
+const anyBackupSet = async (bucket: R2Bucket): Promise<boolean> => {
+  const page = await bucket.list({ prefix: BACKUP_ROOT, delimiter: '/', limit: 100 });
+  return page.delimitedPrefixes.some((p) =>
+    BACKUP_DATE_PATTERN.test(p.slice(BACKUP_ROOT.length, -1)),
+  );
+};
+
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -104,6 +112,7 @@ export const healthSection = async (bucket: R2Bucket, now: Date): Promise<OpsHea
         runs: backupProgress.data.runs,
       }
     : null;
+  const hasRun = backup !== null || inProgress !== null || (await anyBackupSet(bucket));
   return {
     failing,
     announcedDown: announced,
@@ -122,6 +131,7 @@ export const healthSection = async (bucket: R2Bucket, now: Date): Promise<OpsHea
       lastCompleteDaysAgo: backup
         ? Math.floor((now.getTime() - Date.parse(backup)) / DAY_MS)
         : null,
+      hasRun,
       inProgress,
     },
   };

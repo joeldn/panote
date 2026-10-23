@@ -585,10 +585,12 @@ function Health({ h }: { h: OpsHealth }) {
         {purge.lastFailure &&
           ` · last failure ${formatTime(purge.lastFailure.at)} (${purge.lastFailure.detail})`}
       </StatusRow>
-      <StatusRow tone={backupTone(h.backup.lastCompleteDaysAgo)} label="Backup">
+      <StatusRow tone={backupTone(h.backup.lastCompleteDaysAgo, h.backup.hasRun)} label="Backup">
         {h.backup.lastCompleteDate
           ? `Last complete set ${h.backup.lastCompleteDate}`
-          : 'No complete set yet'}
+          : h.backup.hasRun
+            ? 'No complete set this month or last'
+            : 'No complete set yet'}
         {h.backup.inProgress &&
           ` · ${h.backup.inProgress.date} being written (${formatNumber(h.backup.inProgress.objects)} objects so far)`}
       </StatusRow>

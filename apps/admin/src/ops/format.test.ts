@@ -43,12 +43,16 @@ describe('ops formatting', () => {
 
 describe('backupTone', () => {
   it.each([
-    [null, 'none'],
     [0, 'ok'],
     [1, 'ok'],
     [2, 'warn'],
     [3, 'bad'],
   ] as const)('reads a last complete set %s days ago as %s', (days, tone) => {
-    expect(backupTone(days)).toBe(tone);
+    expect(backupTone(days, true)).toBe(tone);
+  });
+
+  it('reads no recent complete set as failing once the backup has run, else no data', () => {
+    expect(backupTone(null, true)).toBe('bad');
+    expect(backupTone(null, false)).toBe('none');
   });
 });
