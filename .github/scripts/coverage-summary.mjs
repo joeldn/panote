@@ -27,7 +27,9 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-const WORKSPACE_DIRS = ['apps', 'packages', 'services'];
+// infra/ holds infra/pulumi next to plain data dirs (cloudflare/, r2/), which
+// have no package.json and are skipped below like any other non-workspace.
+const WORKSPACE_DIRS = ['apps', 'infra', 'packages', 'services'];
 
 /** Marker used to find and update this comment instead of posting a new one. */
 const MARKER = '<!-- panote:coverage -->';
@@ -128,7 +130,7 @@ function runsUnderWorkersPool(root) {
   return WORKERS_POOL_MARKERS.some((marker) => source.includes(marker));
 }
 
-/** Every workspace under packages/ and services/ that runs Vitest. */
+/** Every workspace under the WORKSPACE_DIRS that runs Vitest. */
 function collectWorkspaces() {
   const workspaces = [];
 

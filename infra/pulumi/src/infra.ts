@@ -15,11 +15,17 @@ import type { Settings } from './settings.js';
 /** Queues' maximum message retention: 14 days. The default is 4. */
 export const QUEUE_RETENTION_SECONDS = 14 * 24 * 60 * 60;
 
-/** HSTS on every host of the zone: 6 months, subdomains, not preloaded. */
+/**
+ * HSTS on every host of the zone: one year, subdomains, not preloaded. The
+ * same max-age the apps' own `Strict-Transport-Security` header sends
+ * (`@internal/web-kit`'s headers.ts), so the two never disagree. In the API's
+ * snake_case: `ZoneSetting.value` is untyped JSON, so the keys are sent as
+ * written whether or not the bridge would have renamed camelCase ones.
+ */
 export const HSTS = {
   enabled: true,
-  maxAge: 15552000,
-  includeSubdomains: true,
+  max_age: 31536000,
+  include_subdomains: true,
   preload: false,
   nosniff: false,
 } as const;
@@ -119,14 +125,21 @@ export function createInfra(settings: Settings): Infra {
   const ruleset = (key: keyof typeof RULESET_PHASES, rules: cloudflare.types.input.RulesetRule[]) =>
     track(
       key,
-      new cloudflare.Ruleset(RESOURCES[key].name, {
-        zoneId,
-        kind: 'zone',
-        // What the dashboard names a zone's entrypoint rulesets.
-        name: 'default',
-        phase: RULESET_PHASES[key],
-        rules,
-      }),
+      new cloudflare.Ruleset(
+        RESOURCES[key].name,
+        {
+          zoneId,
+          kind: 'zone',
+          // What the dashboard names a zone's entrypoint rulesets.
+          name: 'default',
+          phase: RULESET_PHASES[key],
+          rules,
+        },
+        // A name change forces a replacement, which for the WAF ruleset would
+        // briefly leave the CDN open. An imported ruleset keeps whatever name
+        // the dashboard gave it.
+        { ignoreChanges: ['name'] },
+      ),
     );
   const waf = ruleset('wafRuleset', wafRules(zone));
   ruleset('rateLimitRuleset', rateLimitRules());
@@ -139,7 +152,7 @@ export function createInfra(settings: Settings): Infra {
     new cloudflare.ZoneSetting(RESOURCES.hsts.name, {
       zoneId,
       settingId: 'security_header',
-      value: { strictTransportSecurity: HSTS },
+      value: { strict_transport_security: HSTS },
     }),
   );
   // Normalizing incoming URLs is what makes `/tiles/../panos/` hit the WAF rule.

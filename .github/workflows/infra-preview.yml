@@ -26,6 +26,9 @@ on:
     branches: [main]
     paths:
       - 'infra/**'
+      # Catalog bumps of @pulumi/* and the lockfile change what the program runs.
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
       - '.github/workflows/infra-preview.yml'
 
 # Never cancelled: a preview killed mid-run can leave the stack's lock in the
@@ -84,6 +87,8 @@ jobs:
 
       - if: steps.secrets.outputs.ready == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - if: steps.secrets.outputs.ready == 'true'
         uses: ./.github/actions/setup

@@ -4,6 +4,7 @@ import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { RESOURCES, type ResourceKey } from './names.js';
+import type { Infra } from './infra.js';
 import type { Settings } from './settings.js';
 import { stackSettings } from './test-support.js';
 
@@ -48,12 +49,15 @@ function settle<T>(output: pulumi.Output<T>): Promise<T> {
   return new Promise((resolve) => output.apply(resolve));
 }
 
+/** The program's return value from the latest `run`. */
+let lastInfra: Infra;
+
 /** Runs the program for one stack's settings and waits for every registration. */
 async function run(settings: Settings): Promise<Map<string, Registered>> {
   registered = new Map();
   const { createInfra } = await import('./infra.js');
-  const infra = createInfra(settings);
-  await Promise.all(Object.values(infra.resources).map((resource) => settle(resource.urn)));
+  lastInfra = createInfra(settings);
+  await Promise.all(Object.values(lastInfra.resources).map((resource) => settle(resource.urn)));
   return registered;
 }
 
@@ -85,8 +89,10 @@ describe.each([
 ] as const)('the %s stack', (stack, zone, suffix) => {
   const settings = stackSettings(stack);
   let resources: Map<string, Registered>;
+  let infra: Infra;
   beforeAll(async () => {
     resources = await run(settings);
+    infra = lastInfra;
   });
 
   it('names every resource for its environment', () => {
@@ -181,18 +187,31 @@ describe.each([
     });
   });
 
-  it('sets HSTS for 6 months, subdomains included, not preloaded', () => {
+  it('sets HSTS for a year like the apps, subdomains included, not preloaded', () => {
     const inputs = inputsOf(resources, 'hsts');
     expect(inputs.settingId).toBe('security_header');
     expect(inputs.value).toEqual({
-      strictTransportSecurity: {
+      strict_transport_security: {
         enabled: true,
-        maxAge: 15552000,
-        includeSubdomains: true,
+        max_age: 31536000,
+        include_subdomains: true,
         preload: false,
         nosniff: false,
       },
     });
+    const appHeaders = readFileSync(
+      new URL('../../../packages/web-kit/src/headers.ts', import.meta.url),
+      'utf8',
+    );
+    expect(appHeaders).toContain('max-age=31536000; includeSubDomains');
+  });
+
+  it('protects the bucket and both queues from deletion', () => {
+    // `__protect` is the SDK's record of the protect option; mocks don't see options.
+    const protectedKeys = Object.entries(infra.resources)
+      .filter(([, resource]) => (resource as unknown as { __protect?: boolean }).__protect)
+      .map(([key]) => key);
+    expect(protectedKeys.sort()).toEqual(['bucket', 'deadLetterQueue', 'uploadsQueue']);
   });
 
   it('normalizes incoming URLs, which the WAF rule relies on', () => {

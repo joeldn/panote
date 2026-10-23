@@ -176,32 +176,61 @@ After the import, these and only these are expected:
   descriptions (dashboard rules carry generated ones), rules the code adds that aren't live yet (the CDN
   nosniff/CSP headers, `panote-json-edge-cache` if it was never applied), and
   `tiles-404-short-ttl`, the dashboard cache rule, replaced by the same-purpose
-  `panote-tiles-404-no-store` that production uses.
+  `panote-tiles-404-no-store` that production uses;
+- **update** `hsts`: `max_age` 15552000 → 31536000, one year, the same as the apps' own
+  `Strict-Transport-Security` header.
 
-Anything else (a changed expression, an HSTS value, a queue setting, a **replace** or **delete**
-of anything) means the code and the account disagree: fix whichever is wrong and preview again.
-Don't `up` past it.
+A ruleset's name is ignored (`ignoreChanges`), so a dashboard name other than `default` never
+shows up. Anything else (a changed expression, another HSTS value, a queue setting, a **replace**
+or **delete** of anything) means the code and the account disagree: fix whichever is wrong and
+preview again. Don't `up` past it.
 
 ### 9. Up
 
-The two adopted resources that already exist need clearing first, once, on dev only: creating the
-custom domain fails while it's attached, and the notification could end up doubled. Both are
-recreated seconds later by the same `up`. Uploads in that window don't tile, and the CDN is down
-until its certificate is reissued, so pick a quiet moment.
+The custom domain and the notification already exist on dev but can't be imported: creating the
+domain fails while it's attached, and the notification could end up doubled. So everything else
+goes first, and those two are only removed and recreated once that has worked.
 
 ```bash
-pnpm --filter @service/admin-api exec wrangler r2 bucket notification delete pano-content-dev --queue pano-uploads-dev
-pnpm --filter @service/admin-api exec wrangler r2 bucket domain remove pano-content-dev --domain cdn.panote.dev --force
 cd infra/pulumi
 export CLOUDFLARE_API_TOKEN=<bootstrap token>
-pulumi up --stack dev --diff
-pulumi preview --stack dev --expect-no-changes     # must now pass
-pulumi stack export --stack dev --file <somewhere safe>/panote-dev-state.json
+DOMAIN='urn:pulumi:dev::panote-infra::cloudflare:index/r2CustomDomain:R2CustomDomain::cdn-domain'
+NOTIFY='urn:pulumi:dev::panote-infra::cloudflare:index/r2BucketEventNotification:R2BucketEventNotification::upload-notification'
+pulumi preview --stack dev --urns          # the two URNs above must appear as written
 ```
 
-Then check the CDN as in docs/deploy.md ("Prerequisite: WAF custom rule": private paths `403`,
-`/tiles/x` `404`) and `wrangler r2 bucket notification list pano-content-dev` (one rule,
-`panos/` / `/original`).
+a. Everything but those two. Dev keeps its live domain and notification meanwhile:
+   ```bash
+   pulumi up --stack dev --diff --exclude "$DOMAIN" --exclude "$NOTIFY"
+   ```
+   Check dev still works before going on: the CDN checks in docs/deploy.md ("Prerequisite: WAF
+   custom rule": private paths `403`, `/tiles/x` `404`, a real tile `200`), a page load on
+   `panote.dev`, and the nosniff and CSP headers on `curl -sI https://cdn.panote.dev/tiles/x`.
+b. Only then remove the two live ones (from the repo root):
+   ```bash
+   pnpm --filter @service/admin-api exec wrangler r2 bucket notification delete pano-content-dev --queue pano-uploads-dev
+   pnpm --filter @service/admin-api exec wrangler r2 bucket domain remove pano-content-dev --domain cdn.panote.dev --force
+   ```
+c. Recreate them right away (back in `infra/pulumi`):
+   ```bash
+   pulumi up --stack dev --diff --target "$DOMAIN" --target "$NOTIFY"
+   ```
+d. Confirm nothing is left:
+   ```bash
+   pulumi preview --stack dev --expect-no-changes
+   pulumi stack export --stack dev --file <somewhere safe>/panote-dev-state.json
+   ```
+
+Between b and c the CDN is down for minutes, mostly waiting for the custom domain's certificate
+to be issued, and uploads don't tile, so pick a quiet moment. Check
+`wrangler r2 bucket notification list pano-content-dev` shows one rule (`panos/` / `/original`)
+and `cdn.panote.dev` serves again. A pano uploaded in the gap has its original but no tiles:
+re-queue it with `services/admin-api/scripts/retile.ts --pano <panoId> --apply` (docs/deploy.md,
+Re-tiling).
+
+The rate-limit rule uses the Free plan's limits as documented, but only an `up` shows whether
+Cloudflare accepts the expression shape on this plan. If it refuses it, the error names what it
+rejected; adjust `rateLimitRules` in `src/rules.ts` and run a again.
 
 ### 10. Production from scratch
 
@@ -252,7 +281,7 @@ A fork's pull request gets no secrets.
 - `error: the stack is currently locked`: a run was killed before releasing its lock in the state
   bucket. Check nothing else is running, then `pulumi cancel --stack <stack>` and retry. *(unverified
   against R2)*
-- HSTS is zone-wide with `includeSubdomains` (6 months): any future subdomain served over plain
+- HSTS is zone-wide with `includeSubdomains` (one year): any future subdomain served over plain
   HTTP would be unreachable in browsers that saw it. Mail is unaffected (HSTS is HTTP only).
 - A change made in the dashboard is drift: `pulumi preview --refresh` shows it, and the next `up`
   undoes it. Make the change in code instead.
