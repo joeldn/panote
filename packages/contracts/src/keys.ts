@@ -52,6 +52,23 @@ const ORIGINAL_KEY_RE = /^panos\/([^/]+)\/([^/]+)\/original$/;
 // Same base64url charset as encodeId's output (upload-prefix.ts's OWNER_CHARSET_RE).
 const OWNER_SEGMENT_RE = /^[A-Za-z0-9_-]+$/;
 
+/**
+ * The raw id an owner segment encodes (encodeId's inverse), or null for a segment encodeId
+ * could not have written. For operator tooling that finds owners by listing keys.
+ */
+export const decodeId = (segment: string): string | null => {
+  if (!OWNER_SEGMENT_RE.test(segment)) return null;
+  try {
+    const b64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return encodeId(raw) === segment ? raw : null;
+  } catch {
+    return null;
+  }
+};
+
 // Shared by both exports below - parses and validates both segments once.
 // The errors never echo the key or the owner segment: callers log them, and
 // the owner is base64url(sub), which is reversible.

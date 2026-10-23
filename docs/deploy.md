@@ -1642,8 +1642,10 @@ next run carries on` on a partial run.
 
 The "gone" test leans on the owner pointer, which tours created before pointers existed (#121)
 don't have unless they were published since. So every tour save that carries a plan now writes
-the pointer if it is missing (one `HEAD` after the first). A published tour with no pointer
-still counts as existing through its bundle.
+the pointer if it is missing (one `HEAD` after the first), and the cover backfill
+(`backfill-covers.ts`, "Cover and Explore backfill") writes the missing pointers of every tour:
+run it once after deploying this. A published tour with no pointer still counts as existing
+through its bundle.
 
 ---
 
@@ -1672,7 +1674,7 @@ lists it as new. The public bundle `pub/tours/<tourId>.json` now also carries
 the bundle: listed while the bundle is Public, the start scene's manifest exists (a ready scene)
 and there is no hidden marker; removed otherwise. These writes are best-effort: a failure is
 logged as `[explore] index update failed` and the publish still succeeds, so at worst a tour is
-missing from Explore until its next Save. Removal on unpublish is not best-effort: the owner's
+missing from Explore until its next Save (or the backfill below). Removal on unpublish is not best-effort: the owner's
 Stop sharing, tour delete, account delete (and its daily sweep), and the operator's `unpublish`
 and `delete` (so also any later takedown mode built on them) all go through `unpublish` in
 `publish.ts`, which deletes the bundle, then the entry and pointer, then `publish.json`. If the
@@ -1704,6 +1706,49 @@ writes the hidden marker, then removes the entry. Publish never relists a hidden
 read side drops it even if an entry slipped through. `--show-on-explore` deletes the marker and
 relists the tour from its current bundle if it is still published and Public. The marker is
 owner-free and is left behind by a tour or account delete (tourIds are never reused).
+
+### Cover and Explore backfill
+
+Some tours carry state from before the code that writes it, and only their owner's next Save
+fixes it: a Public tour published before Explore existed (#126) isn't listed at all; an Explore
+card's cover names a tile version, so after a re-tile and the tile sweep it points at a version
+that is gone and the card shows its placeholder; a tour saved before start-scene covers (#111)
+shows its first scene on the dashboard instead of the starred one; and a tour created before
+owner pointers (#121), never published since, has no `tour-owners/<tourId>.json`. Link previews
+(`og:image`) need nothing: the website reads the start scene's manifest on every request, and a
+pano with no `og.jpg` is the og.jpg backfill's job ("Link-preview image").
+
+`services/admin-api/scripts/backfill-covers.ts` fixes all of it, idempotently: a tour already up
+to date needs nothing, so a second run reports no changes. It calls `admin-api`'s operator route
+`POST /api/admin/operator/backfill` (`OPERATOR_TOKEN`, the takedown route's secret), which walks
+`tours/` through the binding a page at a time (`{ cursor, limit, apply }`, 10 tours a request by
+default, at most 25), so it needs no R2 credentials: `R2_BUCKET` only picks the environment and
+its admin-api origin, with the usual `--allow-bucket` for anything but a `-dev` bucket. For each
+`tour.json` it:
+
+- rewrites the tour's `customMetadata` (title, scene count, cover) when it differs from what a
+  Save would write, with the same body and only over the version it read (`If-Match`), so a Save
+  in between wins. An editor open on that tour then gets the usual "changed elsewhere" conflict
+  on its next Save, so run it at a quiet time;
+- writes the owner pointer if there is none (create-only, the sub decoded from the key's owner
+  segment);
+- re-syncs the Explore entry through the tour's `TourPublisher`, as a publish does, when the tour
+  is Public, published, not hidden, has a ready start scene, and has no entry or an entry whose
+  cover differs from the start scene's current one. A tour listed for the first time this way
+  takes its last publish time as its place, so old tours don't jump to the top.
+
+```bash
+export R2_BUCKET=pano-content-dev OPERATOR_TOKEN=...
+cd services/admin-api
+# What each tour needs, changing nothing
+node scripts/backfill-covers.ts
+# Do it
+node scripts/backfill-covers.ts --apply
+```
+
+It prints one line per tour that needs (or got) something, `update <tourId>: cover,
+owner-pointer, explore`, and the totals. A skipped tour (a `tour.json` that doesn't parse) is
+listed with the reason. Not run against any environment yet.
 
 ---
 

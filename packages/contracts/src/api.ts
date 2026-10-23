@@ -371,6 +371,39 @@ export const OperatorRestoreOkSchema = z.object({
 });
 export type OperatorRestoreOk = z.infer<typeof OperatorRestoreOkSchema>;
 
+// admin-api's operator-only backfill route (scripts/backfill-covers.ts), same token as the
+// takedown route. Walks tours/ a page at a time from `cursor` (the last tour.json key a page
+// ended on) and brings each tour written before the current code up to date: its dashboard
+// cover (tour.json's customMetadata), its owner pointer (tour-owners/<tourId>.json), and its
+// Explore entry (listed, with the start scene's current cover). Reports only unless `apply`.
+export const OPERATOR_BACKFILL_PATH = '/api/admin/operator/backfill';
+export const OPERATOR_BACKFILL_MAX_TOURS = 25;
+export const BACKFILL_CHANGES = ['cover', 'owner-pointer', 'explore'] as const;
+export type BackfillChange = (typeof BACKFILL_CHANGES)[number];
+export const OperatorBackfillRequestSchema = z.object({
+  cursor: z
+    .string()
+    .max(OPERATOR_RESTORE_MAX_KEY_LENGTH)
+    .regex(/^tours\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/tour\.json$/)
+    .optional(),
+  limit: z.number().int().min(1).max(OPERATOR_BACKFILL_MAX_TOURS).default(10),
+  apply: z.boolean().default(false),
+});
+export type OperatorBackfillRequest = z.infer<typeof OperatorBackfillRequestSchema>;
+// 200: each tour looked at, with what it needed (done, with `apply`), or why it was skipped.
+// `cursor`: pass it back for the next page; null once every tour has been seen.
+export const OperatorBackfillOkSchema = z.object({
+  tours: z.array(
+    z.object({
+      tourId: z.string(),
+      changes: z.array(z.enum(BACKFILL_CHANGES)),
+      skipped: z.string().optional(),
+    }),
+  ),
+  cursor: z.string().nullable(),
+});
+export type OperatorBackfillOk = z.infer<typeof OperatorBackfillOkSchema>;
+
 // Written at backup/<date>/complete.json when a day's set is whole.
 export const BackupCompleteRecordSchema = z.object({
   v: z.literal(1),

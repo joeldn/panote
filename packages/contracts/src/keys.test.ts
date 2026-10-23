@@ -47,6 +47,7 @@ import {
   trashDayPrefix,
   trashKey,
   isOriginalKey,
+  decodeId,
 } from './keys.js';
 
 describe('keys', () => {
@@ -423,6 +424,15 @@ describe('backup keys', () => {
     expect(isBackedUpKey(key)).toBe(false);
     expect(trashDayPrefix('2026-10-22')).toBe('trash/2026-10-22/');
     expect(() => trashDayPrefix('2026-10-22/..')).toThrow();
+  });
+
+  it('decodes an owner segment back to the id, and nothing encodeId could not write', () => {
+    for (const raw of ['auth0|abc', 'google-oauth2|1234', 'email|ünï ✓']) {
+      expect(decodeId(encodeId(raw))).toBe(raw);
+    }
+    for (const bad of ['', 'a/b', 'YQ==', '_w', encodeId('x') + '%']) {
+      expect(decodeId(bad)).toBeNull();
+    }
   });
 
   it('knows an original key from anything else', () => {

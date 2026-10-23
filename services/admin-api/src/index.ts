@@ -6,9 +6,11 @@ import {
   deletingKey,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
+  OPERATOR_BACKFILL_PATH,
   OPERATOR_RESTORE_PATH,
   OPERATOR_TAKEDOWN_PATH,
   OPERATOR_TOKEN_HEADER,
+  OperatorBackfillRequestSchema,
   OperatorRestoreRequestSchema,
   OperatorTakedownRequestSchema,
   originalKey,
@@ -33,6 +35,7 @@ import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
 
+import { backfillTours } from './backfill.js';
 import { BACKUP_CRON, restoreFromBackup, runBackup } from './backup.js';
 import {
   conditionalGet,
@@ -143,6 +146,11 @@ type AppEnv = { Bindings: Env; Variables: { sub: string | undefined } };
 const app = new Hono<AppEnv>();
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const OPERATOR_PATHS = new Set([
+  OPERATOR_TAKEDOWN_PATH,
+  OPERATOR_RESTORE_PATH,
+  OPERATOR_BACKFILL_PATH,
+]);
 const ACCOUNT_PATH = '/api/admin/account';
 // The WRITE_LIMITER binding's `simple.period` (wrangler.jsonc), sent as the
 // 429's Retry-After. The limit itself lives in wrangler.jsonc, per env.
@@ -155,7 +163,7 @@ export const WRITE_RATE_PERIOD_SECONDS = 60;
 // Auth0 user; their own secret guards them.
 app.use('/api/admin/*', async (c, next) => {
   if (!WRITE_METHODS.has(c.req.method)) return next();
-  if (c.req.path === OPERATOR_TAKEDOWN_PATH || c.req.path === OPERATOR_RESTORE_PATH) return next();
+  if (OPERATOR_PATHS.has(c.req.path)) return next();
   const { sub: verified } = await authenticate(c.req.raw, c.env);
   const limited = await rateLimit(c.env.WRITE_LIMITER, verified, WRITE_RATE_PERIOD_SECONDS);
   if (limited) return limited;
@@ -569,6 +577,24 @@ app.post(OPERATOR_RESTORE_PATH, async (c) => {
   // An audit line: counts only, keys carry the owner.
   console.warn(
     `[restore] operator restore from ${from} ${date}: ${out.restored.length} restored, ${out.existing.length} left as they are, ${out.missing.length} not in the set, ${out.refused.length} refused, ${out.failed.length} failed`,
+  );
+  return c.json(out);
+});
+
+// Operator backfill (scripts/backfill-covers.ts): covers, owner pointers and Explore entries
+// for tours written before them, a page at a time; reports only unless `apply`.
+app.post(OPERATOR_BACKFILL_PATH, async (c) => {
+  if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
+    return c.json({ error: 'not found' }, 404);
+  }
+  const body = OperatorBackfillRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!body.success) return c.json({ error: body.error.format() }, 400);
+  const out = await backfillTours(c.env.BUCKET, body.data, (tourId) =>
+    publisher(c.env, tourId).refreshExplore(tourId),
+  );
+  const changed = out.tours.filter((t) => t.changes.length).length;
+  console.warn(
+    `[backfill] ${body.data.apply ? 'updated' : 'would update'} ${changed} of ${out.tours.length} tour(s)`,
   );
   return c.json(out);
 });
