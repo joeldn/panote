@@ -72,3 +72,10 @@ export type CdnPurgePending = z.infer<typeof CdnPurgePendingSchema>;
  * by hand and deletes the record (docs/deploy.md, CDN purge on delete).
  */
 export const CDN_PURGE_DEAD_PREFIX = 'ops/cdn-purge/dead/';
+
+/**
+ * tiler-consumer's health check state (services/tiler-consumer/src/health.ts, which owns
+ * the shape): consecutive failures per failing check, and what the last email reported.
+ * admin-api's ops metrics read it, loosely, for the operator dashboard.
+ */
+export const HEALTH_STATE_KEY = 'ops/health/state.json';

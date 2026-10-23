@@ -3,6 +3,7 @@ import {
   CdnPurgeFailureSchema,
   CRON_STATUS_KEY,
   CronStatusSchema,
+  HEALTH_STATE_KEY,
 } from '@internal/contracts';
 import { ALERT_THROTTLE_MS } from './alert.js';
 import { buildProbes, runProbe, type CheckResult } from './health-probes.js';
@@ -22,7 +23,8 @@ export const CRON_CHECK = 'admin-api daily cron';
 export const PURGE_CHECK = 'cdn purge';
 
 // Next to the DLQ alert's state under ops/: private, and no R2 notification watches it.
-export const HEALTH_STATE_KEY = 'ops/health/state.json';
+// admin-api's ops metrics read it too, so the key lives in contracts.
+export { HEALTH_STATE_KEY };
 
 export interface HealthState {
   /** Consecutive failures per check that failed last run; a passing check is absent. */

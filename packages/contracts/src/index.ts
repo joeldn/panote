@@ -15,3 +15,4 @@ export * from './client-error.js';
 export * from './ops.js';
 export * from './support.js';
 export * from './members.js';
+export * from './ops-metrics.js';

@@ -99,6 +99,20 @@
         // Who may open the operator pages (/app/ops): the hex SHA-256 of each operator's
         // Auth0 user id, comma-separated; empty means nobody. docs/deploy.md, "Operator pages".
         "OPERATOR_SUB_SHA256": "",
+        // This env's resources, for the operator dashboard (src/ops-metrics): dev and
+        // production share one Cloudflare account, so its analytics are filtered to these.
+        "OPS_RESOURCES": {
+          "workers": [
+            "panote-website-dev",
+            "panote-admin-dev",
+            "panote-public-api-dev",
+            "panote-admin-api-dev",
+            "panote-upload-api-dev",
+            "panote-tiler-consumer-dev",
+          ],
+          "buckets": ["pano-content-dev"],
+          "queues": ["pano-uploads-dev", "pano-uploads-dlq-dev"],
+        },
       },
       // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
       // the backup, which runs every 15 minutes until the day's set is complete
@@ -191,6 +205,20 @@
         // Who may open the operator pages (/app/ops): the hex SHA-256 of each operator's
         // Auth0 user id, comma-separated; empty means nobody. docs/deploy.md, "Operator pages".
         "OPERATOR_SUB_SHA256": "",
+        // This env's resources, for the operator dashboard (src/ops-metrics): dev and
+        // production share one Cloudflare account, so its analytics are filtered to these.
+        "OPS_RESOURCES": {
+          "workers": [
+            "panote-website",
+            "panote-admin",
+            "panote-public-api",
+            "panote-admin-api",
+            "panote-upload-api",
+            "panote-tiler-consumer",
+          ],
+          "buckets": ["pano-content"],
+          "queues": ["pano-uploads", "pano-uploads-dlq"],
+        },
       },
       // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
       // the backup, which runs every 15 minutes until the day's set is complete

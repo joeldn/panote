@@ -91,6 +91,7 @@ import {
 } from './members.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { isOperatorSub, requireOperator } from './ops-gate.js';
+import { OPS_METRICS_PATH, opsMetricsRoute } from './ops-metrics/index.js';
 import { sweepUnsavedPlans } from './plan-sweep.js';
 import { supportRoutes } from './support.js';
 import { sweepPlans } from './plans.js';
@@ -682,6 +683,8 @@ app.delete('/api/admin/tours/:tourId/publish', async (c) => {
   purgeLater(c, { prefixes: [], files });
   return c.body(null, 204);
 });
+
+app.get(OPS_METRICS_PATH, (c) => opsMetricsRoute(c));
 
 app.get('/api/admin/tours/:tourId/insights', (c) => insightsRoute(c, c.req.param('tourId')));
 
