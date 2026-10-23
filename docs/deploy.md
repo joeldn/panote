@@ -195,8 +195,10 @@ production deploy guard fails on any `YOUR_` in `apps/*/.env.production`.
 `@internal/web-kit/build`): a CSP of `default-src 'self'`, `script-src 'self'`,
 `style-src 'self'`, `img-src 'self' <cdn> https: data: blob:`, `media-src 'self' <cdn> https:`, `connect-src 'self' <cdn> <auth0 domain>`
 (admin adds the R2 S3 endpoint), `frame-src https://www.youtube-nocookie.com https://player.vimeo.com` (admin adds `'self'`),
-`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff` and
-`strict-origin-when-cross-origin`. Every path gets `frame-ancestors 'none'` except the website's
+`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, plus `nosniff`,
+`strict-origin-when-cross-origin` and `Strict-Transport-Security: max-age=31536000;
+includeSubDomains` (no `preload`; every host on both zones is HTTPS-only behind Cloudflare, and
+HSTS is per host, so the apex's `_headers` covers the `/s/*` and API responses on it too). Every path gets `frame-ancestors 'none'` except the website's
 `/s/:slug/embed`, whose rule removes the inherited CSP (`! Content-Security-Policy`) and sets
 the same policy with `frame-ancestors *`. Verified under `wrangler dev`: the embed path gets only
 the `*` policy, other paths only `'none'`, and SPA-fallback responses carry the headers too.
@@ -2407,7 +2409,7 @@ the account has the resources the config names.
     **Status: outstanding.**
 
 11. **Rate limits and Analytics Engine: nothing to create.** The production `namespace_id`s
-    (`2101`, `2201`–`2204`, Rate limits) are already in config and only have to be unique in the
+    (`2101`, `2201`–`2205`, `2301`, Rate limits) are already in config and only have to be unique in the
     account; the `panote_events` dataset appears on the first write (Insights).
     Verify: `grep -rn namespace_id services/*/wrangler.jsonc` shows no id used twice.
     **Status: done in config.**
