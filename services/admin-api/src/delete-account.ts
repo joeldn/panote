@@ -57,27 +57,78 @@ const readMarker = (bucket: R2Bucket, sub: string): Promise<AccountDeletionRecor
 export const isAccountDeleted = async (bucket: R2Bucket, sub: string): Promise<boolean> =>
   !!(await bucket.head(accountDeletionKey(sub)));
 
-/** Create-only, so a retry keeps the first requestedAt (and any completedAt). */
+/**
+ * The subs whose data goes with the account: its own, then the identities linked into it
+ * (the token's linked subs, see "Account linking" in docs/deploy.md). Data made under one
+ * of those before it was linked would otherwise be left behind with no way to reach it.
+ */
+export const ownersOf = (record: Pick<AccountDeletionRecord, 'sub' | 'linkedSubs'>): string[] => [
+  record.sub,
+  ...new Set((record.linkedSubs ?? []).filter((s) => s !== record.sub)),
+];
+
+/**
+ * Read-modify-write of the marker, conditional on the ETag it read, so two writers (a
+ * retry adding linked subs, the sweep stamping completedAt) can't drop each other's
+ * change. `change` returns null to leave the marker as it is. On a lost race it reads
+ * again and retries once, then throws. False when the marker is missing or unreadable.
+ */
+const updateMarker = async (
+  bucket: R2Bucket,
+  sub: string,
+  change: (record: AccountDeletionRecord) => AccountDeletionRecord | null,
+): Promise<boolean> => {
+  const key = accountDeletionKey(sub);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const got = await getJson<unknown>(bucket, key).catch(() => null);
+    const parsed = got ? AccountDeletionRecordSchema.safeParse(got.value) : null;
+    if (!got || !parsed?.success) return false;
+    const next = change(parsed.data);
+    if (!next) return true;
+    if ((await putJson(bucket, key, next, { etagMatches: got.etag })).ok) return true;
+  }
+  throw new Error('account deletion marker changed while it was being updated');
+};
+
+/**
+ * Create-only, so a retry keeps the first requestedAt (and any completedAt). A retry
+ * whose token names linked subs the marker doesn't have yet adds them.
+ */
 export const markAccountForDeletion = async (
   bucket: R2Bucket,
   sub: string,
   now: Date,
+  linkedSubs: readonly string[] = [],
 ): Promise<void> => {
-  const record: AccountDeletionRecord = { v: 1, sub, requestedAt: now.toISOString() };
+  const linked = ownersOf({ sub, linkedSubs: [...linkedSubs] }).slice(1);
+  const record: AccountDeletionRecord = {
+    v: 1,
+    sub,
+    requestedAt: now.toISOString(),
+    ...(linked.length > 0 && { linkedSubs: linked }),
+  };
   const created = await putJson(bucket, accountDeletionKey(sub), record, {
     etagDoesNotMatch: '*',
   });
+  if (created.ok) return;
+  const readable = await updateMarker(bucket, sub, (existing) => {
+    const known = new Set(existing.linkedSubs);
+    if (linked.every((s) => known.has(s))) return null;
+    const merged = ownersOf({ sub, linkedSubs: [...(existing.linkedSubs ?? []), ...linked] });
+    return { ...existing, linkedSubs: merged.slice(1) };
+  });
   // An unreadable marker still blocks writes; rewrite it so the sweep can read it.
-  if (!created.ok && !(await readMarker(bucket, sub))) {
-    await putJson(bucket, accountDeletionKey(sub), record);
-  }
+  if (!readable) await putJson(bucket, accountDeletionKey(sub), record);
 };
 
 /** Stamps completedAt once; later sweeps keep the first one, so retention runs from it. */
 const markComplete = async (bucket: R2Bucket, sub: string, now: Date): Promise<void> => {
-  const record = await readMarker(bucket, sub);
-  if (!record || record.completedAt) return;
-  await putJson(bucket, accountDeletionKey(sub), { ...record, completedAt: now.toISOString() });
+  let stamped = false;
+  await updateMarker(bucket, sub, (record) => {
+    stamped = !record.completedAt;
+    return stamped ? { ...record, completedAt: now.toISOString() } : null;
+  });
+  if (!stamped) return;
   console.warn(
     `${LOG_PREFIX} account deleted: remove its Auth0 user within ${ACCOUNT_MARKER_DAYS} days (delete-account.ts --list)`,
   );
@@ -199,19 +250,36 @@ export const deleteAccountData = async (
 
 export type AccountDeleteResult = { status: 'deleted' | 'pending'; purge: CdnPurge };
 
+/** deleteAccountData for each owner in turn; true once every one is done. */
+const deleteOwnersData = async (
+  deps: AccountDeps,
+  owners: readonly string[],
+  purge: CdnPurge,
+  budget?: Budget,
+): Promise<boolean> => {
+  for (const owner of owners) {
+    if (!(await deleteAccountData(deps, owner, purge, budget))) return false;
+  }
+  return true;
+};
+
 /**
  * The owner's DELETE /api/admin/account. The marker goes first, so a request
  * that dies part way leaves a read-only account the daily sweep finishes.
+ * `linkedSubs` (from the token) are deleted along with it.
  */
 export const deleteAccount = async (
   deps: AccountDeps,
   sub: string,
   now: Date,
+  linkedSubs: readonly string[] = [],
 ): Promise<AccountDeleteResult> => {
-  await markAccountForDeletion(deps.bucket, sub, now);
+  await markAccountForDeletion(deps.bucket, sub, now, linkedSubs);
   const purge: CdnPurge = { prefixes: [], files: [] };
   try {
-    await deleteAccountData(deps, sub, purge);
+    // From the marker, so a retry also covers linked subs an earlier request named.
+    const record = await readMarker(deps.bucket, sub);
+    await deleteOwnersData(deps, ownersOf(record ?? { sub, linkedSubs: [...linkedSubs] }), purge);
   } catch (e) {
     console.error(`${LOG_PREFIX} delete interrupted, the daily sweep resumes it:`, errorName(e));
     return { status: 'pending', purge: mergePurges(purge) };
@@ -221,9 +289,11 @@ export const deleteAccount = async (
 };
 
 // One cheap LIST per prefix: whether anything is left (a late upload, say).
-const hasData = async (bucket: R2Bucket, sub: string): Promise<boolean> => {
-  for (const prefix of [userToursPrefix(sub), userPanosPrefix(sub), userUploadLogPrefix(sub)]) {
-    if ((await bucket.list({ prefix, limit: 1 })).objects.length > 0) return true;
+const hasData = async (bucket: R2Bucket, owners: readonly string[]): Promise<boolean> => {
+  for (const sub of owners) {
+    for (const prefix of [userToursPrefix(sub), userPanosPrefix(sub), userUploadLogPrefix(sub)]) {
+      if ((await bucket.list({ prefix, limit: 1 })).objects.length > 0) return true;
+    }
   }
   return false;
 };
@@ -272,12 +342,16 @@ export const sweepAccountDeletions = async (
   let retained = 0;
   for (const { key, record } of await listMarkers(deps.bucket)) {
     const { sub, completedAt } = record;
+    // Linked subs only until the delete completes. After that, data under one of them can
+    // only come from a new, separate user with that provider id (the Auth0 user was
+    // removed and they signed up again, or the operator unlinked it): not ours to delete.
+    const owners = completedAt ? [sub] : ownersOf(record);
     try {
       let done = true;
-      if (!completedAt || (await hasData(deps.bucket, sub))) {
+      if (!completedAt || (await hasData(deps.bucket, owners))) {
         const mine: Budget = { items: Math.min(budget.items, perAccount) };
         const allowed = mine.items;
-        done = await deleteAccountData(deps, sub, purge, mine);
+        done = await deleteOwnersData(deps, owners, purge, mine);
         budget.items -= allowed - mine.items;
       }
       if (!done) continue;

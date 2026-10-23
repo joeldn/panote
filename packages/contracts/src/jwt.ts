@@ -32,7 +32,47 @@ interface Claims {
   iss: string;
   aud: string | string[];
   exp: number;
+  /** Auth0's grant type; `client-credentials` on a machine-to-machine token. */
+  gty?: unknown;
+  [claim: string]: unknown;
 }
+
+/**
+ * Custom claims the Auth0 post-login Action adds to the access token
+ * (packages/auth0-actions/src/link-accounts.cjs keeps its own copy of these names).
+ * Auth0 drops a custom claim that isn't namespaced with a URL.
+ */
+export const AUTH_TIME_CLAIM = 'https://panote.io/auth_time';
+export const LINKED_SUBS_CLAIM = 'https://panote.io/linked_subs';
+/** At most this many linked subs are read from the token; the Action sends no more. */
+export const MAX_LINKED_SUBS = 10;
+// An Auth0 user id: `<provider>|<id>`, no whitespace, bounded.
+const LINKED_SUB = /^[^\s|]+\|\S+$/;
+const MAX_SUB_LENGTH = 256;
+
+/** What a verified access token says about its user. */
+export interface VerifiedClaims {
+  sub: string;
+  /** When the user last actually signed in (epoch seconds), from AUTH_TIME_CLAIM. */
+  authTime?: number;
+  /**
+   * The user ids of identities linked into this user (link-accounts Action): data
+   * made under one of them before it was linked is this user's too.
+   */
+  linkedSubs?: readonly string[];
+}
+
+const readAuthTime = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+
+const readLinkedSubs = (v: unknown, sub: string): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const subs = v.filter(
+    (s): s is string =>
+      typeof s === 'string' && s.length <= MAX_SUB_LENGTH && LINKED_SUB.test(s) && s !== sub,
+  );
+  return [...new Set(subs)].slice(0, MAX_LINKED_SUBS);
+};
 
 const b64urlToBytes = (s: string): Uint8Array<ArrayBuffer> => {
   const pad = s.length % 4 ? '='.repeat(4 - (s.length % 4)) : '';
@@ -43,7 +83,7 @@ const b64urlToBytes = (s: string): Uint8Array<ArrayBuffer> => {
 export const assertClaims = (
   c: Claims,
   opts: { issuer: string; audience: string },
-): { sub: string } => {
+): VerifiedClaims => {
   if (c.iss !== opts.issuer) throw new Error('bad issuer');
   const auds = Array.isArray(c.aud) ? c.aud : [c.aud];
   if (!auds.includes(opts.audience)) throw new Error('bad audience');
@@ -52,8 +92,19 @@ export const assertClaims = (
   // `NaN <= Date.now()` (always false) treat the token as never expiring.
   if (typeof c.exp !== 'number' || !Number.isFinite(c.exp)) throw new Error('bad exp');
   if (c.exp * 1000 <= Date.now()) throw new Error('token expired');
-  if (!c.sub) throw new Error('no subject');
-  return { sub: c.sub };
+  if (typeof c.sub !== 'string' || !c.sub) throw new Error('no subject');
+  // A machine-to-machine (client-credentials) token is no user: refuse it even if an
+  // M2M application is ever authorised for this API's audience.
+  if (c.gty === 'client-credentials' || c.sub.endsWith('@clients')) {
+    throw new Error('client-credentials token');
+  }
+  const authTime = readAuthTime(c[AUTH_TIME_CLAIM]);
+  const linkedSubs = readLinkedSubs(c[LINKED_SUBS_CLAIM], c.sub);
+  return {
+    sub: c.sub,
+    ...(authTime !== undefined && { authTime }),
+    ...(linkedSubs !== undefined && { linkedSubs }),
+  };
 };
 
 export const fetchJwks = async (
@@ -81,7 +132,7 @@ export const fetchJwks = async (
 export const verifyJwt = async (
   token: string,
   opts: { issuer: string; audience: string; jwks: Jwk[] },
-): Promise<{ sub: string }> => {
+): Promise<VerifiedClaims> => {
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('malformed jwt');
   const [h, p, s] = parts;

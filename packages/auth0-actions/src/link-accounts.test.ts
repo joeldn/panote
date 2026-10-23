@@ -8,9 +8,14 @@ import type * as Action from './link-accounts.cjs';
 const load = createRequire(import.meta.url);
 const action = load('./link-accounts.cjs') as typeof Action;
 const {
+  AUTH_TIME_CLAIM,
+  LINKED_SUBS_CLAIM,
+  MAX_LINKED_SUBS,
   ManagementError,
   TRUSTED_PROVIDERS,
+  authTimeOf,
   choosePrimary,
+  linkedSubsOf,
   linkAccounts,
   managementClient,
   managementFromSecrets,
@@ -45,7 +50,10 @@ const appleUser = user('apple|333', '2026-05-01T00:00:00.000Z', {
   identities: [{ provider: 'apple', user_id: 333 }],
 });
 
-const fakeApi = () => ({ authentication: { setPrimaryUser: vi.fn() } });
+const fakeApi = () => ({
+  authentication: { setPrimaryUser: vi.fn() },
+  accessToken: { setCustomClaim: vi.fn() },
+});
 
 const fakeManagement = (
   found: User[],
@@ -150,6 +158,27 @@ describe('linkAccounts', () => {
     );
     expect(api.authentication.setPrimaryUser).toHaveBeenCalledWith('google-oauth2|111');
     expect(log.mock.calls.flat().join(' ')).not.toContain(EMAIL);
+    // The token is the primary's: it names this user as linked into it.
+    expect(api.accessToken.setCustomClaim).toHaveBeenCalledWith(LINKED_SUBS_CLAIM, ['apple|333']);
+  });
+
+  it("claims the primary's other linked identities too when linking into it", async () => {
+    const api = fakeApi();
+    const primary = {
+      ...google,
+      identities: [
+        { provider: 'google-oauth2', user_id: '111' },
+        { provider: 'email', user_id: '222' },
+      ],
+    };
+    await linkAccounts({ user: appleUser }, api, {
+      management: fakeManagement([primary, appleUser]),
+      log: vi.fn(),
+    });
+    expect(api.accessToken.setCustomClaim).toHaveBeenCalledWith(LINKED_SUBS_CLAIM, [
+      'email|222',
+      'apple|333',
+    ]);
   });
 
   it('sets the primary user only after the link succeeded', async () => {
@@ -552,7 +581,99 @@ describe('managementClient', () => {
   });
 });
 
+describe('linkedSubsOf', () => {
+  it('names each linked identity as the user id it had, without the user itself', () => {
+    const primary = {
+      ...google,
+      identities: [
+        { provider: 'google-oauth2', user_id: '111' },
+        { provider: 'email', user_id: '222' },
+        { provider: 'apple', user_id: 333 },
+      ],
+    };
+    expect(linkedSubsOf(primary)).toEqual(['email|222', 'apple|333']);
+    expect(linkedSubsOf(google)).toEqual([]);
+    expect(linkedSubsOf(google, ['email|9', 'email|9', 'google-oauth2|111'])).toEqual(['email|9']);
+  });
+
+  it(`sends at most ${MAX_LINKED_SUBS}`, () => {
+    const many = Array.from({ length: MAX_LINKED_SUBS + 3 }, (_, i) => `email|${i}`);
+    expect(linkedSubsOf(google, many)).toHaveLength(MAX_LINKED_SUBS);
+  });
+
+  it('uses the claim names admin-api reads (packages/contracts/src/jwt.ts)', () => {
+    expect(AUTH_TIME_CLAIM).toBe('https://panote.io/auth_time');
+    expect(LINKED_SUBS_CLAIM).toBe('https://panote.io/linked_subs');
+    expect(MAX_LINKED_SUBS).toBe(10);
+  });
+});
+
+describe('authTimeOf', () => {
+  const at = (...timestamps: string[]) => ({
+    user: google,
+    authentication: { methods: timestamps.map((timestamp) => ({ name: 'federated', timestamp })) },
+  });
+
+  it('is the latest authentication method, in epoch seconds', () => {
+    expect(authTimeOf(at('2026-10-01T00:00:00.000Z', '2026-10-01T00:05:00.900Z'))).toBe(
+      Date.parse('2026-10-01T00:05:00.000Z') / 1000,
+    );
+  });
+
+  it('is undefined with no usable timestamp', () => {
+    expect(authTimeOf({ user: google })).toBeUndefined();
+    expect(authTimeOf(at('not a date'))).toBeUndefined();
+  });
+
+  it('is undefined on a refresh-token exchange, which is no sign-in', () => {
+    expect(
+      authTimeOf({
+        ...at('2026-10-01T00:00:00.000Z'),
+        transaction: { protocol: 'oauth2-refresh-token' },
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe('onExecutePostLogin', () => {
+  it('claims the sign-in time and the linked identities on an ordinary login', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const api = fakeApi();
+    const primary = {
+      ...google,
+      identities: [
+        { provider: 'google-oauth2', user_id: '111' },
+        { provider: 'email', user_id: '222' },
+      ],
+    };
+    await action.onExecutePostLogin(
+      {
+        user: primary,
+        authentication: { methods: [{ name: 'federated', timestamp: '2026-10-01T00:00:00Z' }] },
+      },
+      api,
+    );
+    expect(api.accessToken.setCustomClaim).toHaveBeenCalledWith(LINKED_SUBS_CLAIM, ['email|222']);
+    expect(api.accessToken.setCustomClaim).toHaveBeenCalledWith(
+      AUTH_TIME_CLAIM,
+      Date.parse('2026-10-01T00:00:00Z') / 1000,
+    );
+    log.mockRestore();
+  });
+
+  it('keeps the linked identities but claims no sign-in time on a refresh', async () => {
+    const api = fakeApi();
+    await action.onExecutePostLogin(
+      {
+        user: google,
+        transaction: { protocol: 'oauth2-refresh-token' },
+        authentication: { methods: [{ name: 'federated', timestamp: '2026-10-01T00:00:00Z' }] },
+      },
+      api,
+    );
+    expect(api.accessToken.setCustomClaim).toHaveBeenCalledExactlyOnceWith(LINKED_SUBS_CLAIM, []);
+  });
+
   it('is exported for Auth0 and never throws, even unconfigured', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const api = fakeApi();

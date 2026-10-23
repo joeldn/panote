@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { assertClaims, fetchJwks, DEFAULT_JWKS_TIMEOUT_MS } from './jwt.js';
+import {
+  assertClaims,
+  AUTH_TIME_CLAIM,
+  fetchJwks,
+  DEFAULT_JWKS_TIMEOUT_MS,
+  LINKED_SUBS_CLAIM,
+  MAX_LINKED_SUBS,
+} from './jwt.js';
 
 describe('assertClaims', () => {
   const base = {
@@ -40,6 +47,102 @@ describe('assertClaims', () => {
         audience: 'api',
       }),
     ).toThrow(/exp/);
+  });
+});
+
+describe('assertClaims: machine-to-machine tokens', () => {
+  const opts = { issuer: 'https://x/', audience: 'api' };
+  const base = { sub: 'auth0|abc', iss: 'https://x/', aud: 'api', exp: 9999999999 };
+
+  it('rejects a client-credentials grant', () => {
+    expect(() =>
+      assertClaims({ ...base, sub: 'abc123@clients', gty: 'client-credentials' }, opts),
+    ).toThrow(/client-credentials/);
+  });
+
+  it('rejects a client-credentials gty even with a user-looking sub', () => {
+    expect(() => assertClaims({ ...base, gty: 'client-credentials' }, opts)).toThrow(
+      /client-credentials/,
+    );
+  });
+
+  it('rejects an M2M sub even without gty', () => {
+    expect(() => assertClaims({ ...base, sub: 'abc123@clients' }, opts)).toThrow(
+      /client-credentials/,
+    );
+  });
+
+  it('accepts a user token with another grant type (a refresh-token exchange)', () => {
+    expect(assertClaims({ ...base, gty: 'refresh_token' }, opts)).toEqual({ sub: 'auth0|abc' });
+  });
+
+  it('rejects a non-string sub', () => {
+    expect(() =>
+      assertClaims({ ...base, sub: 42 } as unknown as Parameters<typeof assertClaims>[0], opts),
+    ).toThrow(/subject/);
+  });
+});
+
+describe('assertClaims: Panote custom claims', () => {
+  const opts = { issuer: 'https://x/', audience: 'api' };
+  const base = { sub: 'google-oauth2|1', iss: 'https://x/', aud: 'api', exp: 9999999999 };
+
+  it('has no authTime or linkedSubs when the Action added none', () => {
+    expect(assertClaims(base, opts)).toEqual({ sub: 'google-oauth2|1' });
+  });
+
+  it('reads the sign-in time', () => {
+    expect(assertClaims({ ...base, [AUTH_TIME_CLAIM]: 1_800_000_000 }, opts).authTime).toBe(
+      1_800_000_000,
+    );
+  });
+
+  it.each([
+    ['a string', '1800000000'],
+    ['NaN', Number.NaN],
+    ['zero', 0],
+    ['negative', -5],
+  ])('ignores a sign-in time that is %s', (_label, v) => {
+    expect(assertClaims({ ...base, [AUTH_TIME_CLAIM]: v }, opts).authTime).toBeUndefined();
+  });
+
+  it('reads linked subs, dropping malformed entries, duplicates and the sub itself', () => {
+    const claims = assertClaims(
+      {
+        ...base,
+        [LINKED_SUBS_CLAIM]: [
+          'email|abc',
+          'email|abc',
+          'google-oauth2|1',
+          'no-provider',
+          'has space|x',
+          42,
+          `apple|${'x'.repeat(300)}`,
+          'apple|001.abc',
+        ],
+      },
+      opts,
+    );
+    expect(claims.linkedSubs).toEqual(['email|abc', 'apple|001.abc']);
+  });
+
+  it(`keeps at most ${MAX_LINKED_SUBS} linked subs`, () => {
+    const many = Array.from({ length: MAX_LINKED_SUBS + 5 }, (_, i) => `email|${i}`);
+    expect(assertClaims({ ...base, [LINKED_SUBS_CLAIM]: many }, opts).linkedSubs).toEqual(
+      many.slice(0, MAX_LINKED_SUBS),
+    );
+  });
+
+  it('ignores a linked-subs claim that is not a list', () => {
+    expect(
+      assertClaims({ ...base, [LINKED_SUBS_CLAIM]: 'email|abc' }, opts).linkedSubs,
+    ).toBeUndefined();
+  });
+
+  it('keeps the claim names the Auth0 Action sets', () => {
+    // packages/auth0-actions/src/link-accounts.cjs has its own copy: change both together.
+    expect(AUTH_TIME_CLAIM).toBe('https://panote.io/auth_time');
+    expect(LINKED_SUBS_CLAIM).toBe('https://panote.io/linked_subs');
   });
 });
 
