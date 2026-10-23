@@ -53,9 +53,14 @@ let registered = new Map<string, Registered>();
 
 /**
  * Installs the mocks once per test file. Outputs a provider computes are
- * given stand-ins: a queue's id, a client's id and secret.
+ * given stand-ins: a queue's id, a client's id and secret. `preview` runs the
+ * program as `pulumi preview` would (`isDryRun`); `linkingSecret` is what the
+ * provider reads back as the link-accounts client's secret.
  */
-export async function installMocks(): Promise<void> {
+export async function installMocks(
+  options: { preview?: boolean; linkingSecret?: string } = {},
+): Promise<void> {
+  const { preview = false, linkingSecret } = options;
   await pulumi.runtime.setMocks(
     {
       newResource(args) {
@@ -64,7 +69,7 @@ export async function installMocks(): Promise<void> {
         if (args.type === RESOURCES.uploadsQueue.type) state.queueId = `${args.name}-queue-id`;
         if (args.type === RESOURCES.spaClient.type) state.clientId = `${args.name}-client-id`;
         if (args.type === RESOURCES.linkingCredentials.type) {
-          state.clientSecret = `${args.name}-secret`;
+          state.clientSecret = linkingSecret ?? `${args.name}-secret`;
         }
         return { id: `${args.name}-id`, state };
       },
@@ -81,7 +86,7 @@ export async function installMocks(): Promise<void> {
     },
     'panote-infra',
     'test',
-    false,
+    preview,
   );
 }
 

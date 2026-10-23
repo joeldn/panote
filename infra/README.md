@@ -411,7 +411,11 @@ Then these and only these are expected, all **update**:
   them) and `code` (the comment at the top of both files changed with this program; any older
   paste too). Each update deploys a new version of the Action;
 - `auth0-post-login-actions`: only if the Login flow isn't exactly *Block banned emails*, then
-  *Link accounts by verified email*, nothing else;
+  *Link accounts by verified email*. This resource owns the whole post-login flow, so `up`
+  unbinds any other Action bound there by hand. If the preview removes an Action other than
+  these two, stop: model that Action in `src/auth0.ts` first, or move it off post-login. The
+  likely case is a sign-up allow-list: dev has none yet, and when one is added it should be a
+  *pre-user-registration* Action, which Pulumi leaves alone, or be modelled;
 - `auth0-database-clients`: `enabledClients` to none, if the SPA still had the password database
   (a new tenant enables it for every app). Nobody could have a Panote account through it on
   purpose, but check User Management → Users for `auth0|…` users first;

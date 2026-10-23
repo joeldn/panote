@@ -14,7 +14,7 @@ import {
   type Registered,
 } from './test-support.js';
 
-beforeAll(installMocks);
+beforeAll(() => installMocks());
 
 interface Rule {
   ref?: string;

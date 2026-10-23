@@ -14,7 +14,7 @@ import {
   type Registered,
 } from './test-support.js';
 
-beforeAll(installMocks);
+beforeAll(() => installMocks());
 
 const REPO = new URL('../../../', import.meta.url);
 const repoFile = (path: string) => readFileSync(new URL(path, REPO), 'utf8');
@@ -59,6 +59,15 @@ describe('the dev tenant', () => {
 
   it('declares every Auth0 resource', () => {
     for (const key of AUTH0_KEYS) inputsOf(resources, key);
+  });
+
+  it('protects the SPA, the API and the Google connection, and nothing else in Auth0', async () => {
+    const { infra } = await run(settings);
+    // `__protect` is the SDK's record of the protect option; mocks don't see options.
+    const protectedKeys = AUTH0_KEYS.filter(
+      (key) => (infra.resources[key] as unknown as { __protect?: boolean }).__protect,
+    );
+    expect(protectedKeys.sort()).toEqual(['api', 'googleConnection', 'spaClient']);
   });
 
   it('issues tokens for the audience and issuer the APIs and apps are configured with', async () => {
