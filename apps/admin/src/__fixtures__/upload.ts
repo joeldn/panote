@@ -65,6 +65,8 @@ export function fakeBackend() {
     publishNotReady: [] as string[],
     /** What the library listing (`GET /api/admin/panos`) returns. */
     library: [] as Array<Record<string, unknown>>,
+    /** The user's role on the tour, as the editor's load says it (unset: the owner). */
+    role: null as 'editor' | null,
   };
 
   const fetch: FetchLike = async (url, init = {}) => {
@@ -95,7 +97,12 @@ export function fakeBackend() {
           ? { config: { panoId, title: c.title, hotspots: [] }, etag: `c-${panoId}` }
           : { missing: true, deleting: false, hasOriginal: true };
       }
-      return json({ tour: state.tour, etag: state.tourEtag, configs });
+      return json({
+        tour: state.tour,
+        etag: state.tourEtag,
+        configs,
+        ...(state.role && { role: state.role }),
+      });
     }
     state.calls.push({ method, url, headers, body, cache: init.cache });
 

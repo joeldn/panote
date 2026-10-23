@@ -11,14 +11,9 @@
   font: 500 19px/1.2 var(--fbody);
   text-align: left;
 }
+/* A Notice above the drop zone. */
 .up-overlay__notice {
   margin: 0 0 16px;
-  padding: 10px 14px;
-  border-radius: var(--r-field);
-  background: var(--ink-05);
-  font: 400 13.5px/1.45 var(--fbody);
-  color: var(--ink-82);
-  text-align: left;
 }
 .up-drop {
   display: flex;
@@ -41,10 +36,6 @@
 .up-drop--over {
   border-color: var(--accent);
   background: var(--ink-05);
-}
-.up-drop:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 .up-drop:disabled {
   cursor: default;
@@ -220,6 +211,10 @@
   margin-top: 12px;
 }
 .up-chip__action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  box-sizing: border-box;
   border: 0;
   border-radius: var(--r-pill);
   padding: 6px 12px;
@@ -232,7 +227,13 @@
   background: var(--accent);
   color: #fff;
 }
-.up-chip__action:focus-visible {
+/* "Free up space" is a link styled as one of the buttons. */
+a.up-chip__action {
+  text-decoration: none;
+}
+/* The accent ring disappears on the dark chip: its focus ring is the chip's text colour. */
+.up-chip__action:focus-visible,
+.up-chip__close:focus-visible {
   outline: 2px solid var(--chip-text);
   outline-offset: 2px;
 }
@@ -243,9 +244,33 @@
   }
   .up-chip {
     right: 12px;
-    bottom: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     left: 12px;
     width: auto;
+  }
+
+  /*
+   * Over the editor, it docks above the panel sheet (16px off the bottom, at most 46% of
+   * the screen tall) instead of covering its tabs.
+   */
+  body:has(.ed-side--sheet) .up-chip {
+    bottom: calc(46% + 24px);
+  }
+}
+
+/* Touch: the chip's buttons and its × are finger-sized. */
+@media (pointer: coarse) {
+  .up-chip__action {
+    min-height: 40px;
+    padding: 0 16px;
+  }
+  .up-chip__close {
+    position: relative;
+  }
+  .up-chip__close::before {
+    content: '';
+    position: absolute;
+    inset: -12px;
   }
 }
 

@@ -1,7 +1,7 @@
 import type { UploadState } from '@internal/web-kit';
 import { describe, expect, it } from 'vitest';
 
-import { chipModel, type ActiveUpload, type FinalizeState } from './chip-model.js';
+import { chipModel, FREE_SPACE_TO, type ActiveUpload, type FinalizeState } from './chip-model.js';
 
 const m = { pano: 'p1', faceSize: 1024, tileSize: 512, maxLevel: 1, faces: [], quality: 85 };
 const active = (
@@ -206,6 +206,25 @@ describe('chipModel', () => {
     );
     // The rate limit clears within a minute: that one can be tried again.
     expect(actions(active(f, { limited: 'rate' }))).toEqual(['retry-upload']);
+  });
+
+  it('out of panos or storage, offers the unused panos, unless the tour is someone else’s', () => {
+    const f = {
+      phase: 'failed',
+      panoId: null,
+      stage: 'presign',
+      message: 'This account has reached its pano limit.',
+    } as UploadState;
+    expect(chipModel(active(f, { limited: 'space' }))).toMatchObject({
+      title: 'Upload limit reached',
+      actions: [{ id: 'free-space', label: 'Free up space', to: FREE_SPACE_TO }],
+    });
+    expect(FREE_SPACE_TO).toBe('/?view=unused');
+    const shared = {
+      ...active(f, { limited: 'space' }),
+      target: { kind: 'add', tourId: 't1', shared: true },
+    } as const;
+    expect(chipModel(shared)?.actions).toEqual([]);
   });
 
   it('uploads paused for everyone get their own title, and no retry until tomorrow', () => {

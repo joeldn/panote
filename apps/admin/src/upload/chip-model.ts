@@ -34,14 +34,24 @@ export interface ActiveUpload {
 }
 
 /**
- * Why a presign was refused: an account quota (`quota`), the per-minute rate limit
- * (`rate`), an account that is disabled or deleted (`account`), or the service-wide
- * daily ceiling (`paused`); null when it wasn't.
+ * Why a presign was refused: the account's pano or storage limit (`space`), another
+ * account quota such as uploads per day (`quota`), the per-minute rate limit (`rate`), an
+ * account that is disabled or deleted (`account`), or the service-wide daily ceiling
+ * (`paused`); null when it wasn't.
  */
-export type UploadLimit = 'quota' | 'rate' | 'account' | 'paused' | null;
+export type UploadLimit = 'space' | 'quota' | 'rate' | 'account' | 'paused' | null;
 
 export type ChipActionId =
-  'retry-upload' | 'retry-poll' | 'retry-finalize' | 'sign-in' | 'repick' | 'cancel-queue';
+  | 'retry-upload'
+  | 'retry-poll'
+  | 'retry-finalize'
+  | 'sign-in'
+  | 'repick'
+  | 'cancel-queue'
+  | 'free-space';
+
+/** Where the chip's "Free up space" goes: the dashboard's Unused panos. */
+export const FREE_SPACE_TO = '/?view=unused';
 
 export interface ChipModel {
   tone: 'upload' | 'processing' | 'ready' | 'failed' | 'timed-out';
@@ -55,7 +65,8 @@ export interface ChipModel {
   note: string;
   /** "3 more waiting": the rest of a batch, one line under the note. */
   queue: string | null;
-  actions: Array<{ id: ChipActionId; label: string }>;
+  /** Buttons, or links where `to` is set (they also run their action, e.g. to dismiss). */
+  actions: Array<{ id: ChipActionId; label: string; to?: string }>;
   dismissLabel: string;
 }
 
@@ -221,6 +232,13 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
           // Every account at once, until 00:00 UTC: nothing to retry today.
           if (a.limited === 'paused') {
             return failed('Uploads paused', m.message + skippedNote(a, 'tomorrow'), []);
+          }
+          // Out of panos or storage in the user's own account: their unused panos are the
+          // first place to make room. Not for a tour they only edit (the owner's limits).
+          if (a.limited === 'space' && !a.target.shared) {
+            return failed('Upload limit reached', m.message + skippedNote(a, 'later'), [
+              { id: 'free-space', label: 'Free up space', to: FREE_SPACE_TO },
+            ]);
           }
           if (a.limited) {
             return failed(
