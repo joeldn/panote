@@ -1,6 +1,8 @@
 import {
+  CRON_STATUS_KEY,
   manifestKey,
   originalKey,
+  TILE_GC_STATUS_KEY,
   tileGcKey,
   tileVersionPrefix,
   type TileGcRecord,
@@ -16,12 +18,14 @@ import { describe, expect, it, vi } from 'vitest';
 import worker from './index.js';
 import { BACKUP_CRON } from './backup.js';
 import {
+  checkTileGcStatus,
   runBackupThenTileGc,
   sweepSupersededTiles,
   sweepTileGcRecord,
   TILE_GC_GRACE_MS,
   TILE_GC_RECORD_MAX_OPS,
   TILE_GC_RUN_OPS,
+  TILE_GC_STALE_MS,
   tileGcStart,
 } from './tile-gc.js';
 
@@ -424,5 +428,67 @@ describe('runBackupThenTileGc', () => {
       }),
     ).rejects.toThrow('backup broke');
     expect(await listKeys(tileVersionPrefix(panoId, 't1-old'))).toHaveLength(2);
+  });
+});
+
+describe('tile-gc monitoring', () => {
+  const status = async () =>
+    JSON.parse(await (await env.BUCKET.get(TILE_GC_STATUS_KEY))!.text()) as {
+      lastRunAt: string;
+      lastOkAt: string | null;
+    };
+  const t0 = new Date('2026-10-23T10:00:00Z');
+  const at = (minutes: number) => new Date(t0.getTime() + minutes * 60_000);
+  const idleBackup = async () => ({ operations: 2 });
+
+  it('records each clean run, and keeps the last clean time when a run fails', async () => {
+    await runBackupThenTileGc(env.BUCKET, at(0), idleBackup);
+    expect(await status()).toEqual({
+      lastRunAt: at(0).toISOString(),
+      lastOkAt: at(0).toISOString(),
+    });
+
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(
+      runBackupThenTileGc(env.BUCKET, at(15), async () => {
+        throw new Error('backup broke');
+      }),
+    ).rejects.toThrow('backup broke');
+    expect(await status()).toEqual({
+      lastRunAt: at(15).toISOString(),
+      lastOkAt: at(0).toISOString(),
+    });
+  });
+
+  it('fails the daily check once the sweep has had no clean run for TILE_GC_STALE_MS, or none at all', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await env.BUCKET.delete(TILE_GC_STATUS_KEY);
+    await expect(checkTileGcStatus(env.BUCKET, at(0))).rejects.toThrow();
+
+    await runBackupThenTileGc(env.BUCKET, at(0), idleBackup);
+    await expect(checkTileGcStatus(env.BUCKET, at(30))).resolves.toBeUndefined();
+    await expect(
+      checkTileGcStatus(env.BUCKET, new Date(at(0).getTime() + TILE_GC_STALE_MS + 1)),
+    ).rejects.toThrow('tile-gc sweep is failing or not running');
+  });
+
+  it('shows a stale sweep in the daily cron status the health check reads', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await runBackupThenTileGc(env.BUCKET, at(0), idleBackup);
+    const fire = async (when: Date) => {
+      const ctx = createExecutionContext();
+      await worker.scheduled(
+        createScheduledController({ scheduledTime: when.getTime(), cron: '17 3 * * *' }),
+        env,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return JSON.parse(await (await env.BUCKET.get(CRON_STATUS_KEY))!.text()) as {
+        failed: string[];
+      };
+    };
+    expect((await fire(at(20))).failed).not.toContain('tile-gc');
+    expect((await fire(at(24 * 60))).failed).toContain('tile-gc');
   });
 });

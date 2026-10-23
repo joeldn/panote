@@ -175,8 +175,17 @@ const handleUploadsBatch = async (batch: MessageBatch<R2Event>, env: Env): Promi
           // The tiler refused the source itself (format, pixel or aspect cap):
           // the same bytes fail the same way, so mark it failed now rather than
           // retrying into the DLQ. The original stays; a new upload replaces it.
-          await writeFailureMarker(env.BUCKET, key, 'unsupported', msg.body.object.eTag);
-          msg.ack();
+          // Acked once the marker is written or not needed ('skipped': the original
+          // changed or went); a failed write retries, and if the retries run out
+          // the DLQ writes its own marker, so the owner always sees the failure.
+          const marker = await writeFailureMarker(
+            env.BUCKET,
+            key,
+            'unsupported',
+            msg.body.object.eTag,
+          );
+          if (marker === 'failed') msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
+          else msg.ack();
         } else {
           msg.retry({ delaySeconds: retryDelaySeconds(msg.attempts) });
         }

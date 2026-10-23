@@ -1,4 +1,4 @@
-import { CRON_STATUS_KEY, type CronStatus } from '@internal/contracts';
+import { CRON_STATUS_KEY, TILE_GC_STATUS_KEY, type CronStatus } from '@internal/contracts';
 import {
   createExecutionContext,
   createScheduledController,
@@ -97,6 +97,11 @@ describe('runDailyCron', () => {
 
   it('is what the daily Cron Trigger runs', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // Its `tile-gc` task checks the 15-minute sweep finished cleanly lately.
+    await env.BUCKET.put(
+      TILE_GC_STATUS_KEY,
+      JSON.stringify({ lastRunAt: DAY2.toISOString(), lastOkAt: DAY2.toISOString() }),
+    );
     const ctx = createExecutionContext();
     await worker.scheduled(
       createScheduledController({ scheduledTime: DAY2.getTime(), cron: '17 3 * * *' }),

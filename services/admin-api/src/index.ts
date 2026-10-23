@@ -56,7 +56,7 @@ import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './op
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
-import { runBackupThenTileGc } from './tile-gc.js';
+import { checkTileGcStatus, runBackupThenTileGc } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
@@ -573,8 +573,9 @@ app.onError(errorHandler);
 
 export default {
   fetch: app.fetch,
-  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6), and
-  // finishes (or re-sweeps) every account marked for deletion.
+  // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
+  // finishes (or re-sweeps) every account marked for deletion, and checks the
+  // tile sweep has been finishing cleanly.
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
   // The same invocation then deletes tile versions a re-tile superseded more than a
@@ -594,6 +595,9 @@ export default {
         'slug-aliases': () => sweepExpiredAliases(env.BUCKET, now),
         'account-deletions': () =>
           sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)),
+        // The sweep runs every 15 minutes (below); this only checks it is still
+        // finishing cleanly, so a failing sweep still shows in the daily status.
+        'tile-gc': () => checkTileGcStatus(env.BUCKET, now),
       }),
     );
   },

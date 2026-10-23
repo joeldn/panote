@@ -2,8 +2,11 @@ import {
   manifestKey,
   panoIdFromOriginalKey,
   TILE_GC_ROOT,
+  TILE_GC_STATUS_KEY,
   TileGcRecordSchema,
+  TileGcStatusSchema,
   tileVersionPrefix,
+  type TileGcStatus,
 } from '@internal/contracts';
 import { deletePrefix } from '@internal/worker-kit/r2-binding';
 import { BACKUP_RUN_BUDGET, runBackup } from './backup.js';
@@ -258,11 +261,29 @@ const report = (
   return counts;
 };
 
+// The status record (TILE_GC_STATUS_KEY): one read and one write a run, kept out
+// of the sweep's share of the budget.
+const STATUS_OPS = 2;
+
+/**
+ * The daily cron's `tile-gc` task fails once the sweep hasn't finished cleanly for
+ * this long: four 15-minute runs in a row, so one transient failure doesn't alert.
+ */
+export const TILE_GC_STALE_MS = 60 * 60 * 1000;
+
+const readTileGcStatus = async (bucket: R2Bucket): Promise<TileGcStatus | null> => {
+  const obj = await bucket.get(TILE_GC_STATUS_KEY);
+  if (!obj) return null;
+  const parsed = TileGcStatusSchema.safeParse(await obj.json().catch(() => null));
+  return parsed.success ? parsed.data : null;
+};
+
 /**
  * The 15-minute cron: the backup first, then the tile sweep with the R2 operations
- * the backup left of TILE_GC_RUN_OPS. A backup that throws is assumed to have spent
- * its whole budget, so the sweep skips that run, and its error is thrown again
- * once the sweep is done.
+ * the backup left of TILE_GC_RUN_OPS, then the sweep's status at TILE_GC_STATUS_KEY.
+ * A backup that throws is assumed to have spent its whole budget, so the sweep does
+ * nothing and the run doesn't count as clean (tile GC isn't happening), and the
+ * backup's error is thrown again at the end.
  */
 export const runBackupThenTileGc = async (
   bucket: R2Bucket,
@@ -276,10 +297,41 @@ export const runBackupThenTileGc = async (
   } catch (error) {
     backupError = { error };
   }
+  let ok = backupError === undefined;
   try {
-    await sweepSupersededTiles(bucket, now, { ops: TILE_GC_RUN_OPS - spent });
+    await sweepSupersededTiles(bucket, now, { ops: TILE_GC_RUN_OPS - STATUS_OPS - spent });
   } catch (e) {
+    ok = false;
     console.error('[tile-gc] run failed:', errorName(e));
   }
+  try {
+    const previous = await readTileGcStatus(bucket).catch(() => null);
+    const status: TileGcStatus = {
+      lastRunAt: now.toISOString(),
+      lastOkAt: ok ? now.toISOString() : (previous?.lastOkAt ?? null),
+    };
+    await bucket.put(TILE_GC_STATUS_KEY, JSON.stringify(status), {
+      httpMetadata: { contentType: 'application/json' },
+    });
+  } catch (e) {
+    console.error('[tile-gc] status not saved:', errorName(e));
+  }
   if (backupError) throw backupError.error;
+};
+
+/**
+ * The daily cron's `tile-gc` task: throws when the 15-minute sweep has no clean
+ * run in the last TILE_GC_STALE_MS (or none recorded at all), so runDailyCron lists
+ * it as failed and the health check alerts, as it did when the sweep itself ran
+ * daily.
+ */
+export const checkTileGcStatus = async (bucket: R2Bucket, now: Date): Promise<void> => {
+  const status = await readTileGcStatus(bucket);
+  const okAt = status?.lastOkAt ? Date.parse(status.lastOkAt) : NaN;
+  if (Number.isNaN(okAt) || now.getTime() - okAt > TILE_GC_STALE_MS) {
+    console.error(
+      `[tile-gc] no clean sweep since ${status?.lastOkAt ?? 'never'} (last run ${status?.lastRunAt ?? 'never'})`,
+    );
+    throw new Error('tile-gc sweep is failing or not running');
+  }
 };

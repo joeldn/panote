@@ -133,9 +133,11 @@ createServer((req, res) => {
         throw new Error(`derived tile version must match ${PANO_PATTERN} (got ${version})`);
       const work = await mkdtemp(join(tmpdir(), 'pano-'));
       // Set once the first tile PUT may have landed: from then on a failure can
-      // leave a partial version dir behind. Cleared again once the manifest PUT
-      // is under way: a failure after that may leave the manifest naming this
-      // dir, and the swap's own path handles it (the retry, or the orphan cleanup).
+      // leave a partial version dir behind. Cleared once the manifest PUT has
+      // succeeded: a failure after that leaves the manifest naming this dir, and
+      // the swap's own path handles it (the retry, or the orphan cleanup). A failed
+      // manifest PUT still records it; the sweep never deletes a dir the manifest
+      // names or the current original tiles into.
       let partialDir = false;
       try {
         // Written outside build()'s output tree, under a name a valid
@@ -184,12 +186,12 @@ createServer((req, res) => {
             `skip manifest pano=${panoId}: original ETag changed (${etag} -> ${String(stripEtagQuotes(preHead.etag))})`,
           );
         } else {
-          partialDir = false;
           if (files['manifest.json']) {
             const manifestT0 = performance.now();
             await put(manifestKey(panoId), files['manifest.json'], 'application/json');
             logPhase(panoId, `manifest written in ${secsSince(manifestT0)}`);
           }
+          partialDir = false;
           // A DELETE can land between the pre-swap HEAD and the manifest PUT;
           // this catches it - a retry won't, since r2.get(key) 404s first.
           const postHead = await r2.head(key);

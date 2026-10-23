@@ -741,6 +741,19 @@ describe('a failed job', () => {
     );
   });
 
+  it('records the dir when the manifest PUT itself fails', async () => {
+    const panoId = 'p-manifest-put-fails';
+    setupManifestWritten(panoId);
+    r2PutMock.mockImplementation(async (k: string) => {
+      if (k === manifestKey(panoId)) throw new Error('R2 PUT manifest -> 500');
+    });
+
+    const res = await postTile(JSON.stringify({ key: `panos/abc/${panoId}/original` }));
+
+    expect(res.status).toBe(500);
+    expect(gcPuts().map(([k]) => k)).toEqual([tileGcKey(panoId, version)]);
+  });
+
   it('still 500s with the job error, logging without the owner, when recording fails too', async () => {
     const panoId = 'p-upload-and-record-fail';
     const key = `panos/${OWNER}/${panoId}/original`;

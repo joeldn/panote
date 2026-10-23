@@ -530,6 +530,71 @@ describe('a source the tiler refuses (422)', () => {
   });
 });
 
+describe('a source the tiler refuses, when the marker write fails', () => {
+  it('retries with the back-off instead of acking, so the failure is never lost', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(async () => new Response('SourceRejectedError: nope', { status: 422 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    const key = 'panos/u1/rejected-marker-fails/original';
+    await env.BUCKET.put(key, 'not really a jpeg');
+    const head = await env.BUCKET.head(key);
+    const putSpy = vi.spyOn(env.BUCKET, 'put').mockRejectedValue(new Error('put boom'));
+    try {
+      const ctx = createExecutionContext();
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-rejected-marker-fails',
+          timestamp: new Date(),
+          body: { object: { key, size: 17, eTag: head!.etag }, action: 'PutObject' },
+          attempts: 3,
+        },
+      ]);
+      const retry = vi.spyOn(batch.messages[0]!, 'retry');
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.explicitAcks).toEqual([]);
+      expect(result.retryMessages).toEqual([{ msgId: 'msg-rejected-marker-fails' }]);
+      expect(retry).toHaveBeenCalledWith({ delaySeconds: 240 });
+    } finally {
+      putSpy.mockRestore();
+      getSpy.mockRestore();
+    }
+  });
+
+  it('acks when the marker is skipped because a newer upload replaced the original', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(async () => new Response('SourceRejectedError: nope', { status: 422 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    const key = 'panos/u1/rejected-superseded/original';
+    await env.BUCKET.put(key, 'refused bytes');
+    const stale = await env.BUCKET.head(key);
+    await env.BUCKET.put(key, 'a newer original');
+    try {
+      const ctx = createExecutionContext();
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: 'msg-rejected-superseded',
+          timestamp: new Date(),
+          body: { object: { key, size: 13, eTag: stale!.etag }, action: 'PutObject' },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, env, ctx);
+      const result = await getQueueResult(batch, ctx);
+      expect(result.explicitAcks).toEqual(['msg-rejected-superseded']);
+      expect(await env.BUCKET.head(tileFailedKeyFromOriginalKey(key))).toBeNull();
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
+});
+
 describe('an original that is already tiled', () => {
   const run = async (panoId: string, manifest: string | null, eTag: string | undefined) => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);

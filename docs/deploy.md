@@ -1156,14 +1156,19 @@ before. To force a re-tile of the same bytes, bump `TILER_OUTPUT_VERSION`.
   as an image at all;
 - is over 150 MP (`MAX_INPUT_PIXELS`), also enforced by libvips through sharp's
   `limitInputPixels` on every `sharp()` that opens the source, with `failOn: 'warning'`;
-- is more than 16:1 either way (`MAX_ASPECT_RATIO` in `packages/tiler/src/equirect.ts`). A 16:1
+- is more than 16:1 either way (`MAX_ASPECT_RATIO` in `packages/core/src/manifest.ts`). A 16:1
   strip is a full sweep with a 22.5° vertical field of view; real partial panoramas are well
   inside it. Wider strips are padded to 2:1 and, past the pixel cap, downscaled, so no accepted
   source makes more work than a real 150 MP 2:1 panorama (8,192 px faces).
 
-The container answers `422` for these and the consumer acks the message and writes the
-`unsupported` failure marker (the original stays; a new upload replaces it). Every other failure
-is a `500` and is retried.
+The container answers `422` for these and the consumer acks the message once the
+`unsupported` failure marker is written (or not needed, because the original changed); if the
+marker write fails it retries, and the DLQ writes its own marker if retries run out. The original
+stays; a new upload replaces it. Every other failure is a `500` and is retried.
+
+The admin refuses the pixel and aspect cases before the upload starts
+(`validateUploadImage` in `packages/web-kit/src/image-size.ts`, reading the header), with the same
+`MAX_ASPECT_RATIO` from `@panote/core`, so only a client that skips it reaches the tiler's check.
 
 ### Old version dirs
 
@@ -1200,7 +1205,14 @@ stops after acting on 200 records or looking at 500. That is roughly 125 typical
 about 12,000 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
 `tile-gc/`, moving on each quarter hour, and wraps round, so kept records listed early can't take
 every run's budget. Kept ones are checked again on a later run. CPU is not a constraint (a record
-is a few small JSON parses). Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
+is a few small JSON parses).
+
+**Monitoring.** Each 15-minute run records `{ lastRunAt, lastOkAt }` at
+`ops/cron/admin-api-tile-gc.json` (2 more R2 operations, taken out of the sweep's share). A run
+is clean when the backup didn't throw and the sweep finished. The daily cron's `tile-gc` task
+throws when the last clean run is over an hour old (four runs in a row) or none is recorded, so
+the health check's `admin-api daily cron` check alerts on a failing sweep, as before. Right
+after a deploy, a daily run before the first 15-minute run would report it once. Nothing is purged: no manifest points at those URLs any more, and edge copies age out. Dirs
 left over from before this existed are recorded the next time that pano re-tiles, so a
 `retile.ts --all` after deploying this clears them too, a day later.
 
@@ -2325,7 +2337,7 @@ change alone leaves it as it is; CI checks for drift).
 ### Daily cron and CDN purge failures
 
 - **Daily cron.** `admin-api`'s `scheduled` handler runs its tasks (`slug-aliases`,
-  `account-deletions` with its CDN purge) through `runDailyCron`
+  `account-deletions` with its CDN purge, `tile-gc`) through `runDailyCron`
   (`services/admin-api/src/cron-status.ts`). Each task that throws logs
   `[cron] daily task failed task=<name> error=<error name>`, and every run writes
   `ops/cron/admin-api-daily.json`: `{ lastRunAt, lastOkAt, failed }`, where `lastOkAt` only moves
