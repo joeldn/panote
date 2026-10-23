@@ -108,6 +108,30 @@ describe('sweepUnsavedPlans', () => {
     expect(warn.mock.calls.flat().join(' ')).toMatch(/1 tour\(s\) alone with no owner pointer/);
   });
 
+  it('keeps every image of a tour whose tour.json or plan it cannot read', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // tour.json that isn't JSON.
+    await putPointer('garbled');
+    await env.BUCKET.put(tourKey(SUB, 'garbled'), '{not json');
+    await putImages('garbled', 'x');
+    // A stored plan that doesn't parse (the type is not one the app writes).
+    await putPointer('odd-plan');
+    await env.BUCKET.put(
+      tourKey(SUB, 'odd-plan'),
+      JSON.stringify({ tourId: 'odd-plan', title: 't', scenes: [], plan: { id: 'x' } }),
+    );
+    await putImages('odd-plan', 'x');
+    // A bundle that isn't JSON, beside a readable tour.json with no plan.
+    await putTour('odd-bundle');
+    await env.BUCKET.put(pubTourKey('odd-bundle'), 'nope');
+    await putImages('odd-bundle', 'x');
+
+    const out = await sweepUnsavedPlans(env.BUCKET, after(PLAN_UNUSED_GRACE_MS + HOUR_MS));
+
+    expect(out.deleted).toEqual([]);
+    expect(await plansLeft()).toHaveLength(3);
+  });
+
   it('treats a published tour with no owner pointer as existing', async () => {
     await env.BUCKET.put(pubTourKey('old'), JSON.stringify({ plan: plan('shared') }));
     await putImages('old', 'shared', 'other');

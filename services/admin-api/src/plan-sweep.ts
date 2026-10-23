@@ -55,26 +55,39 @@ export type PlanSweepResult = {
   done: boolean;
 };
 
+// Present but not JSON: not "gone", and naming nothing the sweep can read.
+const UNREADABLE = Symbol('unreadable');
+
 const readJson = async (bucket: R2Bucket, key: string): Promise<unknown> => {
   const obj = await bucket.get(key);
   if (!obj) return null;
   try {
     return JSON.parse(await obj.text());
   } catch {
-    // Present but unreadable: not "gone", so judged as a tour that exists.
-    return {};
+    return UNREADABLE;
   }
 };
 
-// The image key a stored tour or bundle names, if its plan reads as one.
-const storedKey = (tourId: string, doc: unknown): string | null => {
-  const parsed = TourPlanSchema.safeParse((doc as { plan?: unknown } | null)?.plan);
-  return parsed.success ? planKey(tourId, parsed.data.id, parsed.data.type) : null;
+/**
+ * The image key a stored tour or bundle names: null when it names none (no doc, or no
+ * plan), UNREADABLE when it can't be told (a doc that isn't JSON, or a plan that doesn't
+ * parse), in which case the image it may name must not be judged unused.
+ */
+const storedKey = (tourId: string, doc: unknown): string | null | typeof UNREADABLE => {
+  if (doc === UNREADABLE) return UNREADABLE;
+  if (doc === null || typeof doc !== 'object') return doc === null ? null : UNREADABLE;
+  const plan = (doc as { plan?: unknown }).plan;
+  if (plan === undefined) return null;
+  const parsed = TourPlanSchema.safeParse(plan);
+  return parsed.success ? planKey(tourId, parsed.data.id, parsed.data.type) : UNREADABLE;
 };
 
 const readCursor = async (bucket: R2Bucket): Promise<string | undefined> => {
-  const body = (await readJson(bucket, PLAN_SWEEP_CURSOR_KEY)) as { startAfter?: unknown } | null;
-  const startAfter = body?.startAfter;
+  const body = await readJson(bucket, PLAN_SWEEP_CURSOR_KEY);
+  const startAfter =
+    body !== null && typeof body === 'object'
+      ? (body as { startAfter?: unknown }).startAfter
+      : null;
   return typeof startAfter === 'string' && startAfter.startsWith(PLANS_ROOT)
     ? startAfter
     : undefined;
@@ -110,6 +123,8 @@ const judgeTour = async (
     };
   }
   const keep = new Set([storedKey(tourId, tour), storedKey(tourId, bundle)]);
+  // A tour.json or bundle that can't be read might name any of the images: keep them all.
+  if (keep.has(UNREADABLE)) return { stale: [], operations, unknown: false };
   return {
     stale: objects
       .filter((o) => age(o) > PLAN_UNUSED_GRACE_MS && !keep.has(o.key))

@@ -1845,6 +1845,8 @@ lists `pub/plans/` and judges each tour's images:
   plan a local draft holds survives as long as the draft can be restored (an image is aged from
   its upload, not from the draft's last autosave, so a draft kept alive past a week by editing
   can lose a plan it never saved).
+- **Can't tell**: a `tour.json` or bundle that isn't JSON, or a `plan` that doesn't parse, might
+  name any image, so all of that tour's images stay.
 
 A tour whose images are all younger than a day costs nothing beyond the listing; one being judged
 costs up to 4 R2 operations (pointer, `tour.json`, bundle, one batch delete), or 1 with no
