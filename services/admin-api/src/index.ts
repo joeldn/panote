@@ -177,7 +177,7 @@ const loadSceneConfigs = async (
   return entries;
 };
 
-// `sub` (and `auth`, for writes) are set by the gate below, which has already verified the JWT.
+// `sub` and `auth` are set by the gate below, which has already verified the JWT.
 type AppEnv = {
   Bindings: Env;
   Variables: { sub: string | undefined; auth?: AuthContext };

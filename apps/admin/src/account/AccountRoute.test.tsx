@@ -43,7 +43,7 @@ function server(over: Partial<Record<string, () => Response>> = {}) {
     if (key === 'GET /api/admin/account') {
       return json({
         email: 'maya@example.com',
-        signIns: ['google-oauth2', 'email', 'github', 'constructor'],
+        signIns: ['google-oauth2', 'email', 'windowslive', 'unknown-idp', 'constructor'],
       });
     }
     if (key === 'GET /api/upload-url') return json(USAGE);
@@ -63,7 +63,9 @@ describe('the account page', () => {
     renderAdmin('/app/account', { fetch });
     expect(await screen.findByRole('heading', { name: 'Account' })).toBeTruthy();
     expect(await screen.findByText('maya@example.com')).toBeTruthy();
-    expect(screen.getByText('Google, Email code, github, constructor')).toBeTruthy();
+    expect(
+      screen.getByText('Google, Email code, Microsoft, unknown-idp, constructor'),
+    ).toBeTruthy();
 
     const usage = within(screen.getByRole('region', { name: 'Usage' }));
     expect(await usage.findByText('12 of 500')).toBeTruthy();
@@ -72,6 +74,15 @@ describe('the account page', () => {
     // Both pages of tours, counted.
     expect(usage.getByText('103 of 200')).toBeTruthy();
     expect(fetch.mock.calls.some(([u]) => String(u).includes('cursor=c2'))).toBe(true);
+  });
+
+  it('says the email is not verified when the token has none', async () => {
+    renderAdmin('/app/account', {
+      fetch: server({
+        'GET /api/admin/account': () => json({ email: null, signIns: ['windowslive'] }),
+      }),
+    });
+    expect(await screen.findByText('Not verified')).toBeTruthy();
   });
 
   it('shows a count with no bar for a limit that is not set', async () => {

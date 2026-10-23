@@ -135,13 +135,14 @@ export function AccountRoute() {
         {account.status === 'ready' && (
           <dl className="acct__facts">
             <dt>Email</dt>
-            <dd>{account.value.email ?? session.user.email ?? 'Not verified'}</dd>
+            <dd>{account.value.email ?? 'Not verified'}</dd>
             <dt>Sign in with</dt>
             <dd>{account.value.signIns.map(signInName).join(', ') || 'Unknown'}</dd>
           </dl>
         )}
         <p className="acct__hint">
-          Signing in another way with the same verified email address opens this account too.
+          Signing in with Google, Apple or an email code with the same verified address opens this
+          account too.
         </p>
       </section>
 
