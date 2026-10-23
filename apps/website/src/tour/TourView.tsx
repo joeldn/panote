@@ -128,6 +128,7 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
       {...(embed && { className: 'tour-view--embed' })}
       data={vt}
       title={tour.title}
+      description={tour.description}
       baseUrl={tilesBaseUrl(config)}
       start={start}
       single={single}

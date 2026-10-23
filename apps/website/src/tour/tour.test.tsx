@@ -354,6 +354,42 @@ describe('/s/:slug', () => {
     expect(robots()).toBeUndefined();
   });
 
+  it('shows a busy loading state until the tour arrives', async () => {
+    renderAt('/s/old-town');
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('Loading tour…');
+    expect(status.closest('[aria-busy="true"]')).toBeTruthy();
+    await shown('square');
+    expect(screen.queryByText('Loading tour…')).toBeNull();
+    expect(document.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  it("shows the tour's and the scene's descriptions under About, in the visitor's language", async () => {
+    objects['pub/tours/tour-a.json'] = bundle({
+      description: 'A walk round the old town.',
+      languages: { default: 'en', others: ['de'] },
+      i18n: { de: { description: 'Ein Rundgang.' } },
+      scenes: [
+        {
+          panoId: 'square',
+          config: {
+            panoId: 'square',
+            title: 'Square',
+            description: 'Market days:\nTue and Sat',
+            hotspots: [],
+            i18n: { de: { description: 'Markttage' } },
+          },
+        },
+      ],
+    });
+    renderAt('/s/old-town?lang=de');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'About this tour' }));
+    const about = screen.getByRole('complementary', { name: 'About this tour' });
+    expect(within(about).getByText('Ein Rundgang.')).toBeTruthy();
+    expect(within(about).getByText('Markttage')).toBeTruthy();
+  });
+
   it('shows info points, their panel, and walks a link to the next scene', async () => {
     renderAt('/s/old-town');
     await shown('square');
@@ -766,6 +802,16 @@ describe('/s/:slug/embed', () => {
     expect(calls('/api/tours/tour-a/view')[0]?.[1]?.body).toBe(
       JSON.stringify({ panoId: 'square', surface: 'embed' }),
     );
+  });
+
+  it('says so when the graphics memory runs out, rather than going black', async () => {
+    renderAt('/s/old-town/embed');
+    await shown('square');
+    act(() => lastViewer().emit('context-lost'));
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The viewer ran out of graphics memory.',
+    );
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
   });
 
   it('limits ?pano= to one scene with no nav links', async () => {
