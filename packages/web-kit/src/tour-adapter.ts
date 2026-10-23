@@ -34,6 +34,8 @@ export interface ViewerTour {
   /** Compass north offset per panoId, radians (0 when unset). */
   north: Record<string, number>;
   titles: Record<string, string>;
+  /** Each scene's description, in `lang`; scenes without one (or a blank one) are left out. */
+  descriptions: Record<string, string>;
   /** Floor-plan positions for the mini-map, where the tour has them (contracts plan.ts). */
   mapPositions: Record<string, { x: number; y: number }>;
   /** The scenes whose north has been set, so the mini-map can show which way the view faces. */
@@ -102,6 +104,7 @@ export function toViewerTour(
   const north: ViewerTour['north'] = {};
   const hasNorth: ViewerTour['hasNorth'] = {};
   const titles: ViewerTour['titles'] = {};
+  const descriptions: ViewerTour['descriptions'] = {};
   for (const [panoId, config] of loaded) {
     const links: ViewerLink[] = [];
     const info: ViewerInfoHotspot[] = [];
@@ -132,6 +135,7 @@ export function toViewerTour(
     north[panoId] = config.north ?? 0;
     hasNorth[panoId] = config.north !== undefined;
     titles[panoId] = config.title;
+    if (config.description?.trim()) descriptions[panoId] = config.description;
   }
 
   const first = loaded.keys().next();
@@ -148,6 +152,7 @@ export function toViewerTour(
     links: linksByPano,
     north,
     titles,
+    descriptions,
     mapPositions,
     hasNorth,
     plan:

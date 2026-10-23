@@ -295,6 +295,8 @@ export type EditorAction =
   /** The floor-plan image; null removes it. */
   | { type: 'tour/plan'; plan: TourPlan | null }
   | { type: 'scene/title'; panoId: string; title: string; lang?: string }
+  /** Stored trimmed; blank removes it (or, with `lang`, its translation). */
+  | { type: 'scene/description'; panoId: string; description: string; lang?: string }
   | { type: 'scene/start-view'; panoId: string; view: View }
   | { type: 'scene/north'; panoId: string; north: number }
   | { type: 'point/add'; panoId: string; hotspot: Hotspot }
@@ -438,6 +440,19 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
         );
       }
       return withConfig(docs, action.panoId, (c) => ({ ...c, title: action.title }));
+    }
+    case 'scene/description': {
+      const { lang } = action;
+      const description = action.description.trim();
+      if (lang) {
+        return withConfig(docs, action.panoId, (c) =>
+          withI18n(c, setTranslation(c.i18n, lang, 'description', description || null)),
+        );
+      }
+      return withConfig(docs, action.panoId, (c) => {
+        const { description: _old, ...rest } = c;
+        return description ? { ...rest, description } : rest;
+      });
     }
     case 'scene/start-view':
       return withConfig(docs, action.panoId, (c) => ({
