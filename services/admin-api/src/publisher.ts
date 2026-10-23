@@ -8,6 +8,7 @@ import {
 import { getJson } from '@internal/worker-kit/r2-binding';
 import { DurableObject } from 'cloudflare:workers';
 
+import { parseHoldDays } from './account-age.js';
 import { setExploreHidden } from './explore.js';
 import {
   NOT_FOUND,
@@ -46,7 +47,11 @@ export class TourPublisher extends DurableObject<Env> {
   }
 
   private clock(): Clock {
-    return { now: new Date(), aliasDays: parseAliasDays(this.env.SLUG_ALIAS_DAYS) };
+    return {
+      now: new Date(),
+      aliasDays: parseAliasDays(this.env.SLUG_ALIAS_DAYS),
+      holdDays: parseHoldDays(this.env.NEW_ACCOUNT_HOLD_DAYS),
+    };
   }
 
   async publish(sub: string, tourId: string, req: PublishRequest): Promise<Outcome<PublishBody>> {
@@ -74,9 +79,15 @@ export class TourPublisher extends DurableObject<Env> {
 
   // Returns the keys to purge; the Worker purges them so this queue stays fast.
   // `stopSharing`: also keep the editor's next Save from publishing it again.
-  async unpublish(sub: string, tourId: string, stopSharing = false): Promise<string[]> {
+  // `takedown`: an operator takedown, whose released slugs no owner may reclaim.
+  async unpublish(
+    sub: string,
+    tourId: string,
+    stopSharing = false,
+    takedown = false,
+  ): Promise<string[]> {
     if (!(await this.owns(sub, tourId, true))) return [];
-    return this.serial(() => unpublish(this.env.BUCKET, sub, tourId, { stopSharing }));
+    return this.serial(() => unpublish(this.env.BUCKET, sub, tourId, { stopSharing, takedown }));
   }
 
   // The operator's hide from (or unhide on) Explore; the tour stays live by link.

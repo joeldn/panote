@@ -2,6 +2,7 @@ import {
   ACCOUNTS_ROOT,
   accountDeletionKey,
   AccountDeletionRecordSchema,
+  accountSinceKey,
   MARKER_MAX_LINKED_SUBS,
   PANO_PATTERN,
   SlugRecordSchema,
@@ -21,6 +22,7 @@ import { deletePlans } from './plans.js';
 import { readPublishRecord } from './publish.js';
 import { mergePurges, type CdnPurge } from './purge.js';
 import { REFERENCE_CONCURRENCY } from './references.js';
+import { holdSlug } from './slug-hold.js';
 
 // How long a finished deletion's marker stays: the account stays read-only and
 // the daily sweep keeps catching late writes (a presigned upload lives 600s).
@@ -180,6 +182,8 @@ const deleteAliases = async (bucket: R2Bucket, sub: string, tourId: string): Pro
     const key = storedSlugKey(slug);
     const record = key ? await readParsed(bucket, key, SlugRecordSchema) : null;
     if (key && record?.tourId === tourId) {
+      // Held like any released slug, so nobody takes over the old share link.
+      await holdSlug(bucket, sub, slug, new Date());
       await bucket.delete(key);
       removed.push(key);
     }
@@ -282,6 +286,8 @@ export const deleteAccountData = async (
   if (panos.length < panoIds.length) return false;
   // Empty objects, at most about a day's worth: not counted against the budget.
   await deletePrefix(bucket, userUploadLogPrefix(sub));
+  // The account's age (account-age.ts): a later sign-up under the same sub starts again.
+  await bucket.delete(accountSinceKey(sub));
   return true;
 };
 

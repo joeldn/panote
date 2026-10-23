@@ -58,6 +58,9 @@ export const PublishedTourSchema = z.object({
   startPanoId: publicId(),
   // Optional: bundles published before plan images, and tours without one.
   plan: TourPlanSchema.optional(),
+  // Set while the owner's account is too new (admin-api's NEW_ACCOUNT_HOLD_DAYS): until
+  // then the tour is off Explore and its page is noindex. Absent on most bundles.
+  heldUntil: z.string().optional(),
   scenes: z.array(
     z
       .object({
@@ -73,6 +76,10 @@ export const PublishedTourSchema = z.object({
   ),
 });
 export type PublishedTour = z.infer<typeof PublishedTourSchema>;
+
+/** Whether a published tour is still held back from Explore and search engines (heldUntil). */
+export const isHeldBack = (tour: { heldUntil?: string | undefined }, nowMs: number): boolean =>
+  tour.heldUntil !== undefined && !(Date.parse(tour.heldUntil) <= nowMs);
 
 // slugs/<slug>.json: a live pointer, or a time-limited alias left behind by
 // a slug change (Q6). The website Worker turns an alias into a 308.

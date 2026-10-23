@@ -75,19 +75,31 @@ const deleteEntriesByScan = async (bucket: R2Bucket, tourId: string): Promise<vo
 /**
  * Takes the tour off Explore: its entry, then its pointer. Idempotent, and it
  * throws on an R2 error, so a takedown that can't finish says so and is retried.
+ * `keepPlace` keeps a readable pointer: the entry key it names is the tour's
+ * listing time, so listing the tour again puts it back where it was rather than
+ * on top as new (a spammer can't bump a tour by switching it off and on).
  */
-export const removeFromExplore = async (bucket: R2Bucket, tourId: string): Promise<void> => {
+export const removeFromExplore = async (
+  bucket: R2Bucket,
+  tourId: string,
+  { keepPlace = false }: { keepPlace?: boolean } = {},
+): Promise<void> => {
   const stored = await readPointer(bucket, tourId);
   if (!stored) return;
   if (stored.pointer) await bucket.delete(stored.pointer.key);
   else await deleteEntriesByScan(bucket, tourId);
+  if (keepPlace && stored.pointer) return;
   await bucket.delete(exploreTourKey(tourId));
 };
 
 /**
  * Brings the tour's entry in line with the bundle just written: listed while it is
  * Public, has a ready start scene and isn't hidden by the operator; removed
- * otherwise. Pointer before entry, so an entry never exists without one.
+ * otherwise, keeping its place for when it is listed again. Pointer before entry,
+ * so an entry never exists without one. A first listing is filed at the bundle's
+ * heldUntil when that is later than now (a new account): public-api only lists
+ * entries filed at or before the current time, so the tour shows up, as new, once
+ * the hold ends, with no Save needed.
  */
 export const syncExplore = async (bucket: R2Bucket, bundle: PublishedTour, now: Date) => {
   const { tourId } = bundle;
@@ -97,14 +109,15 @@ export const syncExplore = async (bucket: R2Bucket, bundle: PublishedTour, now: 
     !(await bucket.head(exploreHiddenKey(tourId)));
   const ready = listable ? await readCover(bucket, bundle.startPanoId) : null;
   if (!ready) {
-    await removeFromExplore(bucket, tourId);
+    await removeFromExplore(bucket, tourId, { keepPlace: true });
     return;
   }
   const stored = await readPointer(bucket, tourId);
   // An unreadable pointer can't name its entry: drop whatever is filed under the tour first.
   if (stored && !stored.pointer) await deleteEntriesByScan(bucket, tourId);
   const kept = stored?.pointer ? listedAtOf(stored.pointer.key) : null;
-  const listedAtMs = kept ?? now.getTime();
+  const held = bundle.heldUntil ? Date.parse(bundle.heldUntil) : NaN;
+  const listedAtMs = kept ?? (held > now.getTime() ? held : now.getTime());
   const key = exploreEntryKey(listedAtMs, tourId);
   if (stored?.pointer?.key !== key) {
     // A pointer naming a malformed key: drop that object before replacing the pointer.

@@ -5,6 +5,7 @@ import {
   exploreCursorOf,
   ExploreEntrySchema,
   exploreHiddenKey,
+  exploreRank,
   pubTourKey,
   type ExplorePage,
   type ExploreTour,
@@ -14,6 +15,9 @@ import {
 // it). The index is a hint, not the truth: each entry is checked against the
 // tour's public bundle and the operator's hidden marker before it is shown, so
 // an entry that outlived its tour (a failed removal, a race) is never listed.
+// An entry filed at a future listedAt (a new account's tour, held until then) is
+// skipped by the listing itself: the index is newest first, so every page starts
+// at the current time and never reads one.
 
 // List calls per request at most, so a run of dropped entries can't make one
 // request walk the whole index; what is left comes back as the next cursor.
@@ -44,7 +48,11 @@ const readBundle = async (
 };
 
 /** The card for one index entry, or null if it must not be listed. Never names an owner. */
-const checkEntry = async (bucket: R2Bucket, key: string): Promise<ExploreTour | null> => {
+const checkEntry = async (
+  bucket: R2Bucket,
+  key: string,
+  nowMs: number,
+): Promise<ExploreTour | null> => {
   const tourId = tourIdOf(key);
   if (tourId === null) return null;
   const [obj, bundle, hidden] = await Promise.all([
@@ -55,6 +63,7 @@ const checkEntry = async (bucket: R2Bucket, key: string): Promise<ExploreTour | 
   if (!obj || !bundle || bundle.visibility !== 'public' || hidden) return null;
   const parsed = ExploreEntrySchema.safeParse(await obj.json().catch(() => null));
   if (!parsed.success || parsed.data.tourId !== tourId || parsed.data.sceneCount < 1) return null;
+  if (!(Date.parse(parsed.data.listedAt) <= nowMs)) return null;
   const e = parsed.data;
   // Field by field, so nothing else an entry might carry reaches the page.
   return {
@@ -74,17 +83,21 @@ export const listExplore = async (
   bucket: R2Bucket,
   cursor: string | undefined,
   limit = EXPLORE_PAGE_SIZE,
+  nowMs = Date.now(),
 ): Promise<ExplorePage> => {
-  let startAfter = cursor === undefined ? undefined : (exploreCursorKey(cursor) ?? undefined);
+  // Every key filed later than now sorts before this one; a key filed at now sorts after it.
+  const present = `${EXPLORE_INDEX_ROOT}${exploreRank(nowMs)}`;
+  const after = cursor === undefined ? undefined : (exploreCursorKey(cursor) ?? undefined);
+  let startAfter = after !== undefined && after > present ? after : present;
   const tours: ExploreTour[] = [];
   const seen = new Set<string>();
   for (let call = 0; call < MAX_LIST_CALLS; call += 1) {
     const page = await bucket.list({
       prefix: EXPLORE_INDEX_ROOT,
       limit: limit - tours.length,
-      ...(startAfter ? { startAfter } : {}),
+      startAfter,
     });
-    const cards = await Promise.all(page.objects.map((o) => checkEntry(bucket, o.key)));
+    const cards = await Promise.all(page.objects.map((o) => checkEntry(bucket, o.key, nowMs)));
     for (const card of cards) {
       if (card && !seen.has(card.tourId)) {
         seen.add(card.tourId);
@@ -96,5 +109,5 @@ export const listExplore = async (
     startAfter = last;
     if (tours.length >= limit) break;
   }
-  return { tours, cursor: startAfter ? exploreCursorOf(startAfter) : null };
+  return { tours, cursor: exploreCursorOf(startAfter) };
 };

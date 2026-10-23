@@ -1,4 +1,4 @@
-import { localizePublishedTour, pickLanguage } from '@internal/contracts';
+import { isHeldBack, localizePublishedTour, pickLanguage } from '@internal/contracts';
 
 import { isLinkPreviewBot } from './bots.js';
 import { preloadLinks, preloadUrls, readTourBoot, scriptJson, type TourBoot } from './boot.js';
@@ -51,7 +51,10 @@ function headTail(
   };
   return (
     `<title>${escapeText(`${shown.tour.title} · panote`)}</title>` +
-    (boot.tour.visibility === 'unlisted' ? '<meta name="robots" content="noindex">' : '') +
+    // Unlisted, or a new account's tour still held back (heldUntil): not for search engines.
+    (boot.tour.visibility === 'unlisted' || isHeldBack(boot.tour, Date.now())
+      ? '<meta name="robots" content="noindex">'
+      : '') +
     linkPreviewTags(shown, canonical, tilesBase) +
     preloads +
     `<script type="application/json" id="pn-boot">${data}</script>`

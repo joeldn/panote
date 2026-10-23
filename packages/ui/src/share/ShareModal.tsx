@@ -79,7 +79,10 @@ export interface ShareModalProps {
 
 // Exactly two (design README, Share modal). Public is what the website's /explore lists.
 const VISIBILITY_OPTIONS: ReadonlyArray<{ value: Visibility; desc: string }> = [
-  { value: 'public', desc: 'Listed on Explore and can appear in search.' },
+  {
+    value: 'public',
+    desc: 'Listed on Explore and can appear in search, once your account is a week old.',
+  },
   { value: 'unlisted', desc: 'Only people with the link.' },
 ];
 
@@ -338,7 +341,7 @@ function PrivacyTab({ visibility, onVisibilityChange, onStopSharing }: ShareModa
           <ConfirmModal
             open={confirmStop}
             title="Stop sharing this tour?"
-            body="Its link and embeds stop working. You can share it again any time."
+            body="Its link and embeds stop working. People who already viewed it may still be able to load its images. You can share it again any time."
             confirmLabel="Stop sharing"
             onConfirm={stopSharing}
             onCancel={() => setConfirmStop(false)}
