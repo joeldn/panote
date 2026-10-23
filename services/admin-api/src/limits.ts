@@ -14,9 +14,12 @@ export const PANO_DELETE_RATE_PERIOD_SECONDS = 60;
  * every schema cap (200 hotspots with 20,000-character bodies, 2,048-character media
  * urls and 200,000 translated characters) is about 4.5 MiB of JSON in ASCII and 12.6 MiB
  * written entirely in 3-byte characters (CJK), so 14 MiB takes every config the schema
- * allows. The body is decoded as it streams in (worker-kit's body.ts), so the bytes are
- * never held twice. A config over BACKUP_MAX_OBJECT_BYTES (8 MiB, backup.ts) is stored but
- * left out of the daily backup, which reports it.
+ * allows whose text JSON writes as itself. Characters JSON escapes as \uXXXX (control
+ * characters, lone surrogates) take 6 bytes each, so text made mostly of them can reach
+ * about 25 MiB at the caps and is refused with a 413. The body is decoded as it streams
+ * in (worker-kit's body.ts), so the bytes are never held twice. A config over
+ * BACKUP_MAX_OBJECT_BYTES (8 MiB, backup.ts) is stored but left out of the daily backup,
+ * which reports it.
  */
 export const MAX_CONFIG_BODY_BYTES = 14 * 1024 * 1024;
 
