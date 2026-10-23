@@ -294,6 +294,10 @@ export function TourViewer({
   };
   const landed = (id: string) => {
     setShown(id);
+    // A scene with nothing to say closes About, so it doesn't reopen by itself (and take
+    // focus) on the next scene that has a description. Between two described scenes it
+    // stays open.
+    if (!description && !data.descriptions?.[id]) setInfoOpen(false);
     if (viewer) setArrivedOn({ viewer, baseUrl });
     if (reported.current === id) return;
     reported.current = id;

@@ -835,6 +835,19 @@ describe('TourViewer', () => {
       await waitFor(() => expect(about()).toBeNull());
     });
 
+    it('stays closed back on a described scene after one with nothing to say', async () => {
+      renderViewer({ data: data({ descriptions: { square: 'Busy on Saturdays.' } }) });
+      fireEvent.click(about()!);
+      expect(panel()).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      await waitFor(() => expect(about()).toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Map' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Square' }));
+      await waitFor(() => expect(about()).toBeTruthy());
+      expect(panel()).toBeNull();
+      expect(about()!.getAttribute('aria-expanded')).toBe('false');
+    });
+
     it('takes the place of an open point, and the other way round', () => {
       renderViewer({ description: 'A walk round the old town.' });
       fireEvent.click(screen.getByRole('button', { name: 'Fountain' }));
