@@ -571,13 +571,22 @@ export function useEditor(
   );
 
   /**
-   * The publish notice's "Try again": publishes the already-saved tour. Never mid-save or
-   * after a save that failed in part: the server would hold a mix of new and old documents.
+   * Why nothing may publish the saved tour right now, or null when it may. Mid-save, or
+   * after a save that failed in part, the server holds a mix of new and old documents.
    */
+  const publishBlocked = useCallback(
+    (): string | null =>
+      savingRef.current || Object.keys(failuresRef.current).length > 0
+        ? 'Save your changes first.'
+        : null,
+    [],
+  );
+
+  /** The publish notice's "Try again": publishes the already-saved tour, unless blocked. */
   const republish = useCallback(async () => {
-    if (savingRef.current || Object.keys(failuresRef.current).length > 0) return;
+    if (publishBlocked() !== null) return;
     if (docsRef.current) await republishWith(docsRef.current);
-  }, [republishWith]);
+  }, [publishBlocked, republishWith]);
 
   /**
    * The tiles the last publish waited on are all in: publish again. A no-op unless that
@@ -746,6 +755,7 @@ export function useEditor(
     overwriteConflicts,
     publish,
     setShared,
+    publishBlocked,
     republish,
     publishing,
     awaitingTiles,

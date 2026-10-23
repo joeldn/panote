@@ -631,6 +631,25 @@ describe('editor: a Save that fails in part never publishes a mixed tour', () =>
     expect(publishRetry(ui)).toBeNull();
     expect(published).toEqual([]);
   });
+
+  it('the Share modal over the editor won’t publish after a Save fails in part', async () => {
+    const published = recordPublishes();
+    const { ui, router } = openTab();
+    await loaded(ui);
+    await rename(ui, /Tour title: Old town/, 'New town');
+    await rename(ui, /Pano name: Square/, 'New square');
+    server.brokenConfigs.add('square');
+    fireEvent.click(ui.getByRole('button', { name: 'Save' }));
+    await ui.findByText(/weren’t saved/);
+    expect(server.tour!.body.title).toBe('New town');
+
+    fireEvent.click(ui.getByRole('link', { name: 'Share' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish link' }));
+    expect(await screen.findByText('Save your changes first.')).toBeTruthy();
+    expect(published).toEqual([]);
+    expect(server.publish).toBeNull();
+  });
 });
 
 describe('editor: stop sharing', () => {
