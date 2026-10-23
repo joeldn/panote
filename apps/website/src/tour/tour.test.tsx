@@ -27,6 +27,7 @@ import { StageFactoryContext } from './stage-factory.js';
 type ViewerOptions = Parameters<ViewerFactory>[1];
 type LoadOptions = Parameters<PanoViewer['load']>[1];
 type PanoViewer = ReturnType<ViewerFactory>;
+type View = ReturnType<PanoViewer['getView']>;
 
 const CDN = 'https://cdn.test/';
 const config = loadConfig({
@@ -94,13 +95,15 @@ class FakeViewer implements PanoViewer {
   setAutoRotate = vi.fn();
   setLabel = vi.fn();
   dispose = vi.fn();
-  renders = new Set<() => void>();
-  onRender = (cb: () => void) => {
+  renders = new Set<(view: Readonly<View>) => void>();
+  onRender = (cb: (view: Readonly<View>) => void) => {
     this.renders.add(cb);
-    return () => this.renders.delete(cb);
+    return () => {
+      this.renders.delete(cb);
+    };
   };
   /** Draws a frame; the camera counts as at rest a moment after the last one. */
-  draw = () => act(() => this.renders.forEach((cb) => cb()));
+  draw = () => act(() => this.renders.forEach((cb) => cb(this.view)));
   project = () => ({ x: 0, y: 0, behind: false });
   heading = () => 0;
   prefetch = vi.fn(async () => {});
