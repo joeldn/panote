@@ -2,6 +2,7 @@ import {
   ACCOUNTS_ROOT,
   accountDeletionKey,
   AccountDeletionRecordSchema,
+  MARKER_MAX_LINKED_SUBS,
   PANO_PATTERN,
   SlugRecordSchema,
   storedSlugKey,
@@ -61,11 +62,14 @@ export const isAccountDeleted = async (bucket: R2Bucket, sub: string): Promise<b
  * The subs whose data goes with the account: its own, then the identities linked into it
  * (the token's linked subs, see "Account linking" in docs/deploy.md). Data made under one
  * of those before it was linked would otherwise be left behind with no way to reach it.
+ * Linked subs a completed run already deleted (`completedLinkedSubs`) aren't included.
  */
-export const ownersOf = (record: Pick<AccountDeletionRecord, 'sub' | 'linkedSubs'>): string[] => [
-  record.sub,
-  ...new Set((record.linkedSubs ?? []).filter((s) => s !== record.sub)),
-];
+export const ownersOf = (
+  record: Pick<AccountDeletionRecord, 'sub' | 'linkedSubs' | 'completedLinkedSubs'>,
+): string[] => {
+  const done = new Set([record.sub, ...(record.completedLinkedSubs ?? [])]);
+  return [record.sub, ...new Set((record.linkedSubs ?? []).filter((s) => !done.has(s)))];
+};
 
 /**
  * Read-modify-write of the marker, conditional on the ETag it read, so two writers (a
@@ -92,8 +96,9 @@ const updateMarker = async (
 
 /**
  * Create-only, so a retry keeps the first requestedAt (and any completedAt). A retry
- * whose token names linked subs the marker doesn't have yet adds them, and takes off
- * completedAt if it was there, so the sweep deletes those too before stamping it again.
+ * whose token names linked subs the marker doesn't have yet adds them. On a completed
+ * marker it also takes off completedAt and moves the subs already done to
+ * completedLinkedSubs, so the reopened delete covers the account and the new subs only.
  */
 export const markAccountForDeletion = async (
   bucket: R2Bucket,
@@ -115,9 +120,28 @@ export const markAccountForDeletion = async (
   const readable = await updateMarker(bucket, sub, (existing) => {
     const known = new Set(existing.linkedSubs);
     if (linked.every((s) => known.has(s))) return null;
-    const merged = ownersOf({ sub, linkedSubs: [...(existing.linkedSubs ?? []), ...linked] });
+    // Capped at the schema's bound, or the marker would stop parsing (the sweep would skip
+    // it and the next request rewrite it). The ones already there are kept first.
+    const all = [...new Set([...(existing.linkedSubs ?? []), ...linked])].filter((s) => s !== sub);
+    if (all.length > MARKER_MAX_LINKED_SUBS) {
+      console.error(
+        `${LOG_PREFIX} more linked subs than a marker holds; the extra ones are left out`,
+      );
+    }
+    const kept = all.slice(0, MARKER_MAX_LINKED_SUBS);
+    if (kept.length === (existing.linkedSubs ?? []).length) return null;
+    if (!existing.completedAt) return { ...existing, linkedSubs: kept };
+    // Reopened: everything the marker named so far is done; only the new subs are pending.
     const { completedAt: _done, ...open } = existing;
-    return { ...open, linkedSubs: merged.slice(1) };
+    const completed = new Set([
+      ...(existing.completedLinkedSubs ?? []),
+      ...(existing.linkedSubs ?? []),
+    ]);
+    return {
+      ...open,
+      linkedSubs: kept,
+      completedLinkedSubs: [...completed].slice(0, MARKER_MAX_LINKED_SUBS),
+    };
   });
   // An unreadable marker still blocks writes; rewrite it so the sweep can read it.
   if (!readable) await putJson(bucket, accountDeletionKey(sub), record);

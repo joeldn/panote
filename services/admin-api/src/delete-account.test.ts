@@ -1,9 +1,11 @@
 import {
   ACCOUNT_DELETE_CONFIRMATION,
   accountDeletionKey,
+  AccountDeletionRecordSchema,
   configKey,
   deletingKey,
   manifestKey,
+  MARKER_MAX_LINKED_SUBS,
   originalKey,
   planKey,
   REAUTH_REQUIRED_ERROR,
@@ -411,9 +413,54 @@ describe('linked subs that arrive while a delete is open', () => {
     const reopened = await marker(sub);
     expect(reopened?.completedAt).toBeUndefined();
     expect(reopened?.linkedSubs).toEqual([l1, l2]);
+    expect(reopened?.completedLinkedSubs).toEqual([l1]);
     // So the sweep treats it as open and deletes under L2.
     await sweepAccountDeletions(depsWith(), new Date('2026-09-06T00:00:00.000Z'));
     expect(await has(originalKey(l2, 'acct-reopen-p'))).toBe(false);
+  });
+
+  it('never grows the marker past what its schema reads, keeping the first request', async () => {
+    const sub = subOf('acct-linked-cap');
+    const requestedAt = '2026-09-01T00:00:00.000Z';
+    const many = Array.from({ length: MARKER_MAX_LINKED_SUBS - 1 }, (_, i) => `email|cap-${i}`);
+    await put(accountDeletionKey(sub), { v: 1, sub, requestedAt, linkedSubs: many });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await markAccountForDeletion(env.BUCKET, sub, new Date(), ['apple|cap-a', 'apple|cap-b']);
+    error.mockRestore();
+    const record = await marker(sub);
+    expect(AccountDeletionRecordSchema.safeParse(record).success).toBe(true);
+    expect(record?.requestedAt).toBe(requestedAt);
+    expect(record?.linkedSubs).toEqual([...many, 'apple|cap-a']);
+  });
+
+  it('a reopened delete never deletes under a linked sub an earlier run completed', async () => {
+    const sub = subOf('acct-reopen-old');
+    const old = 'email|acct-reopen-old-1';
+    const l2 = 'apple|acct-reopen-old-2';
+    const done = '2026-09-01T00:00:00.000Z';
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: done,
+      completedAt: done,
+      linkedSubs: [old],
+    });
+    // Unlinked since, and a separate user's now; L2 was linked in after the delete.
+    await put(originalKey(old, 'acct-reopen-old-p'), 'bytes');
+    await put(originalKey(l2, 'acct-reopen-old-p2'), 'bytes');
+    await put(tourKey(sub, 'acct-reopen-old-tour'), { tourId: 'acct-reopen-old-tour', scenes: [] });
+    const failing = depsWith({ clearStats: vi.fn().mockRejectedValue(new Error('stats down')) });
+    const reopenedAt = new Date('2026-09-05T00:00:00.000Z');
+    expect((await deleteAccount(failing, sub, reopenedAt, [l2])).status).toBe('pending');
+    // The sweep finishes the reopened delete: L2 goes, the old sub's data stays.
+    await sweepAccountDeletions(depsWith(), new Date('2026-09-06T00:00:00.000Z'));
+    expect(await has(originalKey(l2, 'acct-reopen-old-p2'))).toBe(false);
+    expect(await has(originalKey(old, 'acct-reopen-old-p'))).toBe(true);
+    expect(await marker(sub)).toMatchObject({
+      completedAt: '2026-09-06T00:00:00.000Z',
+      linkedSubs: [old, l2],
+      completedLinkedSubs: [old],
+    });
   });
 
   it("a retry after completion deletes only the subs its token names, not the marker's", async () => {
