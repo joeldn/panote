@@ -52,12 +52,13 @@ export interface Held {
 const COUNT_KEY = 'count';
 
 // One instance (idFromName('global')): every reservation runs through it. Each method
-// is a get and a put with no other await between them, so the DO's input gate runs
-// them one at a time: a reservation is checked and counted in one step, and parallel
-// requests can't both take the last slot.
+// reads and writes through the synchronous SQLite-backed KV API, with no await at all,
+// so a reservation is checked and counted in one uninterrupted step and parallel
+// requests can't both take the last slot. (With the async get/put, concurrent calls
+// interleaved between the read and the write and overshot the limit.)
 export class UploadCeiling extends DurableObject<Env> {
-  private async current(day: string): Promise<DayCount> {
-    const stored = await this.ctx.storage.get<DayCount>(COUNT_KEY);
+  private current(day: string): DayCount {
+    const stored = this.ctx.storage.kv.get<DayCount>(COUNT_KEY);
     // A new day starts from zero; the old day's count is simply overwritten.
     return stored?.day === day ? stored : { day, uploads: 0, bytes: 0, warned: false };
   }
@@ -68,32 +69,35 @@ export class UploadCeiling extends DurableObject<Env> {
    */
   async reserve(bytes: number, limits: CeilingLimits, now: number): Promise<Held | null> {
     const day = utcDay(now);
-    const c = await this.current(day);
+    const c = this.current(day);
     const fits =
       (limits.maxUploads === null || c.uploads + 1 <= limits.maxUploads) &&
       (limits.maxBytes === null || c.bytes + bytes <= limits.maxBytes);
     if (!fits) {
       if (!c.warned) {
         // Once a day, so the logs show when the switch tripped without one line per refusal.
-        console.warn('upload ceiling reached: uploads paused until 00:00 UTC', {
-          day,
-          uploads: c.uploads,
-          bytes: c.bytes,
-          ...limits,
-        });
-        await this.ctx.storage.put(COUNT_KEY, { ...c, warned: true });
+        console.warn(
+          'upload ceiling reached: refusing uploads that would pass it until 00:00 UTC',
+          {
+            day,
+            uploads: c.uploads,
+            bytes: c.bytes,
+            ...limits,
+          },
+        );
+        this.ctx.storage.kv.put(COUNT_KEY, { ...c, warned: true });
       }
       return null;
     }
-    await this.ctx.storage.put(COUNT_KEY, { ...c, uploads: c.uploads + 1, bytes: c.bytes + bytes });
+    this.ctx.storage.kv.put(COUNT_KEY, { ...c, uploads: c.uploads + 1, bytes: c.bytes + bytes });
     return { day, bytes };
   }
 
   /** Gives back a reservation whose URL was never issued. A past day's is dropped. */
   async release(held: Held): Promise<void> {
-    const stored = await this.ctx.storage.get<DayCount>(COUNT_KEY);
+    const stored = this.ctx.storage.kv.get<DayCount>(COUNT_KEY);
     if (stored?.day !== held.day) return;
-    await this.ctx.storage.put(COUNT_KEY, {
+    this.ctx.storage.kv.put(COUNT_KEY, {
       ...stored,
       uploads: Math.max(0, stored.uploads - 1),
       bytes: Math.max(0, stored.bytes - held.bytes),
@@ -110,8 +114,10 @@ const ceiling = (env: Env) => env.UPLOAD_CEILING.get(env.UPLOAD_CEILING.idFromNa
 
 // When the DO can't be reached: a blip fails open (the per-owner quotas still hold, so
 // that is no worse than before the ceiling existed), but this many failures in a row in
-// one isolate fail closed until a call gets through again, so a lasting outage can't
-// be used to get round the ceiling.
+// one isolate fail closed until a call gets through again. The count is per isolate and
+// lost when the isolate goes, so during a lasting outage each new isolate still lets its
+// first few requests through: it limits how far an outage lifts the ceiling, it doesn't
+// close it.
 export const CEILING_FAILURES_BEFORE_CLOSED = 3;
 let failuresInARow = 0;
 

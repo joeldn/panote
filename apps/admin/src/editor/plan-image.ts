@@ -92,11 +92,16 @@ export const preparePlanImage: PlanPreparer = async (file) => {
 /**
  * What the editor says when a plan image couldn't be added. A refusal upload-api names
  * (a limit, a disabled or deleted account, uploads paused) says which, in words; anything
- * else is worth another try.
+ * else, a gateway's 503 included, is worth another try.
  */
 export function planErrorMessage(e: unknown): string {
   if (e instanceof PlanImageError) return e.message;
-  if (e instanceof ApiError && [403, 410, 429, 503].includes(e.status)) return e.message;
+  if (e instanceof ApiError) {
+    const code = (e.body as { error?: unknown } | null)?.error;
+    if ([403, 410, 429].includes(e.status) || (e.status === 503 && code === 'uploads paused')) {
+      return e.message;
+    }
+  }
   return 'The image couldn’t be added. Try again.';
 }
 

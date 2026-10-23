@@ -2037,19 +2037,23 @@ env blocks:
 
 The check comes last, after the owner's own limits pass (a request they refuse costs no DO call),
 and is one RPC per URL: `reserve` reads today's count, and either counts the URL (one upload, its
-declared `size`) or refuses it, in one step with no other await, so the DO's input gate runs
-reservations one at a time and parallel requests can't overshoot. If the upload-log write after it
-fails, no URL is issued and the reservation is given back (`release`, best-effort in `waitUntil`).
-Past either limit every upload URL gets `503 {"error":"uploads paused"}` with `Retry-After` set to
+declared `size`) or refuses it, in one synchronous step (the SQLite-backed `storage.kv` API, no
+await between the read and the write), so parallel requests can't overshoot. If anything after
+it fails (the upload-log write, or signing the URL), no URL is issued and the reservation is given
+back (`release`, best-effort in `waitUntil`). It counts URLs issued, not PUTs, so it only bounds
+tiling cost once each URL is single-use (#138); until then one URL can be PUT to again and again.
+An upload that would pass either limit gets `503 {"error":"uploads paused"}` with `Retry-After` set to
 the seconds until 00:00 UTC, and nothing is logged against the owner; the admin app says "Uploads
-are paused for today. Try again tomorrow." and stops the rest of a multi-photo pick. The first
-refusal of each day logs `upload ceiling reached` (a `console.warn` from the DO, visible in
+are paused for today. Try again tomorrow." and stops the rest of a multi-photo pick. Near the byte limit a large file can be refused while
+smaller ones still get through; the copy says "paused" either way. The first refusal of each day
+logs `upload ceiling reached` (a `console.warn` from the DO, visible in
 Workers Logs and `wrangler tail`); the health check doesn't alert on it.
 
 If the DO can't be reached, a single failure fails open (the per-owner limits still hold, so that
 is no worse than before the ceiling existed), but three failures in a row in one isolate fail
-closed with `502 {"error":"storage unavailable"}` until a call gets through, so a lasting outage
-can't be used to get round it. Empty vars lift a limit (both empty: no DO call at all); a
+closed with `502 {"error":"storage unavailable"}` until a call gets through. The count lives in
+the isolate, so each new isolate still lets its first couple of requests through during a lasting
+outage: this limits how far an outage lifts the ceiling rather than closing it outright. Empty vars lift a limit (both empty: no DO call at all); a
 non-integer refuses every upload (`500`), as for the owner quotas.
 
 The trade-off is deliberate: someone with enough accounts can use up the day's ceiling and pause
@@ -2070,11 +2074,15 @@ deploying (vars changed in the dashboard are overwritten by the next deploy):
 them in `MAX_BYTES_PER_OWNER` would mean listing every tour's prefix on each request. Instead a plan
 upload lists only its own tour's prefix (one more `ListObjectsV2`) and is refused with
 `403 {"error":"plan storage limit reached"}` once the images there plus the declared size would pass
-`MAX_PLAN_BYTES_PER_TOUR` (16 MiB, four full-size plans, in `src/index.ts`). That covers the live
-image, the one a share link may still show, and a few uploaded but not saved; `admin-api` deletes
-unused ones an hour old on the tour's next save. With `MAX_TOURS_PER_OWNER` (200) tours, an owner's
-plan images are bounded to about 3 GiB. Plan uploads also count toward the daily limit and the
-global ceiling.
+`MAX_PLAN_BYTES_PER_TOUR` (16 MiB, four full-size plans, in `src/index.ts`). That covers the
+live image, the one a share link may still show, and a few uploaded but not saved; `admin-api`
+deletes unused ones an hour old on the tour's next save. The listing follows every page, but the
+cap is soft: it only sees images already uploaded, not URLs issued and not yet used. The admin
+uploads at once, so in normal use a tour stays near 16 MiB. A client that takes its URLs first and
+uploads after can get a day's worth through one check (the owner's 50 URLs at 4 MiB), so one tour
+can reach about 216 MiB, and over many days an owner's plan images across 200 tours about 40 GiB.
+Plan uploads also count toward the daily limit and the global ceiling, which bound how fast that
+can grow.
 
 **Not counted: tiles and JSON.** Tiles (`tiles/<panoId>/`) are derived from originals and grow with the
 original's pixels (capped by the tiler's pixel limit), so `MAX_BYTES_PER_OWNER` and the pano limit

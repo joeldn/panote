@@ -35,6 +35,13 @@ describe('planErrorMessage', () => {
     expect(planErrorMessage(new ApiError(502, { error: 'storage unavailable' }))).toBe(
       'The image couldn’t be added. Try again.',
     );
+    // A 503 from anything but the ceiling (a gateway, say) is no reason to wait a day.
+    expect(planErrorMessage(new ApiError(503, '<html>Service Unavailable</html>'))).toBe(
+      'The image couldn’t be added. Try again.',
+    );
+    expect(planErrorMessage(new ApiError(503, { error: 'overloaded' }))).toBe(
+      'The image couldn’t be added. Try again.',
+    );
     expect(planErrorMessage(new TypeError('Failed to fetch'))).toBe(
       'The image couldn’t be added. Try again.',
     );

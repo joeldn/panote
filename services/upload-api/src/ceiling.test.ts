@@ -85,10 +85,12 @@ describe('UploadCeiling', () => {
     await c.reserve(1, limits(0, null), NOON);
     await c.reserve(1, limits(0, null), NOON);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(await runInDurableObject(c, (_i, state) => state.storage.get('count'))).toMatchObject({
-      warned: true,
-      uploads: 0,
-    });
+    expect(await runInDurableObject(c, (_i, state) => state.storage.kv.get('count'))).toMatchObject(
+      {
+        warned: true,
+        uploads: 0,
+      },
+    );
   });
 });
 

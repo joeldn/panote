@@ -956,11 +956,63 @@ describe('upload-url global daily ceiling', () => {
     expect(await today()).toEqual(before);
   });
 
+  // The real global instance, with its reserve and release calls recorded, so a test
+  // can show a reservation was taken before it was given back.
+  const watched = () => {
+    const real = ceiling();
+    const reserved: unknown[] = [];
+    const released: unknown[] = [];
+    const ns = {
+      idFromName: () => ({}),
+      get: () => ({
+        reserve: async (...a: Parameters<typeof real.reserve>) => {
+          const held = await real.reserve(...a);
+          reserved.push(held);
+          return held;
+        },
+        release: async (...a: Parameters<typeof real.release>) => {
+          released.push(a[0]);
+          await real.release(...a);
+        },
+      }),
+    } as unknown as Env['UPLOAD_CEILING'];
+    return { ns, reserved, released };
+  };
+  // Takes a reservation, then fails: it must be given back, leaving the count as it was.
+  const releasedAfterFailure = async (body: unknown, status: number) => {
+    const w = watched();
+    const before = await today();
+    expect((await call(body, { UPLOAD_CEILING: w.ns })).status).toBe(status);
+    expect(w.reserved).toHaveLength(1);
+    expect(w.reserved[0]).not.toBeNull();
+    expect(w.released).toEqual(w.reserved);
+    expect(await today()).toEqual(before);
+  };
+
   it('gives the reservation back when the upload log cannot be written', async () => {
     vi.stubGlobal('fetch', storage(500));
-    const before = await today();
-    expect((await call(validBody, {})).status).toBe(502);
-    expect(await today()).toEqual(before);
+    await releasedAfterFailure(validBody, 502);
+  });
+
+  // Lets every request through, then fails the signing that comes after the upload-log
+  // PUT, which is the URL's own presign: the last step before the URL goes out.
+  const presignFails = (base: Mock = storage()) => {
+    let logged = false;
+    const sign = crypto.subtle.sign.bind(crypto.subtle);
+    vi.spyOn(crypto.subtle, 'sign').mockImplementation(async (...args) => {
+      if (logged) throw new Error('presign failed');
+      return sign(...args);
+    });
+    return vi.fn(async (input: Request | string) => {
+      const res = await base(input);
+      if (methodOf(input) === 'PUT') logged = true;
+      return res;
+    });
+  };
+
+  it('gives the reservation back when signing the URL fails', async () => {
+    vi.stubGlobal('fetch', presignFails());
+    await releasedAfterFailure(validBody, 500);
   });
 
   it('unset limits: no DO call at all', async () => {
@@ -1031,6 +1083,11 @@ describe('upload-url global daily ceiling', () => {
       const r = await call(planBody, { MAX_UPLOADS_PER_DAY_GLOBAL: '0' });
       expect(r.status).toBe(503);
       expect(await r.json()).toEqual({ error: 'uploads paused' });
+    });
+
+    it('give the reservation back when signing the URL fails', async () => {
+      vi.stubGlobal('fetch', presignFails(stub()));
+      await releasedAfterFailure(planBody, 500);
     });
 
     it('403 once the tour’s plan images would pass MAX_PLAN_BYTES_PER_TOUR', async () => {
