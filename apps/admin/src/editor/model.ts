@@ -248,11 +248,16 @@ export function mapPositions(tour: TourDoc): Map<string, MapPoint> {
 }
 
 /**
- * `tour` with `panoId` at (x, y) on the plan. A tour that still holds positions in
- * other units (from before the 0..1 convention) has them all converted first, to where
- * they were drawn, so placing one scene doesn't move the others on the map.
+ * `tour` with each scene in `at` put there on the plan (0..1 fractions). A tour that
+ * still holds positions in other units (from before the 0..1 convention) has them all
+ * converted first, to where they were drawn, so placing one scene doesn't move the
+ * others on the map. With `onlyNew`, scenes already on the plan keep their place.
  */
-function placeOnMap(tour: TourDoc, panoId: string, x: number, y: number): TourDoc {
+function placeOnMap(
+  tour: TourDoc,
+  at: ReadonlyMap<string, MapPoint>,
+  { onlyNew = false }: { onlyNew?: boolean } = {},
+): TourDoc {
   const placed = [...tour.scenes].flatMap((s) =>
     s.mapX !== undefined && s.mapY !== undefined ? [{ x: s.mapX, y: s.mapY }] : [],
   );
@@ -260,9 +265,11 @@ function placeOnMap(tour: TourDoc, panoId: string, x: number, y: number): TourDo
   return {
     ...tour,
     scenes: tour.scenes.map((s) => {
-      if (s.panoId === panoId) return { ...s, mapX: toMapCoord(x), mapY: toMapCoord(y) };
-      const at = fitted?.get(s.panoId);
-      return at ? { ...s, mapX: toMapCoord(at.x), mapY: toMapCoord(at.y) } : s;
+      const isPlaced = s.mapX !== undefined && s.mapY !== undefined;
+      const to = onlyNew && isPlaced ? undefined : at.get(s.panoId);
+      if (to) return { ...s, mapX: toMapCoord(to.x), mapY: toMapCoord(to.y) };
+      const was = fitted?.get(s.panoId);
+      return was ? { ...s, mapX: toMapCoord(was.x), mapY: toMapCoord(was.y) } : s;
     }),
   };
 }
@@ -283,6 +290,8 @@ export type EditorAction =
   /** Puts a scene on the floor plan, or moves it: 0..1 fractions, clamped. */
   | { type: 'map/place'; panoId: string; x: number; y: number }
   | { type: 'map/remove'; panoId: string }
+  /** Puts several unplaced scenes on the plan in one edit; placed ones never move. */
+  | { type: 'map/suggest'; positions: Record<string, MapPoint> }
   /** The floor-plan image; null removes it. */
   | { type: 'tour/plan'; plan: TourPlan | null }
   | { type: 'scene/title'; panoId: string; title: string; lang?: string }
@@ -400,7 +409,13 @@ export function editorReducer(docs: EditorDocs | null, action: EditorAction): Ed
           : { ...rest, scenes, startPanoId };
       });
     case 'map/place':
-      return withTour(docs, (t) => placeOnMap(t, action.panoId, action.x, action.y));
+      return withTour(docs, (t) =>
+        placeOnMap(t, new Map([[action.panoId, { x: action.x, y: action.y }]])),
+      );
+    case 'map/suggest':
+      return withTour(docs, (t) =>
+        placeOnMap(t, new Map(Object.entries(action.positions)), { onlyNew: true }),
+      );
     case 'map/remove':
       return withTour(docs, (t) => ({
         ...t,
