@@ -176,6 +176,8 @@ function limitOf(e: unknown): UploadLimit {
   if (e.status !== 403) return null;
   const code = (e.body as { error?: unknown } | null)?.error;
   if (code === 'account disabled') return 'account';
+  // Only these two are freed by deleting unused panos. 'plan storage limit reached' is a
+  // tour's floor-plan images, which panos don't count toward, so it stays a plain quota.
   return code === 'pano limit reached' || code === 'storage limit reached' ? 'space' : 'quota';
 }
 
