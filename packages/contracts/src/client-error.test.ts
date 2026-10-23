@@ -189,6 +189,9 @@ describe('scrubErrorText', () => {
     expect(scrubErrorText('backup/2026-01-01/tours/Z29v/t1/tour.json')).toBe(
       'backup/2026-01-01/tours/:owner/t1/tour.json',
     );
+    expect(scrubErrorText('quarantine/api/panos/Z29v/p1/original')).toBe(
+      'quarantine/api/panos/:owner/p1/original',
+    );
   });
 
   it('masks pano and tour ids in R2 keys and CDN URLs', () => {

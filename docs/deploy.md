@@ -1682,8 +1682,10 @@ happens while it's unset depends on the `LIKER_HASH_FALLBACK` var (`wrangler.jso
 
 Setting the secret on an env that already has unkeyed hashes (dev) lets each earlier liker like
 again once. Keys stored raw before this change (`liked:<who>`) are rewritten as hashes, 128 per
-request to that tour's `TourStats` (any route: view, like, stats), until a `likes-hashed` marker
-says none are left; a raw key still waiting counts as a like. The rewrite runs inside
+request to that tour's `TourStats` (any route: view, like, stats) until none are left; a raw key
+still waiting counts as a like. Nothing is stored to mark that done (a request that finds none
+sets an in-memory flag), so a read of any tour id, or one after an account delete, creates no
+state. The rewrite runs inside
 `blockConcurrencyWhile`, and a like is hashed before `counts` is read, so only storage operations
 (which hold the input gate) sit between that read and its write. With no way to hash (production
 without the secret) the raw keys are left alone until the secret is set.

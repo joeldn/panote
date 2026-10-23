@@ -25,8 +25,20 @@ export class PreconditionRequiredError extends WorkerError {
 // How deep a cause chain is logged; also stops a cycle (an error that is its own cause).
 const MAX_CAUSES = 5;
 
+// A thrown non-Error object is logged as JSON (String() would say only
+// `[object Object]`), capped, and redacted with the rest.
+const MAX_THROWN_JSON = 2000;
+const thrownValue = (e: unknown): string => {
+  if (typeof e !== 'object' || e === null) return String(e);
+  try {
+    return (JSON.stringify(e) ?? String(e)).slice(0, MAX_THROWN_JSON);
+  } catch {
+    return String(e); // A cycle or a BigInt.
+  }
+};
+
 const oneError = (e: unknown): string =>
-  e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : String(e);
+  e instanceof Error ? (e.stack ?? `${e.name}: ${e.message}`) : thrownValue(e);
 
 /**
  * An unexpected error as one log string: its stack (which starts with the message,

@@ -69,7 +69,7 @@ const SECRET_PAIR =
 // (its pages live under `/s/` and `/app/`), so what this over-masks is prose like
 // `tiles/abc`, which costs a little debugging detail and never leaks.
 const KEY_SEGMENT =
-  /(?<![A-Za-z0-9_.-])(?<!(?:api|admin|app|pub|explore)\/)(panos|tours|accounts|upload-log|tiles|tile-gc|tour-owners|slugs|pub\/tours|pub\/plans|explore\/tours|explore\/hidden)\/[^/\s?#()'"<>`]+/gi;
+  /(?<![A-Za-z0-9_.-])(?<!(?<!quarantine\/)(?:api|admin|app|pub|explore)\/)(panos|tours|accounts|upload-log|tiles|tile-gc|tour-owners|slugs|pub\/tours|pub\/plans|explore\/tours|explore\/hidden)\/[^/\s?#()'"<>`]+/gi;
 const KEY_LABEL: Record<string, string> = {
   panos: ':owner',
   tours: ':owner',

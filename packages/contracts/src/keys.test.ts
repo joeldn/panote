@@ -435,6 +435,12 @@ describe('redactOwner', () => {
     expect(redactOwner(`${QUARANTINE_ROOT}case1/panos/abc/p1/original`)).toBe(
       `${QUARANTINE_ROOT}case1/panos/<owner>/p1/original`,
     );
+    // A case id that is also a route word doesn't hide the key after it.
+    for (const caseId of ['api', 'admin', 'app', 'pub', 'explore']) {
+      expect(redactOwner(`${QUARANTINE_ROOT}${caseId}/tours/abc/t1/tour.json`)).toBe(
+        `${QUARANTINE_ROOT}${caseId}/tours/<owner>/t1/tour.json`,
+      );
+    }
   });
 
   it('redacts an owner with spaces, @ or %, up to the next slash', () => {

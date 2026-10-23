@@ -19,8 +19,10 @@ const HASHED_PREFIX = 'likedh:';
 // Before the hash, the key was liked:<who>, raw. Those are rewritten to the hashed
 // form in batches (DO storage takes at most 128 keys a call), a batch per request
 // until none are left, and a raw key still waiting counts as a like meanwhile.
+// Nothing is stored to say they're done: a request that finds none only sets an
+// in-memory flag, so a read (GET stats for any id, or after an account delete's
+// DELETE) never creates state. A new instance lists once.
 const LEGACY_PREFIX = 'liked:';
-const LEGACY_MIGRATED_KEY = 'likes-hashed';
 const MIGRATE_BATCH = 128;
 // Without the secret, an env whose LIKER_HASH_FALLBACK var is "allow" (dev, and the
 // tests) hashes with an unkeyed SHA-256 under a fixed domain prefix: likes keep
@@ -92,10 +94,7 @@ export class TourStats {
   private async migrateLegacyLikes(): Promise<boolean> {
     if (this.legacyMigrated) return true;
     return this.state.blockConcurrencyWhile(async () => {
-      if (this.legacyMigrated || (await this.storage.get(LEGACY_MIGRATED_KEY))) {
-        this.legacyMigrated = true;
-        return true;
-      }
+      if (this.legacyMigrated) return true;
       const legacy = await this.storage.list({ prefix: LEGACY_PREFIX, limit: MIGRATE_BATCH });
       const hashed: Record<string, number> = {};
       for (const key of legacy.keys()) {
@@ -107,10 +106,7 @@ export class TourStats {
         await this.storage.put(hashed);
         await this.storage.delete([...legacy.keys()]);
       }
-      if (legacy.size < MIGRATE_BATCH) {
-        await this.storage.put(LEGACY_MIGRATED_KEY, true);
-        this.legacyMigrated = true;
-      }
+      if (legacy.size < MIGRATE_BATCH) this.legacyMigrated = true;
       return this.legacyMigrated;
     });
   }

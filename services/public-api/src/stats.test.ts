@@ -44,7 +44,7 @@ describe('TourStats like store cap', () => {
     const stored = await runInDurableObject(stub('t-cap'), async (_i, state) =>
       state.storage.list(),
     );
-    expect([...stored.keys()]).toEqual(['counts', 'likes-hashed']);
+    expect([...stored.keys()]).toEqual(['counts']);
   });
 
   it('still counts the last like under the cap', async () => {
@@ -132,6 +132,15 @@ describe('TourStats liker hashing', () => {
     expect(view).toEqual({ views: 1, likes: 0 });
     expect(legacy).toBe(1);
     expect((await keys('t-closed')).join()).not.toContain('likedh:');
+  });
+
+  it('creates no state on a read of an unknown tour, or after DELETE', async () => {
+    await callDO('t-unknown', '/');
+    expect(await keys('t-unknown')).toEqual([]);
+    await callDO('t-reread', '/like?u=alice');
+    await callDO('t-reread', '/', 'DELETE');
+    await callDO('t-reread', '/');
+    expect(await keys('t-reread')).toEqual([]);
   });
 
   it('counts every one of many concurrent likes', async () => {

@@ -93,4 +93,13 @@ describe('describeError', () => {
       'caused by: panos/<owner>/p1',
     );
   });
+
+  it('logs a thrown plain object as redacted JSON, and survives a cycle', () => {
+    expect(describeError({ code: 'R2', key: 'panos/Z29v/p1/original' })).toBe(
+      '{"code":"R2","key":"panos/<owner>/p1/original"}',
+    );
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(describeError(cyclic)).toBe('[object Object]');
+  });
 });

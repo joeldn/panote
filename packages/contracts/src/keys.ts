@@ -146,10 +146,11 @@ const ownerRootAlternation = OWNER_ROOTS.map((r) => r.slice(0, -1)).join('|');
 // `<root>/<owner>/` anywhere in free text: an R2 key in an error, an S3 URL, a backup or
 // quarantine copy's key. Not right after a word character, and not the same word in a
 // route (`/api/tours/`, `/api/admin/tours/`, `/app/panos/`, `pub/tours/`, `explore/tours/`),
-// whose next segment is an id. The owner runs to the next `/` and may hold spaces (a
+// whose next segment is an id, unless that word is a quarantine case id
+// (`quarantine/api/panos/<owner>/...` is still a key). The owner runs to the next `/` and may hold spaces (a
 // malformed owner can) but never crosses a line break, so the scan stays linear.
 const OWNER_IN_TEXT_RE = new RegExp(
-  `(?<![A-Za-z0-9_-])(?<!(?:api|admin|app|pub|explore)/)(${ownerRootAlternation})/[^/\\r\\n]+/`,
+  `(?<![A-Za-z0-9_-])(?<!(?<!quarantine/)(?:api|admin|app|pub|explore)/)(${ownerRootAlternation})/[^/\\r\\n]+/`,
   'g',
 );
 
