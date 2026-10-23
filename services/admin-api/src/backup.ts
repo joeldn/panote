@@ -17,14 +17,15 @@ import {
   SlugRecordSchema,
   TOUR_OWNERS_ROOT,
   tourOwnerKey,
+  tourIdOfPlanKey,
   TourOwnerRecordSchema,
   type BackupCompleteRecord,
   type BackupProgress,
   type OperatorRestoreOk,
 } from '@internal/contracts';
 
-// Daily backup of the JSON that defines user content (BACKUP_SOURCES in
-// @internal/contracts), copied to backup/<YYYY-MM-DD>/<original key> in the same
+// Daily backup of the JSON that defines user content, and the tours' floor-plan images
+// (BACKUP_SOURCES in @internal/contracts), copied to backup/<YYYY-MM-DD>/<original key> in the same
 // bucket and kept BACKUP_RETENTION_DAYS. It runs on its own cron (BACKUP_CRON,
 // every 15 minutes), so it has a whole invocation's subrequest budget to itself.
 // Each run does at most BACKUP_RUN_BUDGET R2 operations and records where it got
@@ -48,10 +49,12 @@ export const BACKUP_RETENTION_DAYS = 30;
 // or a retry can't take a run over it.
 export const BACKUP_RUN_BUDGET = 900;
 // Objects copied at once. Every copy is read whole into memory, so with the size cap
-// below a batch stays far under the isolate's 128 MB.
+// below a batch stays under the isolate's 128 MB (plan images, the largest objects
+// copied, are at most 4 MiB, so a real batch is a few tens of MB at worst).
 const COPY_BATCH = 10;
-// A document larger than this is not copied (and is counted as skipped): nothing the
-// app writes comes near it, so one would be a mistake that shouldn't sink the run.
+// An object larger than this is not copied (and is counted as skipped): nothing the
+// app writes comes near it (a plan image is at most MAX_PLAN_BYTES, 4 MiB), so one would
+// be a mistake that shouldn't sink the run.
 export const BACKUP_MAX_OBJECT_BYTES = 8 * 1024 * 1024;
 // How long a run's lease holds: longer than a Cron Trigger invocation may run (15 minutes).
 export const BACKUP_LEASE_MS = 20 * 60 * 1000;
@@ -405,7 +408,10 @@ const tourIdOfKey = (key: string): string | null => {
   const cursor = exploreCursorOf(key);
   if (cursor !== null) return cursor.slice(cursor.indexOf('-') + 1);
   return (
-    name(PUB_TOURS_ROOT) ?? name(`${EXPLORE_ROOT}tours/`) ?? name(`${EXPLORE_ROOT}hidden/`) ?? null
+    name(PUB_TOURS_ROOT) ??
+    name(`${EXPLORE_ROOT}tours/`) ??
+    name(`${EXPLORE_ROOT}hidden/`) ??
+    tourIdOfPlanKey(key)
   );
 };
 
@@ -422,10 +428,10 @@ const parseJson = (body: ArrayBuffer): unknown => {
  * and metadata, for each key. Create-only unless `overwrite`, so by default nothing
  * that exists now is touched. Keys of an owner whose account is marked for deletion
  * are refused: the daily sweep would only delete them again. The owner of a key outside
- * tours/ and panos/ is found through its tour's owner pointer (tour-owners/<tourId>.json,
- * the set's copy or else the live one; a slug's tour from the backed-up slug record, a
- * pointer's owner from its own body), and a key whose owner can't be found is refused
- * too. A key whose R2 call throws is `failed`, and the rest still go through. Keys must
+ * tours/ and panos/ (a bundle, a plan image, Explore) is found through its tour's owner
+ * pointer (tour-owners/<tourId>.json, the set's copy or else the live one; a slug's tour
+ * from the backed-up slug record, a pointer's owner from its own body), and a key whose
+ * owner can't be found is refused too. A key whose R2 call throws is `failed`, and the rest still go through. Keys must
  * already be checked with isRestorableKey (the request schema does).
  */
 export const restoreFromBackup = async (

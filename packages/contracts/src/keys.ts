@@ -176,6 +176,14 @@ export type PlanImageType = keyof typeof PLAN_EXTENSIONS;
 export const PLAN_IMAGE_TYPES = Object.keys(PLAN_EXTENSIONS) as PlanImageType[];
 export const planKey = (t: string, planId: string, type: PlanImageType): string =>
   `${planPrefix(t)}${assertValidId(planId, 'planId')}.${PLAN_EXTENSIONS[type]}`;
+// A plan image's key, pub/plans/<tourId>/<planId>.<ext>, as a pattern with no anchors.
+const PLAN_KEY_PATTERN = `pub/plans/([A-Za-z0-9_-]+)/[A-Za-z0-9_-]+\\.(?:${Object.values(PLAN_EXTENSIONS).join('|')})`;
+const PLAN_KEY_RE = new RegExp(`^${PLAN_KEY_PATTERN}$`);
+/** The tourId a plan image's key names, or null for any other key. */
+export const tourIdOfPlanKey = (key: string): string | null => {
+  const tourId = PLAN_KEY_RE.exec(key)?.[1];
+  return tourId !== undefined && PANO_PATTERN.test(tourId) ? tourId : null;
+};
 export const SLUGS_ROOT = 'slugs/';
 export const slugKey = (slug: string): string => {
   if (!isValidSlug(slug)) throw new Error(`invalid or reserved slug ${JSON.stringify(slug)}`);
@@ -248,15 +256,16 @@ export const BACKUP_PROGRESS_KEY = `${BACKUP_ROOT}progress.json`;
 /**
  * What the backup copies: every key under `prefix` that `match` accepts. The JSON the app
  * can't rebuild: tours and their publish records, each pano's config, the public bundles
- * and share links, the tour-owner index, Explore, and the account markers. Not originals
- * or tiles (large; tiles and manifests are rebuilt from originals by a re-tile), nor the
- * derived or operational prefixes (tile-gc/, upload-log/, quarantine/, ops/).
+ * and share links, the tour-owner index, Explore, and the account markers; and the tours'
+ * floor-plan images (at most MAX_PLAN_BYTES each, plan.ts). Not originals or tiles (large;
+ * tiles and manifests are rebuilt from originals by a re-tile), nor the derived or
+ * operational prefixes (tile-gc/, upload-log/, quarantine/, ops/).
  */
 export const BACKUP_SOURCES: readonly { prefix: string; match: RegExp }[] = [
   { prefix: ACCOUNTS_ROOT, match: /^accounts\/[^/]+\/(deletion|disabled)\.json$/ },
   { prefix: EXPLORE_ROOT, match: /^explore\/(index|tours|hidden)\/[^/]+\.json$/ },
   { prefix: 'panos/', match: /^panos\/[^/]+\/[^/]+\/config\.json$/ },
-  { prefix: 'pub/', match: /^pub\/.+\.json$/ },
+  { prefix: 'pub/', match: new RegExp(`^(?:pub/.+\\.json|${PLAN_KEY_PATTERN})$`) },
   { prefix: SLUGS_ROOT, match: /^slugs\/[^/]+\.json$/ },
   { prefix: TOUR_OWNERS_ROOT, match: /^tour-owners\/[^/]+\.json$/ },
   { prefix: 'tours/', match: /^tours\/[^/]+\/[^/]+\/[^/]+\.json$/ },

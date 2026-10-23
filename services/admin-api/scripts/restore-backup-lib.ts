@@ -29,6 +29,7 @@ import {
   pubTourKey,
   SlugRecordSchema,
   storedSlugKey,
+  tourIdOfPlanKey,
   tourOwnerKey,
   type BackupCompleteRecord,
   type OperatorRestoreOk,
@@ -203,7 +204,7 @@ const scenePanoIds = (doc: unknown): string[] => {
 
 /**
  * The tour's keys outside its owner's prefix, as the set has them: public bundle, owner
- * index, Explore pointer, entry and hidden marker, and each share link (live slug and
+ * index, Explore pointer, entry and hidden marker, floor-plan images, and each share link (live slug and
  * aliases from its backed-up publish record) that the backup shows pointing at it.
  */
 async function tourPublicKeys(
@@ -222,6 +223,8 @@ async function tourPublicKeys(
   for (const k of inSet) {
     if (k.startsWith(EXPLORE_INDEX_ROOT) && exploreCursorOf(k)?.endsWith(`-${tourId}`))
       keys.push(k);
+    // Its floor-plan images, the live one and any the tour had not swept yet.
+    if (tourIdOfPlanKey(k) === tourId) keys.push(k);
   }
   if (owner !== null) {
     const record = PublishRecordSchema.safeParse(

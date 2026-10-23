@@ -39,9 +39,11 @@ import {
   isBackedUpKey,
   isRestorableKey,
   publishKey,
+  planKey,
   pubTourKey,
   sharingStoppedKey,
   slugKey,
+  tourIdOfPlanKey,
 } from './keys.js';
 
 describe('keys', () => {
@@ -366,6 +368,9 @@ describe('backup keys', () => {
     exploreHiddenKey('t1'),
     accountDeletionKey(sub),
     accountDisabledKey(sub),
+    planKey('t1', 'pl1', 'image/webp'),
+    planKey('t1', 'pl1', 'image/jpeg'),
+    planKey('t1', 'pl1', 'image/png'),
   ])('backs up %s', (key) => {
     expect(isBackedUpKey(key)).toBe(true);
   });
@@ -382,8 +387,28 @@ describe('backup keys', () => {
     'ops/dlq-alert/q.json',
     backupKey('2026-10-22', tourKey(sub, 't1')),
     BACKUP_PROGRESS_KEY,
+    'pub/plans/t1/pl1.gif',
+    'pub/plans/t1/nested/pl1.webp',
+    'pub/plans/t1/',
   ])('leaves %s out', (key) => {
     expect(isBackedUpKey(key)).toBe(false);
+  });
+
+  it('restores plan images like any other public key', () => {
+    expect(isRestorableKey(planKey('t1', 'pl1', 'image/png'))).toBe(true);
+  });
+
+  it('reads the tourId back from a plan image key, and only from one', () => {
+    expect(tourIdOfPlanKey(planKey('t-1_a', 'pl1', 'image/webp'))).toBe('t-1_a');
+    for (const key of [
+      'pub/plans/t1/pl1.gif',
+      'pub/plans/t1/a/pl1.webp',
+      'pub/plans/t1.webp',
+      pubTourKey('t1'),
+      'pub/plans/../pl1.png',
+    ]) {
+      expect(tourIdOfPlanKey(key)).toBeNull();
+    }
   });
 
   it('never restores the account markers', () => {

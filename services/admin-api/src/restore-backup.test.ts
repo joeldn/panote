@@ -8,6 +8,7 @@ import {
   configKey,
   exploreEntryKey,
   exploreTourKey,
+  planKey,
   publishKey,
   pubTourKey,
   slugKey,
@@ -74,6 +75,7 @@ const put = (key: string, value: unknown, customMetadata?: Record<string, string
     ...(customMetadata ? { customMetadata } : {}),
   });
 const has = async (key: string) => !!(await env.BUCKET.head(key));
+const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 255]);
 
 /** A published, listed tour with one scene, its slug and one old alias. */
 const seedTour = async (sub: string, tourId: string, panoId: string, slug: string) => {
@@ -96,6 +98,10 @@ const seedTour = async (sub: string, tourId: string, panoId: string, slug: strin
   await put(tourOwnerKey(tourId), { v: 1, sub });
   await put(entry, { tourId });
   await put(exploreTourKey(tourId), { v: 1, key: entry });
+  // Its floor-plan image: bytes, not JSON, under the owner-free pub/plans/<tourId>/.
+  await env.BUCKET.put(planKey(tourId, 'pl1', 'image/png'), PNG, {
+    httpMetadata: { contentType: 'image/png' },
+  });
   return [
     tourKey(sub, tourId),
     publishKey(sub, tourId),
@@ -106,6 +112,7 @@ const seedTour = async (sub: string, tourId: string, panoId: string, slug: strin
     slugKey(`${slug}-old`),
     entry,
     exploreTourKey(tourId),
+    planKey(tourId, 'pl1', 'image/png'),
   ];
 };
 
@@ -224,7 +231,7 @@ describe('runRestore', () => {
     await runRestore({ mode: 'list', r2: restoreArgs({ kind: 'all' }).r2 }, d);
 
     expect(lines).toEqual([
-      expect.stringMatching(/^2026-10-22: complete, 10 object\(s\)/),
+      expect.stringMatching(/^2026-10-22: complete, 11 object\(s\)/),
       '2026-10-23: still being written',
     ]);
     expect((await listBackupSets(store)).map((s) => s.date)).toEqual(['2026-10-22', '2026-10-23']);
@@ -267,7 +274,10 @@ describe('runRestore', () => {
     expect(await (await env.BUCKET.get(configKey(SUB, 'p1')))!.json()).toMatchObject({
       edited: true,
     });
-    expect(lines.at(-2)).toMatch(/^restored 8 key\(s\)/);
+    const plan = await env.BUCKET.get(planKey('t1', 'pl1', 'image/png'));
+    expect(new Uint8Array(await plan!.arrayBuffer())).toEqual(PNG);
+    expect(plan!.httpMetadata?.contentType).toBe('image/png');
+    expect(lines.at(-2)).toMatch(/^restored 9 key\(s\)/);
   });
 
   it('--overwrite replaces what is there with the backed-up copy', async () => {

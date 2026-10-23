@@ -1399,11 +1399,12 @@ define user content to a private, dated prefix in the **same** bucket every day
 
 **What's in a set.** `BACKUP_SOURCES` in `@internal/contracts` (`keys.ts`): every `tours/<owner>/<tourId>/*.json`
 (`tour.json`, `publish.json`, `sharing-stopped.json`), each pano's `panos/<owner>/<panoId>/config.json`,
-`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, and the
-account markers `accounts/<owner>/{deletion,disabled}.json`. Not in it: floor-plan images (`pub/plans/`, not JSON, so a restored `tour.json` can name a plan image that is gone; re-upload it in the editor), originals (large, and the
-only copy of the photo, so a lost original is still lost), tiles and manifests (rebuilt from the
-original by a re-tile, "Re-tiling" above), and the derived or operational prefixes `tile-gc/`,
-`upload-log/`, `quarantine/` and `ops/`. Each copy keeps the object's content type, cache control
+`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, the
+account markers `accounts/<owner>/{deletion,disabled}.json`, and the tours' floor-plan images
+`pub/plans/<tourId>/<planId>.{webp,jpg,png}` (at most 4 MiB each, `MAX_PLAN_BYTES`). Not in it:
+originals (large, and the only copy of the photo, so a lost original is still lost), tiles and
+manifests (rebuilt from the original by a re-tile, "Re-tiling" above), and the derived or
+operational prefixes `tile-gc/`, `upload-log/`, `quarantine/` and `ops/`. Each copy keeps the object's content type, cache control
 and custom metadata (titles, visibility, an alias's expiry), since the app reads those.
 
 **Layout.** `backup/<YYYY-MM-DD>/<original key>`, with `backup/<YYYY-MM-DD>/complete.json`
@@ -1432,7 +1433,9 @@ than today, but never the newest **good** set (complete, no failed copy, at leas
 however old, and nothing at all if there is no good set; a prune cut short by the budget finishes
 after the next set. A copy that fails is counted (`failed`), left
 out and tried again in the next day's set; an object over 8 MiB is counted as `skipped` and never
-copied (nothing the app writes is close).
+copied (nothing the app writes is close: plan images, the largest objects in a set, are capped at
+4 MiB by `upload-api`). A copy is read whole into memory, 10 at a time, so a batch of plan images
+is at most 40 MB.
 
 **Logs** (`admin-api` observability), each starting `[backup]`, never with a key (the owner segment
 is reversible): `set <date>: N object(s) copied this run, M so far; the next run carries on` while
@@ -1455,7 +1458,10 @@ figure in Cloudflare's Workers limits docs first); CPU is not the constraint (co
 milliseconds).
 
 **Cost.** Per set, one Class A operation (the PUT) and one Class B (the GET) per object, plus
-the listing; storage is 31 copies of the JSON. Pre-launch that is well inside R2's free tier.
+the listing; storage is 31 copies of the JSON and of the plan images. A tour has one live plan
+image (a few hundred KB to 4 MiB), so plans are most of a set's bytes: 1,000 tours with plans is
+roughly 1 to 4 GB per set, 31 to 120 GB kept. That is the figure to watch on the R2 bill; the
+operation count barely moves (one object per tour). Pre-launch that is well inside R2's free tier.
 At 40,000 objects it is about 1.2 million Class A operations a month (about $1 past the free
 million, shared with everything else) and 31 × the JSON's total size in storage.
 
@@ -1484,8 +1490,9 @@ node scripts/restore-backup.ts --date 2026-10-21 --all --apply
 ```
 
 - A tour is its `tours/<owner>/<tourId>/` records, the configs of the panos its tour and bundle
-  show, its bundle, its owner pointer, its Explore pointer, entry and hidden marker, and the share
-  links its backed-up publish record names that point at it. An owner is every tour and config
+  show, its bundle, its owner pointer, its Explore pointer, entry and hidden marker, every
+  floor-plan image the set holds under `pub/plans/<tourId>/`, and the share links its backed-up
+  publish record names that point at it. An owner is every tour and config
   under their prefix, with those tours' public keys.
 - **Create-only by default**: a key that exists now is left as it is and only missing keys come
   back. `--overwrite` replaces existing keys with the backed-up copy too (an owner's edits since
@@ -1495,7 +1502,7 @@ node scripts/restore-backup.ts --date 2026-10-21 --all --apply
   `--all` before applying it.
 - It refuses an owner whose account is marked for deletion now (the daily sweep would delete the
   restore again); `--all` leaves such owners out, with their tours' public keys. The route checks
-  each key too: a public, share-link, Explore or owner-pointer key is matched to its owner through
+  each key too: a public, plan-image, share-link, Explore or owner-pointer key is matched to its owner through
   the tour's `tour-owners/` pointer (the set's, or else the live one), and refused if that owner is
   marked for deletion or can't be found (a tour older than the pointers: its owner re-publishing
   writes them again). Remove the marker first only if the deletion itself was the mistake. The
