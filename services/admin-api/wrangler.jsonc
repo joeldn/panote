@@ -103,7 +103,7 @@
         "MAX_BYTES_PER_OWNER": "21474836480",
         // Who may open the operator pages (/app/ops): the hex SHA-256 of each operator's
         // Auth0 user id, comma-separated; empty means nobody. docs/deploy.md, "Operator pages".
-        "OPERATOR_SUB_SHA256": "",
+        "OPERATOR_SUB_SHA256": "34a891c72a816b721fbfb2acc19212645df9d8feec99dff2e4d23447003a8e3d",
         // This env's resources, for the operator dashboard (src/ops-metrics): dev and
         // production share one Cloudflare account, so its analytics are filtered to these.
         "OPS_RESOURCES": {
