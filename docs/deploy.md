@@ -1401,6 +1401,32 @@ trailing whitespace is refused. The next daily sweep (03:17 UTC) then does the w
 For a deletion requested by email: `--sub` to mark it, `--status` the next day, then delete the
 Auth0 user as above and reply to the request.
 
+
+### Operator: account storage
+
+There is no admin screen listing accounts. `services/admin-api/scripts/account-storage.ts` lists
+every account the bucket has anything for, largest first, with its tours (`tour.json`s), panos
+(directories under `panos/<owner>/` without a delete tombstone, as the quota counts them), the
+bytes of their originals (the figure `MAX_BYTES_PER_OWNER` caps), the bytes of its deleted
+originals in `trash/` (not counted toward the quota), and whether it is marked for deletion or
+disabled. `--tiles` adds each account's tile bytes (one more listing, of all of `tiles/`, which is
+most of the bucket's keys). It is **read-only**: it only lists keys over the R2 S3 API, never reads
+or writes an object, so it has no dry run because it needs none, and an R2 API token with Object
+Read is enough. Same `R2_*` variables and `--allow-bucket` rule as the other scripts.
+
+```bash
+export R2_ACCOUNT_ID=... R2_BUCKET=pano-content-dev R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=...
+cd services/admin-api
+node scripts/account-storage.ts             # a table, with a totals row
+node scripts/account-storage.ts --top 20    # the 20 largest
+node scripts/account-storage.ts --json --tiles > storage.json
+```
+
+The account column is the Auth0 user id, decoded from the key's owner segment, so treat the
+output like the case log: keep it private. Listing costs one Class A operation per 1,000 keys.
+
+Bulk re-tiling already has a script: `retile.ts` ("Re-tiling").
+
 ---
 
 ## Backups
