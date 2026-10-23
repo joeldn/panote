@@ -5,7 +5,10 @@ import { lookFromOrientation, screenAngle, smoothLook, yawFor, type Look } from 
 
 /** Share of the way each reading moves toward the new one; the viewer eases on top. */
 const SMOOTHING = 0.35;
-/** With no reading this long after turning on, the device (or the embed) gives none. */
+/**
+ * With no reading this long after turning on, it goes off again. The control stays: the
+ * sensor may just have been slow, so another tap tries again.
+ */
 const NO_READINGS_MS = 1500;
 
 type PermissionRequest = () => Promise<'granted' | 'denied' | 'default'>;
@@ -44,8 +47,8 @@ export interface Gyro {
  * "Tilt to look around": while on, the phone's orientation steers the camera. The
  * heading is relative (it starts from where the camera faces), the pitch absolute
  * (holding the phone upright looks at the horizon). A drag or a key on the viewer
- * turns it off, as does a device or embed that gives no readings, which also hides
- * the control. `stage` is the element whose viewer the visitor drags.
+ * turns it off, as does a device or embed that gives no readings. A refused permission
+ * hides the control. `stage` is the element whose viewer the visitor drags.
  */
 export function useGyro(viewer: PanoViewerApi | null, stage: RefObject<HTMLElement | null>): Gyro {
   const [supported] = useState(gyroSupported);
@@ -59,9 +62,7 @@ export function useGyro(viewer: PanoViewerApi | null, stage: RefObject<HTMLEleme
     let smoothed: Look | null = null;
     let readings = false;
     const silent = setTimeout(() => {
-      if (readings) return;
-      setFailed(true);
-      setOn(false);
+      if (!readings) setOn(false);
     }, NO_READINGS_MS);
     const onOrientation = (e: DeviceOrientationEvent) => {
       const look = lookFromOrientation(e, screenAngle());

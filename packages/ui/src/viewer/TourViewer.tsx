@@ -166,17 +166,22 @@ function PointsLayer({ panoId, hotspots, links, active, setActive, onGo }: Point
 const SETTLE_MS = 400;
 
 // Reports the camera once it has stopped drawing for SETTLE_MS. Inside PanoStage for the viewer.
+// Nothing is reported while a scene change is in flight: the viewer cuts to the new
+// scene's camera as its pano swaps in, a render before `panoId` follows, so a report
+// then could pair the old scene with the new scene's camera.
 function ViewSettle({
   panoId,
+  moving,
   onSettle,
 }: {
   panoId: string;
+  moving: boolean;
   onSettle: (id: string, view: View) => void;
 }) {
   const viewer = usePanoViewer();
-  const latest = useRef({ panoId, onSettle });
+  const latest = useRef({ panoId, moving, onSettle });
   useEffect(() => {
-    latest.current = { panoId, onSettle };
+    latest.current = { panoId, moving, onSettle };
   });
   useEffect(() => {
     if (!viewer) return;
@@ -184,8 +189,8 @@ function ViewSettle({
     const off = viewer.onRender(() => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        const { panoId: id, onSettle: cb } = latest.current;
-        cb(id, viewer.getView());
+        const { panoId: id, moving: inFlight, onSettle: cb } = latest.current;
+        if (!inFlight) cb(id, viewer.getView());
       }, SETTLE_MS);
     });
     return () => {
@@ -409,7 +414,7 @@ export function TourViewer({
         onLoadError={loadFailed}
       >
         <LinkPrefetch targets={prefetchTargets} prefetch={prefetch} />
-        {onViewSettle && <ViewSettle panoId={panoId} onSettle={onViewSettle} />}
+        {onViewSettle && <ViewSettle panoId={panoId} moving={moving} onSettle={onViewSettle} />}
         <PointsLayer
           panoId={panoId}
           hotspots={hotspots}

@@ -875,6 +875,36 @@ describe('TourViewer navigation from the page', () => {
   });
 });
 
+describe('TourViewer settled view during a scene change', () => {
+  it("reports nothing while a change is in flight, so no scene gets the next one's camera", async () => {
+    const onViewSettle = vi.fn();
+    const { viewer } = renderViewer({ onViewSettle });
+    await waitFor(() => expect(viewer().load).toHaveBeenCalled());
+    vi.useFakeTimers();
+    try {
+      const v = viewer();
+      v.defer = true;
+      fireEvent.click(screen.getByRole('button', { name: 'Go to To the church' }));
+      expect(v.crossfade).toHaveBeenCalledWith('church', { yaw: 1 });
+      // The viewer has cut to the church's camera while the square is still the scene shown.
+      const church = { yaw: 1, pitch: 0, fov: 70 };
+      v.getView = () => church;
+      const draw = () => act(() => v.renders.forEach((cb) => cb(church)));
+      draw();
+      act(() => vi.advanceTimersByTime(500));
+      expect(onViewSettle).not.toHaveBeenCalled();
+      // Landed: the next rest is the church's, with its camera.
+      await act(async () => v.pending[0]!.resolve());
+      draw();
+      act(() => vi.advanceTimersByTime(500));
+      expect(onViewSettle).toHaveBeenCalledTimes(1);
+      expect(onViewSettle).toHaveBeenCalledWith('church', church);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('TourViewer fullscreen fallback', () => {
   afterEach(() => Reflect.deleteProperty(document, 'fullscreenEnabled'));
   const noFullscreen = () =>
@@ -1016,13 +1046,22 @@ describe('TourViewer tilt to look around', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: NAME })).toBeNull());
   });
 
-  it('goes away when no reading comes (say, an embed without allow="gyroscope")', async () => {
+  it('turns off when no reading comes, but stays offered for another try', async () => {
+    // Say, an embed without allow="gyroscope", or a sensor slow to wake.
     supportGyro();
-    renderViewer();
+    const { viewer } = renderViewer();
     await act(async () => {});
     vi.useFakeTimers();
     fireEvent.click(screen.getByRole('button', { name: NAME }));
     act(() => vi.advanceTimersByTime(1600));
-    expect(screen.queryByRole('button', { name: NAME })).toBeNull();
+    const button = screen.getByRole('button', { name: NAME });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    // A second tap tries again, and readings that come now steer the camera.
+    fireEvent.click(button);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    tilt(0, 90, 0);
+    expect(viewer().setView).toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1600));
+    expect(button.getAttribute('aria-pressed')).toBe('true');
   });
 });
