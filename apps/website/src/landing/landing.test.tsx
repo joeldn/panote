@@ -19,6 +19,11 @@ import { ConfigContext } from '../config-context.js';
 import { routes } from '../routes.js';
 import { StageFactoryContext } from '../tour/stage-factory.js';
 
+// Each test renders the whole site router, which is quick alone but ran past 5 s in CI's
+// Coverage job, where every package's suite runs at once under V8 coverage (three
+// different tests here, on two PRs). The work is the same; the runner is that much slower.
+vi.setConfig({ testTimeout: 15_000 });
+
 type LoadOptions = Parameters<ReturnType<ViewerFactory>['load']>[1];
 
 const stash = vi.hoisted(() => vi.fn<(file: File) => Promise<boolean>>(async () => true));
