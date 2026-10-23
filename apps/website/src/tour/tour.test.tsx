@@ -157,6 +157,7 @@ const ownerBody = {
   etag: 'e1',
   publish: null,
 };
+let flagStatus = 204;
 const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
   if (url.startsWith('/api/admin/')) {
@@ -172,6 +173,7 @@ const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit
     const key = url.slice(CDN.length);
     return key in objects ? Response.json(objects[key]) : new Response('', { status: 404 });
   }
+  if (url === '/api/tours/tour-a/flag') return new Response(null, { status: flagStatus });
   if (url.startsWith('/api/tours/tour-a/')) {
     const liked = url.endsWith('/like');
     const gate = url.endsWith('/view') ? viewGate : null;
@@ -229,6 +231,7 @@ beforeEach(() => {
   adminTour = 200;
   localStorage.clear();
   fetchMock.mockClear();
+  flagStatus = 204;
   vi.stubGlobal('fetch', fetchMock);
 });
 afterEach(() => {
@@ -1340,29 +1343,60 @@ describe('owner Edit', () => {
 });
 
 describe('Report', () => {
-  it('opens a mail to hello@panote.io with the tour link filled in', async () => {
+  const flagCalls = () => calls('/api/tours/tour-a/flag');
+
+  it('flags the panorama on screen with a reason and a note', async () => {
     renderAt('/s/old-town');
     await shown('square');
-    const link = screen.getByRole('link', { name: 'Report this tour' });
-    const href = new URL(link.getAttribute('href')!);
-    expect(href.protocol).toBe('mailto:');
-    expect(href.pathname).toBe('hello@panote.io');
-    expect(href.searchParams.get('subject')).toBe('Report a tour');
-    expect(href.searchParams.get('body')).toContain('Tour: https://panote.test/s/old-town\r\n');
-    expect(link.getAttribute('href')).toContain('%0D%0A');
-    expect(link.textContent).toBe('Report');
+    const button = screen.getByRole('button', { name: 'Report this panorama' });
+    expect(button.textContent).toBe('Report');
+    fireEvent.click(button);
+    const dialog = within(await screen.findByRole('dialog', { name: 'Report this panorama' }));
+    const send = dialog.getByRole('button', { name: 'Send report' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fireEvent.click(dialog.getByLabelText('Violence or gore'));
+    fireEvent.change(dialog.getByLabelText('Anything else? (optional)'), {
+      target: { value: '  blood on the floor ' },
+    });
+    fireEvent.click(send);
+    expect(await dialog.findByText('Thanks. We’ll take a look.')).toBeTruthy();
+    expect(flagCalls()).toHaveLength(1);
+    const [, init] = flagCalls()[0]!;
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      panoId: 'square',
+      reason: 'violence',
+      note: 'blood on the floor',
+    });
+  });
+
+  it('says so when it could not send, and keeps a mail link for longer reports', async () => {
+    flagStatus = 500;
+    renderAt('/s/old-town');
+    await shown('square');
+    fireEvent.click(screen.getByRole('button', { name: 'Report this panorama' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Report this panorama' }));
+    const mail = new URL(
+      dialog.getByRole('link', { name: 'Email us instead' }).getAttribute('href')!,
+    );
+    expect(mail.protocol).toBe('mailto:');
+    expect(mail.pathname).toBe('hello@panote.io');
+    expect(mail.searchParams.get('body')).toContain('Tour: https://panote.test/s/old-town\r\n');
+    fireEvent.click(dialog.getByLabelText('Spam or misleading'));
+    fireEvent.click(dialog.getByRole('button', { name: 'Send report' }));
+    expect((await dialog.findByRole('alert')).textContent).toBe('Couldn’t send that. Try again.');
   });
 
   it('shows for the owner too, beside Edit', async () => {
     renderAt('/s/old-town', signedIn());
     await screen.findByRole('link', { name: 'Edit' });
-    expect(screen.getByRole('link', { name: 'Report this tour' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Report this panorama' })).toBeTruthy();
   });
 
   it('is not in the embed', async () => {
     renderAt('/s/old-town/embed');
     await shown('square');
-    expect(screen.queryByRole('link', { name: 'Report this tour' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Report this panorama' })).toBeNull();
   });
 });
 

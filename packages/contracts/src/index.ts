@@ -11,6 +11,7 @@ export * from './analytics.js';
 export * from './slug.js';
 export * from './publish.js';
 export * from './explore.js';
+export * from './moderation.js';
 export * from './client-error.js';
 export * from './ops.js';
 export * from './support.js';

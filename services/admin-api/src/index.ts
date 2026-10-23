@@ -24,6 +24,7 @@ import {
   SceneConfigSchema,
   SUPPORT_USERS_PATH,
   EXPLORE_QUEUE_PATH,
+  FLAGS_PATH,
   signInOf,
   TOUR_TRANSFERRING_ERROR,
   type TransferFinishing,
@@ -75,6 +76,7 @@ import {
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { exploreQueueRoutes } from './explore-queue.js';
+import { flagRoutes } from './flags.js';
 import { insightsRoute } from './insights.js';
 import {
   jsonBody,
@@ -1084,6 +1086,8 @@ app.post(OPERATOR_BACKFILL_PATH, async (c) => {
 app.route(SUPPORT_USERS_PATH, supportRoutes);
 // The operator's Explore approval queue (explore-queue.ts), behind the operator gate.
 app.route(EXPLORE_QUEUE_PATH, exploreQueueRoutes);
+// The operator's review of visitors' flags (flags.ts), behind the operator gate.
+app.route(FLAGS_PATH, flagRoutes);
 
 app.onError(errorHandler);
 

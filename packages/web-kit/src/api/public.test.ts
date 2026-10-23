@@ -78,6 +78,24 @@ describe('createPublicApi', () => {
     await expect(api.getStats('t1')).rejects.toBeInstanceOf(ApiSchemaError);
     await expect(api.getStats('a/b')).rejects.toThrow(TypeError);
   });
+
+  it('posts a flag as JSON, and throws ApiError when it is refused', async () => {
+    const fetch = vi.fn(
+      async (_u: string, _i?: RequestInit) => new Response(null, { status: 204 }),
+    );
+    const api = createPublicApi({ fetch, baseUrl: 'https://panote.test/' });
+    await api.flagPano('t1', { panoId: 'p1', reason: 'spam' });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://panote.test/api/tours/t1/flag');
+    expect(fetch.mock.calls[0]?.[1]).toEqual({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"panoId":"p1","reason":"spam"}',
+    });
+    fetch.mockResolvedValueOnce(json({ error: 'tour not found' }, 404));
+    await expect(api.flagPano('t1', { panoId: 'p9', reason: 'spam' })).rejects.toBeInstanceOf(
+      ApiError,
+    );
+  });
 });
 
 describe('explore', () => {

@@ -2,6 +2,9 @@ import {
   AccountDeleteOkSchema,
   EXPLORE_QUEUE_PATH,
   ExploreQueueSchema,
+  FLAGS_PATH,
+  FlagListSchema,
+  type FlagList,
   type ExploreDecision,
   type ExploreQueue,
   SUPPORT_USERS_PATH,
@@ -225,6 +228,10 @@ export interface AdminApi {
     action: ExploreDecision,
     fingerprint: string,
   ): Promise<ExploreQueue>;
+  /** Operator only: visitors' newest flags on panoramas. */
+  listFlags(): Promise<FlagList>;
+  /** Operator only: deletes flags dealt with; answers the list as it is now. Needs a recent sign-in. */
+  dismissFlags(flagIds: string[]): Promise<FlagList>;
   /** The operator dashboard (operators only: anyone else gets an ApiError 404). */
   getOpsMetrics(range?: OpsRange): Promise<OpsMetrics>;
   /**
@@ -513,6 +520,15 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
       }
       if (!res.res.ok) throw new ApiError(res.res.status, res.body);
       return parseWith(ExploreQueueSchema, res.url, res.body);
+    },
+    listFlags: async () => getJson(FLAGS_PATH, FlagListSchema),
+    dismissFlags: async (flagIds) => {
+      const res = await send('POST', `${FLAGS_PATH}/dismiss`, { body: { flagIds } });
+      if (res.res.status === 403 && ReauthRequiredSchema.safeParse(res.body).success) {
+        throw new ReauthRequiredError(res.body);
+      }
+      if (!res.res.ok) throw new ApiError(res.res.status, res.body);
+      return parseWith(FlagListSchema, res.url, res.body);
     },
     getOpsMetrics: async (range = DEFAULT_OPS_RANGE) =>
       getJson(`/api/admin/ops/metrics?range=${range}`, OpsMetricsSchema),

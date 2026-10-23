@@ -37,6 +37,8 @@ export const OPS_EVENT_NAMES = [
   'rate-limited',
   /** public-api accepted a client error report. detail: the app (website | admin). */
   'client-error',
+  /** public-api stored a visitor's flag on a panorama. detail: the reason. */
+  'pano-flagged',
 ] as const;
 export type OpsEventName = (typeof OPS_EVENT_NAMES)[number];
 

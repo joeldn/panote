@@ -328,6 +328,20 @@ export const EXPLORE_PENDING_ROOT = `${EXPLORE_ROOT}pending/`;
 export const explorePendingKey = (t: string): string =>
   `${EXPLORE_PENDING_ROOT}${assertValidId(t, 'tourId')}.json`;
 
+// Moderation (contracts moderation.ts): visitors' flags on a panorama, for the operator's
+// review queue. Private (outside the WAF's public prefixes) and owner-free; not backed up,
+// since a flag only matters until the operator has looked at it.
+export const MODERATION_ROOT = 'moderation/';
+export const FLAGS_ROOT = `${MODERATION_ROOT}flags/`;
+/** One flag, newest first: `moderation/flags/<rank>-<flagId>.json` (rank as exploreRank). */
+export const flagKey = (atMs: number, flagId: string): string =>
+  `${FLAGS_ROOT}${exploreRank(atMs)}-${assertValidId(flagId, 'flagId')}.json`;
+/** The flagId a flag key names, or null for any other key. */
+export const flagIdOf = (key: string): string | null => {
+  const m = /^moderation\/flags\/\d{13}-([A-Za-z0-9_-]{1,64})\.json$/.exec(key);
+  return m ? m[1]! : null;
+};
+
 // Nightly backup (admin-api's backup.ts): a private copy of every JSON document that
 // defines user content, under backup/<YYYY-MM-DD>/<its original key>, kept 30 days. Outside
 // the WAF's public prefixes (only tiles/, pub/ and slugs/ pass), and nothing but the backup

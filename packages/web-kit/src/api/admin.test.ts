@@ -637,3 +637,33 @@ describe('Explore approval queue', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('operator flags', () => {
+  const f = {
+    v: 1,
+    flagId: 'f1',
+    source: 'viewer',
+    tourId: 't1',
+    slug: 'old-town',
+    panoId: 'p1',
+    reason: 'spam',
+    at: '2026-10-20T00:00:00.000Z',
+  };
+
+  it('lists flags and dismisses some, answered with the list as it is now', async () => {
+    const { api, call } = setup(
+      json({ flags: [f], more: false }),
+      json({ flags: [], more: false }),
+    );
+    await expect(api.listFlags()).resolves.toEqual({ flags: [f], more: false });
+    expect(call(0).url).toBe('https://panote.test/api/admin/ops/flags');
+    await expect(api.dismissFlags(['f1'])).resolves.toEqual({ flags: [], more: false });
+    expect(call(1).url).toBe('https://panote.test/api/admin/ops/flags/dismiss');
+    expect(JSON.parse(String(call(1).init.body))).toEqual({ flagIds: ['f1'] });
+  });
+
+  it('throws ReauthRequiredError for a stale sign-in', async () => {
+    const { api } = setup(json({ error: 'reauthentication required' }, 403));
+    await expect(api.dismissFlags(['f1'])).rejects.toBeInstanceOf(ReauthRequiredError);
+  });
+});

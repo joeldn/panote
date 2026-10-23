@@ -98,6 +98,8 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     supportAction: fail,
     exploreQueue: fail,
     exploreDecide: fail,
+    listFlags: fail,
+    dismissFlags: fail,
     getOpsMetrics: fail,
     offerTransfer: fail,
     cancelTransfer: fail,

@@ -16,7 +16,7 @@ import './tour.css';
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';
 import { useViewerAnalytics } from './analytics.js';
-import { reportHref } from './report.js';
+import { FlagDialog } from './FlagDialog.js';
 import { prefetchShareSheet } from './share-chunk.js';
 import { LazyShareSheet } from './share-sheet.js';
 import { StageFactoryContext } from './stage-factory.js';
@@ -52,14 +52,28 @@ function OwnerEdit({ tourId }: { tourId: string }) {
   );
 }
 
-/** Report, by mail with the share link filled in; never in the embed. */
-function ReportLink({ slug }: { slug: string }) {
-  const { siteOrigin } = useConfig();
+/** Report: flags the panorama on screen with a reason (FlagDialog); never in the embed. */
+function ReportButton({ tourId, slug, panoId }: { tourId: string; slug: string; panoId: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <a className="tour-report" href={reportHref(siteOrigin, slug)} aria-label="Report this tour">
-      <i className="fa-solid fa-flag" aria-hidden="true" />
-      <span className="tour-report__label">Report</span>
-    </a>
+    <>
+      <button
+        type="button"
+        className="tour-report"
+        aria-label="Report this panorama"
+        onClick={() => setOpen(true)}
+      >
+        <i className="fa-solid fa-flag" aria-hidden="true" />
+        <span className="tour-report__label">Report</span>
+      </button>
+      <FlagDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        tourId={tourId}
+        slug={slug}
+        panoId={panoId}
+      />
+    </>
   );
 }
 
@@ -206,7 +220,7 @@ export function TourView({ tour: stored, embed }: { tour: PublishedTour; embed: 
             shown && <TourStats tourId={tour.tourId} visible view={{ panoId, surface }} />,
           end: (
             <>
-              <ReportLink slug={tour.slug} />
+              <ReportButton tourId={tour.tourId} slug={tour.slug} panoId={here?.panoId ?? start} />
               <OwnerEdit tourId={tour.tourId} />
             </>
           ),

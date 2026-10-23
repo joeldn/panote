@@ -39,6 +39,8 @@ import {
   exploreHiddenKey,
   explorePendingKey,
   exploreTourKey,
+  flagIdOf,
+  flagKey,
   isBackedUpKey,
   isRestorableKey,
   publishKey,
@@ -539,5 +541,17 @@ describe('redactOwner', () => {
     redactOwner(`panos/${'a'.repeat(100_000)}`);
     redactOwner(`${'api/tours/'.repeat(10_000)}x`);
     expect(performance.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe('flag keys', () => {
+  it('lists newest first and names the flag back', () => {
+    const older = flagKey(1_700_000_000_000, 'f-old');
+    const newer = flagKey(1_700_000_000_001, 'f-new');
+    expect(newer < older).toBe(true);
+    expect(older).toMatch(/^moderation\/flags\/\d{13}-f-old\.json$/);
+    expect(flagIdOf(older)).toBe('f-old');
+    expect(flagIdOf('moderation/flags/x.json')).toBeNull();
+    expect(() => flagKey(0, '../x')).toThrow();
   });
 });
