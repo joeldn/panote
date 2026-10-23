@@ -1,0 +1,158 @@
+// @ts-check
+'use strict';
+
+/*
+ * Auth0 post-login Action "Block banned emails".
+ *
+ * Paste this whole file into the Action's code editor (docs/deploy.md, "Email ban list"), and
+ * put it FIRST in the Login flow, before "Link accounts by verified email", so a banned address
+ * is refused before it is linked into anything.
+ *
+ * A takedown (services/admin-api/scripts/takedown.ts --disable-owner) blocks one Auth0 user id.
+ * This blocks the person's email address instead, so a new Google, Apple or email-code sign-in
+ * with that address can't start a fresh account. It needs no npm dependency.
+ *
+ * Secret (Action → Secrets):
+ *   BANNED_EMAIL_SHA256  SHA-256 hashes (hex) of normalised email addresses, separated by
+ *                        commas, spaces or newlines. Never the addresses themselves.
+ *                        `node packages/auth0-actions/scripts/ban-email.cjs <email>` prints
+ *                        the hash to add. Missing or empty: nobody is refused. Entries
+ *                        that aren't 64 hex digits are ignored, and counted in a warning.
+ *
+ * The hashes are unsalted SHA-256, so they keep addresses out of plain sight, not secret:
+ * anyone who can read the secret can test whether a given address is on the list.
+ *
+ * Every address the user carries is checked: the root email and each linked identity's,
+ * verified or not (an unverified address that matches still belongs to whoever was banned or
+ * to someone posing as them; either way it doesn't sign in). It also runs on refresh-token
+ * exchanges, so a session already open ends at its next token refresh.
+ */
+
+const LOG = '[ban-list]';
+
+/** What the person sees on the admin app's callback page (it shows its own copy for access_denied). */
+const DENY_REASON = 'This account can’t sign in to Panote.';
+
+// Google ignores dots in the local part and treats googlemail.com as gmail.com.
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
+
+/**
+ * The form an address is hashed in, so trivial variants of a banned address hash the same:
+ * trimmed and lower-cased, any `+tag` dropped, and for Gmail the dots too.
+ *
+ * @param {string} email
+ * @returns {string}
+ */
+function normaliseEmail(email) {
+  const lower = email.trim().toLowerCase();
+  const at = lower.lastIndexOf('@');
+  if (at <= 0) return lower;
+  let local = lower.slice(0, at);
+  let domain = lower.slice(at + 1);
+  const plus = local.indexOf('+');
+  if (plus > 0) local = local.slice(0, plus);
+  if (GMAIL_DOMAINS.has(domain)) {
+    local = local.replace(/\./g, '');
+    domain = 'gmail.com';
+  }
+  return `${local}@${domain}`;
+}
+
+/** @param {string} email @returns {Promise<string>} the hex SHA-256 of the normalised address */
+async function emailHash(email) {
+  const bytes = new TextEncoder().encode(normaliseEmail(email));
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+const isHash = (/** @type {string} */ h) => /^[0-9a-f]{64}$/.test(h);
+
+/** @param {string | undefined} secret @returns {string[]} the secret's non-empty entries */
+const entriesOf = (secret) =>
+  (secret ?? '')
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map((h) => h.toLowerCase());
+
+/**
+ * The hashes in the secret; anything that isn't 64 hex digits is ignored.
+ *
+ * @param {string | undefined} secret
+ * @returns {Set<string>}
+ */
+function parseBanList(secret) {
+  return new Set(entriesOf(secret).filter(isHash));
+}
+
+/**
+ * How many of the secret's entries aren't hashes (a pasted address, a truncated hash).
+ *
+ * @param {string | undefined} secret
+ */
+const ignoredEntries = (secret) => entriesOf(secret).filter((h) => !isHash(h)).length;
+
+/**
+ * @typedef {object} BanEvent
+ * @property {{ email?: string, identities?: { profileData?: { email?: string } }[] }} user
+ * @property {Record<string, string | undefined>} [secrets]
+ */
+
+/**
+ * Every address on the user: the root email and each identity's.
+ *
+ * @param {BanEvent['user']} user
+ * @returns {string[]}
+ */
+function emailsOf(user) {
+  const all = [user.email, ...(user.identities ?? []).map((id) => id.profileData?.email)];
+  return all.filter(/** @returns {e is string} */ (e) => typeof e === 'string' && e.includes('@'));
+}
+
+/**
+ * @param {BanEvent} event
+ * @param {(...args: unknown[]) => void} [log]
+ * @returns {Promise<boolean>}
+ */
+// eslint-disable-next-line no-console
+async function isBanned(event, log = console.log) {
+  const secret = event.secrets?.BANNED_EMAIL_SHA256;
+  const ignored = ignoredEntries(secret);
+  // The count only: an entry may be a pasted address, which must not reach the logs.
+  if (ignored > 0)
+    log(LOG, `${ignored} BANNED_EMAIL_SHA256 entries are not SHA-256 hashes, ignored`);
+  const banned = parseBanList(secret);
+  if (banned.size === 0) return false;
+  const hashes = await Promise.all(emailsOf(event.user).map(emailHash));
+  return hashes.some((h) => banned.has(h));
+}
+
+/**
+ * Auth0 calls this on every login and token refresh (Actions → Triggers → post-login).
+ *
+ * @param {BanEvent} event
+ * @param {{ access: { deny: (reason: string) => void } }} api
+ */
+exports.onExecutePostLogin = async (event, api) => {
+  let banned;
+  try {
+    banned = await isBanned(event);
+  } catch (e) {
+    // A runtime problem (crypto.subtle missing, say) must not lock everyone out: log the
+    // error's name only and let the login through.
+    // eslint-disable-next-line no-console
+    console.log(LOG, 'ban check failed, sign-in allowed:', e instanceof Error ? e.name : 'unknown');
+    return;
+  }
+  if (!banned) return;
+  // Never the address or the user id: the log is enough to tell the ban worked.
+  // eslint-disable-next-line no-console
+  console.log(LOG, 'sign-in refused: the email is on the ban list');
+  api.access.deny(DENY_REASON);
+};
+
+exports.DENY_REASON = DENY_REASON;
+exports.emailHash = emailHash;
+exports.emailsOf = emailsOf;
+exports.isBanned = isBanned;
+exports.normaliseEmail = normaliseEmail;
+exports.parseBanList = parseBanList;

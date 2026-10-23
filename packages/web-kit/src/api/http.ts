@@ -26,6 +26,17 @@ export class ConflictError extends ApiError {
   }
 }
 
+/**
+ * 403 from account delete: the sign-in is too old (or the token doesn't say when it was).
+ * Sign in again with `reauthenticate: true`, then retry.
+ */
+export class ReauthRequiredError extends ApiError {
+  constructor(body: unknown) {
+    super(403, body, 'a recent sign-in is required');
+    this.name = 'ReauthRequiredError';
+  }
+}
+
 /** A 2xx body that failed its contract schema. Never retried: it is a server/client drift bug. */
 export class ApiSchemaError extends Error {
   constructor(

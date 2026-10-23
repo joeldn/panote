@@ -55,6 +55,9 @@
         // CDN purge target (B6): the panote.dev zone id (not secret).
         "CDN_ZONE_ID": "2196d8dead0322ad69307711fc72b5d3",
         "CDN_HOST": "cdn.panote.dev",
+        // Account delete wants a sign-in from the last 10 minutes (the Auth0 Action's
+        // auth_time claim). "false" turns that off; docs/deploy.md, "Account deletion".
+        "REQUIRE_RECENT_AUTH": "true",
       },
       // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
       // the backup, which runs every 15 minutes until the day's set is complete
@@ -104,6 +107,8 @@
         // CDN purge target (B6). Placeholder zone id: the purge no-ops until it's real.
         "CDN_ZONE_ID": "YOUR_PANOTE_IO_ZONE_ID",
         "CDN_HOST": "cdn.panote.io",
+        // Account delete wants a recent sign-in (see env.dev).
+        "REQUIRE_RECENT_AUTH": "true",
       },
       // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
       // the backup, which runs every 15 minutes until the day's set is complete

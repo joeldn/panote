@@ -1,6 +1,7 @@
 // Tokens are cached in localStorage (D3). That is only acceptable while the Auth0
 // tenant keeps refresh-token rotation and reuse detection enabled.
 import type { Auth0ClientOptions } from '@auth0/auth0-spa-js';
+import { RECENT_AUTH_MAX_AGE_SECONDS } from '@internal/contracts';
 
 import { KNOWN_CONNECTIONS, type AuthConfig, type ConnectionId } from './config.js';
 
@@ -18,7 +19,13 @@ interface AppState {
 /** The subset of `Auth0Client` this wrapper uses; tests inject a fake. */
 export interface Auth0Like {
   loginWithRedirect(options: {
-    authorizationParams?: { connection?: string; redirect_uri?: string };
+    authorizationParams?: {
+      connection?: string;
+      redirect_uri?: string;
+      prompt?: 'login';
+      max_age?: number;
+      login_hint?: string;
+    };
     appState?: AppState;
   }): Promise<void>;
   handleRedirectCallback(url?: string): Promise<{ appState?: AppState }>;
@@ -110,7 +117,18 @@ export interface Auth {
   readonly configured: boolean;
   /** The sign-in buttons to render (config-driven; Google only in Wave 6). */
   readonly connections: SignInConnection[];
-  signIn(options: { connection: ConnectionId; returnTo?: string }): Promise<void>;
+  /**
+   * `reauthenticate`: make the user actually sign in again, even with a live Auth0
+   * session (`prompt=login`), so the new token carries a fresh sign-in time; account
+   * delete asks for one (admin-api's 403 `reauthentication required`).
+   */
+  signIn(options: {
+    connection: ConnectionId;
+    returnTo?: string;
+    reauthenticate?: boolean;
+    /** Pre-fills the address where the connection asks for one (Auth0 `login_hint`). */
+    loginHint?: string;
+  }): Promise<void>;
   /** Finish the redirect on the callback route; resolves to the path to go to next. */
   handleCallback(url: string): Promise<string>;
   getAccessToken(): Promise<string>;
@@ -214,13 +232,18 @@ export function createAuth(config: AuthConfig, opts: CreateAuthOptions): Auth {
   return {
     configured: config.configured,
     connections,
-    async signIn({ connection, returnTo }) {
+    async signIn({ connection, returnTo, reauthenticate = false, loginHint }) {
       if (!config.connections.includes(connection)) {
         throw new Error(`sign-in connection not enabled: ${connection}`);
       }
       const c = await getClient();
       await c.loginWithRedirect({
-        authorizationParams: { connection, redirect_uri: opts.redirectUri },
+        authorizationParams: {
+          connection,
+          redirect_uri: opts.redirectUri,
+          ...(reauthenticate && { prompt: 'login', max_age: RECENT_AUTH_MAX_AGE_SECONDS }),
+          ...(loginHint && { login_hint: loginHint }),
+        },
         appState: { returnTo: safeReturnTo(returnTo, origin) },
       });
     },

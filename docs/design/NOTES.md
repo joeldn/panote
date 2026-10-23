@@ -107,9 +107,15 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   from the editor's library or delete it for good. (Deleting a whole tour
   deletes the panos only it used.)
 - **Embed `allow` list.** The README's embed snippet asks for
-  `allow="fullscreen; xr-spatial-tracking"`. The code asks only for
-  `fullscreen`: there is no VR mode, so the snippet shouldn't imply one.
-  Embeds already pasted with the old list keep working.
+  `allow="fullscreen; xr-spatial-tracking"`. The code asks for
+  `fullscreen; gyroscope; accelerometer`: there is no VR mode, so the snippet
+  shouldn't imply one, while `gyroscope` and `accelerometer` let a visitor
+  look around by tilting their phone inside the embed. Embeds already pasted
+  with an older list keep working; without those two the browser gives the
+  embed no motion readings, and the tilt control turns itself off again
+  when tried (it stays, so it can be tried again; only a refused permission
+  hides it). On an iPhone, where the frame can't go fullscreen, the embed's
+  fullscreen button opens the tour page in a new tab instead.
 
 ## Auth
 

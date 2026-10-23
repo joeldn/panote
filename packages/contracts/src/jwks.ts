@@ -1,4 +1,4 @@
-import { fetchJwks, verifyJwt, type Jwk } from './jwt.js';
+import { fetchJwks, verifyJwt, type Jwk, type VerifiedClaims } from './jwt.js';
 
 export interface JwksLoader {
   get(force?: boolean): Promise<Jwk[]>;
@@ -60,7 +60,7 @@ export const makeJwksLoader = (
 export const verifyWithRotation = async (
   token: string,
   opts: { issuer: string; audience: string; loader: JwksLoader },
-): Promise<{ sub: string }> => {
+): Promise<VerifiedClaims> => {
   const { issuer, audience, loader } = opts;
   try {
     return await verifyJwt(token, {

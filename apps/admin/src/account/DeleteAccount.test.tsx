@@ -1,12 +1,18 @@
-import { cleanup, configure, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { FetchLike } from '@internal/web-kit';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fakeAuth, renderAdmin } from '../__fixtures__/auth.js';
+import { fakeAuth, renderAdmin, USER } from '../__fixtures__/auth.js';
+
+// What the dialog keeps across the re-auth redirect: the account that asked.
+const DELETING_SUB_KEY = 'panote:delete-account:sub';
 
 // The first render in a cold worker can exceed the 1s default under a loaded `turbo test`.
 configure({ asyncUtilTimeout: 5000 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -88,6 +94,79 @@ describe('Delete account', () => {
     fireEvent.click(deleteButton());
     expect((await screen.findByRole('alert')).textContent).toContain('couldn’t be deleted');
     expect(screen.getByRole('dialog', { name: 'Delete your account?' })).toBeTruthy();
+    expect(auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it('asks for a fresh sign-in when the server wants one, coming back to this page', async () => {
+    const auth = fakeAuth();
+    const fetch = server(() => json({ error: 'reauthentication required' }, 403));
+    renderAdmin('/app/?tab=tours', { auth, fetch });
+    await openDialog();
+    fireEvent.change(phraseInput(), { target: { value: 'delete my account' } });
+    fireEvent.click(deleteButton());
+    const signIn = await screen.findByRole('dialog', {
+      name: 'Sign in again to delete your account',
+    });
+    expect(screen.queryByRole('dialog', { name: 'Delete your account?' })).toBeNull();
+    fireEvent.click(within(signIn).getByRole('button', { name: /Google/ }));
+    await waitFor(() =>
+      expect(auth.signIn).toHaveBeenCalledWith({
+        connection: 'google-oauth2',
+        returnTo: '/app/?tab=tours&delete-account=reauthenticated',
+        reauthenticate: true,
+        loginHint: USER.email,
+      }),
+    );
+    expect(sessionStorage.getItem(DELETING_SUB_KEY)).toBe(USER.sub);
+    expect(auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it('back from signing in again: reopens the dialog, drops the param, and deletes', async () => {
+    sessionStorage.setItem(DELETING_SUB_KEY, USER.sub);
+    const auth = fakeAuth();
+    const { router } = renderAdmin('/app/?delete-account=reauthenticated', {
+      auth,
+      fetch: server(() => json({ status: 'deleted' })),
+    });
+    await screen.findByRole('dialog', { name: 'Delete your account?' });
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(sessionStorage.getItem(DELETING_SUB_KEY)).toBeNull();
+    fireEvent.change(phraseInput(), { target: { value: 'delete my account' } });
+    fireEvent.click(deleteButton());
+    await waitFor(() => expect(auth.signOut).toHaveBeenCalled());
+  });
+
+  it.each([
+    ['as a different account', 'google-oauth2|someone-else', /different account/],
+    ['with no record of who asked', null, /couldn’t tell which account/],
+  ])('back from signing in again %s: refuses to delete', async (_label, asked, message) => {
+    if (asked) sessionStorage.setItem(DELETING_SUB_KEY, asked);
+    const fetch = server(() => json({ status: 'deleted' }));
+    const auth = fakeAuth();
+    renderAdmin('/app/?delete-account=reauthenticated', { auth, fetch });
+    await screen.findByRole('dialog', { name: 'Delete your account?' });
+    expect((await screen.findByRole('alert')).textContent).toMatch(message);
+    fireEvent.change(phraseInput(), { target: { value: 'delete my account' } });
+    expect(deleteButton().disabled).toBe(true);
+    fireEvent.click(deleteButton());
+    expect(fetch.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+    expect(auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it('says so, instead of looping, when a fresh sign-in is still refused', async () => {
+    sessionStorage.setItem(DELETING_SUB_KEY, USER.sub);
+    const auth = fakeAuth();
+    renderAdmin('/app/?delete-account=reauthenticated', {
+      auth,
+      fetch: server(() => json({ error: 'reauthentication required' }, 403)),
+    });
+    await screen.findByRole('dialog', { name: 'Delete your account?' });
+    fireEvent.change(phraseInput(), { target: { value: 'delete my account' } });
+    fireEvent.click(deleteButton());
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'couldn’t confirm your sign-in',
+    );
+    expect(auth.signIn).not.toHaveBeenCalled();
     expect(auth.signOut).not.toHaveBeenCalled();
   });
 

@@ -232,10 +232,11 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const [planUploading, setPlanUploading] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
   // The share modal opens over the editor: sharing it starts or stops is the editor's too.
-  const { setShared } = editor;
+  // It may not publish what a running or half-failed Save left on the server either.
+  const { setShared, publishBlocked } = editor;
   const shareContext = useMemo<ShareOutletContext>(
-    () => ({ onSharingChange: setShared }),
-    [setShared],
+    () => ({ onSharingChange: setShared, publishBlocked }),
+    [setShared, publishBlocked],
   );
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [failedLoad, setFailedLoad] = useState<string | null>(null);
@@ -958,6 +959,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           onRepublish={() => void editor.republish()}
           onDiscardDraft={() => void editor.discardDraft()}
           saving={editor.saving}
+          failed={Object.keys(editor.failures).length > 0}
         />
       </div>
 

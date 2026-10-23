@@ -52,14 +52,19 @@ export {
   type ShareTab,
   type SocialTarget,
 } from './share/links.js';
-export { ShareModal, type ShareModalProps, type SharePano } from './share/ShareModal.js';
+export {
+  ShareModal,
+  type ShareModalProps,
+  type SharePano,
+  type ShareView,
+} from './share/ShareModal.js';
 export { SlugField, type SlugFieldProps } from './share/SlugField.js';
 export { useCopy, type CopyState } from './share/use-copy.js';
 export { StageEventsContext, useStageEvents, type StageEvents } from './stage-events.js';
 export { useModalTitleId } from './use-modal-title-id.js';
 export { usePanoViewer } from './viewer-context.js';
 // For hosts' test doubles of the viewer (see PanoViewerApi).
-export type { PanoViewerApi, PanoViewerEvents } from '@panote/viewer';
+export type { PanoViewerApi, PanoViewerEvents, View } from '@panote/viewer';
 export { VISIBILITY_META, type Visibility } from './visibility.js';
 export { Compass } from './viewer/Compass.js';
 export { FloorLinks, type FloorLinksProps } from './viewer/FloorLinks.js';

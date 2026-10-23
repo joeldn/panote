@@ -9,12 +9,14 @@ import { ShareRoute } from './ShareRoute.js';
 
 // The editor under the share routes hears about sharing changed there.
 const onSharingChange = vi.fn();
+// ...and says when its saved tour can't be published (a Save running or failed in part).
+const publishBlocked = vi.fn((): string | null => null);
 
 // The share routes alone, under a stand-in editor: the real tree's guard is tested elsewhere.
 const routes: RouteObject[] = [
   {
     path: 't/:tourId',
-    element: <Outlet context={{ onSharingChange }} />,
+    element: <Outlet context={{ onSharingChange, publishBlocked }} />,
     children: [
       { index: true, element: <p>Editor</p> },
       ...(['link', 'privacy', 'embed'] as const).map((tab) => ({
@@ -125,6 +127,7 @@ const clickPublish = async () => {
 afterEach(() => {
   cleanup();
   onSharingChange.mockReset();
+  publishBlocked.mockReturnValue(null);
 });
 
 describe('share route', () => {
@@ -216,7 +219,7 @@ describe('share route', () => {
     expect(screen.getByLabelText('Embed code', { selector: 'pre' }).textContent).toBe(
       '<iframe src="https://panote.io/s/old-town/embed?pano=pano-2"\n' +
         '  width="100%" height="480" style="border:0"\n' +
-        '  allow="fullscreen"></iframe>',
+        '  allow="fullscreen; gyroscope; accelerometer"></iframe>',
     );
   });
 
@@ -283,6 +286,45 @@ describe('share route', () => {
     expect(api.publishTour).toHaveBeenCalledWith('tour-1');
     expect(screen.getByText('panote.io/s/old-town')).toBeTruthy();
     expect(screen.getByText('Unlisted', { selector: 'b' })).toBeTruthy();
+  });
+
+  it('won’t publish while the editor’s Save is out or failed in part', async () => {
+    publishBlocked.mockReturnValue('Save your changes first.');
+    const api = fakeApi({
+      getTourWithConfigs: vi.fn(async () => tourOk(null)) as AdminApi['getTourWithConfigs'],
+    });
+    renderShare('/app/t/tour-1/share/link', api);
+    await clickPublish();
+    expect(screen.getByText('Save your changes first.')).toBeTruthy();
+    expect(api.publishTour).not.toHaveBeenCalled();
+    expect(onSharingChange).not.toHaveBeenCalled();
+    expect(screen.getByText('This tour isn’t live yet')).toBeTruthy();
+  });
+
+  it('won’t publish a first link picked while the editor’s Save is blocked', async () => {
+    const publishTour = vi.fn().mockRejectedValueOnce(new ApiError(409, { error: 'slug lost' }));
+    const api = fakeApi({
+      getTourWithConfigs: vi.fn(async () => tourOk(null)) as AdminApi['getTourWithConfigs'],
+      publishTour,
+    });
+    renderShare('/app/t/tour-1/share/link', api);
+    await clickPublish();
+    expect(publishTour).toHaveBeenCalledTimes(1);
+    // A Save fails in part meanwhile: the slug the owner then picks must not publish.
+    publishBlocked.mockReturnValue('Save your changes first.');
+    const input = screen.getByRole('textbox', { name: 'Custom link' });
+    fireEvent.change(input, { target: { value: 'fresh-link' } });
+    await act(async () => fireEvent.keyDown(input, { key: 'Enter' }));
+    expect(publishTour).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByText('Save your changes first.').length).toBeGreaterThan(0);
+    expect(onSharingChange).not.toHaveBeenCalled();
+  });
+
+  it('renames a live tour’s link even while the editor’s Save is blocked', async () => {
+    publishBlocked.mockReturnValue('Save your changes first.');
+    const { api } = renderShare('/app/t/tour-1/share/link');
+    await editSlug('new-town');
+    expect(api.renameSlug).toHaveBeenCalledWith('tour-1', 'new-town');
   });
 
   it('asks for a new slug when publish reports 409 slug lost', async () => {

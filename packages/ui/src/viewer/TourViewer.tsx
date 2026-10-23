@@ -1,5 +1,5 @@
 import type { Hotspot, TourSettings } from '@internal/contracts';
-import type { PanoViewerApi } from '@panote/viewer';
+import type { PanoViewerApi, View } from '@panote/viewer';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { cx } from '../cx.js';
@@ -14,6 +14,7 @@ import { HotspotPanel } from './HotspotPanel.js';
 import { LanguagePicker } from './LanguagePicker.js';
 import { SceneMap, type SceneMapPlan } from './SceneMap.js';
 import type { ViewerHotspot, ViewerLinkArrow, ViewerTourGraph } from './types.js';
+import { useGyro } from './use-gyro.js';
 import { ViewerControls } from './ViewerControls.js';
 
 /**
@@ -50,6 +51,25 @@ export interface TourViewerProps {
   baseUrl: string;
   /** Scene to open on, with its own initial view. Must be a scene of `data.tour`. */
   start: string;
+  /** Overrides axes of `start`'s initial view, e.g. from a shared link. */
+  startView?: Partial<View>;
+  /**
+   * The scene the page asks for (say, from its URL). A change goes there like a map
+   * pick, with `sceneView` (else the scene's initial view): for the browser's Back and
+   * Forward. Only a change counts, so the visitor's own moves are left alone.
+   */
+  scene?: string;
+  sceneView?: Partial<View>;
+  /**
+   * The camera came to rest (no frame drawn for a moment) on `panoId`, at `view`:
+   * the yaw is in (−π, π]. Not while auto-rotate keeps it turning.
+   */
+  onViewSettle?: (panoId: string, view: View) => void;
+  /**
+   * In an embed where the frame can't go fullscreen: the page that opens in a new tab
+   * instead, for the scene on screen. Without it the embed offers no fullscreen there.
+   */
+  fullscreenHref?: (panoId: string) => string;
   /** Pins `start`: no floor links and no map, so there is no way to another scene. */
   single?: boolean;
   /**
@@ -142,6 +162,45 @@ function PointsLayer({ panoId, hotspots, links, active, setActive, onGo }: Point
   );
 }
 
+/** How long the camera has to stay still before it counts as settled. */
+const SETTLE_MS = 400;
+
+// Reports the camera once it has stopped drawing for SETTLE_MS. Inside PanoStage for the viewer.
+// Nothing is reported while a scene change is in flight: the viewer cuts to the new
+// scene's camera as its pano swaps in, a render before `panoId` follows, so a report
+// then could pair the old scene with the new scene's camera.
+function ViewSettle({
+  panoId,
+  moving,
+  onSettle,
+}: {
+  panoId: string;
+  moving: boolean;
+  onSettle: (id: string, view: View) => void;
+}) {
+  const viewer = usePanoViewer();
+  const latest = useRef({ panoId, moving, onSettle });
+  useEffect(() => {
+    latest.current = { panoId, moving, onSettle };
+  });
+  useEffect(() => {
+    if (!viewer) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = viewer.onRender(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const { panoId: id, moving: inFlight, onSettle: cb } = latest.current;
+        if (!inFlight) cb(id, viewer.getView());
+      }, SETTLE_MS);
+    });
+    return () => {
+      off();
+      clearTimeout(timer);
+    };
+  }, [viewer]);
+  return null;
+}
+
 // Linked scenes warmed per scene: each costs a manifest and six base tiles.
 const PREFETCH_LIMIT = 3;
 
@@ -194,6 +253,11 @@ export function TourViewer({
   title,
   baseUrl,
   start,
+  startView,
+  scene,
+  sceneView,
+  onViewSettle,
+  fullscreenHref,
   single = false,
   embed = false,
   bar,
@@ -217,10 +281,10 @@ export function TourViewer({
   // `target` is the scene asked for; `shown` is the one on screen, which only
   // moves once the viewer reports the new pano drawable. The chrome follows
   // `shown`, so nothing for the next scene lands over the old pano.
-  const [target, setTarget] = useState<Scene>(() => ({
-    id: start,
-    view: data.tour?.scenes[start]?.initialView,
-  }));
+  const [target, setTarget] = useState<Scene>(() => {
+    const initial = data.tour?.scenes[start]?.initialView;
+    return { id: start, view: startView ? { ...initial, ...startView } : initial };
+  });
   const [shown, setShown] = useState(start);
   // The viewer (and its baseUrl) that last reported a scene on screen. Until
   // the current viewer has, it is empty and counts as settled, so the
@@ -234,6 +298,7 @@ export function TourViewer({
   const [autoRotate, setAutoRotate] = useState(
     () => data.settings.autoRotate && !prefersReducedMotion(),
   );
+  const gyro = useGyro(viewer, frame);
   // The scene last passed to `onSceneChange`: a reload of the scene on screen
   // (after a failed change) lands it again, and that is not a new visit.
   const reported = useRef<string | null>(null);
@@ -292,6 +357,22 @@ export function TourViewer({
     if (id === target.id && id !== shown) setTarget({ id: shown, view: undefined });
     onLoadError?.(error, id);
   };
+  // The page asked for another scene (Back or Forward): go there. Kept out of render so
+  // only a change of `scene` moves, never the visitor's own pick before the page follows it.
+  const asked = useRef(scene);
+  const latestNav = useRef({ go, target });
+  useEffect(() => {
+    latestNav.current = { go, target };
+  });
+  useEffect(() => {
+    if (scene === undefined || scene === asked.current) return;
+    asked.current = scene;
+    // Already there or on the way: the page is catching up with the visitor.
+    if (scene === latestNav.current.target.id || !data.tour?.scenes[scene]) return;
+    latestNav.current.go(scene, sceneView ?? data.tour.scenes[scene].initialView);
+    // sceneView is read with the scene it came with, not on its own changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, data.tour]);
   const scenes = useMemo(
     () =>
       Object.keys(data.tour?.scenes ?? {}).map((id) => ({
@@ -320,7 +401,7 @@ export function TourViewer({
         panoId={target.id}
         {...(target.view && { view: target.view })}
         north={data.north[panoId] ?? 0}
-        autoRotate={autoRotate}
+        autoRotate={autoRotate && !gyro.on}
         transition
         embed={embed}
         {...(createViewer && { createViewer })}
@@ -333,6 +414,7 @@ export function TourViewer({
         onLoadError={loadFailed}
       >
         <LinkPrefetch targets={prefetchTargets} prefetch={prefetch} />
+        {onViewSettle && <ViewSettle panoId={panoId} moving={moving} onSettle={onViewSettle} />}
         <PointsLayer
           panoId={panoId}
           hotspots={hotspots}
@@ -379,9 +461,30 @@ export function TourViewer({
         <ViewerControls
           fullscreenTarget={frame}
           autoRotate={autoRotate}
-          onAutoRotateChange={setAutoRotate}
+          onAutoRotateChange={(on) => {
+            // Auto-rotate and tilting both steer the camera: one at a time.
+            if (on && gyro.on) gyro.toggle();
+            setAutoRotate(on);
+          }}
           position={controls}
+          fullscreenFallback={
+            embed ? (fullscreenHref ? { href: fullscreenHref(panoId) } : 'none') : 'pseudo'
+          }
         >
+          {gyro.available && (
+            <button
+              type="button"
+              className="pn-controls__btn"
+              aria-label="Look around by tilting your phone"
+              aria-pressed={gyro.on}
+              onClick={() => {
+                if (!gyro.on) setAutoRotate(false);
+                gyro.toggle();
+              }}
+            >
+              <i className="fa-solid fa-mobile-screen" aria-hidden="true" />
+            </button>
+          )}
           {onShare && (
             <button
               type="button"
