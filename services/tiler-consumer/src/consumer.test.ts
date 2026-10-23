@@ -1,6 +1,11 @@
 import { createExecutionContext, createMessageBatch, env, getQueueResult } from 'cloudflare:test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { manifestKey, tileFailedKeyFromOriginalKey } from '@internal/contracts';
+import {
+  encodeId,
+  manifestKey,
+  previewKey,
+  tileFailedKeyFromOriginalKey,
+} from '@internal/contracts';
 import { TILER_OUTPUT_VERSION } from '@internal/tiler/version';
 import { ALERT_THROTTLE_MS, alertThrottleKey, flushHeldDlqAlerts } from './alert.js';
 import worker, { retryDelaySeconds } from './consumer.js';
@@ -393,9 +398,18 @@ describe('res.ok handling', () => {
     const getSpy = vi
       .spyOn(env.TILER, 'get')
       .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    // What a tiled pano leaves for the automatic check, a model that sees nothing, and
+    // admin-api's entrypoint (afterTiling).
+    await env.BUCKET.put(
+      manifestKey('ok-response'),
+      JSON.stringify({ version: 't1-a', preview: true }),
+    );
+    await env.BUCKET.put(previewKey('ok-response', 't1-a'), 'webp');
+    const run = vi.fn(async () => ({ response: { categories: [] } }));
+    const panoTiled = vi.fn(async () => 0);
     try {
       const ctx = createExecutionContext();
-      const key = 'panos/u1/ok-response/original';
+      const key = `panos/${encodeId('auth0|ok')}/ok-response/original`;
       const batch = createMessageBatch('pano-uploads-dev', [
         {
           id: 'msg-ok-response',
@@ -404,14 +418,77 @@ describe('res.ok handling', () => {
           attempts: 1,
         },
       ]);
-      await worker.queue(batch, env, ctx);
+      await worker.queue(
+        batch,
+        { ...env, AI: { run } as unknown as Ai, MODERATION: { panoTiled } as never },
+        ctx,
+      );
       const result = await getQueueResult(batch, ctx);
       expect(result.explicitAcks).toEqual(['msg-ok-response']);
       expect(result.retryMessages).toEqual([]);
       expect(errorSpy).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledOnce();
+      expect(panoTiled).toHaveBeenCalledWith('ok-response');
     } finally {
       getSpy.mockRestore();
     }
+  });
+
+  // One forced job through the queue, with the manifest naming `before` when it starts.
+  const forcedJob = async (panoId: string, before: string, eTag: string, deps: Partial<Env>) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fakeFetch = vi.fn(async () => new Response('ok', { status: 200 }));
+    const getSpy = vi
+      .spyOn(env.TILER, 'get')
+      .mockReturnValue({ fetch: fakeFetch } as unknown as ReturnType<typeof env.TILER.get>);
+    await env.BUCKET.put(manifestKey(panoId), JSON.stringify({ version: before, preview: true }));
+    await env.BUCKET.put(previewKey(panoId, before), 'webp');
+    try {
+      const ctx = createExecutionContext();
+      const batch = createMessageBatch('pano-uploads-dev', [
+        {
+          id: `msg-${panoId}`,
+          timestamp: new Date(),
+          body: {
+            object: { key: `panos/${encodeId('auth0|f')}/${panoId}/original`, size: 10, eTag },
+            action: 'PutObject',
+            force: true,
+          },
+          attempts: 1,
+        },
+      ]);
+      await worker.queue(batch, { ...env, ...deps }, ctx);
+      return await getQueueResult(batch, ctx);
+    } finally {
+      getSpy.mockRestore();
+    }
+  };
+
+  it('a forced re-tile of the same original neither screens nor re-queues Explore tours', async () => {
+    const run = vi.fn();
+    const panoTiled = vi.fn();
+    const result = await forcedJob('same-original', 't1-abc', '"abc"', {
+      AI: { run } as unknown as Ai,
+      MODERATION: { panoTiled } as never,
+    });
+    expect(result.explicitAcks).toEqual(['msg-same-original']);
+    expect(run).not.toHaveBeenCalled();
+    expect(panoTiled).not.toHaveBeenCalled();
+  });
+
+  it('a new original is screened, and a failed Explore re-queue never retries the job', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const run = vi.fn(async () => ({ response: { categories: [] } }));
+    const panoTiled = vi.fn(async () => {
+      throw new Error('down');
+    });
+    const result = await forcedJob('new-original', 't1-old', 'new', {
+      AI: { run } as unknown as Ai,
+      MODERATION: { panoTiled } as never,
+    });
+    expect(run).toHaveBeenCalledOnce();
+    expect(result.explicitAcks).toEqual(['msg-new-original']);
+    expect(result.retryMessages).toEqual([]);
   });
 
   it('logs the panoId, status, and (truncated) body, and still retries, on a non-ok container response', async () => {
@@ -1450,9 +1527,15 @@ describe('operator events', () => {
 
   it('records a tiled original with how long it took, and nothing that names the pano', async () => {
     const events = await run('ev-ok');
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(3);
     expect(events[0]?.slice(0, 2)).toEqual(['tile-ok', '']);
     expect(events[0]?.[2]).toBeGreaterThanOrEqual(0);
+    // Then the automatic check, which fails here (the fake container tiled nothing), and the
+    // Explore re-queue, which fails on the test stand-in for admin-api.
+    expect(events.slice(1)).toEqual([
+      ['pano-screened', 'failed', 0],
+      ['explore-requeue', 'failed', 0],
+    ]);
   });
 
   it('records a retry by the container status, or `threw`', async () => {

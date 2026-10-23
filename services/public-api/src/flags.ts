@@ -1,4 +1,4 @@
-import { flagKey, pubTourKey, type FlagRecord, type FlagRequest } from '@internal/contracts';
+import { flagKey, pubTourKey, type ViewerFlag, type FlagRequest } from '@internal/contracts';
 
 // POST /api/tours/:tourId/flag: a visitor flags one panorama of a published tour, with a
 // reason (contracts moderation.ts). Stored under moderation/flags/ for the operator's review
@@ -34,7 +34,7 @@ export const storeFlag = async (
   const bundle = await readBundle(bucket, tourId);
   if (!bundle || !bundle.panoIds.has(req.panoId)) return 'not-found';
   const flagId = crypto.randomUUID();
-  const record: FlagRecord = {
+  const record: ViewerFlag = {
     v: 1,
     flagId,
     source: 'viewer',

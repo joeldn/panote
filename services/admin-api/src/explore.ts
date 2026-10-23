@@ -1,6 +1,8 @@
 import {
   ExploreApprovalSchema,
   exploreApprovedKey,
+  exploreApprovedPanoKey,
+  exploreApprovedPanosPrefix,
   EXPLORE_INDEX_ROOT,
   EXPLORE_PENDING_ROOT,
   EXPLORE_RANK_MAX,
@@ -18,6 +20,7 @@ import {
   type ExploreEntry,
   type ExplorePending,
   type ExplorePointer,
+  isContentId,
   type PublishedTour,
 } from '@internal/contracts';
 import { getJson, putJson } from '@internal/worker-kit/r2-binding';
@@ -118,6 +121,18 @@ const removeEntry = async (bucket: R2Bucket, tourId: string, keepPlace: boolean)
   else await deleteEntriesByScan(bucket, tourId);
   if (keepPlace && stored.pointer) return;
   await bucket.delete(exploreTourKey(tourId));
+};
+
+/**
+ * Marks each pano the approved tour shows (exploreApprovedPanoKey), before it is listed, so a
+ * re-tile of any of them finds this tour (approvedToursUsing). Rewritten on every sync of a
+ * listed tour, which also fills it in for tours approved before the index existed (backfill).
+ */
+const indexApprovedPanos = async (bucket: R2Bucket, bundle: PublishedTour): Promise<void> => {
+  const panoIds = [...new Set(bundle.scenes.map((scene) => scene.panoId))];
+  await mapInBatches(panoIds, (panoId) =>
+    putJson(bucket, exploreApprovedPanoKey(panoId, bundle.tourId), { v: 1 }),
+  );
 };
 
 /** JSON with object keys sorted at every level, so equal content always reads the same. */
@@ -244,6 +259,7 @@ export const syncExplore = async (
     return;
   }
   await bucket.delete(explorePendingKey(tourId));
+  await indexApprovedPanos(bucket, bundle);
   const stored = await readPointer(bucket, tourId);
   // An unreadable pointer can't name its entry: drop whatever is filed under the tour first.
   if (stored && !stored.pointer) await deleteEntriesByScan(bucket, tourId);
@@ -311,22 +327,36 @@ export const setExploreHidden = async (
   if (bundle) await syncExplore(bucket, bundle, now);
 };
 
-/** The operator's queue: every tour waiting for approval, oldest first. */
-export const listApprovalQueue = async (bucket: R2Bucket): Promise<ExplorePending[]> => {
+/** Every key under `prefix`, all pages. */
+const listAllKeys = async (bucket: R2Bucket, prefix: string): Promise<string[]> => {
   const keys: string[] = [];
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix: EXPLORE_PENDING_ROOT, ...(cursor ? { cursor } : {}) });
+    const page = await bucket.list({ prefix, ...(cursor ? { cursor } : {}) });
     keys.push(...page.objects.map((o) => o.key));
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
-  const read = await Promise.all(
-    keys.map(async (key) => {
-      const got = await getJson<unknown>(bucket, key).catch(() => null);
-      const parsed = got ? ExplorePendingSchema.safeParse(got.value) : null;
-      return parsed?.success ? parsed.data : null;
-    }),
-  );
+  return keys;
+};
+
+/** R2 reads in flight at once when reading a whole prefix (a backfill can queue every tour). */
+export const READ_CONCURRENCY = 20;
+
+const mapInBatches = async <T, R>(items: readonly T[], run: (item: T) => Promise<R>) => {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += READ_CONCURRENCY)
+    out.push(...(await Promise.all(items.slice(i, i + READ_CONCURRENCY).map(run))));
+  return out;
+};
+
+/** The operator's queue: every tour waiting for approval, oldest first. */
+export const listApprovalQueue = async (bucket: R2Bucket): Promise<ExplorePending[]> => {
+  const keys = await listAllKeys(bucket, EXPLORE_PENDING_ROOT);
+  const read = await mapInBatches(keys, async (key) => {
+    const got = await getJson<unknown>(bucket, key).catch(() => null);
+    const parsed = got ? ExplorePendingSchema.safeParse(got.value) : null;
+    return parsed?.success ? parsed.data : null;
+  });
   return read
     .filter((p): p is ExplorePending => p !== null)
     .sort((a, b) => (a.queuedAt < b.queuedAt ? -1 : a.queuedAt > b.queuedAt ? 1 : 0));
@@ -375,4 +405,43 @@ export const rejectForExplore = async (
   if (!(await waitsAs(bucket, tourId, fingerprint))) return 'stale';
   await setExploreHidden(bucket, tourId, true, now, null);
   return 'done';
+};
+
+const usesPano = (bundle: PublishedTour, panoId: string): boolean =>
+  bundle.scenes.some((scene) => scene.panoId === panoId);
+
+/**
+ * The approved tours that may show this pano, from the pano index (indexApprovedPanos). The
+ * approval names the bundle, not the photos, which a replacement re-tiles under the same
+ * panoId with no publish; so after a tile job (tiler-consumer, through the Moderation
+ * entrypoint) these go back to the queue. Each is re-checked in its TourPublisher.
+ */
+export const approvedToursUsing = async (bucket: R2Bucket, panoId: string): Promise<string[]> => {
+  const prefix = exploreApprovedPanosPrefix(panoId);
+  return (await listAllKeys(bucket, prefix))
+    .map((key) => key.slice(prefix.length, -'.json'.length))
+    .filter(isContentId);
+};
+
+/**
+ * Takes the approval of a tour that shows this pano, so the operator looks at the new image
+ * before it is listed again: the tour goes back to the queue as changed. False when the
+ * live bundle doesn't show the pano, or the tour has no approval. Either way the tour's index
+ * marker for the pano goes: a new approval writes it again. In the TourPublisher.
+ */
+export const revokeForPano = async (
+  bucket: R2Bucket,
+  tourId: string,
+  bundle: PublishedTour | null,
+  panoId: string,
+  now: Date,
+): Promise<boolean> => {
+  const approved =
+    !!bundle && usesPano(bundle, panoId) && !!(await bucket.head(exploreApprovedKey(tourId)));
+  if (approved) {
+    await bucket.delete(exploreApprovedKey(tourId));
+    await syncExplore(bucket, bundle, now, { revoked: true });
+  }
+  await bucket.delete(exploreApprovedPanoKey(panoId, tourId));
+  return approved;
 };

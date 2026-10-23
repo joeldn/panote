@@ -13,6 +13,7 @@ import { deleteTour } from './delete-tour.js';
 import {
   approveForExplore,
   rejectForExplore,
+  revokeForPano,
   setExploreHidden,
   syncExplore,
   type DecisionOutcome,
@@ -175,6 +176,16 @@ export class TourPublisher extends DurableObject<Env> {
   // name (the queue is owner-free). The tour stays live by link.
   async rejectExplore(tourId: string, fingerprint: string): Promise<DecisionOutcome> {
     return this.serial(() => rejectForExplore(this.env.BUCKET, tourId, fingerprint, new Date()));
+  }
+
+  // A pano the tour shows was tiled again (the Moderation entrypoint): back to the queue,
+  // in this queue so a publish can't land between the bundle read and the revoke.
+  async revokeForPano(tourId: string, panoId: string): Promise<boolean> {
+    return this.serial(async () => {
+      const bucket = this.env.BUCKET;
+      const got = await getJson<PublishedTour>(bucket, pubTourKey(tourId));
+      return revokeForPano(bucket, tourId, got?.value ?? null, panoId, new Date());
+    });
   }
 
   // The operator's hide from (or unhide on) Explore; the tour stays live by link.

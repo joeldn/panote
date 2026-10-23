@@ -48,7 +48,9 @@ export function Privacy() {
           <strong>What you upload.</strong> Panoramas, tours and their text. Anyone with a published
           tour’s link can open it. Once your account is a week old, a public tour can appear in
           search, and once reviewed it is listed on Explore (title, cover image and scene count,
-          never your name).
+          never your name). Each new panorama is checked automatically for sexual, violent or
+          hateful content by an AI model that runs at Cloudflare; a person looks at anything it
+          flags.
         </li>
         <li>
           <strong>Likes.</strong> Signed out, a random id in your browser’s local storage, so a like
@@ -74,7 +76,9 @@ export function Privacy() {
 
       <h2>Who else handles it</h2>
       <ul>
-        <li>Cloudflare: hosting, storage and visit counts.</li>
+        <li>
+          Cloudflare: hosting, storage, visit counts and the automatic check of new panoramas.
+        </li>
         <li>Auth0: sign-in. Plus whichever provider you sign in with.</li>
         <li>An email delivery provider: sign-in codes.</li>
         <li>

@@ -3,7 +3,7 @@ import {
   FLAGS_ROOT,
   flagKey,
   type FlagList,
-  type FlagRecord,
+  type ViewerFlag,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
 import { env, SELF } from 'cloudflare:test';
@@ -26,9 +26,9 @@ beforeEach(async () => {
 });
 
 const T0 = Date.parse('2026-10-20T00:00:00.000Z');
-const seed = async (flagId: string, minutes: number, over: Partial<FlagRecord> = {}) => {
+const seed = async (flagId: string, minutes: number, over: Partial<ViewerFlag> = {}) => {
   const at = T0 + minutes * 60_000;
-  const record: FlagRecord = {
+  const record: ViewerFlag = {
     v: 1,
     flagId,
     source: 'viewer',
@@ -65,6 +65,28 @@ describe('operator flags', () => {
     expect(body.flags.map((f) => f.flagId)).toEqual(['new', 'old']);
     expect(body.flags[0]).toMatchObject({ reason: 'sexual', note: 'left wall' });
     expect(body.more).toBe(false);
+  });
+
+  it('lists the automatic check’s flags beside visitors’, and refuses one with no category', async () => {
+    const at = T0 + 5 * 60_000;
+    const screened = {
+      v: 1,
+      flagId: 'auto',
+      source: 'screening',
+      panoId: 'p2',
+      version: 't1-abc',
+      owner: 'auth0|uploader',
+      categories: ['violence'],
+      at: new Date(at).toISOString(),
+    };
+    await env.BUCKET.put(flagKey(at, 'auto'), JSON.stringify(screened));
+    await env.BUCKET.put(
+      flagKey(at + 1, 'auto-empty'),
+      JSON.stringify({ ...screened, flagId: 'auto-empty', categories: [] }),
+    );
+    const viewer = await seed('v1', 1);
+    const body = (await (await get()).json()) as FlagList;
+    expect(body.flags).toEqual([screened, viewer]);
   });
 
   it('dismisses the named flags and answers the list as it is now', async () => {

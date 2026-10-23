@@ -6,6 +6,9 @@ import { defineWorkerTestConfig } from '@internal/vitest-config/workers';
 export default defineWorkerTestConfig({
   name: '@service/tiler-consumer',
   cloudflareTestOptions: {
+    // The AI binding (src/screen.ts) is remote-only: left on, the pool would open a remote
+    // session to Cloudflare, which needs an account. Tests pass their own fake model.
+    remoteBindings: false,
     // Secrets never appear in wrangler config; miniflare supplies them for
     // tests. Without these the Tiler DO's constructor (src/consumer.ts) would
     // throw from containerEnvVars() before the container-reaching cases in
@@ -20,10 +23,9 @@ export default defineWorkerTestConfig({
       // here and stop workerd from starting. Stand-ins that answer 503; the health
       // tests pass their own fakes.
       serviceBindings: Object.fromEntries(
-        ['WEBSITE', 'ADMIN_APP', 'PUBLIC_API', 'ADMIN_API', 'UPLOAD_API'].map((name) => [
-          name,
-          () => new Response('no such Worker in tests', { status: 503 }),
-        ]),
+        ['WEBSITE', 'ADMIN_APP', 'PUBLIC_API', 'ADMIN_API', 'UPLOAD_API', 'MODERATION'].map(
+          (name) => [name, () => new Response('no such Worker in tests', { status: 503 })],
+        ),
       ),
     },
   },

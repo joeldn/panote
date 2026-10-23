@@ -93,8 +93,14 @@
       // DLQ and health alert email (src/alert.ts, src/health.ts). Unrestricted on
       // purpose: the recipient is the ALERT_EMAIL_TO secret, so no address lives in the repo.
       "send_email": [{ "name": "ALERT_EMAIL" }],
+      // The automatic check of each newly tiled panorama (src/screen.ts, docs/deploy.md
+      // "Screening"). Workers AI: no key, and the image stays within Cloudflare.
+      "ai": { "binding": "AI" },
       // Health check probes: straight into each Worker, past routes and Access.
+      // MODERATION: admin-api's Moderation entrypoint (RPC only, no HTTP route), which
+      // takes tours using a re-tiled pano off Explore until the operator looks again.
       "services": [
+        { "binding": "MODERATION", "service": "panote-admin-api-dev", "entrypoint": "Moderation" },
         { "binding": "WEBSITE", "service": "panote-website-dev" },
         { "binding": "ADMIN_APP", "service": "panote-admin-dev" },
         { "binding": "PUBLIC_API", "service": "panote-public-api-dev" },
@@ -156,8 +162,10 @@
         "HEALTH_PUBLIC_PROBES": "false",
       },
       "send_email": [{ "name": "ALERT_EMAIL" }],
+      "ai": { "binding": "AI" },
       // Every target must already be deployed: deploy this Worker last (Production runbook).
       "services": [
+        { "binding": "MODERATION", "service": "panote-admin-api", "entrypoint": "Moderation" },
         { "binding": "WEBSITE", "service": "panote-website" },
         { "binding": "ADMIN_APP", "service": "panote-admin" },
         { "binding": "PUBLIC_API", "service": "panote-public-api" },
