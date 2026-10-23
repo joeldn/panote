@@ -226,6 +226,8 @@ export interface UploadDeps {
     file: Blob,
     opts: {
       contentType: string;
+      /** The presign's signed headers, which the PUT must send. */
+      headers?: Readonly<Record<string, string>> | undefined;
       onProgress: (loaded: number, total: number) => void;
       signal: AbortSignal;
     },
@@ -458,6 +460,7 @@ export function startUpload(deps: UploadDeps, opts: StartUploadOptions): UploadC
     try {
       await deps.put(presigned.url, opts.file, {
         contentType,
+        headers: presigned.headers,
         signal: abort.signal,
         onProgress: (loaded, total) => dispatch({ type: 'progress', loaded, total }),
       });

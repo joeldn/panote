@@ -118,13 +118,14 @@ export async function uploadPlanImage(
   file: File,
 ): Promise<TourPlan> {
   const prepared = await deps.prepare(file);
-  const { planId, url } = await deps.upload.presignPlan({
+  const { planId, url, headers } = await deps.upload.presignPlan({
     tourId,
     contentType: prepared.type,
     size: prepared.blob.size,
   });
   await putFile(url, prepared.blob, {
     contentType: prepared.type,
+    headers,
     ...(deps.createXhr && { createXhr: deps.createXhr }),
   });
   return { id: planId, type: prepared.type, width: prepared.width, height: prepared.height };

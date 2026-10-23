@@ -93,7 +93,8 @@ describe('fresh upload from /app/new', () => {
     const xhr = FakeXhr.last;
     expect(xhr.method).toBe('PUT');
     expect(xhr.url).toBe(PUT_URL);
-    expect(xhr.headers['content-type']).toBe('image/png');
+    // The signed headers from the presign, condition included.
+    expect(xhr.headers).toEqual({ 'content-type': 'image/png', 'if-none-match': '*' });
     expect(xhr.body).toBe(file);
     expect(chipTitle()).toBe('Uploading panorama');
 

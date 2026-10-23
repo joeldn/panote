@@ -618,8 +618,11 @@ nested under `allowed`. It rejects an AWS S3-style file (`CORSRules`, or bare `A
 <https://developers.cloudflare.com/r2/buckets/cors/#example> — pano-viewer's `services/cors.json`
 was in that now-rejected S3 shape, so it's been converted rather than copied verbatim. The
 converted file lives at `infra/r2/cors.json`: GET (public tile/manifest reads, `content-type`
-header, 24h preflight cache) and PUT (presigned uploads, `content-type` header, 1h preflight
-cache), origins `https://panote.dev` and `https://panote.io`. This command always replaces the
+header, 24h preflight cache) and PUT (presigned uploads, `content-type`, `if-match` and
+`if-none-match` headers, 1h preflight cache), origins `https://panote.dev` and
+`https://panote.io`. The two conditional headers make each upload URL single-use (Owner quotas,
+"Single-use upload URLs"); a bucket whose ruleset predates them fails every upload's preflight,
+so re-apply the file whenever it changes. This command always replaces the
 whole ruleset (prompts for confirmation unless `--force`), so it's genuinely safe to re-run.
 
 ```bash
@@ -630,8 +633,10 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content \
   --file ../../infra/r2/cors.json
 ```
 
-**Status: set for dev, outstanding for production** — `pano-content-dev`'s CORS ruleset is set
-from `infra/r2/cors.json`; `pano-content` doesn't exist yet. Rollback: this command always
+**Status: needs re-applying to dev, outstanding for production** — `pano-content-dev`'s CORS
+ruleset was set from `infra/r2/cors.json` before the PUT rule gained `if-match` and
+`if-none-match`: run the dev command above again before, or together with, the upload-api deploy that signs them, or uploads fail at the
+preflight. `pano-content` doesn't exist yet. Rollback: this command always
 replaces the whole ruleset, so undoing a bad change is just re-running it with the previous
 `cors.json` (from git history).
 
@@ -1425,14 +1430,14 @@ still catches it like any other late write; only if it happens after DELETE has 
 and removed the tombstone does a later DELETE take the no-proof path and skip `tiles/<panoId>/`
 entirely, leaving that one narrow case to the same manual per-key delete.
 
-A presigned upload URL stays valid for up to 600 seconds after `upload-api` issues it, and can
-still be used within that window to re-create a deleted pano's original — which re-tiles a pano
-that now has no `config.json`. That isn't a leak of anything new, and the pano can simply be
-deleted again. The replace-image path (`POST /api/upload-url` with `panoId`) has the same TOCTOU:
-its ownership HEAD check runs once, at presign time, so a presign issued just before a DELETE can
-still land up to 600s later and recreate the original after the delete completed. It stays
-confined to the caller's own owner-scoped prefix either way, so the impact is the same as the
-fresh-upload case above — the pano can simply be deleted again.
+A presigned upload URL stays valid for up to 120 seconds after `upload-api` issues it, and a
+new-pano URL that hasn't been used yet can still be used within that window to re-create a deleted
+pano's original — which re-tiles a pano that now has no `config.json`. That isn't a leak of
+anything new, and the pano can simply be deleted again. A URL already used can't: it is
+create-only (`If-None-Match: *`, see "Single-use upload URLs"). The replace-image path
+(`POST /api/upload-url` with `panoId`) is pinned to the original's ETag (`If-Match`), so once a
+DELETE has removed that original, the URL gets `412` and can't recreate it. It stays confined to
+the caller's own owner-scoped prefix either way.
 
 ---
 
@@ -1549,7 +1554,7 @@ including for a partial run.
 
 - Interrupted deletes (no `completedAt`) first, oldest request first, then finished ones.
 - A finished account costs one `LIST` (`limit: 1`) per owner prefix; only if something turned up
-  there (a presigned upload issued before the marker, valid for 600s) does it run the full delete
+  there (a presigned upload issued before the marker, valid for 120s) does it run the full delete
   again.
 - One run deletes at most `SWEEP_ITEM_BUDGET` (400) tours plus panos, and one account at most
   `SWEEP_ACCOUNT_ITEM_BUDGET` (100) of them, so one huge account can't starve the rest; what's
@@ -2345,6 +2350,29 @@ the CDN's WAF rule only lets `tiles/`, `pub/` and `slugs/` through. Account dele
 so an entry logged just before the deletion marker is caught. An owner who stops uploading keeps
 up to a day's entries (empty objects) until their next upload-URL request. A Workers Rate Limiting
 binding can't express a day (its period is 10 or 60 seconds), which is why the count lives in R2.
+
+**Single-use upload URLs.** Counting URLs only bounds tiling if each URL makes one original. Every
+PUT that lands fires an R2 object-create event, and under `panos/` that is a full tiling job, so a
+URL that could be PUT to again and again (a presigned URL can, until it expires) would get round
+the daily limit and keep the tiler busy for everyone. So `upload-api` signs a condition into every
+upload URL, alongside content-type and content-length (`SignedHeaders=content-length;content-type;host;if-none-match`
+or `...;host;if-match`):
+
+- a new pano's original, and a floor-plan image (always a fresh key): `If-None-Match: *`, so once
+  one PUT lands every other gets `412`;
+- a replace: `If-Match: <ETag>` from the HEAD of the original it checks at presign time, so the
+  URL overwrites only that object, once. A HEAD `200` with no ETag fails closed (`502`, no URL).
+
+A signed header has to be sent, with exactly the signed value, or R2 answers `403`, so it can't be
+dropped. The response carries the headers the PUT must send as `headers` (lowercase names, e.g.
+`{"content-type":"image/jpeg","if-none-match":"*"}`), and the admin app's uploader
+(`putFile` in `packages/web-kit/src/api/upload.ts`) sends them as given, so the condition lives in
+one place. Bucket CORS must allow `if-match` and `if-none-match` on PUT (Bucket CORS above). One
+gap is left: a replace whose bytes are identical to the current original keeps the same ETag, so
+that URL can be PUT to again with those same bytes until it expires; each one builds the same
+tile version again. The URLs last 120 s (`UPLOAD_URL_EXPIRY_SECONDS`, was 600): the uploader PUTs
+the moment it gets one, and SigV4 checks expiry when the request arrives, so a slow upload that
+started in time still finishes (unverified on R2: see "Known limitations").
 
 To change a limit, edit it in both env blocks, run `pnpm --filter @service/upload-api run types`
 (the vars are in the generated `env.d.ts`) and deploy.
@@ -3318,6 +3346,18 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   one presigned URL for an `image/jpeg` upload, a PUT with `content-type: image/png` and one with
   no content-type both got `403` (`SignatureDoesNotMatch`) and wrote nothing; the same PUT with
   `image/jpeg` got `200`.
+- **Signed but unverified: the single-use condition on upload URLs.** `upload-api` signs
+  `If-None-Match: *` (new pano, plan image) or `If-Match: <ETag>` (replace) into each presigned
+  PUT (Owner quotas, "Single-use upload URLs"). R2 supports both on `PutObject` (the tiler's
+  manifest writes rely on `If-Match`), but a presigned PUT carrying them has not been tried in dev
+  yet. To verify: get an upload URL, PUT the file with the response's `headers` → `200`; PUT the
+  same request again → `412` and no second tiling job; PUT without the conditional header →
+  `403`. For a replace, the second PUT should get `412` too (different bytes). Also unverified:
+  that R2, like S3, checks `X-Amz-Expires` when a request starts rather than when its body has
+  arrived; with the 120 s expiry, a 150 MiB upload over a link slower than about 10 Mbit/s would
+  fail if R2 checked at the end. To check, start a large PUT (throttled, e.g.
+  `curl --limit-rate`) just before its URL expires and see that it still gets `200`; if it
+  doesn't, raise `UPLOAD_URL_EXPIRY_SECONDS` (the URLs are single-use either way).
 - **Signed but unverified: the presigned upload PUT pins content-length.** On 2026-10-08, with
   content-length unsigned, a URL presigned for `size: 100` accepted an 8779-byte PUT with `200`.
   `upload-api` now also signs `content-length` as the declared `size`

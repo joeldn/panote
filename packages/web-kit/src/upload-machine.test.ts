@@ -277,7 +277,15 @@ function harness(): Harness {
   h.deps = {
     presign: vi.fn(async (req) => {
       h.calls.push(`presign:${req.panoId ?? 'new'}`);
-      return { panoId: req.panoId ?? 'p1', key: 'k', url: 'https://r2.example/put' };
+      return {
+        panoId: req.panoId ?? 'p1',
+        key: 'k',
+        url: 'https://r2.example/put',
+        headers: {
+          'content-type': req.contentType,
+          ...(req.panoId ? { 'if-match': '"e1"' } : { 'if-none-match': '*' }),
+        },
+      };
     }),
     put: vi.fn((_url, _file, o) => {
       h.calls.push('put');
@@ -318,6 +326,20 @@ describe('startUpload (background-tab safe: no requestAnimationFrame)', () => {
     expect(raf).not.toHaveBeenCalled();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('PUTs with the headers the presign signed', async () => {
+    const h = harness();
+    startUpload(h.deps, { file: file(200) });
+    await flush();
+    expect(h.deps.put).toHaveBeenCalledWith(
+      'https://r2.example/put',
+      expect.any(Blob),
+      expect.objectContaining({
+        contentType: 'image/jpeg',
+        headers: { 'content-type': 'image/jpeg', 'if-none-match': '*' },
+      }),
+    );
   });
 
   it('fresh upload: presign -> PUT progress -> poll manifest -> ready', async () => {

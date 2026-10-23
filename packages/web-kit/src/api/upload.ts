@@ -15,10 +15,19 @@ export const MAX_UPLOAD_BYTES = 150 * 1024 * 1024;
 export const UPLOAD_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 export type UploadContentType = (typeof UPLOAD_CONTENT_TYPES)[number];
 
+/**
+ * The headers the PUT to a presigned URL must send, as upload-api signed them:
+ * content-type plus a condition (`if-none-match: *`, or `if-match: <ETag>` for a
+ * replace) that makes the URL single-use. Optional only so an upload-api from
+ * before it still parses.
+ */
+const PutHeadersSchema = z.record(z.string(), z.string()).optional();
+
 export const UploadUrlOkSchema = z.object({
   panoId: z.string().regex(PANO_PATTERN),
   key: z.string().min(1),
   url: z.string().url(),
+  headers: PutHeadersSchema,
 });
 export type UploadUrlOk = z.infer<typeof UploadUrlOkSchema>;
 
@@ -35,6 +44,7 @@ export const PlanUrlOkSchema = z.object({
   planId: z.string().regex(PANO_PATTERN),
   key: z.string().min(1),
   url: z.string().url(),
+  headers: PutHeadersSchema,
 });
 export type PlanUrlOk = z.infer<typeof PlanUrlOkSchema>;
 
@@ -123,6 +133,8 @@ export class UploadAbortedError extends Error {
 
 export interface PutFileOptions {
   contentType: string;
+  /** The presign's `headers`, sent as given (they are signed into the URL). */
+  headers?: Readonly<Record<string, string>> | undefined;
   onProgress?: (loaded: number, total: number) => void;
   signal?: AbortSignal;
   createXhr?: () => XhrLike;
@@ -146,8 +158,13 @@ export function putFile(url: string, file: Blob, opts: PutFileOptions): Promise<
       fn();
     };
     xhr.open('PUT', url);
-    // Signed into the presign (upload-api), so it must match exactly.
-    xhr.setRequestHeader('Content-Type', opts.contentType);
+    // Signed into the presign (upload-api), so each must match exactly. Merged by
+    // lowercase name first: XHR joins a header set twice into one value.
+    const headers: Record<string, string> = { 'content-type': opts.contentType };
+    for (const [name, value] of Object.entries(opts.headers ?? {})) {
+      headers[name.toLowerCase()] = value;
+    }
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
     xhr.upload.onprogress = (e) => {
       opts.onProgress?.(e.loaded, e.lengthComputable ? e.total : file.size);
     };

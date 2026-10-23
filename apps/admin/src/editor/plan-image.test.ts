@@ -84,6 +84,7 @@ describe('uploadPlanImage', () => {
       planId: 'plan-1',
       key: 'pub/plans/t1/plan-1.webp',
       url: 'https://r2.test/put?sig',
+      headers: { 'content-type': 'image/webp', 'if-none-match': '*' },
     }));
     const file = new File(['original-with-exif'], 'plan.jpg', { type: 'image/jpeg' });
     const done = uploadPlanImage(
@@ -95,7 +96,8 @@ describe('uploadPlanImage', () => {
     const xhr = FakeXhr.last;
     expect(xhr.method).toBe('PUT');
     expect(xhr.url).toBe('https://r2.test/put?sig');
-    expect(xhr.headers['content-type']).toBe('image/webp');
+    // The presign's signed headers: create-only, so the URL can be used once.
+    expect(xhr.headers).toEqual({ 'content-type': 'image/webp', 'if-none-match': '*' });
     expect(xhr.body).toBe(redrawn);
     xhr.respond(200);
     await expect(done).resolves.toEqual({

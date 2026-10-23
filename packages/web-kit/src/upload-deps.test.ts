@@ -43,10 +43,13 @@ describe('createUploadDeps', () => {
     const signal = new AbortController().signal;
     await deps.put('https://r2.test/put', new Blob(['abc']), {
       contentType: 'image/png',
+      headers: { 'content-type': 'image/png', 'if-none-match': '*' },
       onProgress: () => {},
       signal,
     });
     expect(xhr.open).toHaveBeenCalledWith('PUT', 'https://r2.test/put');
+    // The signed condition reaches the PUT.
+    expect(xhr.setRequestHeader).toHaveBeenCalledWith('if-none-match', '*');
     await expect(deps.fetchManifest('p1', { signal })).resolves.toMatchObject({ version: 't1-a' });
     expect(fetch.mock.calls[0]?.[0]).toBe('https://cdn.test/tiles/p1/manifest.json');
     await expect(deps.getPanoStatus('p1')).resolves.toMatchObject({ tiling: 'pending' });

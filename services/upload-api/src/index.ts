@@ -60,10 +60,12 @@ const assertHeadIsDefinitive = (head: R2HeadResult): void => {
 // 429's Retry-After. The limit itself lives in wrangler.jsonc, per env.
 export const UPLOAD_URL_RATE_PERIOD_SECONDS = 60;
 // How long an upload URL stays valid. The admin uploader PUTs the moment it gets
-// the URL, so this mostly bounds replays of a leaked or reused URL. 600 s still
-// covers a whole 150 MiB PUT at ~2 Mbit/s, in case R2 (unlike S3, which checks
-// only when the request starts) were to check expiry at the end of a slow upload.
-export const UPLOAD_URL_EXPIRY_SECONDS = 600;
+// the URL, so the PUT starts within a second or two. SigV4 checks X-Amz-Expires
+// when the request arrives, not when its body finishes (S3 documents this; for R2
+// it is assumed, see docs/deploy.md "Known limitations"), so a slow 150 MiB
+// upload that starts in time still completes. Each URL is single-use anyway (the
+// signed condition below); this only bounds how long a leaked one stays usable.
+export const UPLOAD_URL_EXPIRY_SECONDS = 120;
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 // The request body is a handful of short fields (contentType, size, panoId or kind and
 // tourId): anything bigger than this is not ours, and is never buffered.
@@ -127,6 +129,26 @@ async function tourOwnerFor(r2: R2, sub: string, tourId: string): Promise<string
   return access.owner;
 }
 
+/**
+ * The headers the PUT to an upload URL must carry, each signed into the URL, so a
+ * PUT without them (or with any other value) gets a 403. Names are lowercase.
+ * The condition makes the URL single-use at R2: every PUT that lands fires an
+ * object-create event and, for an original, a full tiling job, so a URL that could
+ * be PUT to again and again would get round the daily upload limit.
+ * - `if-none-match: *` for a fresh key: once the first PUT lands, a second gets 412.
+ * - `if-match: <ETag>` for a replace: only the object as it was at presign time can
+ *   be overwritten, so a second PUT (of different bytes) gets 412.
+ */
+const putHeaders = (
+  contentType: string,
+  condition: { ifNoneMatch: '*' } | { ifMatch: string },
+): Record<string, string> => ({
+  'content-type': contentType,
+  ...('ifMatch' in condition
+    ? { 'if-match': condition.ifMatch }
+    : { 'if-none-match': condition.ifNoneMatch }),
+});
+
 // A tour's floor-plan image: a fresh key under the tour's public plan prefix, so a
 // replaced image is never served stale from a cache. Only the owner of the tour, or one
 // of its editors, gets one. It counts toward the daily upload limit and the global ceiling (it is an upload
@@ -160,12 +182,14 @@ async function planUrl(
     (await reserveAndLog(r2, subs, planId, size, now, { env, reserved }));
   if (refused) return refused;
   const key = planKey(tourId, planId, contentType);
+  // A fresh key every time: create-only.
+  const headers = putHeaders(contentType, { ifNoneMatch: '*' });
   const url = await r2.presignPut(key, {
     expiresInSeconds: UPLOAD_URL_EXPIRY_SECONDS,
-    headers: { 'content-type': contentType },
+    headers,
     contentLength: size,
   });
-  return Response.json({ planId, key, url });
+  return Response.json({ planId, key, url, headers });
 }
 
 // The global ceiling's reservation for this request, once made: the Worker's catch gives
@@ -353,6 +377,9 @@ export default {
       // original under the owner's prefix may be re-presigned, and for an editor only
       // one of the tour's own scenes.
       let panoId: string;
+      // A new pano's original may only be created; a replace may only overwrite the
+      // original it HEADed here.
+      let condition: { ifNoneMatch: '*' } | { ifMatch: string } = { ifNoneMatch: '*' };
       if ('panoId' in body) {
         if (typeof body.panoId !== 'string' || body.panoId.length === 0) {
           return Response.json({ error: 'panoId must be a non-empty string' }, { status: 400 });
@@ -373,6 +400,10 @@ export default {
         if (original.status === 404 || tombstone.ok) {
           return Response.json({ error: 'original not found' }, { status: 404 });
         }
+        // R2 always sends an ETag on a 200 HEAD. Without one there is nothing to pin
+        // the replace to, and an unconditional URL could be replayed: fail closed.
+        if (original.etag === null) throw new WorkerError('storage unavailable', 502);
+        condition = { ifMatch: original.etag };
       } else {
         panoId = crypto.randomUUID();
       }
@@ -411,12 +442,13 @@ export default {
       const key = originalKey(owner, panoId);
       // content-length is signed too: the browser sends the File's size, which is the
       // declared `size`, so a body of any other length breaks the signature.
+      const headers = putHeaders(contentType, condition);
       const putUrl = await r2.presignPut(key, {
         expiresInSeconds: UPLOAD_URL_EXPIRY_SECONDS,
-        headers: { 'content-type': contentType },
+        headers,
         contentLength: size,
       });
-      return Response.json({ panoId, key, url: putUrl });
+      return Response.json({ panoId, key, url: putUrl, headers });
     } catch (e) {
       // No URL went out (the log write or the signing failed): give the slot back.
       releaseLater(env, reserved.held, ctx);

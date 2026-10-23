@@ -182,6 +182,49 @@ describe('presignPut contentLength', () => {
   });
 });
 
+// upload-api makes each upload URL single-use by signing a condition into it.
+describe('presignPut with a signed condition', () => {
+  const presign = (headers: Record<string, string>) =>
+    createR2S3Client(config).presignPut('panos/p1/original', {
+      expiresInSeconds: 120,
+      headers: { 'content-type': 'image/png', ...headers },
+      contentLength: 1024,
+    });
+  const sent = { 'content-length': '1024', 'content-type': 'image/png' };
+
+  it('signs if-none-match: a PUT must carry it to match', async () => {
+    const url = await presign({ 'if-none-match': '*' });
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'content-length;content-type;host;if-none-match',
+    );
+    await expect(signatureCovers(url, 'PUT', { ...sent, 'if-none-match': '*' })).resolves.toBe(
+      true,
+    );
+    // Dropping the condition (to PUT again and again) breaks the signature.
+    await expect(signatureCovers(url, 'PUT', sent)).resolves.toBe(false);
+  });
+
+  it('signs if-match with the quoted ETag as given: only that ETag matches', async () => {
+    const url = await presign({ 'if-match': '"abc123"' });
+    expect(new URL(url).searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'content-length;content-type;host;if-match',
+    );
+    await expect(signatureCovers(url, 'PUT', { ...sent, 'if-match': '"abc123"' })).resolves.toBe(
+      true,
+    );
+    for (const other of ['"other"', 'abc123', '*']) {
+      await expect(signatureCovers(url, 'PUT', { ...sent, 'if-match': other })).resolves.toBe(
+        false,
+      );
+    }
+    await expect(signatureCovers(url, 'PUT', sent)).resolves.toBe(false);
+    // Nor can If-Match be swapped for If-None-Match.
+    await expect(signatureCovers(url, 'PUT', { ...sent, 'if-none-match': '*' })).resolves.toBe(
+      false,
+    );
+  });
+});
+
 describe('put', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
