@@ -53,7 +53,7 @@
 
 .landing-kicker {
   font: 400 13px var(--fmono);
-  color: var(--ink-45);
+  color: var(--ink-62);
   max-width: 32ch;
   letter-spacing: 0.02em;
   margin: 0;
@@ -99,6 +99,14 @@
   position: absolute;
   inset: 0;
   pointer-events: auto;
+}
+
+/* No pano behind it: the hero sizes to its content, and the pillars show on the first screen. */
+.landing-hero--static {
+  height: auto;
+  min-height: 0;
+  justify-content: flex-start;
+  padding-top: clamp(140px, 18vh, 200px);
 }
 
 .landing-hero__stage > * {
@@ -233,7 +241,12 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  transition: gap 0.15s;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-hero__tour {
+    transition: gap 0.15s;
+  }
 }
 
 .landing-hero__tour:hover {
@@ -453,7 +466,7 @@
   padding: 17px 22px;
   border-top: 1px solid var(--ink-09);
   font: 400 14.5px var(--fbody);
-  color: var(--ink-50);
+  color: var(--ink-62);
 }
 
 .landing-table tbody tr:first-child > * {
@@ -468,7 +481,8 @@
 
 .landing-table tbody td.landing-table__us {
   font-weight: 600;
-  color: var(--accent);
+  /* Accent, a touch deeper so the small text clears 4.5:1 on its tint. */
+  color: color-mix(in srgb, var(--accent) 90%, var(--ink));
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
@@ -724,7 +738,12 @@
   flex: none;
   font-size: 12px;
   color: var(--accent);
-  transition: transform 0.2s;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-qa__icon {
+    transition: transform 0.2s;
+  }
 }
 
 .landing-qa--open .landing-qa__icon {
@@ -839,6 +858,10 @@
     padding-bottom: 40px;
   }
 
+  .landing-hero--static {
+    padding-top: 116px;
+  }
+
   .landing-hero__lede {
     font-size: 17px;
   }
@@ -899,6 +922,22 @@
     display: none;
   }
 
+  /* Room for both header labels: a narrower first column, and no logo mark. */
+  .landing-table col,
+  .landing-table th:first-child {
+    width: 34%;
+  }
+
+  .landing-table thead th,
+  .landing-table thead th:first-child,
+  .landing-table thead th:nth-child(2) {
+    font-size: 12.5px;
+  }
+
+  .landing-table__brand svg {
+    display: none;
+  }
+
   .landing-qa__q {
     padding: 18px;
     font-size: 16px;
@@ -911,5 +950,30 @@
   .landing-featured__badge {
     top: 18px;
     left: 18px;
+  }
+}
+
+/* Landscape phones: the hero fits its content so the CTA stays on the first screen. */
+@media (max-height: 500px) {
+  .landing-hero {
+    height: auto;
+    min-height: 0;
+    padding-top: 84px;
+  }
+
+  .landing-hero__live {
+    margin-bottom: 12px;
+  }
+
+  .landing-hero__title {
+    font-size: clamp(32px, 6vw, 48px);
+  }
+
+  .landing-hero__lede {
+    margin: 14px 0 20px;
+  }
+
+  .landing-hero__content {
+    padding-bottom: 32px;
   }
 }

@@ -1,7 +1,7 @@
 import './landing.css';
 
 import type { PublishedTour } from '@internal/contracts';
-import { LogoMark, PanoStage, cx } from '@internal/ui';
+import { LogoMark, PanoStage, cx, prefersReducedMotion } from '@internal/ui';
 import { stashPendingUpload, tilesBaseUrl } from '@internal/web-kit';
 import {
   useContext,
@@ -55,11 +55,14 @@ function Hero({
   showcase,
   tilesBase,
 }: {
-  showcase: PublishedTour | null;
+  showcase: PublishedTour | null | undefined;
   tilesBase: string | null;
 }) {
+  // No pano behind it (none set, or it failed): the headline moves up instead of sitting
+  // at the foot of an empty screen. While the showcase loads, the hero keeps its height.
+  const still = showcase === null || !tilesBase;
   return (
-    <section className="landing-hero">
+    <section className={cx('landing-hero', still && 'landing-hero--static')}>
       {showcase && tilesBase ? (
         <HeroStage tour={showcase} tilesBase={tilesBase} />
       ) : (
@@ -115,7 +118,7 @@ function HeroStage({ tour, tilesBase }: { tour: PublishedTour; tilesBase: string
         panoId={start.panoId}
         {...(start.config.initialView && { view: start.config.initialView })}
         {...(start.config.north !== undefined && { north: start.config.north })}
-        autoRotate
+        autoRotate={!prefersReducedMotion()}
         aria-label={`Live panorama: ${tour.title}`}
         {...(createViewer && { createViewer })}
       />
@@ -319,7 +322,7 @@ function WhyFree() {
   );
 }
 
-function Showcase({ showcase }: { showcase: PublishedTour | null }) {
+function Showcase({ showcase }: { showcase: PublishedTour | null | undefined }) {
   return (
     <section id="showcase" className="landing-wrap landing-showcase">
       <h2 className="landing-h2 landing-h2--wide">Built for anyone with a space to show.</h2>

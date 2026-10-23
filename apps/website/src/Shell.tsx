@@ -79,6 +79,9 @@ export function Shell() {
   useScrollOnNavigate(pathname, hash);
   return (
     <div className="app-shell">
+      <a href="#main" className="app-shell__skip">
+        Skip to content
+      </a>
       <header
         className={cx(
           'app-shell__bar',
@@ -99,14 +102,14 @@ export function Shell() {
           </nav>
         )}
         <div className="app-shell__actions">
-          <Link to="/explore" className="app-shell__link">
+          <Link to="/explore" className="app-shell__link app-shell__explore">
             Explore
           </Link>
           <AccountNav />
           <UploadLink className="app-shell__cta">Upload a photo</UploadLink>
         </div>
       </header>
-      <main className="app-shell__main">
+      <main id="main" tabIndex={-1} className="app-shell__main">
         <Outlet />
       </main>
       <SiteFooter />
