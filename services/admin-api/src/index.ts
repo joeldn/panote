@@ -180,6 +180,7 @@ const operatorLimit = createMiddleware<AppEnv>(async (c, next) => {
 });
 app.use(OPERATOR_TAKEDOWN_PATH, operatorLimit);
 app.use(OPERATOR_RESTORE_PATH, operatorLimit);
+app.use(OPERATOR_BACKFILL_PATH, operatorLimit);
 
 // Every read is rate limited per owner too, on its own budget, before any R2 read: a
 // list costs R2 operations on every call, and nothing else would stop a loop on it.
