@@ -131,6 +131,20 @@ export class UploadAbortedError extends Error {
   }
 }
 
+/**
+ * A 412 from a presigned PUT: the condition upload-api signed into the URL failed.
+ * For a fresh key (`if-none-match: *`) that means an earlier PUT with this same URL
+ * already landed, so the file is there. For a replace (`if-match`), the original is
+ * no longer the one the URL was signed for: an earlier PUT of ours landed, or
+ * something else changed or deleted it.
+ */
+export class UploadUrlUsedError extends ApiError {
+  constructor() {
+    super(412, null, 'upload URL already used');
+    this.name = 'UploadUrlUsedError';
+  }
+}
+
 export interface PutFileOptions {
   contentType: string;
   /** The presign's `headers`, sent as given (they are signed into the URL). */
@@ -173,6 +187,8 @@ export function putFile(url: string, file: Blob, opts: PutFileOptions): Promise<
         if (xhr.status >= 200 && xhr.status < 300) {
           opts.onProgress?.(file.size, file.size);
           resolve();
+        } else if (xhr.status === 412) {
+          reject(new UploadUrlUsedError());
         } else {
           reject(new ApiError(xhr.status, null, `upload failed with ${xhr.status}`));
         }

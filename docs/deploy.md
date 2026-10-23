@@ -2367,7 +2367,12 @@ A signed header has to be sent, with exactly the signed value, or R2 answers `40
 dropped. The response carries the headers the PUT must send as `headers` (lowercase names, e.g.
 `{"content-type":"image/jpeg","if-none-match":"*"}`), and the admin app's uploader
 (`putFile` in `packages/web-kit/src/api/upload.ts`) sends them as given, so the condition lives in
-one place. Bucket CORS must allow `if-match` and `if-none-match` on PUT (Bucket CORS above). One
+one place. A PUT whose answer was lost and that is sent again gets `412`, and the uploader reads it
+per case: for a new pano or a plan image (a fresh key only that URL can write) the file is there,
+so it carries on as if the PUT had answered; for a replace, which can't tell its own earlier PUT
+from another tab's replace, it asks once for a new URL and sends the file again (one more URL
+toward the daily limit and the global ceiling), and a second `412` fails with "This panorama changed while it was
+uploading". Bucket CORS must allow `if-match` and `if-none-match` on PUT (Bucket CORS above). One
 gap is left: a replace whose bytes are identical to the current original keeps the same ETag, so
 that URL can be PUT to again with those same bytes until it expires; each one builds the same
 tile version again. The URLs last 120 s (`UPLOAD_URL_EXPIRY_SECONDS`, was 600): the uploader PUTs

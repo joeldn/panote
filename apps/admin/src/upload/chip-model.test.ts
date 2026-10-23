@@ -141,6 +141,16 @@ describe('chipModel', () => {
     expect(actions(active(f, { hasFile: false }))).toEqual(['repick']);
   });
 
+  it('failed at changed says the panorama changed, and offers to try again', () => {
+    const f = { phase: 'failed', panoId: 'p1', stage: 'changed', message: 'm' } as UploadState;
+    expect(chipModel(active(f))).toMatchObject({
+      title: 'Upload failed',
+      tone: 'failed',
+      note: 'This panorama changed while it was uploading, maybe in another tab.',
+    });
+    expect(actions(active(f))).toEqual(['retry-upload']);
+  });
+
   it('failed at tiling does not blame the image’s shape or format', () => {
     // The tiler takes any ratio and colour space; the limits it has are checked
     // before the upload. A tiling failure is the tiler erroring on every attempt.

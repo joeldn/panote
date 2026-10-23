@@ -114,6 +114,53 @@ describe('uploadPlanImage', () => {
     });
   });
 
+  it('a 412 on the PUT means an earlier PUT with this create-only URL landed: done', async () => {
+    const blob = new Blob(['webp-bytes'], { type: 'image/webp' });
+    const prepare = vi.fn(async () => ({
+      blob,
+      type: 'image/webp' as const,
+      width: 10,
+      height: 10,
+    }));
+    const presignPlan = vi.fn(async () => ({
+      planId: 'plan-2',
+      key: 'pub/plans/t1/plan-2.webp',
+      url: 'https://r2.test/put?sig',
+      headers: { 'content-type': 'image/webp', 'if-none-match': '*' },
+    }));
+    const done = uploadPlanImage(
+      { upload: { presignPlan }, prepare, createXhr: () => new FakeXhr() },
+      't1',
+      new File(['x'], 'plan.png', { type: 'image/png' }),
+    );
+    await vi.waitFor(() => expect(FakeXhr.all).toHaveLength(1));
+    FakeXhr.last.respond(412);
+    await expect(done).resolves.toMatchObject({ id: 'plan-2' });
+    expect(presignPlan).toHaveBeenCalledTimes(1);
+  });
+
+  it('any other failed PUT still fails', async () => {
+    const prepare = vi.fn(async () => ({
+      blob: new Blob(['b'], { type: 'image/webp' }),
+      type: 'image/webp' as const,
+      width: 10,
+      height: 10,
+    }));
+    const presignPlan = vi.fn(async () => ({
+      planId: 'plan-3',
+      key: 'k',
+      url: 'https://r2.test/p',
+    }));
+    const done = uploadPlanImage(
+      { upload: { presignPlan }, prepare, createXhr: () => new FakeXhr() },
+      't1',
+      new File(['x'], 'plan.png', { type: 'image/png' }),
+    );
+    await vi.waitFor(() => expect(FakeXhr.all).toHaveLength(1));
+    FakeXhr.last.respond(403);
+    await expect(done).rejects.toMatchObject({ status: 403 });
+  });
+
   it('asks for no URL when the image can’t be prepared', async () => {
     const presignPlan = vi.fn();
     const prepare = vi.fn(async () => {

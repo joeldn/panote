@@ -203,6 +203,14 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
             'The upload didn’t finish. Check your connection and try again.',
             [reupload(a)],
           );
+        case 'changed':
+          // A replace whose pano changed under it twice running: another tab replaced
+          // or deleted it. Trying again starts over from the pano as it is now.
+          return failed(
+            'Upload failed',
+            'This panorama changed while it was uploading, maybe in another tab.',
+            [reupload(a)],
+          );
         case 'presign':
           // An account limit: the server's message says which, and retrying can't help.
           // The rate limit clears within a minute, so that one can be tried again.

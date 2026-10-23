@@ -94,6 +94,7 @@ export {
   putFile,
   UPLOAD_CONTENT_TYPES,
   UploadAbortedError,
+  UploadUrlUsedError,
   UploadUrlOkSchema,
   validateUploadFile,
   type PlanPresignRequest,

@@ -8,6 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
   putFile,
   UploadAbortedError,
+  UploadUrlUsedError,
   validateUploadFile,
   type XhrLike,
 } from './upload.js';
@@ -89,7 +90,7 @@ describe('putFile', () => {
     expect(fresh.headers).toEqual({ 'content-type': 'image/webp', 'if-none-match': '*' });
   });
 
-  it('a 412 (the URL was already used) rejects like any other non-2xx', async () => {
+  it('a 412 (the URL was already used) rejects with UploadUrlUsedError', async () => {
     const xhr = new FakeXhr();
     const p = putFile('u', blob(), {
       contentType: 'image/png',
@@ -97,6 +98,7 @@ describe('putFile', () => {
       createXhr: () => xhr,
     });
     xhr.finish(412);
+    await expect(p).rejects.toBeInstanceOf(UploadUrlUsedError);
     await expect(p).rejects.toMatchObject({ status: 412 });
   });
 
