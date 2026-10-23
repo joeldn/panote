@@ -1409,8 +1409,11 @@ every account the bucket has anything for, largest first, with its tours (`tour.
 (directories under `panos/<owner>/` without a delete tombstone, as the quota counts them), the
 bytes of their originals (the figure `MAX_BYTES_PER_OWNER` caps), the bytes of its deleted
 originals in `trash/` (not counted toward the quota), and whether it is marked for deletion or
-disabled. `--tiles` adds each account's tile bytes (one more listing, of all of `tiles/`, which is
-most of the bucket's keys). It is **read-only**: it only lists keys over the R2 S3 API, never reads
+disabled. `--tiles` adds each account's tile bytes and its **untiled** panos (an original with no
+`tiles/<panoId>/manifest.json`: a failed or lost tiling job, or one still running; retry them
+with `retile.ts --pano`), and a line for tile dirs that belong to no pano (left by a delete that
+raced a tiling job, "Deleted panos"), at the cost of one more listing, of all of `tiles/`, which is
+most of the bucket's keys. It is **read-only**: it only lists keys over the R2 S3 API, never reads
 or writes an object, so it has no dry run because it needs none, and an R2 API token with Object
 Read is enough. Same `R2_*` variables and `--allow-bucket` rule as the other scripts.
 

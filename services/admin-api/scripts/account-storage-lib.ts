@@ -68,6 +68,11 @@ export interface AccountStorage {
   trashBytes: number;
   /** Tiles of the owner's panos, with --tiles; null without. */
   tileBytes: number | null;
+  /**
+   * With --tiles: panos with an original but no manifest, so never tiled (a failed or lost
+   * job, or one still running). retile.ts --pano retries them. Null without --tiles.
+   */
+  untiled: number | null;
   deleted: boolean;
   disabled: boolean;
 }
@@ -85,6 +90,20 @@ export async function accountStorage(
   store: StorageStore,
   withTiles: boolean,
 ): Promise<AccountStorage[]> {
+  return (await storageReport(store, withTiles)).accounts;
+}
+
+export interface StorageReport {
+  accounts: AccountStorage[];
+  /** With --tiles: tile dirs whose pano is in no owner's panos/ (left by a delete race). */
+  orphanTiles: { panos: number; bytes: number } | null;
+}
+
+/** accountStorage, plus the tiles that belong to no account. */
+export async function storageReport(
+  store: StorageStore,
+  withTiles: boolean,
+): Promise<StorageReport> {
   const [panos, tours, accounts, trash, tiles] = await Promise.all([
     store.listObjects('panos/'),
     store.listObjects('tours/'),
@@ -106,6 +125,7 @@ export async function accountStorage(
         tourBytes: 0,
         trashBytes: 0,
         tileBytes: withTiles ? 0 : null,
+        untiled: withTiles ? 0 : null,
         deleted: false,
         disabled: false,
       };
@@ -153,16 +173,37 @@ export async function accountStorage(
     const m = TRASH_RE.exec(o.key);
     if (m) of(m[1]!).trashBytes += o.size;
   }
+  const manifests = new Set<string>();
+  const orphans = new Set<string>();
+  let orphanBytes = 0;
   for (const o of tiles) {
-    const owner = tileOwner.get(TILE_RE.exec(o.key)?.[1] ?? '');
-    if (owner !== undefined) of(owner).tileBytes! += o.size;
+    const panoId = TILE_RE.exec(o.key)?.[1] ?? '';
+    if (o.key === `${TILES_ROOT}${panoId}/manifest.json`) manifests.add(panoId);
+    const owner = tileOwner.get(panoId);
+    if (owner !== undefined) {
+      of(owner).tileBytes! += o.size;
+    } else if (panoId) {
+      orphans.add(panoId);
+      orphanBytes += o.size;
+    }
+  }
+  if (withTiles) {
+    for (const [id, info] of panoInfo) {
+      if (!info.deleting && info.original > 0 && !manifests.has(id.slice(id.indexOf('/') + 1))) {
+        of(info.owner).untiled! += 1;
+      }
+    }
   }
   const total = (a: AccountStorage) =>
     a.panoBytes + a.tourBytes + a.trashBytes + (a.tileBytes ?? 0);
-  return [...byOwner.values()].sort(
+  const sorted = [...byOwner.values()].sort(
     (a, b) =>
       b.originalBytes - a.originalBytes || total(b) - total(a) || a.owner.localeCompare(b.owner),
   );
+  return {
+    accounts: sorted,
+    orphanTiles: withTiles ? { panos: orphans.size, bytes: orphanBytes } : null,
+  };
 }
 
 const human = (bytes: number): string => {
@@ -184,7 +225,7 @@ export function formatTable(rows: readonly AccountStorage[], withTiles: boolean)
     'panos',
     'originals',
     'trash',
-    ...(withTiles ? ['tiles'] : []),
+    ...(withTiles ? ['tiles', 'untiled'] : []),
     'state',
   ];
   const body = rows.map((a) => [
@@ -193,7 +234,7 @@ export function formatTable(rows: readonly AccountStorage[], withTiles: boolean)
     String(a.panos),
     human(a.originalBytes),
     human(a.trashBytes),
-    ...(withTiles ? [human(a.tileBytes ?? 0)] : []),
+    ...(withTiles ? [human(a.tileBytes ?? 0), String(a.untiled ?? 0)] : []),
     [a.deleted ? 'deleted' : '', a.disabled ? 'disabled' : ''].filter(Boolean).join(',') || '-',
   ]);
   const sum = (f: (a: AccountStorage) => number) => rows.reduce((n, a) => n + f(a), 0);
@@ -203,7 +244,7 @@ export function formatTable(rows: readonly AccountStorage[], withTiles: boolean)
     String(sum((a) => a.panos)),
     human(sum((a) => a.originalBytes)),
     human(sum((a) => a.trashBytes)),
-    ...(withTiles ? [human(sum((a) => a.tileBytes ?? 0))] : []),
+    ...(withTiles ? [human(sum((a) => a.tileBytes ?? 0)), String(sum((a) => a.untiled ?? 0))] : []),
     '',
   ]);
   const widths = head.map((h, i) => Math.max(h.length, ...body.map((r) => r[i]!.length)));
@@ -224,10 +265,21 @@ export interface StorageDeps {
 
 /** The whole CLI run. */
 export async function runStorage(args: StorageArgs, deps: StorageDeps): Promise<number> {
-  const all = await accountStorage(deps.store, args.tiles);
+  const report = await storageReport(deps.store, args.tiles);
+  const all = report.accounts;
   const rows = args.top === null ? all : all.slice(0, args.top);
   if (args.format === 'json') {
-    deps.log(JSON.stringify({ bucket: args.r2.bucket, accounts: rows }, null, 2));
+    deps.log(
+      JSON.stringify(
+        {
+          bucket: args.r2.bucket,
+          accounts: rows,
+          ...(report.orphanTiles ? { orphanTiles: report.orphanTiles } : {}),
+        },
+        null,
+        2,
+      ),
+    );
     return 0;
   }
   if (rows.length === 0) {
@@ -235,6 +287,11 @@ export async function runStorage(args: StorageArgs, deps: StorageDeps): Promise<
     return 0;
   }
   for (const line of formatTable(rows, args.tiles)) deps.log(line);
+  if (report.orphanTiles?.panos) {
+    deps.log(
+      `${report.orphanTiles.panos} tile dir(s) under tiles/ belong to no pano (${human(report.orphanTiles.bytes)}): left by a delete that raced a tiling job; see "Deleted panos"`,
+    );
+  }
   if (args.top !== null && all.length > rows.length) {
     deps.log(`(the ${rows.length} largest of ${all.length} accounts; drop --top for all)`);
   }

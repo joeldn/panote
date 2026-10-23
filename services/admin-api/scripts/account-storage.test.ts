@@ -81,6 +81,8 @@ describe('accountStorage', () => {
         tourBytes: 4_100,
         trashBytes: 30 * MB,
         tileBytes: 501_000,
+        // a2 has an original and no manifest; a3 is mid-delete and not counted.
+        untiled: 1,
         deleted: false,
         disabled: false,
       },
@@ -94,6 +96,7 @@ describe('accountStorage', () => {
         tourBytes: 0,
         trashBytes: 0,
         tileBytes: 0,
+        untiled: 1,
         deleted: true,
         disabled: true,
       },
@@ -107,6 +110,7 @@ describe('accountStorage', () => {
 
     expect(listed.sort()).toEqual(['accounts/', 'panos/', 'tours/', 'trash/']);
     expect(rows[0]!.tileBytes).toBeNull();
+    expect(rows[0]!.untiled).toBeNull();
   });
 });
 
@@ -150,8 +154,20 @@ describe('runStorage', () => {
     expect(top.at(-1)).toBe('(the 1 largest of 2 accounts; drop --top for all)');
   });
 
-  it('shows the tiles column with --tiles', () => {
-    expect(formatTable([], true)[0]).toContain('tiles');
+  it('shows the tiles and untiled columns with --tiles, and the tiles no pano owns', async () => {
+    expect(formatTable([], true)[0]).toMatch(/tiles\s+untiled/);
+    const lines: string[] = [];
+    await runStorage(parseStorageArgs(['--tiles'], ENV), {
+      store: storeOf(BUCKET).store,
+      log: (l) => lines.push(l),
+    });
+    expect(lines.at(-1)).toMatch(/^1 tile dir\(s\) under tiles\/ belong to no pano \(7 B\)/);
+    const json: string[] = [];
+    await runStorage(parseStorageArgs(['--tiles', '--json'], ENV), {
+      store: storeOf(BUCKET).store,
+      log: (l) => json.push(l),
+    });
+    expect(JSON.parse(json.join('\n'))).toMatchObject({ orphanTiles: { panos: 1, bytes: 7 } });
   });
 });
 
