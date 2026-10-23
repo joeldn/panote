@@ -1,0 +1,150 @@
+name: Coverage comment
+
+# Posts the coverage table that CI's Coverage job builds as a PR comment.
+#
+# Split out of ci.yml so that no job running PR code holds a write token: the
+# Coverage job runs `pnpm test:coverage` (the PR's own code) with contents:
+# read only and uploads its comment as the `coverage-comment` artifact; this
+# workflow, which GitHub always runs from main's copy (workflow_run only fires
+# from the default branch), posts it. It never checks out or runs anything
+# from the PR. The artifact is whatever the PR's code wrote, so it is treated
+# as untrusted text: read from a file inside the script, never interpolated
+# into a shell command or expression, capped in size, and only ever posted as
+# a comment body.
+#
+# Same-repo PRs only, as before the split: a fork's run has no
+# pull_requests entry and its head repository is not this one.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+env:
+  # Keeps actions that still declare the node20 runtime executing on node24 as
+  # GitHub retires node20.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  comment:
+    name: Post coverage comment
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # A cancelled CI run was superseded by a newer push, whose own run posts.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.conclusion != 'skipped'
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      # Finds the PR from GitHub's own record of the run, not from anything in
+      # the artifact, and skips quietly when there is nothing to post: no
+      # artifact (the job died before building it), or the PR has moved on to
+      # a newer commit whose own run will post.
+      - name: Find the pull request and artifact
+        id: find
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const { owner, repo } = context.repo;
+            const number = run.pull_requests?.[0]?.number;
+            if (!number) {
+              core.notice('No same-repo pull request for this run; nothing to post.');
+              return;
+            }
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            if (pr.state !== 'open' || pr.head.sha !== run.head_sha) {
+              core.notice(`PR #${number} is closed or no longer at ${run.head_sha}; skipping.`);
+              return;
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner,
+              repo,
+              run_id: run.id,
+              per_page: 100,
+            });
+            if (!artifacts.some((a) => a.name === 'coverage-comment' && !a.expired)) {
+              core.notice('No coverage-comment artifact on this run; nothing to post.');
+              return;
+            }
+            core.setOutput('pr', String(number));
+
+      - name: Download the comment
+        if: ${{ steps.find.outputs.pr != '' }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: coverage-comment
+          path: ${{ runner.temp }}/coverage-comment
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Post or update the comment
+        if: ${{ steps.find.outputs.pr != '' }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          COMMENT_FILE: ${{ runner.temp }}/coverage-comment/coverage-comment.md
+          PR_NUMBER: ${{ steps.find.outputs.pr }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const marker = '<!-- panote:coverage -->';
+            // What .github/scripts/coverage-summary.mjs always starts with.
+            const prefix = `${marker}\n\n## Coverage\n`;
+            // The real table is a few KB. Checked before reading, so a huge
+            // file never gets loaded into this write-token job.
+            const maxBytes = 256 * 1024;
+            // GitHub rejects a comment body over 65536 characters.
+            const limit = 60000;
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+
+            const file = process.env.COMMENT_FILE;
+            const { size } = fs.statSync(file);
+            if (size > maxBytes) {
+              core.notice(`coverage-comment.md is ${size} bytes, over ${maxBytes}; not posting it.`);
+              return;
+            }
+            let body = fs.readFileSync(file, 'utf8');
+            // Anything else was not written by the generator; don't post it
+            // as github-actions[bot]. This also guarantees the marker the
+            // next run looks for.
+            if (!body.startsWith(prefix)) {
+              core.notice('coverage-comment.md does not start with the expected heading; not posting it.');
+              return;
+            }
+            if (body.length > limit) body = `${body.slice(0, limit)}\n\n_(truncated)_\n`;
+            // A zero-width joiner after every @ so the PR's text can't ping
+            // anyone or a team through the bot.
+            body = body.replace(/@(?=[A-Za-z0-9])/g, '@\u200d');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+
+            // Match on the HTML marker, not on a heading, so editing the
+            // wording never orphans the existing comment; and only on this
+            // workflow's own comments, never one a person wrote.
+            const existing = comments.find(
+              (comment) =>
+                comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

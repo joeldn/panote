@@ -119,6 +119,15 @@ describe('buildHeadersFile', () => {
     expect(file).not.toMatch(/^\/assets\/\*/m);
   });
 
+  it('sends HSTS on every path, with subdomains and without preload', () => {
+    const hsts = '  Strict-Transport-Security: max-age=31536000; includeSubDomains';
+    for (const indexable of [false, true]) {
+      const [all] = buildHeadersFile(loadConfig(env), { indexable }).split('\n\n');
+      expect(all?.split('\n')).toContain(hsts);
+    }
+    expect(buildHeadersFile(loadConfig(env))).not.toContain('preload');
+  });
+
   it('adds noindex on every path unless explicitly indexable', () => {
     const framable = ['/s/:slug/embed'];
     expect(buildHeadersFile(loadConfig(env), { framable })).toMatch(

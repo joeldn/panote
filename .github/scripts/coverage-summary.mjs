@@ -238,11 +238,11 @@ process.stdout.write(`${render(workspaces)}\n`);
 // An unexpected coverage gap fails the job (not just the comment): the
 // "Build coverage comment" step in ci.yml has no `continue-on-error` and runs
 // with `if: ${{ !cancelled() }}`, so a non-zero exit here fails that step and
-// the job, on both same-repo and fork PRs. A comment alone is not enough - the
-// "Post coverage comment" step is skipped on fork PRs (they get a read-only
-// GITHUB_TOKEN), which is the one case this needs to be loud regardless of who
-// sees the PR comment. Exit code is set (not `process.exit`) so the write above
-// is never at risk of being cut off before it reaches the redirected file.
+// the job, on both same-repo and fork PRs. A comment alone is not enough -
+// coverage-comment.yml posts nothing on fork PRs, which is the one case this
+// needs to be loud regardless of who sees the PR comment. Exit code is set
+// (not `process.exit`) so the write above is never at risk of being cut off
+// before it reaches the redirected file.
 if (workspaces.some((w) => w.totals === null && !w.workersPool)) {
   process.exitCode = 1;
 }

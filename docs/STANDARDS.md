@@ -35,7 +35,7 @@ Design choices and best practices that apply across this monorepo.
   | `savePrefix` | `''` | `pnpm add` writes an exact version into the catalog, never `^x.y.z` | **Non-obvious interaction:** `catalogMode: strict` only decides *where* the version string goes — it says nothing about its shape. Without `savePrefix: ''`, `pnpm add` would still happily write a caret range into the catalog entry itself. `savePrefix: ''` is what actually enforces "pinned exactly, no ranges" |
   | `cleanupUnusedCatalogs` | `true` | Drops catalog entries no package references any more | Stops the catalog rotting into a list of things we stopped using |
   | `dedupePeers` | `true` | Collapses peer dependency ranges to a single resolution where possible | Avoids installing several copies of the same peer |
-  | `minimumReleaseAge` | `1440` (minutes, = 24h) | Refuses to install any package version published less than 24h ago | Blunt mitigation against a freshly-published compromised release |
+  | `minimumReleaseAge` | `4320` (minutes, = 3 days; Renovate's `minimumReleaseAge` matches) | Refuses to install any package version published less than 3 days ago | Blunt mitigation against a freshly-published compromised release |
 
 ---
 
