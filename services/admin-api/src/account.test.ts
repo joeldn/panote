@@ -13,6 +13,7 @@ beforeAll(() => {
       };
     }
     if (t === 'plain') return { sub: 'facebook|5' };
+    if (t === 'operator') return { sub: 'auth0|operator' };
     throw new Error('bad');
   });
 });
@@ -28,6 +29,7 @@ describe('GET /api/admin/account', () => {
     expect(await r.json<AccountView>()).toEqual({
       email: 'maya@example.com',
       signIns: ['google-oauth2', 'email', 'apple'],
+      operator: false,
     });
   });
 
@@ -35,7 +37,12 @@ describe('GET /api/admin/account', () => {
     expect(await (await account('plain')).json<AccountView>()).toEqual({
       email: null,
       signIns: ['facebook'],
+      operator: false,
     });
+  });
+
+  it('says whether the user may open the operator pages', async () => {
+    expect((await (await account('operator')).json<AccountView>()).operator).toBe(true);
   });
 
   it('needs a signed-in user', async () => {

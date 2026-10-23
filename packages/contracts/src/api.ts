@@ -310,6 +310,8 @@ export type TileGcRecord = z.infer<typeof TileGcRecordSchema>;
 export const AccountViewSchema = z.object({
   email: z.string().nullable(),
   signIns: z.array(z.string().min(1)),
+  /** Whether this user may open the operator pages (/app/ops). Absent from an older API. */
+  operator: z.boolean().optional(),
 });
 export type AccountView = z.infer<typeof AccountViewSchema>;
 

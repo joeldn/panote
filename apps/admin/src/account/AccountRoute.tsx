@@ -202,6 +202,17 @@ export function AccountRoute() {
         </a>
       </section>
 
+      {account.status === 'ready' && account.value.operator && (
+        <section className="acct__section" aria-labelledby="acct-ops">
+          <h2 id="acct-ops" className="dash__kicker">
+            Operator
+          </h2>
+          <Link to="/ops" className="acct__link">
+            Operations
+          </Link>
+        </section>
+      )}
+
       <section className="acct__section" aria-labelledby="acct-session">
         <h2 id="acct-session" className="dash__kicker">
           Session

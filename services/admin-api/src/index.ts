@@ -89,6 +89,7 @@ import {
   type AccessRefusal,
 } from './members.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
+import { isOperatorSub, requireOperator } from './ops-gate.js';
 import { sweepUnsavedPlans } from './plan-sweep.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
@@ -265,6 +266,10 @@ app.use('/api/admin/*', async (c, next) => {
   if (disabled) return c.json({ error: 'account disabled' }, 403);
   return next();
 });
+
+// The operator area (ops-gate.ts): /api/admin/ops and every route under it, after the gate
+// above.
+app.use('/api/admin/ops/*', requireOperator);
 
 // The caller's sub: from the gate when it ran, else verified here.
 const ownerOf = async (c: Context<AppEnv>): Promise<string> =>
@@ -860,6 +865,7 @@ app.get(ACCOUNT_PATH, async (c) => {
   return c.json({
     email: auth.email ?? null,
     signIns: [...new Set(signIns)],
+    operator: await isOperatorSub(c.env.OPERATOR_SUB_SHA256, auth.sub),
   } satisfies AccountView);
 });
 
