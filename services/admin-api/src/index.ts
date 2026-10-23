@@ -20,6 +20,7 @@ import {
   tilesPrefix,
   TourDocSchema,
   tourKey,
+  tourOwnerKey,
   userPanosPrefix,
   VisibilityPatchRequestSchema,
   type SceneConfig,
@@ -52,6 +53,7 @@ import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
+import { sweepUnsavedPlans } from './plan-sweep.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { sweepSupersededTiles } from './tile-gc.js';
@@ -390,6 +392,16 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   if (!result.ok) {
     return c.json({ error: result.status === 404 ? 'not found' : 'conflict' }, result.status);
   }
+  // A tour with a plan image needs its owner pointer: the daily plan sweep (plan-sweep.ts)
+  // takes a tour with neither pointer nor bundle for deleted. Create-only, so one HEAD after
+  // the first save; tours created before pointers existed get theirs here.
+  if (parsed.data.plan) {
+    c.executionCtx.waitUntil(
+      c.env.BUCKET.head(tourOwnerKey(tourId)).then((p) =>
+        p ? undefined : recordTourOwner(c.env.BUCKET, sub, tourId),
+      ),
+    );
+  }
   // Plan images the tour stopped using (replaced or removed): best-effort, after the answer.
   c.executionCtx.waitUntil(
     sweepPlans(c.env.BUCKET, sub, tourId, Date.now())
@@ -568,8 +580,9 @@ export default {
   // Daily Cron Trigger: releases slug aliases past their expiresAt (Q6),
   // finishes (or re-sweeps) every account marked for deletion, and deletes tile
   // versions a re-tile superseded more than a day ago (no purge: nothing
-  // references their URLs any more, and edge copies age out on their own), and
-  // empties trash/ of originals deleted 30 days ago (trash.ts).
+  // references their URLs any more, and edge copies age out on their own),
+  // empties trash/ of originals deleted 30 days ago (trash.ts), and deletes plan
+  // images no tour will ever save (plan-sweep.ts), purged from the CDN.
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
   // It returns before runDailyCron, so the 15-minute cron never runs the daily
@@ -588,6 +601,10 @@ export default {
           sweepAccountDeletions(accountDeps(env), now).then((p) => purgeCdn(env, p)),
         'tile-gc': () => sweepSupersededTiles(env.BUCKET, now),
         trash: () => sweepTrash(env.BUCKET, now),
+        'plan-sweep': () =>
+          sweepUnsavedPlans(env.BUCKET, now).then((r) =>
+            purgeCdn(env, { prefixes: [], files: r.deleted }),
+          ),
       }),
     );
   },

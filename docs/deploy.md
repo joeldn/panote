@@ -21,7 +21,7 @@ and DLQ above are the only pieces of it still alive, and they belong to panote n
 | Service | Script (dev / production) | Route (dev / production) | Bindings | Secrets |
 |---|---|---|---|---|
 | `services/public-api` | `panote-public-api-dev` / `panote-public-api` | `panote.dev/api/tours/*` + `panote.dev/api/errors` + `panote.dev/api/explore` / same on `panote.io` | `STATS` — Durable Object, class `TourStats`; `EVENTS` — Analytics Engine, dataset `panote_events_dev` / `panote_events` (unit B5); `BUCKET` — R2, `pano-content-dev` / `pano-content`, read-only by convention (likes check `pub/`, Explore reads `explore/`); rate limiters, see Abuse controls | none |
-| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, deletes superseded tile versions (`tile-gc/`) and empties `trash/` of originals deleted 30 days ago, recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
+| `services/admin-api` | `panote-admin-api-dev` / `panote-admin-api` | `panote.dev/api/admin/*` / `panote.io/api/admin/*` | `BUCKET` — R2, bucket `pano-content-dev` / `pano-content`; `PUBLISHER` — Durable Object, class `TourPublisher` (one per tourId, serializes publish/slug/visibility/unpublish; migration `v1` `new_sqlite_classes`, applied by `wrangler deploy`); var `SLUG_ALIAS_DAYS` (`30`, days an old share-link slug keeps redirecting after a rename); `STATS` — cross-script Durable Object binding to `public-api`'s `TourStats` (`script_name` `panote-public-api-dev` / `panote-public-api`; account delete clears a tour's counts, see Account deletion); daily Cron Trigger `17 3 * * *` that deletes expired slug aliases under `slugs/` and sweeps accounts marked for deletion, deletes superseded tile versions (`tile-gc/`) empties `trash/` of originals deleted 30 days ago, and deletes plan images nobody saved (`pub/plans/`), recording each run at `ops/cron/admin-api-daily.json` and each failed CDN purge at `ops/cdn-purge/last-failure.json` for the health check (Monitoring and alerts); vars `CF_ACCOUNT_ID`, `AE_DATASET` (unit B5) | `CF_ANALYTICS_TOKEN` (unit B5, insights; R2 itself uses the native binding, not the S3 API) |
 | `services/upload-api` | `panote-upload-api-dev` / `panote-upload-api` | `panote.dev/api/upload-url` / `panote.io/api/upload-url` | none (S3 API via `R2_ACCOUNT_ID`/`R2_BUCKET` vars) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` |
 | `services/tiler-consumer` | `panote-tiler-consumer-dev` / `panote-tiler-consumer` | none — queue consumer and Cron Trigger, no `fetch` handler | `TILER` — container Durable Object, class `Tiler`; `BUCKET` — R2, bucket `pano-content-dev` / `pano-content` (unit B4: tile-failed marker); queue consumer on `pano-uploads-dev` / `pano-uploads` (`max_batch_size: 1`, `max_retries: 3`, dlq `pano-uploads-dlq-dev` / `pano-uploads-dlq`, `max_concurrency: 5`) and, as of unit B4, on the DLQ itself (`max_batch_size: 10`, `max_retries: 3`, `max_concurrency: 1`, no further DLQ — see below); `ALERT_EMAIL` — `send_email`, unrestricted, var `ALERT_EMAIL_FROM` = `tiler-alerts@panote.io` (DLQ and health alert email, see below); Cron Trigger `*/5 * * * *` (health check) with service bindings `WEBSITE`, `ADMIN_APP`, `PUBLIC_API`, `ADMIN_API`, `UPLOAD_API` to the other five Workers of the same env and vars `HEALTH_SITE_ORIGIN`, `HEALTH_TOUR_SLUG`, `HEALTH_PUBLIC_PROBES` (Monitoring and alerts) | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (forwarded into the container's `process.env` via `Container.envVars` — see `services/tiler-consumer/src/container-env.ts`); `ALERT_EMAIL_TO` (DLQ and health alert recipient, optional — unset means no email) |
 
@@ -676,7 +676,7 @@ pano it removed into one prefix request (100 max each), and purges the tour's fl
 (`pub/plans/<tourId>/<planId>.<ext>`) by URL; unpublish purges `pub/tours/<tourId>.json`
 and the removed `slugs/<slug>.json` by URL. A tour save that leaves a plan image unused (replaced
 or removed, and no longer on the share link) deletes and purges it by URL too, once it is an hour
-old. It's best-effort: a non-2xx, a network error or the 5s
+old, and so does the daily sweep of plan images nobody saved ("Unsaved floor-plan images"). It's best-effort: a non-2xx, a network error or the 5s
 timeout is logged (`cdn purge failed …`, status and Cloudflare error codes only) and nothing is
 retried. With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs
 `cdn purge skipped` and does nothing. Free plan limits are per account: 5 prefix requests/min,
@@ -1608,6 +1608,35 @@ went with the pano: bring it back from the backup set of the day before the dele
 (`--date <day> --tour <tourId>` or `--sub <sub>`; create-only, so nothing current is touched), and a
 tour that still names the pano shows it again once both are back.
 
+## Unsaved floor-plan images
+
+A tour save sweeps that tour's plan images ("CDN purge on delete"), but an upload nobody saves
+(an editor closed before Save, a draft never restored) would wait for a save that may never come.
+The daily cron's `plan-sweep` task (`sweepUnsavedPlans`, `services/admin-api/src/plan-sweep.ts`)
+lists `pub/plans/` and judges each tour's images:
+
+- **The tour is gone** (no `tour-owners/<tourId>.json` naming an owner whose `tour.json` is
+  there, and no live bundle `pub/tours/<tourId>.json`): its images older than a day go.
+- **The tour exists**: images older than **7 days** that neither the stored `tour.json` nor the
+  live bundle names go. 7 days is the editor's draft-autosave window (`DRAFT_MAX_AGE_MS`), so a
+  plan a local draft holds survives as long as the draft can be restored (an image is aged from
+  its upload, not from the draft's last autosave, so a draft kept alive past a week by editing
+  can lose a plan it never saved).
+
+A tour whose images are all younger than a day costs nothing beyond the listing; one being judged
+costs up to 4 R2 operations (pointer, `tour.json`, bundle, one batch delete). A run spends at most
+`PLAN_SWEEP_BUDGET` (400) operations; if it runs out it saves where it got to in
+`ops/plan-sweep/cursor.json` (`{ v, startAfter }`, private like the rest of `ops/`) and the next
+day's run carries on from there. A pass that reaches the end deletes the cursor, so the next one
+starts from the top. Deleted images are purged from the CDN by URL, as the per-save sweep does.
+It logs `[plan-sweep] deleted N unsaved plan image(s) of M tour(s)`, with `budget reached, the
+next run carries on` on a partial run.
+
+The "gone" test leans on the owner pointer, which tours created before pointers existed (#121)
+don't have unless they were published since. So every tour save that carries a plan now writes
+the pointer if it is missing (one `HEAD` after the first). A published tour with no pointer
+still counts as existing through its bundle.
+
 ---
 
 ## Explore
@@ -2227,7 +2256,8 @@ change alone leaves it as it is; CI checks for drift).
 ### Daily cron and CDN purge failures
 
 - **Daily cron.** `admin-api`'s `scheduled` handler runs its tasks (`slug-aliases`,
-  `account-deletions` with its CDN purge, `tile-gc`, `trash`) through `runDailyCron`
+  `account-deletions` with its CDN purge, `tile-gc`, `trash`, `plan-sweep` with its CDN purge)
+  through `runDailyCron`
   (`services/admin-api/src/cron-status.ts`). Each task that throws logs
   `[cron] daily task failed task=<name> error=<error name>`, and every run writes
   `ops/cron/admin-api-daily.json`: `{ lastRunAt, lastOkAt, failed }`, where `lastOkAt` only moves
