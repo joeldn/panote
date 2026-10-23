@@ -58,3 +58,8 @@ export const formatUsage = (n: number, unit: OpsUsage['items'][number]['unit']):
       return formatNumber(n);
   }
 };
+
+// The backup runs daily, so 1 day ago is on time and more means runs have failed;
+// no complete set at all is a new env, not an alarm.
+export const backupTone = (daysAgo: number | null): 'ok' | 'warn' | 'bad' | 'none' =>
+  daysAgo === null ? 'none' : daysAgo <= 1 ? 'ok' : daysAgo === 2 ? 'warn' : 'bad';

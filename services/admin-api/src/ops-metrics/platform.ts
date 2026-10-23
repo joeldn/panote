@@ -332,12 +332,17 @@ const usageLines = async (
   }
 };
 
+const STORAGE_LOOKBACK_MS = 2 * 24 * 60 * 60 * 1000;
+
 export const usageSection = async (
   env: CfEnv,
   w: OpsWindow,
   res: OpsResources,
 ): Promise<OpsUsage> => {
   const month = between(w.monthStart, w.to);
+  // Storage is a level, not a month's sum: the latest sample, which early on the 1st may
+  // still be last month's.
+  const recent = between(new Date(w.to.getTime() - STORAGE_LOOKBACK_MS), w.to);
   const day = w.monthStart.toISOString().slice(0, 10);
   const total = (rows: GqlRow[] | undefined, path: string) =>
     (rows ?? []).reduce((s, r) => s + at(r, path), 0);
@@ -391,7 +396,7 @@ export const usageSection = async (
         res.buckets
           .map(
             (bucket, i) => `s${i}: r2StorageAdaptiveGroups(limit: 1, orderBy: [datetime_DESC],
-              filter: { bucketName: ${lit(bucket)}, ${month} }) {
+              filter: { bucketName: ${lit(bucket)}, ${recent} }) {
               max { payloadSize metadataSize } dimensions { datetime }
             }`,
           )

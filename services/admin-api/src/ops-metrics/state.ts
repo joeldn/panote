@@ -2,6 +2,7 @@ import {
   BACKUP_DATE_PATTERN,
   BACKUP_PROGRESS_KEY,
   BACKUP_ROOT,
+  BackupProgressSchema,
   backupCompleteKey,
   CDN_PURGE_DEAD_PREFIX,
   CDN_PURGE_FAILURE_KEY,
@@ -18,6 +19,8 @@ import {
 // The health section: what the crons, the CDN purge queue, the backup and tiler-consumer's
 // health check already record under ops/ and backup/ (docs/deploy.md, "Monitoring and
 // alerts"). Read only; a record that's missing or unreadable reads as null, not an error.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Listing stops here: past this many records the count shows as "at least". */
 export const QUEUE_COUNT_CAP = 1000;
@@ -58,7 +61,7 @@ const lastCompleteBackup = async (bucket: R2Bucket): Promise<string | null> => {
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-export const healthSection = async (bucket: R2Bucket): Promise<OpsHealth> => {
+export const healthSection = async (bucket: R2Bucket, now: Date): Promise<OpsHealth> => {
   const [health, cron, tileGc, purgeFailure, pending, dead, backup, progress] = await Promise.all([
     readJson(bucket, HEALTH_STATE_KEY),
     readJson(bucket, CRON_STATUS_KEY),
@@ -83,10 +86,14 @@ export const healthSection = async (bucket: R2Bucket): Promise<OpsHealth> => {
   const cronStatus = CronStatusSchema.safeParse(cron);
   const gcStatus = TileGcStatusSchema.safeParse(tileGc);
   const failure = CdnPurgeFailureSchema.safeParse(purgeFailure);
-  const inProgress =
-    isObject(progress) && typeof progress.date === 'string' && typeof progress.status === 'string'
-      ? { date: progress.date, status: progress.status }
-      : null;
+  const backupProgress = BackupProgressSchema.safeParse(progress);
+  const inProgress = backupProgress.success
+    ? {
+        date: backupProgress.data.date,
+        objects: backupProgress.data.objects,
+        runs: backupProgress.data.runs,
+      }
+    : null;
   return {
     failing,
     announcedDown: announced,
@@ -100,6 +107,12 @@ export const healthSection = async (bucket: R2Bucket): Promise<OpsHealth> => {
       dead: dead.n,
       deadCapped: dead.capped,
     },
-    backup: { lastCompleteDate: backup, inProgress },
+    backup: {
+      lastCompleteDate: backup,
+      lastCompleteDaysAgo: backup
+        ? Math.floor((now.getTime() - Date.parse(backup)) / DAY_MS)
+        : null,
+      inProgress,
+    },
   };
 };

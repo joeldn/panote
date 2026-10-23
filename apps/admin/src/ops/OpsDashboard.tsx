@@ -14,6 +14,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import { useSession } from '../session.js';
 import {
+  backupTone,
   formatMs,
   formatNumber,
   formatPercent,
@@ -493,11 +494,12 @@ function Health({ h }: { h: OpsHealth }) {
         {purge.lastFailure &&
           ` · last failure ${formatTime(purge.lastFailure.at)} (${purge.lastFailure.detail})`}
       </StatusRow>
-      <StatusRow tone={h.backup.lastCompleteDate ? 'ok' : 'none'} label="Backup">
+      <StatusRow tone={backupTone(h.backup.lastCompleteDaysAgo)} label="Backup">
         {h.backup.lastCompleteDate
           ? `Last complete set ${h.backup.lastCompleteDate}`
           : 'No complete set yet'}
-        {h.backup.inProgress && ` · ${h.backup.inProgress.date} is ${h.backup.inProgress.status}`}
+        {h.backup.inProgress &&
+          ` · ${h.backup.inProgress.date} being written (${formatNumber(h.backup.inProgress.objects)} objects so far)`}
       </StatusRow>
     </ul>
   );

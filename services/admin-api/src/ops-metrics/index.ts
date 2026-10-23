@@ -73,7 +73,7 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
     });
   const [health, workers, storage, queues, durableObjects, containers, usage, product] =
     await Promise.all([
-      settle(() => healthSection(env.BUCKET)),
+      settle(() => healthSection(env.BUCKET, now)),
       settle(() => cf((r) => workersSection(env, w, r))),
       settle(() => cf((r) => storageSection(env, w, r))),
       settle(() => cf((r) => queuesSection(env, w, r))),

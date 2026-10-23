@@ -7,10 +7,11 @@ import {
   OpsMetricsSchema,
   backupCompleteKey,
   pubTourKey,
+  type BackupProgress,
   type OpsSection,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
-import { createExecutionContext, env } from 'cloudflare:test';
+import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import worker from '../index.js';
@@ -402,14 +403,14 @@ describe('getOpsMetrics', () => {
 
 describe('healthSection', () => {
   it('is all empty on a fresh bucket', async () => {
-    expect(await healthSection(env.BUCKET)).toEqual({
+    expect(await healthSection(env.BUCKET, new Date('2026-10-23T12:00:00Z'))).toEqual({
       failing: [],
       announcedDown: [],
       lastAlertAt: null,
       dailyCron: null,
       tileGc: null,
       cdnPurge: { lastFailure: null, pending: 0, pendingCapped: false, dead: 0, deadCapped: false },
-      backup: { lastCompleteDate: null, inProgress: null },
+      backup: { lastCompleteDate: null, lastCompleteDaysAgo: null, inProgress: null },
     });
   });
 
@@ -433,9 +434,20 @@ describe('healthSection', () => {
       put(`${CDN_PURGE_DEAD_PREFIX}c.json`, {}),
       put(backupCompleteKey('2026-10-21'), {}),
       put('backup/2026-10-22/tours/x.json', {}),
-      put('backup/progress.json', { date: '2026-10-22', status: 'partial' }),
+      put('backup/progress.json', {
+        v: 1,
+        date: '2026-10-22',
+        startedAt: '2026-10-22T03:00:00.000Z',
+        objects: 1234,
+        bytes: 5_000_000,
+        failed: 0,
+        skipped: 0,
+        runs: 2,
+        source: 1,
+        startAfter: 'tours/x.json',
+      } satisfies BackupProgress),
     ]);
-    const h = await healthSection(env.BUCKET);
+    const h = await healthSection(env.BUCKET, new Date('2026-10-23T12:00:00Z'));
     expect(h.failing).toEqual([
       { check: 'cdn purge', failures: 1 },
       { check: 'website /', failures: 3 },
@@ -452,7 +464,8 @@ describe('healthSection', () => {
     });
     expect(h.backup).toEqual({
       lastCompleteDate: '2026-10-21',
-      inProgress: { date: '2026-10-22', status: 'partial' },
+      lastCompleteDaysAgo: 2,
+      inProgress: { date: '2026-10-22', objects: 1234, runs: 2 },
     });
   });
 });
@@ -479,6 +492,27 @@ describe('GET /api/admin/ops/metrics', () => {
     expect(res.headers.get('Cache-Control')).toBe('private, no-store');
     const body = OpsMetricsSchema.parse(await res.json());
     expect(body.range).toBe('7d');
+  });
+
+  it('caches each range on its own for a minute', async () => {
+    const fetchSpy = stubCloudflare(platform);
+    const load = async (range: string) => {
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(
+        new Request(`https://x/api/admin/ops/metrics?range=${range}`, {
+          headers: { Authorization: 'Bearer operator' },
+        }),
+        testEnv,
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return OpsMetricsSchema.parse(await res.json());
+    };
+    expect((await load('24h')).range).toBe('24h');
+    const calls = fetchSpy.mock.calls.length;
+    expect((await load('24h')).range).toBe('24h');
+    expect(fetchSpy.mock.calls.length).toBe(calls);
+    expect((await load('7d')).range).toBe('7d');
   });
 
   it('400s an unknown range', async () => {

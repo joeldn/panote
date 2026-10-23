@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  backupTone,
   formatMs,
   formatPercent,
   formatPoint,
@@ -37,5 +38,17 @@ describe('ops formatting', () => {
     expect(formatUsage(10e9, 'bytes')).toBe('10 GB');
     expect(formatUsage(6.004e9, 'bytes')).toBe('6 GB');
     expect(formatUsage(340e6, 'bytes')).toBe('340 MB');
+  });
+});
+
+describe('backupTone', () => {
+  it.each([
+    [null, 'none'],
+    [0, 'ok'],
+    [1, 'ok'],
+    [2, 'warn'],
+    [3, 'bad'],
+  ] as const)('reads a last complete set %s days ago as %s', (days, tone) => {
+    expect(backupTone(days)).toBe(tone);
   });
 });

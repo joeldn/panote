@@ -243,9 +243,11 @@
 }
 
 .opsd__meter-value {
+  min-width: 0;
   font: 400 13px var(--fmono);
   color: var(--ink-62);
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .opsd__meter-bar {

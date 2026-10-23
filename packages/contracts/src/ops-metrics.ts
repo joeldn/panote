@@ -44,8 +44,10 @@ export const OpsHealthSchema = z.object({
   backup: z.object({
     /** The newest day whose set is complete (YYYY-MM-DD). */
     lastCompleteDate: z.string().nullable(),
-    /** The set being written, if one is. */
-    inProgress: z.object({ date: z.string(), status: z.string() }).nullable(),
+    /** Whole UTC days since that date; the backup runs daily, so 1 is on time. */
+    lastCompleteDaysAgo: count().nullable(),
+    /** The set being written (backup/progress.json), if one is: its day and objects so far. */
+    inProgress: z.object({ date: z.string(), objects: count(), runs: count() }).nullable(),
   }),
 });
 export type OpsHealth = z.infer<typeof OpsHealthSchema>;

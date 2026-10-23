@@ -3040,8 +3040,8 @@ still loads.
 - **`OPS_RESOURCES`** (var, both env blocks of `services/admin-api/wrangler.jsonc`) names this env's
   Workers, buckets and queues, since dev and production share one account. Add a Worker there when a
   new one ships.
-- **Cost.** An uncached load is about 13 GraphQL requests, 5 Analytics Engine queries, a Queues API
-  call and a few R2 reads. Each range's answer is cached for 60 s in the Worker's location, and the
+- **Cost.** An uncached load is 11 GraphQL requests, 5 Analytics Engine queries, a Queues API call
+  and up to about 20 R2 reads. Each range's answer is cached for 60 s in the Worker's location, and the
   route shares tour insights' limit (`INSIGHTS_LIMITER`, 30 a minute per operator). Cloudflare allows
   300 GraphQL queries per 5 minutes per user.
 - **Not here yet.** Zone traffic (cache hit ratio, status codes, bandwidth) and WAF or rate-limit

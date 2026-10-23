@@ -27,7 +27,11 @@ const METRICS: OpsMetrics = {
       },
       tileGc: null,
       cdnPurge: { lastFailure: null, pending: 2, pendingCapped: false, dead: 0, deadCapped: false },
-      backup: { lastCompleteDate: '2026-10-22', inProgress: null },
+      backup: {
+        lastCompleteDate: '2026-10-22',
+        lastCompleteDaysAgo: 1,
+        inProgress: { date: '2026-10-23', objects: 1234, runs: 1 },
+      },
     },
   },
   workers: {
@@ -157,6 +161,9 @@ describe('the operator dashboard', () => {
     expect(within(health).getByText(/failed: trash/)).toBeTruthy();
     expect(within(health).getByText(/2 queued, 0 dead letters/)).toBeTruthy();
     expect(within(health).getByText(/Last complete set 2026-10-22/)).toBeTruthy();
+    expect(
+      within(health).getByText(/2026-10-23 being written \(1,234 objects so far\)/),
+    ).toBeTruthy();
 
     const viewers = panel('Viewers');
     expect(within(viewers).getByText('Old Town')).toBeTruthy();
