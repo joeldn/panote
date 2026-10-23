@@ -569,7 +569,8 @@ describe('editor: a Save that fails in part never publishes a mixed tour', () =>
       // The failed edit stays on screen, unsaved, and in the draft.
       expect(ui.getByRole('button', { name: /Pano name: New square/ })).toBeTruthy();
       expect(unloadPrompts()).toBe(true);
-      await waitFor(() => expect(localStorage.getItem(DRAFT)).toContain('New square'));
+      window.dispatchEvent(new Event('pagehide'));
+      expect(localStorage.getItem(DRAFT)).toContain('New square');
 
       // Retry: only the failed document goes again, then one publish of the whole tour.
       server.brokenConfigs.clear();
