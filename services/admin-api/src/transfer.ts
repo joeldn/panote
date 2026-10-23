@@ -127,7 +127,7 @@ export const ownerLimits = (env: {
 });
 
 /** Panos `sub` holds (not on their way out) and their originals' bytes, as upload-api counts. */
-const holdings = async (
+export const holdings = async (
   bucket: R2Bucket,
   sub: string,
 ): Promise<{ panos: number; bytes: number }> => {

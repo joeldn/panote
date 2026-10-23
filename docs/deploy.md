@@ -2987,6 +2987,33 @@ printf %s 'google-oauth2|1234' | sha256sum
 and add the 64-hex hash to `OPERATOR_SUB_SHA256` for that env, in a PR. It takes effect on the
 next deploy. Removing one is the same edit the other way.
 
+### Users (support)
+
+`/app/ops/users` (`apps/admin/src/ops/SupportRoute.tsx`, API in `services/admin-api/src/support.ts`
+under `/api/admin/ops/users`) is where a support message gets handled without a terminal:
+
+- **Find** an account by its account ID (the Contact support email carries it; see Support email),
+  a tour's share link or slug, or a tourId. A tour is found through its owner pointer
+  (`tour-owners/`); a tour that has none (not created or published since the pointer existed)
+  answers "Nothing found", and `takedown.ts --slug` still finds it by scanning.
+- **See** the account on one page: since when, disabled or being deleted, panos and storage
+  against the limits, uploads in the past 24 hours, every tour (published or not, its link,
+  hidden from Explore, editors, changing owner), how many tours it edits for others, and the
+  originals it deleted that are still in the trash. Reading it writes nothing.
+- **Change**: disable (with a reason for the case log) and enable, the same marker as
+  `takedown.ts --disable-owner`/`--enable-owner`; unpublish a tour (as `takedown.ts --unpublish`:
+  share link off, CDN purge, slug held 30 days for no owner), hide it from Explore and show it
+  again; restore one deleted original from the trash (create-only, re-tiled by the R2
+  notification); close the account (the deletion marker, as the owner's own Delete account; the
+  ID must be typed; it covers that account ID only, not identities linked into it, which the owner's
+  own delete includes). A tour delete that keeps nothing, a quarantine, and restores from backup
+  stay with the scripts.
+
+Every change needs a recent sign-in (`REQUIRE_RECENT_AUTH`, the same 10 minutes as account
+delete); otherwise the page asks the operator to sign in again and come back. Each change logs one
+`[support] operator …` line in `admin-api`'s logs, with the tour or pano id and never the account
+ID; keep the case log as before (Takedown procedures).
+
 ---
 
 ## Insights (unit B5)
