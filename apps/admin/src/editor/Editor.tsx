@@ -832,8 +832,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                   setLanguagesOpen((o) => !o);
                 }}
               >
+                <i className="fa-solid fa-globe" aria-hidden="true" />
                 <span className="ed-lang-btn__tag">{lang ?? defaultLang}</span>
-                <i className="fa-solid fa-chevron-down" aria-hidden="true" />
               </button>
             )}
           </div>
