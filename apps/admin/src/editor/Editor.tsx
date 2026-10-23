@@ -34,6 +34,7 @@ import {
   Link,
   Outlet,
   useBlocker,
+  useLocation,
   useMatch,
   useNavigate,
   useParams,
@@ -49,6 +50,8 @@ import { OwnerAccountMenu } from '../account/OwnerAccountMenu.js';
 import { EditorPreview } from '../preview/Preview.js';
 import { useSession } from '../session.js';
 import type { ShareOutletContext } from '../share/ShareRoute.js';
+import { UNTITLED_TOUR } from '../upload/finalize.js';
+import { FileDrop } from '../upload/FileDrop.js';
 import { UploadEnvContext, useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
@@ -81,12 +84,13 @@ import { StageFactoryContext, type Viewer } from './stage-factory.js';
 import { StageStatus } from './StageStatus.js';
 import { SceneDescription } from './SceneDescription.js';
 import { TourPanel } from './TourPanel.js';
-import { replaceImagePath } from './upload-links.js';
 import { useEditor, type EditorController } from './use-editor.js';
 import { useTilingWatch } from './use-tiling-watch.js';
 
 const FOV_MIN = 15;
 const FOV_MAX = 80;
+/** Stands in for the last upload shown once the user has kept the stage elsewhere. */
+const HELD = '';
 
 type Confirm =
   | { kind: 'remove-pano'; panoId: string }
@@ -352,6 +356,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const startId = tour.startPanoId && sceneIds.includes(tour.startPanoId) ? tour.startPanoId : null;
   // Uploads into this tour, and the ones that have no scene yet (the pending cards).
   const jobs = uploads.pendingFor(docs.tourId);
+  // Photos still on their way in: a failed or timed-out one waits on the chip instead.
+  const starting = jobs.some(
+    (p) => p.queued || p.machine.phase === 'preparing' || p.machine.phase === 'upload',
+  );
   const pendingCards = jobs.filter((p) => isPendingCard(p, sceneIds));
   // Plus the ones already in the server's tour that this editor hasn't synced in yet.
   const knownIds = Object.keys(docs.scenes);
@@ -430,8 +438,15 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   }, [awaitedKey, saving, publishing, tilesFailed, autoRepublish]);
 
   // A new upload into this tour goes on stage the moment it has a pano id, so its local
-  // preview shows while it uploads. Once per upload: the user can look elsewhere after.
+  // preview shows while it uploads. Once per upload, and never out from under an edit; later
+  // photos of a batch follow only while the stage still shows the one before them, so a
+  // pano the user went to look at stays put.
   const shownUploads = useRef(new Set<string>());
+  const lastShown = useRef<string | null>(null);
+  const editing = activePoint !== null || placing || moving !== null;
+  useEffect(() => {
+    if (!starting) lastShown.current = null;
+  }, [starting]);
   const uploading = pendingCards
     .filter((p) => p.machine.phase === 'preparing' || p.machine.phase === 'upload')
     .flatMap((p) => (p.panoId ? [`${p.key}=${p.panoId}`] : []))
@@ -441,8 +456,16 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
       const [key, panoId] = row.split('=') as [string, string];
       if (shownUploads.current.has(key)) continue;
       shownUploads.current.add(key);
+      if (editing || (lastShown.current !== null && currentId !== lastShown.current)) {
+        // Left where the user is: the rest of the batch doesn't jump either.
+        lastShown.current = HELD;
+        continue;
+      }
+      lastShown.current = panoId;
       setParams({ pano: panoId }, { replace: true });
     }
+    // Only a new upload decides: the stage and edit state are read as they are then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploading, setParams]);
 
   // A move belongs to the open point: opening another (or none) ends it where it is.
@@ -622,10 +645,23 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   }).toString();
   const previewTo = `/t/${docs.tourId}/preview${previewQuery ? `?${previewQuery}` : ''}`;
   const conflictBusy = editor.saving;
+  // Just made from photos whose names said nothing: ask for a name straight away.
+  const location = useLocation();
+  const newTour = (location.state as { newTour?: boolean } | null)?.newTour === true;
+  const namelessNewTour = newTour && !lang && tour.title === UNTITLED_TOUR;
 
   // Share shares the saved tour: unsaved edits are saved on the way. A save that fails, or
   // can't start (a conflict is open), stays here with its banner instead.
   const navigate = useNavigate();
+  // Asked once: a reload or Back opens the tour as usual.
+  useEffect(() => {
+    if (newTour) {
+      void navigate(
+        { pathname: location.pathname, search: location.search },
+        { replace: true, state: null },
+      );
+    }
+  }, [newTour, navigate, location.pathname, location.search]);
   const saveThen = (to: string) => {
     (async () => {
       // A save already under way finishes first; then whatever was edited meanwhile.
@@ -723,6 +759,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 Remove from tour
               </Button>
             </div>
+          ) : starting ? (
+            // The first photo is still being read: its preview takes the stage in a moment.
+            <div className="ed-missing ed-start" role="status">
+              <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" />
+              <h2>Starting upload…</h2>
+            </div>
           ) : (
             <div className="ed-missing ed-start" role="status">
               <i className="fa-solid fa-panorama" aria-hidden="true" />
@@ -736,7 +778,6 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 size="sm"
                 pill
                 icon="fa-solid fa-arrow-up-from-bracket"
-                aria-haspopup="dialog"
                 onClick={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
               >
                 Upload a pano
@@ -755,7 +796,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           })}
           {...(scene &&
             (currentStatus === 'failed' || currentStatus === 'timed-out') && {
-              replaceTo: replaceImagePath(docs.tourId, currentId),
+              onReplace: () =>
+                uploads.pick({ kind: 'replace', tourId: docs.tourId, panoId: currentId }),
               onRemove: () => setConfirm({ kind: 'remove-pano', panoId: currentId }),
             })}
           {...(currentStatus === 'timed-out' &&
@@ -792,6 +834,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 className="ed-crumbs__tour"
                 label="Tour title"
                 {...(tr(tour.title, tour.i18n, 'title') ?? { value: tour.title })}
+                editOnMount={namelessNewTour}
                 onCommit={(title) => dispatch({ type: 'tour/title', title, ...(lang && { lang }) })}
               />
               <i className="fa-solid fa-chevron-right ed-crumbs__sep" aria-hidden="true" />
@@ -1134,6 +1177,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           // The library is the signed-in user's own panos: not for someone else's tour.
           {...(editor.role === 'owner' && { onAddFromLibrary: () => setLibraryOpen(true) })}
           onAddPano={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
+          onReplace={(panoId) => uploads.pick({ kind: 'replace', tourId: docs.tourId, panoId })}
         />
         <MapPanel
           docs={docs}
@@ -1213,6 +1257,10 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           onAdded={addedFromLibrary}
         />
       )}
+      <FileDrop
+        target={{ kind: 'add', tourId: docs.tourId }}
+        label="Drop 360° photos to add them to this tour"
+      />
       <Outlet context={shareContext} />
     </main>
   );

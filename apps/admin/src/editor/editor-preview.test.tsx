@@ -170,12 +170,12 @@ describe('editor: an upload in this tab', () => {
     expect(within(list).getByRole('button', { name: /New point/ })).toBeTruthy();
     expect(screen.getByText('Saved')).toBeTruthy();
     expect(
-      within(sceneRow('Town hall')).getByRole('link', { name: 'Replace the image of Town hall' }),
+      within(sceneRow('Town hall')).getByRole('button', { name: 'Replace the image of Town hall' }),
     ).toBeTruthy();
   });
 
   it('a scene whose tiling failed offers Replace image and Remove from tour', async () => {
-    const { backend } = await pick();
+    const { backend, router } = await pick();
     await land();
     backend.state.tiling = 'failed';
     await tick(15_000);
@@ -189,9 +189,14 @@ describe('editor: an upload in this tab', () => {
     expect(card.textContent).toContain('We hit an error processing “Town hall”.');
     expect(card.textContent).not.toMatch(/equirectangular/i);
     expect(within(sceneRow('Town hall')).getByText('Couldn’t process')).toBeTruthy();
-    expect(within(card).getByRole('link', { name: 'Replace image' }).getAttribute('href')).toBe(
-      '/app/new?tour=tour-1&replace=pano-1',
-    );
+    // Replace opens the file dialog in place, for this pano: the editor stays.
+    const browse = vi.spyOn(HTMLInputElement.prototype, 'click');
+    fireEvent.click(within(card).getByRole('button', { name: 'Replace image' }));
+    const picker = screen.getByTestId('upload-picker') as HTMLInputElement;
+    expect(browse.mock.contexts).toContain(picker);
+    expect(picker.multiple).toBe(false);
+    browse.mockRestore();
+    expect(router.state.location.pathname).toBe('/app/t/tour-1');
     // Nothing to wait for: the scene stays editable while the user decides.
     expect((addPoint() as HTMLButtonElement).disabled).toBe(false);
     // On stage, named for it, until it is removed.
@@ -414,9 +419,7 @@ describe('editor: scenes still tiling after a reload', () => {
     expect(
       within(card).getByRole('heading', { name: 'We couldn’t process this image' }),
     ).toBeTruthy();
-    expect(within(card).getByRole('link', { name: 'Replace image' }).getAttribute('href')).toBe(
-      '/app/new?tour=t1&replace=church',
-    );
+    expect(within(card).getByRole('button', { name: 'Replace image' })).toBeTruthy();
     expect(within(card).getByRole('button', { name: 'Remove from tour' })).toBeTruthy();
     await tick(WATCH_POLL_MS * 3);
     expect(statusPolls('church')).toHaveLength(1);
@@ -429,7 +432,7 @@ describe('editor: scenes still tiling after a reload', () => {
     const card = stageCard()!;
     expect(within(card).getByRole('heading', { name: 'Still processing' })).toBeTruthy();
     expect(within(card).queryByRole('button', { name: 'Check again' })).toBeNull();
-    expect(within(card).getByRole('link', { name: 'Replace image' })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: 'Replace image' })).toBeTruthy();
     const slow = statusPolls('church').length;
     await tick(WATCH_SLOW_POLL_MS);
     expect(statusPolls('church')).toHaveLength(slow + 1);

@@ -82,7 +82,7 @@ describe('Dashboard', () => {
     expect(link.getAttribute('href')).toBe('/app/panos/unused');
   });
 
-  it('shows an empty state that links to the upload flow', async () => {
+  it('shows an empty state that starts the upload flow', async () => {
     const { fetch } = server(lists([]));
     renderAdmin('/app/', { fetch });
     expect(await screen.findByRole('heading', { name: 'No tours yet' })).toBeTruthy();
@@ -90,10 +90,15 @@ describe('Dashboard', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
       'Welcome to panote, Maya Larsson.',
     );
-    expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(
-      '/app/new',
-    );
-    expect(screen.getByRole('link', { name: 'New tour' }).getAttribute('href')).toBe('/app/new');
+    // Both open the system's file dialog straight away, for a new tour.
+    const browse = vi.spyOn(HTMLInputElement.prototype, 'click');
+    fireEvent.click(screen.getByRole('button', { name: 'Upload a pano' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New tour' }));
+    const picker = screen.getByTestId('upload-picker') as HTMLInputElement;
+    expect(browse.mock.contexts).toEqual([picker, picker]);
+    expect(picker.multiple).toBe(true);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    browse.mockRestore();
   });
 
   it('renders cards with totals, views and an editor link', async () => {

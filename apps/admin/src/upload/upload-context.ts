@@ -12,6 +12,7 @@ import { createContext, useContext } from 'react';
 
 import type { PlanPreparer } from '../editor/plan-image.js';
 import type { ActiveUpload, FinalizeState } from './chip-model.js';
+import type { StartProblem } from './start-files.js';
 import type { UploadTarget } from './resume-store.js';
 
 export type PanoTarget = Exclude<UploadTarget, { kind: 'new-tour' }>;
@@ -44,8 +45,15 @@ export interface Uploads {
    * with the tour they land in; rejects if they couldn't start.
    */
   begin(files: File | readonly File[], target: UploadTarget): Promise<{ tourId: string | null }>;
-  /** Opens the picker for "Add pano" (`add`) or the camera icon (`replace`). */
-  pick(target: PanoTarget): void;
+  /**
+   * Opens the system's file dialog for New tour, Add pano (`add`) or the camera icon
+   * (`replace`), and starts what is picked. Call it from the click itself.
+   */
+  pick(target: UploadTarget): void;
+  /** Starts photos dropped on the page, as if picked for `target`. */
+  drop(files: readonly File[], target: UploadTarget): void;
+  /** Opens the upload dialog for `target`, saying what went wrong if `problem` is given. */
+  report(target: UploadTarget, problem?: StartProblem): void;
   /** Set after a sign-in redirect lost the file: the target to re-pick it for. */
   repick: { target: UploadTarget; fileName: string; reason: 'signed-out' | 'retry' } | null;
   /** The user closed the re-pick prompt without choosing a file. */

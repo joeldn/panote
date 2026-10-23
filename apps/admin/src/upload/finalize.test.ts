@@ -31,6 +31,30 @@ describe('titleFromFileName', () => {
     expect(titleFromFileName('.png', 'Untitled')).toBe('Untitled');
     expect(titleFromFileName('a'.repeat(300), 'x')).toHaveLength(100);
   });
+
+  it('gives a camera’s own name the fallback, when asked', () => {
+    const skip = { skipCameraNames: true };
+    for (const name of [
+      'IMG_2041.JPG',
+      'PXL_20231004_153012345.jpg',
+      'R0010042.JPG',
+      'DJI_0042.jpg',
+      '20231004_153012.jpg',
+      'PANO_20231004_1530.jpg',
+      'DSC01234.jpg',
+      'PXL_20231004_153012345.MP.jpg',
+      'IMG_2041 (1).jpg',
+      'IMG_E2041.JPG',
+    ]) {
+      expect(titleFromFileName(name, 'Untitled tour', skip), name).toBe('Untitled tour');
+    }
+    // A name someone chose stays, numbers and all.
+    expect(titleFromFileName('IMG_2041 town-hall.jpg', 'x', skip)).toBe('IMG 2041 town-hall');
+    expect(titleFromFileName('R2D2.jpg', 'x', skip)).toBe('R2D2');
+    expect(titleFromFileName('Sam_2024.jpg', 'x', skip)).toBe('Sam 2024');
+    // Panos keep the file's name: it tells several photos apart.
+    expect(titleFromFileName('IMG_2041.JPG', 'x')).toBe('IMG 2041');
+  });
 });
 
 describe('addPanoToTour', () => {

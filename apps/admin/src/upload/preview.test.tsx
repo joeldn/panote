@@ -112,7 +112,7 @@ function renderProvider(opts: { decoder?: ReturnType<typeof fakeDecoder> } = {})
 
 async function choose(target: Parameters<Uploads['pick']>[0], file = pngFile()) {
   act(() => uploads().pick(target));
-  fireEvent.change(screen.getByTestId('upload-input'), { target: { files: [file] } });
+  fireEvent.change(screen.getByTestId('upload-picker'), { target: { files: [file] } });
   await tick();
 }
 const add = () => choose({ kind: 'add', tourId: 'tour-1' });

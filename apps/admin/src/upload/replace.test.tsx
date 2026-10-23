@@ -67,8 +67,9 @@ function renderProvider() {
 
 async function replaceWith(file = pngFile('new.png')) {
   act(() => probe.uploads?.pick({ kind: 'replace', panoId: 'pano-9', tourId: 'tour-1' }));
-  expect(screen.getByRole('dialog', { name: 'Replace image' })).toBeTruthy();
-  fireEvent.change(screen.getByTestId('upload-input'), { target: { files: [file] } });
+  // The system's file dialog, straight away: no dialog of ours in between.
+  expect(screen.queryByRole('dialog')).toBeNull();
+  fireEvent.change(screen.getByTestId('upload-picker'), { target: { files: [file] } });
   await tick();
 }
 
@@ -166,13 +167,28 @@ describe('replace image', () => {
     expect(backend.presigns()[1]?.body).toMatchObject({ panoId: 'pano-9' });
   });
 
+  it('several photos for one replace: the first goes, and the rest are named', async () => {
+    const { backend } = renderProvider();
+    act(() =>
+      probe.uploads?.drop([pngFile('new.png'), pngFile('also.png')], {
+        kind: 'replace',
+        panoId: 'pano-9',
+        tourId: 'tour-1',
+      }),
+    );
+    await tick();
+    await tick();
+    expect(backend.presigns()).toHaveLength(1);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain(
+      'A pano is replaced with one photo. This one was left out:',
+    );
+    expect(dialog.textContent).toContain('also.png');
+  });
+
   it('one PUT at a time: an upload picked meanwhile waits its turn, then goes', async () => {
     const { backend } = renderProvider();
     await replaceWith();
-    act(() => probe.uploads?.pick({ kind: 'add', tourId: 'tour-1' }));
-    expect(screen.getByRole('dialog', { name: 'Add pano' }).textContent).toContain(
-      'Another upload is still running. Anything you add here waits its turn.',
-    );
     await act(() => probe.uploads!.begin(pngFile('next.png'), { kind: 'add', tourId: 'tour-1' }));
     expect(backend.presigns()).toHaveLength(1);
     expect(probe.uploads!.pendingFor('tour-1').map((p) => [p.fileName, !!p.queued])).toEqual([

@@ -36,6 +36,7 @@ function setup(over: Partial<TourPanelProps> = {}, withMove = true) {
     onSelect: vi.fn(),
     onSetStart: vi.fn(),
     onRemove: vi.fn(),
+    onReplace: vi.fn(),
     ...(withMove && { onMove: vi.fn() }),
     onAim: vi.fn(),
     onNudge: vi.fn(),
