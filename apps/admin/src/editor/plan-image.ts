@@ -1,5 +1,11 @@
 import { MAX_PLAN_BYTES, type PlanImageType, type TourPlan } from '@internal/contracts';
-import { putFile, UPLOAD_CONTENT_TYPES, type UploadApi, type XhrLike } from '@internal/web-kit';
+import {
+  ApiError,
+  putFile,
+  UPLOAD_CONTENT_TYPES,
+  type UploadApi,
+  type XhrLike,
+} from '@internal/web-kit';
 
 // A floor-plan image is served as uploaded, from the public CDN. So the editor redraws
 // it first: that drops the photo's metadata (a camera's GPS position, say), caps its size,
@@ -82,6 +88,17 @@ export const preparePlanImage: PlanPreparer = async (file) => {
   }
   return { blob, type: blob.type, ...size };
 };
+
+/**
+ * What the editor says when a plan image couldn't be added. A refusal upload-api names
+ * (a limit, a disabled or deleted account, uploads paused) says which, in words; anything
+ * else is worth another try.
+ */
+export function planErrorMessage(e: unknown): string {
+  if (e instanceof PlanImageError) return e.message;
+  if (e instanceof ApiError && [403, 410, 429, 503].includes(e.status)) return e.message;
+  return 'The image couldn’t be added. Try again.';
+}
 
 export interface PlanUploadDeps {
   upload: Pick<UploadApi, 'presignPlan'>;

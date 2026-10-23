@@ -71,6 +71,14 @@ function errorMessage(status: number, body: unknown): string {
     if (status === 403 && body.error === 'daily upload limit reached') {
       return 'This account has reached its daily upload limit. Try again later today or tomorrow.';
     }
+    // upload-api's per-tour cap on floor-plan images; the editor's save clears unused ones.
+    if (status === 403 && body.error === 'plan storage limit reached') {
+      return 'This tour has too many floor-plan images waiting. Save the tour, then try again in an hour.';
+    }
+    // upload-api's global daily ceiling, across every account: it lifts at 00:00 UTC.
+    if (status === 503 && body.error === 'uploads paused') {
+      return 'Uploads are paused for today. Try again tomorrow.';
+    }
     // admin-api's per-owner tour cap (MAX_TOURS_PER_OWNER).
     if (status === 403 && body.error === 'tour limit reached') {
       return `This account has reached its limit of ${MAX_TOURS_PER_OWNER} tours.`;

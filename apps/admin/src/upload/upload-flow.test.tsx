@@ -489,6 +489,25 @@ describe('several photos at once', () => {
     expect(backend.presigns()).toHaveLength(2);
   });
 
+  it('uploads paused for everyone stop the rest, and say to try again tomorrow', async () => {
+    const { backend } = setup();
+    backend.state.newPanoIds = ['pano-a', 'pano-b'];
+    await tick();
+    await pickMany(three());
+    backend.state.presignStatus = 503;
+    backend.state.presignError = 'uploads paused';
+    FakeXhr.last.respond(200);
+    await tick();
+
+    expect(chipTitle()).toBe('Uploads paused');
+    expect(within(chip()).getByText(/paused for today/).textContent).toBe(
+      'Uploads are paused for today. Try again tomorrow. 1 more photo wasn’t uploaded. Add it again tomorrow.',
+    );
+    expect(within(chip()).queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(backend.presigns()).toHaveLength(2);
+    expect(backend.state.tour.scenes).toEqual([{ panoId: 'pano-a' }]);
+  });
+
   it('a disabled account stops the rest under its own title, not as a limit', async () => {
     const { backend } = setup();
     backend.state.newPanoIds = ['pano-a'];

@@ -12,6 +12,8 @@ type Config = {
     {
       ratelimits?: { name: string; simple: { period: number } }[];
       vars?: Record<string, string>;
+      durable_objects?: { bindings: { name: string; class_name: string }[] };
+      migrations?: { tag: string; new_sqlite_classes?: string[] }[];
     }
   >;
 };
@@ -41,6 +43,25 @@ describe('wrangler.jsonc owner quotas', () => {
       MAX_PANOS_PER_OWNER: '500',
       MAX_BYTES_PER_OWNER: String(20 * 1024 ** 3),
       MAX_UPLOADS_PER_OWNER_PER_DAY: '50',
+    });
+  });
+});
+
+// The global daily ceiling (src/ceiling.ts, docs/deploy.md Owner quotas): its DO and its
+// limits in every env, since Wrangler inherits neither into a named env.
+describe('wrangler.jsonc global upload ceiling', () => {
+  it.each(['dev', 'production'])('%s binds UploadCeiling and sets both limits', (env) => {
+    const e = config.env[env];
+    expect(e?.durable_objects?.bindings).toEqual([
+      { name: 'UPLOAD_CEILING', class_name: 'UploadCeiling' },
+    ]);
+    expect(e?.migrations).toEqual([{ tag: 'v1', new_sqlite_classes: ['UploadCeiling'] }]);
+    expect({
+      MAX_UPLOADS_PER_DAY_GLOBAL: e?.vars?.MAX_UPLOADS_PER_DAY_GLOBAL,
+      MAX_UPLOAD_BYTES_PER_DAY_GLOBAL: e?.vars?.MAX_UPLOAD_BYTES_PER_DAY_GLOBAL,
+    }).toEqual({
+      MAX_UPLOADS_PER_DAY_GLOBAL: '2000',
+      MAX_UPLOAD_BYTES_PER_DAY_GLOBAL: String(200 * 1024 ** 3),
     });
   });
 });

@@ -221,6 +221,12 @@ describe('createAdminApi', () => {
       'daily upload limit reached',
       'This account has reached its daily upload limit. Try again later today or tomorrow.',
     ],
+    [
+      403,
+      'plan storage limit reached',
+      'This tour has too many floor-plan images waiting. Save the tour, then try again in an hour.',
+    ],
+    [503, 'uploads paused', 'Uploads are paused for today. Try again tomorrow.'],
     [429, 'rate limited', 'Too many requests. Wait a minute and try again.'],
     [403, 'tour limit reached', 'This account has reached its limit of 200 tours.'],
     [404, 'pano not found', 'This pano no longer exists.'],

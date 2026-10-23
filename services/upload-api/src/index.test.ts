@@ -4,6 +4,7 @@ import {
   accountDisabledKey,
   deletingKey,
   encodeId,
+  MAX_PLAN_BYTES,
   originalKey,
   uploadLogKey,
   userPanosPrefix,
@@ -15,6 +16,7 @@ import { afterEach, beforeEach, describe, it, expect, beforeAll, vi, type Mock }
 
 import worker, {
   MAX_BODY_BYTES,
+  MAX_PLAN_BYTES_PER_TOUR,
   UPLOAD_URL_EXPIRY_SECONDS,
   UPLOAD_URL_RATE_PERIOD_SECONDS,
 } from './index.js';
@@ -888,5 +890,172 @@ describe('upload-url for a floor-plan image (kind: plan)', () => {
     const r = await call(planBody, { MAX_UPLOADS_PER_OWNER_PER_DAY: '1' });
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'daily upload limit reached' });
+  });
+});
+
+describe('upload-url global daily ceiling', () => {
+  const ceiling = () => env.UPLOAD_CEILING.get(env.UPLOAD_CEILING.idFromName('global'));
+  const today = async () => {
+    const { uploads, bytes } = await ceiling().count(Date.now());
+    return { uploads, bytes };
+  };
+  // The default storage stub (beforeEach), kept so a test can read its calls.
+  const storage = (put = 200) =>
+    vi.fn(async (input: Request | string) => {
+      if (isList(input)) return emptyListing();
+      if (methodOf(input) === 'PUT') return new Response(null, { status: put });
+      return new Response(null, { status: 404 });
+    });
+  const puts = (m: Mock) => m.mock.calls.filter(([req]) => methodOf(req as Request) === 'PUT');
+  // A stand-in for the DO namespace whose instance throws on every call. (`throw`, not
+  // Promise.reject: workerd flags an already-rejected promise as unhandled.)
+  const unreachable = () => {
+    const reserve = vi.fn(async () => {
+      throw new Error('DO down');
+    });
+    return { idFromName: () => ({}), get: () => ({ reserve }) } as unknown as Env['UPLOAD_CEILING'];
+  };
+
+  it('reserves one upload and its declared bytes for each URL issued', async () => {
+    const before = await today();
+    expect((await call(validBody, {})).status).toBe(200);
+    expect(await today()).toEqual({
+      uploads: before.uploads + 1,
+      bytes: before.bytes + validBody.size,
+    });
+  });
+
+  it('503s until 00:00 UTC, and logs no upload, once the ceiling is reached', async () => {
+    const fetchMock = storage();
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await call(validBody, { MAX_UPLOADS_PER_DAY_GLOBAL: '0' });
+    expect(r.status).toBe(503);
+    expect(await r.json()).toEqual({ error: 'uploads paused' });
+    const retryAfter = Number(r.headers.get('Retry-After'));
+    expect(retryAfter).toBeGreaterThan(0);
+    expect(retryAfter).toBeLessThanOrEqual(86_400);
+    expect(puts(fetchMock)).toEqual([]);
+  });
+
+  it('the byte limit pauses uploads too', async () => {
+    const r = await call(validBody, {
+      MAX_UPLOAD_BYTES_PER_DAY_GLOBAL: String(validBody.size - 1),
+    });
+    expect(r.status).toBe(503);
+  });
+
+  it('the limits from wrangler.jsonc apply with no override', async () => {
+    expect(env.MAX_UPLOADS_PER_DAY_GLOBAL).toBe('2000');
+    expect(env.MAX_UPLOAD_BYTES_PER_DAY_GLOBAL).toBe(String(200 * 1024 ** 3));
+  });
+
+  it("a request refused by the owner's own quota reserves nothing", async () => {
+    const before = await today();
+    const r = await call(validBody, { MAX_PANOS_PER_OWNER: '0' });
+    expect(r.status).toBe(403);
+    expect(await today()).toEqual(before);
+  });
+
+  it('gives the reservation back when the upload log cannot be written', async () => {
+    vi.stubGlobal('fetch', storage(500));
+    const before = await today();
+    expect((await call(validBody, {})).status).toBe(502);
+    expect(await today()).toEqual(before);
+  });
+
+  it('unset limits: no DO call at all', async () => {
+    const get = vi.fn();
+    const r = await call(validBody, {
+      MAX_UPLOADS_PER_DAY_GLOBAL: '',
+      MAX_UPLOAD_BYTES_PER_DAY_GLOBAL: '',
+      UPLOAD_CEILING: { idFromName: () => ({}), get } as unknown as Env['UPLOAD_CEILING'],
+    });
+    expect(r.status).toBe(200);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('a malformed limit refuses uploads rather than lifting the limit', async () => {
+    expect((await call(validBody, { MAX_UPLOADS_PER_DAY_GLOBAL: 'lots' })).status).toBe(500);
+  });
+
+  it('fails open on a DO blip, closed once it keeps failing, and recovers', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const down = { UPLOAD_CEILING: unreachable() };
+    expect((await call(validBody, down)).status).toBe(200);
+    expect((await call(validBody, down)).status).toBe(200);
+    const closed = await call(validBody, down);
+    expect(closed.status).toBe(502);
+    expect(await closed.json()).toEqual({ error: 'storage unavailable' });
+    // One call that gets through starts the count again.
+    expect((await call(validBody, {})).status).toBe(200);
+    expect((await call(validBody, down)).status).toBe(200);
+    expect((await call(validBody, {})).status).toBe(200);
+  });
+
+  describe('floor-plan images', () => {
+    const planBody = { kind: 'plan', tourId: 'tour-1', contentType: 'image/webp', size: 2048 };
+    const tourJson = `tours/${encodeId('auth0|me')}/tour-1/tour.json`;
+    // The tour exists; its plan prefix holds `plans` (sizes); PUTs succeed.
+    const stub = (plans: number[] = []) =>
+      vi.fn(async (input: Request | string) => {
+        const reqUrl = new URL(typeof input === 'string' ? input : input.url);
+        if (reqUrl.searchParams.get('list-type') === '2') {
+          const prefix = reqUrl.searchParams.get('prefix') ?? '';
+          const contents = prefix.startsWith('pub/plans/tour-1/')
+            ? plans
+                .map(
+                  (size, i) =>
+                    `<Contents><Key>${prefix}p${i}.webp</Key><Size>${size}</Size></Contents>`,
+                )
+                .join('')
+            : '';
+          return new Response(
+            `<ListBucketResult><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`,
+          );
+        }
+        if (decodeURIComponent(reqUrl.pathname).endsWith(tourJson)) {
+          return new Response(null, { status: 200 });
+        }
+        if (methodOf(input) === 'PUT') return new Response(null, { status: 200 });
+        return new Response(null, { status: 404 });
+      });
+
+    it('count toward the ceiling, and are paused with it', async () => {
+      vi.stubGlobal('fetch', stub());
+      const before = await today();
+      expect((await call(planBody, {})).status).toBe(200);
+      expect(await today()).toEqual({
+        uploads: before.uploads + 1,
+        bytes: before.bytes + planBody.size,
+      });
+      const r = await call(planBody, { MAX_UPLOADS_PER_DAY_GLOBAL: '0' });
+      expect(r.status).toBe(503);
+      expect(await r.json()).toEqual({ error: 'uploads paused' });
+    });
+
+    it('403 once the tour’s plan images would pass MAX_PLAN_BYTES_PER_TOUR', async () => {
+      const room = MAX_PLAN_BYTES_PER_TOUR - planBody.size;
+      vi.stubGlobal('fetch', stub([room - MAX_PLAN_BYTES, MAX_PLAN_BYTES]));
+      expect((await call(planBody, {})).status).toBe(200);
+      vi.stubGlobal('fetch', stub([room - MAX_PLAN_BYTES, MAX_PLAN_BYTES + 1]));
+      const r = await call(planBody, {});
+      expect(r.status).toBe(403);
+      expect(await r.json()).toEqual({ error: 'plan storage limit reached' });
+    });
+
+    it('fails closed with 502 when the plan listing errors', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: Request | string) => {
+          const reqUrl = new URL(typeof input === 'string' ? input : input.url);
+          if (reqUrl.searchParams.get('list-type') === '2')
+            return new Response(null, { status: 500 });
+          return new Response(null, {
+            status: decodeURIComponent(reqUrl.pathname).endsWith(tourJson) ? 200 : 404,
+          });
+        }),
+      );
+      expect((await call(planBody, {})).status).toBe(502);
+    });
   });
 });
