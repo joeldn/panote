@@ -31,69 +31,36 @@ describe('website routes', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy();
   });
 
-  it('privacy describes self-serve account deletion', async () => {
+  it('privacy covers accounts, likes, deletion and rights, plainly', async () => {
     renderAt('/privacy');
-    const choices = await screen.findByRole('heading', { name: 'Your choices' });
-    const text = choices.nextElementSibling?.textContent ?? '';
-    expect(text).toContain('choose Delete account');
-    expect(text).toContain('sign-in record is removed within 30 days');
-    expect(text).not.toContain('To delete your account, or to ask');
+    await screen.findByRole('heading', { name: 'What we keep' });
+    const page = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
+    for (const { label } of Object.values(KNOWN_CONNECTIONS)) expect(page).toContain(label);
+    expect(page).toContain('a one-time code we email to you');
+    expect(page).toContain(
+      'Google, Apple and email-code sign-ins with the same verified email address are joined into one account',
+    );
+    expect(page).toContain('Microsoft and Facebook each keep a separate one');
+    expect(page).toContain('Signed in, your account id against the tour');
+    expect(page).toContain('used for about a minute to limit abuse');
+    expect(page).toContain('deleted within 30 days');
+    expect(page).toContain('may set cookies under its own policy');
+    expect(page).toContain('account menu, Delete account');
+    expect(page).toContain('up to 31 days');
+    expect(page).toContain('people who already viewed it may still load its images');
+    expect(page).toContain('once your account is a week old');
+    expect(page).toContain('complain to your data protection authority');
+    expect(page).toContain('isn’t for anyone under 16');
+    expect(page).toContain('Last updated 23 October 2026');
   });
 
-  it('privacy says what a report or takedown keeps, even after account deletion', async () => {
-    renderAt('/privacy');
-    const holds = await screen.findByRole('heading', { name: 'Reports and legal holds' });
-    const text = holds.nextElementSibling?.textContent ?? '';
-    expect(text).toContain('as long as the law requires');
-    expect(text).toContain('stays even if the account is deleted');
-    expect(text).toContain('we keep your contact details');
-    expect(screen.getByRole('article').textContent).toContain('Last updated 23 October 2026');
-  });
-
-  it('privacy says past viewers may keep loading an unpublished tour’s images', async () => {
-    renderAt('/privacy');
-    const upload = await screen.findByRole('heading', { name: 'What you upload' });
-    const text = upload.nextElementSibling?.textContent ?? '';
-    expect(text).toContain('already viewed it may still be able to load its panorama images');
-    expect(text).toContain('once your account is a week old');
-  });
-
-  it('privacy is accurate about signed-in likes', async () => {
-    renderAt('/privacy');
-    await screen.findByRole('heading', { name: 'Visitors and analytics' });
-    const page = screen.getByRole('article').textContent ?? '';
-    expect(page).toContain('records your account id against that tour');
-    expect(page).not.toContain('isn’t linked to an account');
-  });
-
-  it('content policy covers notices, counter-notices, repeat infringers and illegal images', async () => {
-    renderAt('/content-policy');
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Content and copyright' }),
-    ).toBeTruthy();
-    for (const name of [
-      'What isn’t allowed',
-      'Report a tour',
-      'Copyright notices',
-      'What we do',
-      'Counter-notices',
-      'Repeat infringers',
-      'Illegal images',
-    ]) {
-      expect(screen.getByRole('heading', { level: 2, name })).toBeTruthy();
-    }
-    const page = screen.getByRole('article').textContent ?? '';
-    expect(page).toContain('under penalty of perjury');
-    expect(page).toContain('your signature');
-    expect(page).toContain('NCMEC');
-    expect(page).toContain('We keep a private copy');
-    expect(page).toContain('account is closed');
-  });
-
-  it('terms point to the content policy, and the footer links it', async () => {
+  it('terms are short, set an age and point to the content policy, which the footer links', async () => {
     renderAt('/terms');
     await screen.findByRole('heading', { level: 1, name: 'Terms' });
     const article = screen.getByRole('article');
+    const text = (article.textContent ?? '').replace(/\s+/g, ' ');
+    expect(text).toContain('You must be 16 or older');
+    expect(text).toContain('keep your own copies of your originals');
     expect(
       within(article)
         .getByRole('link', { name: 'content and copyright policy' })
@@ -105,98 +72,37 @@ describe('website routes', () => {
     );
   });
 
-  it('privacy names every sign-in provider the app can offer', async () => {
-    renderAt('/privacy');
-    const account = await screen.findByRole('heading', { name: 'Your account' });
-    const text = account.nextElementSibling?.textContent ?? '';
-    for (const { label } of Object.values(KNOWN_CONNECTIONS)) expect(text).toContain(label);
-    expect(text).toContain('a one-time code we email to it');
-  });
-
-  it('privacy joins only the trusted sign-ins that share a verified email', async () => {
-    renderAt('/privacy');
-    const account = await screen.findByRole('heading', { name: 'Your account' });
-    const text = (account.nextElementSibling?.textContent ?? '').replace(/\s+/g, ' ');
-    expect(text).toContain(
-      'more than one of Google, Apple or an email code using the same email address',
-    );
-    expect(text).toContain('they are joined into one Panote account');
-    expect(text).toContain('Signing in with Microsoft or Facebook keeps a separate account.');
-  });
-
-  it('privacy covers IP addresses, error reports, media embeds and backups', async () => {
-    renderAt('/privacy');
-    const textOf = async (name: string) => {
-      const heading = await screen.findByRole('heading', { name });
-      let text = '';
-      for (let el = heading.nextElementSibling; el && el.tagName !== 'H2';) {
-        text += ` ${el.textContent ?? ''}`;
-        el = el.nextElementSibling;
-      }
-      return text.replace(/\s+/g, ' ');
-    };
-    const ips = await textOf('IP addresses and logs');
-    expect(ips).toContain('We use it briefly to protect the service from abuse');
-    expect(ips).toContain('We don’t store IP addresses with our analytics');
-    expect(ips).toContain('The logs we can read are deleted automatically within 30 days');
-    const errors = await textOf('Error reports');
-    expect(errors).toContain('no IP address, browser or country');
-    const media = await textOf('Videos and media in tours');
-    expect(media).toMatch(/YouTube.*Vimeo/);
-    expect(media).toContain('youtube-nocookie.com');
-    expect(media).toContain('sees your IP address and may set cookies');
-    expect(await textOf('Backups')).toContain(
-      'a tour or account you delete can remain in these private backups for up to 31 days',
-    );
-    expect(await textOf('Backups')).toContain(
-      'we keep the original photo in the same private storage for up to 31 days',
-    );
-    expect(await textOf('Backups')).toContain('Content we remove after a report is not kept');
-    expect(await textOf('How long we keep things')).toContain('Backups: up to 31 days.');
-    expect(await textOf('How long we keep things')).toContain(
-      'The original photos of deleted panoramas: up to 31 days.',
-    );
-    expect(await textOf('Your choices')).toContain('original photos are gone within 31 days');
-    const basis = await textOf('Why we’re allowed to');
-    expect(basis).toContain('our contract with you');
-    expect(basis).toContain('legitimate interest');
-    expect(basis).toContain('Legal obligations');
-  });
-
-  it('covers the minimum the law asks: rights, transfers, age and ending', async () => {
-    renderAt('/privacy');
-    await screen.findByRole('heading', { name: 'Your rights' });
-    const privacy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
-    expect(privacy).toContain('You can object at any time');
-    expect(privacy).toContain('complain to your local data protection authority');
-    expect(privacy).toContain('standard contractual clauses');
-    expect(privacy).toContain('isn’t for anyone under 16');
-    expect(privacy).toContain('Request logs and error reports we can read: up to 30 days.');
-    expect(privacy).toContain('a personal, non-commercial project');
-
-    cleanup();
-    renderAt('/terms');
-    await screen.findByRole('heading', { name: 'Ending' });
-    const terms = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
-    expect(terms).toContain('You must be 16 or older');
-    expect(terms).not.toContain('YOUR_');
-    expect(terms).toContain('aren’t liable for indirect or consequential losses');
-    expect(terms).toContain('death or personal injury');
-    expect(terms).toContain('we’ll tell you why');
-
-    cleanup();
+  it('content policy says how to report, what happens, and how illegal images are handled', async () => {
     renderAt('/content-policy');
-    await screen.findByRole('heading', { name: 'Counter-notices' });
-    const policy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
-    expect(policy).not.toContain('YOUR_');
-    expect(policy).toContain('US federal district court for your address');
-    expect(policy).not.toContain('YOUR_GOVERNING_LAW_JURISDICTION');
-    expect(policy).toContain('which rule or law it broke');
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Content and copyright' }),
+    ).toBeTruthy();
+    for (const name of [
+      'What isn’t allowed',
+      'Report a tour',
+      'What happens next',
+      'Illegal images',
+    ])
+      expect(screen.getByRole('heading', { level: 2, name })).toBeTruthy();
+    const page = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
+    expect(page).toContain('its owner is told why');
+    expect(page).toContain('NCMEC');
+    expect(page).toContain('send the link only, never the images');
+  });
+
+  it('the legal pages make no export promise and name no operator', async () => {
+    for (const path of ['/privacy', '/terms', '/content-policy']) {
+      cleanup();
+      renderAt(path);
+      await screen.findByRole('heading', { level: 1 });
+      const text = screen.getByRole('article').textContent ?? '';
+      expect(text).not.toMatch(/export|download|open source|YOUR_/i);
+    }
   });
 
   it('privacy names no sign-in provider the app does not offer', async () => {
     renderAt('/privacy');
-    await screen.findByRole('heading', { name: 'Your account' });
+    await screen.findByRole('heading', { name: 'What we keep' });
     expect(document.body.textContent).not.toMatch(/GitHub|LinkedIn/);
   });
 

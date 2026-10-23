@@ -212,9 +212,9 @@ describe('Explore in the site nav', () => {
 describe('Explore in the privacy page', () => {
   it('says what a public tour shows on Explore', async () => {
     renderSite('/privacy');
-    const upload = await screen.findByRole('heading', { name: 'What you upload' });
-    const text = upload.nextElementSibling?.textContent?.replace(/\s+/g, ' ') ?? '';
-    expect(text).toContain('a public tour is also listed on Explore');
+    await screen.findByRole('heading', { name: 'What we keep' });
+    const text = screen.getByRole('article').textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(text).toContain('A public tour is also listed on Explore');
     expect(text).toContain('never your name');
   });
 });

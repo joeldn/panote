@@ -270,9 +270,9 @@ describe('legal pages', () => {
     renderSite('/privacy');
     expect(await screen.findByRole('heading', { level: 1, name: 'Privacy' })).toBeTruthy();
     const text = document.querySelector('.legal')?.textContent ?? '';
-    expect(text).toContain('Visits are counted without personal data.');
-    expect(text).toContain('Cloudflare Workers Analytics Engine');
-    expect(text).toContain('no cookies for analytics');
+    expect(text).toContain('Anonymous views, time spent and hotspots opened.');
+    expect(text).toContain('No names, accounts or IP addresses.');
+    expect(text).toContain('no tracking cookies');
   });
 
   it('renders the terms and the footer links between them', async () => {
