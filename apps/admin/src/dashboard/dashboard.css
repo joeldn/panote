@@ -436,3 +436,53 @@
   font: 400 12.5px var(--fbody);
   color: var(--ink-50);
 }
+
+/* Tours other people shared with this account to edit. */
+.dash__shared {
+  margin-top: 44px;
+}
+
+.dash__shared-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--ink-09);
+  border-radius: var(--r-lg);
+}
+
+.dash__shared-list li + li {
+  border-top: 1px solid var(--ink-08);
+}
+
+.dash__shared-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 14px 18px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.dash__shared-row:hover .dash__shared-title {
+  text-decoration: underline;
+}
+
+.dash__shared-title {
+  font: 500 15px var(--fbody);
+  overflow-wrap: anywhere;
+}
+
+.dash__shared-meta {
+  font: 400 12.5px var(--fmono);
+  color: var(--ink-55);
+  overflow-wrap: anywhere;
+}
+
+.dash__shared-error {
+  margin: 36px 0 0;
+  font: 400 13px var(--fbody);
+  color: var(--ink-55);
+}

@@ -104,7 +104,7 @@ describe('editor: languages', () => {
     await save(ui);
     const writes = server.writes();
     expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([
-      'PUT /api/admin/panos/square/config',
+      'PUT /api/admin/panos/square/config?tourId=t1',
       'PUT /api/admin/tours/t1',
       'POST /api/admin/tours/t1/publish',
     ]);

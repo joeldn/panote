@@ -99,6 +99,7 @@ describe('replace image', () => {
       contentType: 'image/png',
       size: 2000,
       panoId: 'pano-9',
+      tourId: 'tour-1',
     });
     expect(FakeXhr.last.headers['content-type']).toBe('image/png');
     expect(screen.queryByRole('dialog')).toBeNull();

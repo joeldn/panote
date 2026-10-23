@@ -154,7 +154,10 @@ export type InviteView = z.infer<typeof InviteViewSchema>;
 export const InviteCreateOkSchema = z.object({ invite: InviteViewSchema, token: z.string() });
 export type InviteCreateOk = z.infer<typeof InviteCreateOkSchema>;
 
-export const MemberViewSchema = TourMemberSchema.omit({ sub: true });
+export const MemberViewSchema = TourMemberSchema.omit({ sub: true }).extend({
+  /** This entry is the caller: an editor finds their own Leave button by it. */
+  you: z.boolean(),
+});
 export type MemberView = z.infer<typeof MemberViewSchema>;
 
 export const MembersOkSchema = z.object({

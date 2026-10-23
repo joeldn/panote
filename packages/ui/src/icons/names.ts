@@ -79,6 +79,7 @@ export const POINT_ICONS = [
   'gear',
   'wrench',
   'triangle-exclamation',
+  'user-group',
   'question',
   'link',
   'arrow-up',
@@ -158,6 +159,7 @@ export const UI_ICONS = [
   'trash',
   'trash-can',
   'triangle-exclamation',
+  'user-group',
   'xmark',
 ] as const;
 

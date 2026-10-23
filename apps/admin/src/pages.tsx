@@ -14,4 +14,6 @@ export { Preview } from './preview/Preview.js';
 
 export { ShareRoute as ShareModal } from './share/ShareRoute.js';
 export { InsightsRoute as InsightsModal } from './insights/InsightsRoute.js';
+export { PeopleRoute as PeopleModal } from './people/PeopleRoute.js';
+export { InviteRoute as Invite } from './people/InviteRoute.js';
 export const NotFound = () => <Placeholder title="Page not found" />;

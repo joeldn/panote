@@ -37,7 +37,7 @@ describe('addPanoToTour', () => {
   it('creates the config (create-only) and appends the scene under If-Match', async () => {
     const a = api();
     await addPanoToTour(a, 't1', 'p1', 'Hall');
-    expect(a.createPanoConfig).toHaveBeenCalledWith('p1', { title: 'Hall' });
+    expect(a.createPanoConfig).toHaveBeenCalledWith('p1', { title: 'Hall' }, { tourId: 't1' });
     expect(a.putTour).toHaveBeenCalledWith(
       't1',
       { tourId: 't1', title: 'T', scenes: [{ panoId: 'a' }, { panoId: 'p1' }] },

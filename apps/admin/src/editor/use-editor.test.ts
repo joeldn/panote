@@ -486,6 +486,7 @@ describe('useEditor save after a 429 partway', () => {
       'pano-2',
       expect.objectContaining({ title: 'Two' }),
       'c-pano-2',
+      { tourId: 'tour-1' },
     );
     expect(putTour).toHaveBeenLastCalledWith(
       'tour-1',

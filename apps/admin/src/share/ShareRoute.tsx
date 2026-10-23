@@ -106,6 +106,14 @@ export function ShareRoute({ tab }: { tab: ShareTab }) {
           setState({ status: 'error', message: 'This tour no longer exists.' });
           return;
         }
+        // An editor reaches this only by typing the URL: sharing is the owner's.
+        if (res.data.role === 'editor') {
+          setState({
+            status: 'error',
+            message: 'Only the tour’s owner can change how it’s shared.',
+          });
+          return;
+        }
         const { tour, configs, publish } = res.data;
         const panos = tour.scenes.map((s, i) => {
           const entry = configs[s.panoId];

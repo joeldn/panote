@@ -181,10 +181,14 @@ const live = (members: TourMembers, nowMs: number): TourMembers => ({
 });
 
 /** GET …/members: the owner sees everything; an editor sees who else edits, no invites. */
-export const membersView = (access: TourAccess, members: TourMembers): MembersOk => ({
+export const membersView = (
+  access: TourAccess,
+  members: TourMembers,
+  caller: string,
+): MembersOk => ({
   role: access.role,
   ownerEmail: members.ownerEmail,
-  members: members.members.map(({ sub: _sub, ...rest }) => rest),
+  members: members.members.map(({ sub, ...rest }) => ({ ...rest, you: sub === caller })),
   invites:
     access.role === 'owner' ? members.invites.map(({ tokenHash: _hash, ...rest }) => rest) : [],
 });
@@ -192,9 +196,10 @@ export const membersView = (access: TourAccess, members: TourMembers): MembersOk
 export const getMembers = async (
   bucket: R2Bucket,
   access: TourAccess,
+  caller: string,
   tourId: string,
 ): Promise<MembersOk> =>
-  membersView(access, (await readMembers(bucket, access.owner, tourId)).members);
+  membersView(access, (await readMembers(bucket, access.owner, tourId)).members, caller);
 
 export type InviteOutcome =
   { status: 201; body: InviteCreateOk } | { status: 400 | 409 | 500; body: { error: string } };

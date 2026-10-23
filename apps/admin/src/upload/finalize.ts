@@ -80,7 +80,7 @@ export async function addPanoToTour(
 ): Promise<void> {
   try {
     // Create-only (If-None-Match: *): never overwrites a config written in between.
-    await api.createPanoConfig(panoId, { title });
+    await api.createPanoConfig(panoId, { title }, { tourId });
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) {
       throw new FinalizeError('This pano is being deleted.', false);

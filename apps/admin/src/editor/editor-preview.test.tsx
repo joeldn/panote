@@ -154,7 +154,7 @@ describe('editor: an upload in this tab', () => {
     await tick();
     await tick();
     const configPuts = backend.state.calls.filter(
-      (c) => c.method === 'PUT' && c.url.endsWith('/api/admin/panos/pano-1/config'),
+      (c) => c.method === 'PUT' && c.url.endsWith('/api/admin/panos/pano-1/config?tourId=tour-1'),
     );
     const saved = configPuts.at(-1)?.body as { hotspots: unknown[] };
     expect(saved.hotspots).toEqual([
@@ -352,7 +352,7 @@ describe('editor: scenes still tiling after a reload', () => {
   }
 
   const statusPolls = (panoId: string) =>
-    server.requests.filter((r) => r.path === `/api/admin/panos/${panoId}?status=1`);
+    server.requests.filter((r) => r.path === `/api/admin/panos/${panoId}?status=1&tourId=t1`);
   const publishes = () =>
     server.requests.filter((r) => r.method === 'POST' && r.path.endsWith('/publish'));
 

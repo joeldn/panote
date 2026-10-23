@@ -33,6 +33,8 @@ export class FakeServer {
   missing = new Map<string, { deleting: boolean; hasOriginal: boolean }>();
   publish: { slug: string; visibility: 'public' | 'unlisted'; publishedAt: string } | null = null;
   publishScript: PublishScript | null = null;
+  /** The caller's role on the tour, as the tour GET reports it (absent: as before editors). */
+  role: 'owner' | 'editor' | null = null;
   /** The owner stopped sharing: an after-Save publish is refused until a plain one. */
   sharingStopped = false;
   requests: Recorded[] = [];
@@ -115,6 +117,7 @@ export class FakeServer {
         tour: this.tour.body,
         etag: this.tour.etag,
         publish: this.publish,
+        ...(this.role && { role: this.role }),
       };
       if (url.searchParams.get('include') === 'configs') {
         const configs: Record<string, unknown> = {};

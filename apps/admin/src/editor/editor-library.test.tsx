@@ -116,7 +116,7 @@ describe('editor: add from library', () => {
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
-    const config = server.writes().find((w) => w.path === '/api/admin/panos/loft/config');
+    const config = server.writes().find((w) => w.path === '/api/admin/panos/loft/config?tourId=t1');
     expect(config?.ifNoneMatch).toBe('*');
     expect(config?.body).toEqual({ title: 'Untitled pano' });
     expect(sceneNames()).toEqual(['Square', 'Untitled pano']);
@@ -184,7 +184,8 @@ function hold(match: (r: Recorded) => boolean) {
   return () => release();
 }
 
-const isConfigPut = (r: Recorded) => r.method === 'PUT' && r.path.endsWith('/config');
+const isConfigPut = (r: Recorded) =>
+  r.method === 'PUT' && r.path.split('?')[0]!.endsWith('/config');
 
 describe('editor: add from library, edge cases', () => {
   it('disables Add and says so when the tour is full', async () => {
@@ -230,7 +231,7 @@ describe('editor: add from library, edge cases', () => {
         .writes()
         .filter(isConfigPut)
         .map((w) => w.path),
-    ).toEqual(['/api/admin/panos/bridge/config']);
+    ).toEqual(['/api/admin/panos/bridge/config?tourId=t1']);
     expect(server.tour?.body.scenes).toEqual([{ panoId: 'square' }, { panoId: 'bridge' }]);
   });
 

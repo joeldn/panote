@@ -422,6 +422,9 @@ describe('the People list', () => {
     const editor = await json<MembersOk>(await api('ppl-ed', 'GET', `/tours/${tourId}/members`));
     expect(editor.role).toBe('editor');
     expect(editor.invites).toEqual([]);
+    // Each caller finds their own entry by `you`, never by a sub.
+    expect(owner.members.map((m) => m.you)).toEqual([false]);
+    expect(editor.members.map((m) => m.you)).toEqual([true]);
   });
 
   it('lets the owner remove an editor, and an editor leave but not remove others', async () => {

@@ -86,6 +86,12 @@ function fakeApi(overrides: Partial<AdminApi> = {}): AdminApi {
     unpublishTour: fail,
     getInsights: fail,
     deleteAccount: fail,
+    getMembers: fail,
+    createInvite: fail,
+    revokeInvite: fail,
+    removeMember: fail,
+    acceptInvite: fail,
+    listSharedTours: fail,
     ...overrides,
   };
 }
@@ -136,6 +142,23 @@ describe('share route', () => {
     expect(await screen.findByText('panote.io/s/old-town')).toBeTruthy();
     expect(api.getTourWithConfigs).toHaveBeenCalledWith('tour-1');
     expect(screen.getByRole('tab', { name: 'Link' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('tells an editor that sharing is the owner’s', async () => {
+    const editorTour = {
+      ...tourOk(PUBLISHED),
+      data: { ...tourOk(PUBLISHED).data, role: 'editor' },
+    };
+    renderShare(
+      '/app/t/tour-1/share/link',
+      fakeApi({
+        getTourWithConfigs: vi.fn(async () => editorTour) as AdminApi['getTourWithConfigs'],
+      }),
+    );
+    expect(
+      await screen.findByText('Only the tour’s owner can change how it’s shared.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('panote.io/s/old-town')).toBeNull();
   });
 
   it('renames the slug and says how long the old link redirects', async () => {

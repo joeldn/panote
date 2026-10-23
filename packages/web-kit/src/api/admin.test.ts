@@ -446,3 +446,79 @@ describe('unused pano support', () => {
     expect(panoDeleteErrorOf(new Error('network'))).toBeNull();
   });
 });
+
+describe('tour members', () => {
+  const invite = {
+    id: 'i1',
+    email: 'ed@example.com',
+    role: 'editor',
+    createdAt: '2026-10-23T00:00:00Z',
+    expiresAt: '2026-10-30T00:00:00Z',
+  };
+
+  it('lists, invites, revokes and removes', async () => {
+    const members = { role: 'owner', ownerEmail: 'me@example.com', members: [], invites: [invite] };
+    const { api, call } = setup(
+      json(members),
+      json({ invite, token: 't1.secret' }),
+      new Response(null, { status: 204 }),
+      new Response(null, { status: 204 }),
+    );
+    await expect(api.getMembers('t1')).resolves.toEqual(members);
+    expect(call(0).url).toBe('https://panote.test/api/admin/tours/t1/members');
+    await expect(api.createInvite('t1', 'ed@example.com')).resolves.toEqual({
+      invite,
+      token: 't1.secret',
+    });
+    expect(call(1).init.method).toBe('POST');
+    expect(call(1).url).toBe('https://panote.test/api/admin/tours/t1/invites');
+    expect(JSON.parse(call(1).init.body as string)).toEqual({ email: 'ed@example.com' });
+    await api.revokeInvite('t1', 'i1');
+    expect(call(2).init.method).toBe('DELETE');
+    expect(call(2).url).toBe('https://panote.test/api/admin/tours/t1/invites/i1');
+    await api.removeMember('t1', 'm1');
+    expect(call(3).url).toBe('https://panote.test/api/admin/tours/t1/members/m1');
+  });
+
+  it('turns an accept refusal into a result, and throws on anything else', async () => {
+    const { api, call } = setup(
+      json({ tourId: 't1' }),
+      json({ error: 'wrong account', email: 'ed@example.com' }, 403),
+      json({ error: 'boom' }, 500),
+    );
+    await expect(api.acceptInvite('t1.secret')).resolves.toEqual({
+      status: 'ok',
+      data: { tourId: 't1' },
+    });
+    expect(call(0).url).toBe('https://panote.test/api/admin/invites/accept');
+    expect(JSON.parse(call(0).init.body as string)).toEqual({ token: 't1.secret' });
+    await expect(api.acceptInvite('t1.secret')).resolves.toEqual({
+      status: 'refused',
+      refusal: { error: 'wrong account', email: 'ed@example.com' },
+    });
+    await expect(api.acceptInvite('t1.secret')).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('lists shared tours', async () => {
+    const { api, call } = setup(json({ tours: [] }));
+    await expect(api.listSharedTours()).resolves.toEqual({ tours: [] });
+    expect(call().url).toBe('https://panote.test/api/admin/shared-tours');
+  });
+
+  it('scopes pano calls to a tour', async () => {
+    const { api, call } = setup(
+      json({ status }),
+      json({ etag: 'e1' }),
+      json({ etag: 'e2' }),
+      json({ status }),
+    );
+    await api.getPanoStatus('p1', { tourId: 't1' });
+    expect(call(0).url).toBe('https://panote.test/api/admin/panos/p1?status=1&tourId=t1');
+    await api.putPanoConfig('p1', { title: 'A', hotspots: [] }, 'e0', { tourId: 't1' });
+    expect(call(1).url).toBe('https://panote.test/api/admin/panos/p1/config?tourId=t1');
+    await api.createPanoConfig('p1', { title: 'A' }, { tourId: 't1' });
+    expect(call(2).url).toBe('https://panote.test/api/admin/panos/p1/config?tourId=t1');
+    await api.getPanoStatus('p1');
+    expect(call(3).url).toBe('https://panote.test/api/admin/panos/p1?status=1');
+  });
+});
