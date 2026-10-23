@@ -48,6 +48,15 @@ export const someSkipped = (skipped: string[]): StartProblem => ({
   files: skipped,
 });
 
+/** A replace uses the first photo; the rest were left out. */
+export const replaceTakesOne = (extras: string[]): StartProblem => ({
+  message:
+    extras.length === 1
+      ? 'A pano is replaced with one photo. This one was left out:'
+      : 'A pano is replaced with one photo. These were left out:',
+  files: extras,
+});
+
 export function startProblem(e: unknown): StartProblem {
   if (e instanceof SignedOutBatchError) {
     return {

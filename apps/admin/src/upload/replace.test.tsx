@@ -167,6 +167,25 @@ describe('replace image', () => {
     expect(backend.presigns()[1]?.body).toMatchObject({ panoId: 'pano-9' });
   });
 
+  it('several photos for one replace: the first goes, and the rest are named', async () => {
+    const { backend } = renderProvider();
+    act(() =>
+      probe.uploads?.drop([pngFile('new.png'), pngFile('also.png')], {
+        kind: 'replace',
+        panoId: 'pano-9',
+        tourId: 'tour-1',
+      }),
+    );
+    await tick();
+    await tick();
+    expect(backend.presigns()).toHaveLength(1);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain(
+      'A pano is replaced with one photo. This one was left out:',
+    );
+    expect(dialog.textContent).toContain('also.png');
+  });
+
   it('one PUT at a time: an upload picked meanwhile waits its turn, then goes', async () => {
     const { backend } = renderProvider();
     await replaceWith();

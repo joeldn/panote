@@ -58,6 +58,7 @@ import { repickNotice } from './repick-notice.js';
 import {
   checkFiles,
   noneValid,
+  replaceTakesOne,
   someSkipped,
   startProblem,
   type StartProblem,
@@ -864,7 +865,9 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const pickFor = useRef<UploadTarget | null>(null);
   const startFiles = useCallback(
     async (picked: readonly File[], target: UploadTarget) => {
+      // A pano is replaced by one photo: any others are said, not silently dropped.
       const files = target.kind === 'replace' ? picked.slice(0, 1) : picked;
+      const extras = picked.slice(files.length).map((f) => f.name);
       const check = await checkFiles(files);
       if (check.valid.length === 0) {
         openPicker(target, noneValid(check));
@@ -875,7 +878,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         if (target.kind === 'new-tour' && tourId) {
           void navigate(`/t/${tourId}`, { state: { newTour: true } });
         }
-        if (check.skipped.length > 0) openPicker(target, someSkipped(check.skipped));
+        if (extras.length > 0) openPicker(target, replaceTakesOne(extras));
+        else if (check.skipped.length > 0) openPicker(target, someSkipped(check.skipped));
       } catch (e) {
         openPicker(target, startProblem(e));
       }
