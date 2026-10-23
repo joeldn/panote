@@ -1,12 +1,30 @@
 import './people.css';
 
-import { INVITE_DAYS, type MembersOk, type MemberView } from '@internal/contracts';
-import { Button, ConfirmModal, Modal, ModalHeader, useCopy, useModalTitleId } from '@internal/ui';
-import { ApiError, isAuthError } from '@internal/web-kit';
-import { useEffect, useState, type FormEvent } from 'react';
+import {
+  INVITE_DAYS,
+  TOUR_TRANSFERRING_ERROR,
+  TRANSFER_OFFER_DAYS,
+  type MembersOk,
+  type MemberView,
+  type TransferRefused,
+} from '@internal/contracts';
+import {
+  Button,
+  ConfirmModal,
+  Modal,
+  ModalHeader,
+  SignInModal,
+  useCopy,
+  useModalTitleId,
+} from '@internal/ui';
+import { ApiError, isAuthError, ReauthRequiredError, type ConnectionId } from '@internal/web-kit';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useHref, useNavigate, useParams, useSearchParams } from 'react-router';
 
 import { useAdminApi } from '../admin-api.js';
+import { useAuthEnv } from '../auth-context.js';
+import { cancelBeforeSignIn, runBeforeSignIn } from '../before-sign-in.js';
+import { useSession } from '../session.js';
 
 type LoadState =
   | { status: 'loading' }
@@ -20,7 +38,29 @@ interface Created {
   expiresAt: string;
 }
 
-type Confirming = { kind: 'remove'; member: MemberView } | { kind: 'leave'; member: MemberView };
+type Confirming = { kind: 'remove' | 'leave' | 'offer'; member: MemberView };
+
+/** User-facing copy for a refused take-over (services/admin-api transfer.ts). */
+function transferMessage(refusal: TransferRefused): string {
+  switch (refusal.error) {
+    case 'no offer':
+      return 'The owner has withdrawn this offer.';
+    case 'offer expired':
+      return 'This offer has expired. Ask the owner to make it again.';
+    case 'tour limit reached':
+      return 'You have as many tours as an account can hold. Delete one first.';
+    case 'pano limit reached':
+      return 'This tour’s panos would take you past the number of panos an account can hold. Delete some first.';
+    case 'storage limit reached':
+      return 'This tour’s panos would take you past your storage limit. Delete some panos first.';
+  }
+}
+
+const CONFIRM_COPY = {
+  remove: { title: 'Remove this editor?', label: 'Remove' },
+  leave: { title: 'Leave this tour?', label: 'Leave' },
+  offer: { title: 'Make them the owner?', label: 'Offer the tour' },
+} as const;
 
 const formatDate = (iso: string): string =>
   new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -45,6 +85,27 @@ function inviteMessage(e: unknown): string {
   return 'Couldn’t create the invite. Try again.';
 }
 
+/** A change to the list that failed: a remove, a leave, an offer and its answers. */
+function changeMessage(e: unknown): string {
+  if (isAuthError(e)) return 'Sign in again to change this list.';
+  if (errorOf(e) === TOUR_TRANSFERRING_ERROR) {
+    return 'This tour is changing owner. Try again in a minute.';
+  }
+  return 'Something went wrong. Try again.';
+}
+
+const confirmBody = (confirming: Confirming | null): string => {
+  const email = confirming?.member.email ?? '';
+  switch (confirming?.kind) {
+    case 'leave':
+      return 'You won’t be able to open or edit it any more. The owner can invite you again.';
+    case 'offer':
+      return `If ${email} accepts, the tour, its share link and its panos move to their account, and you stay on as an editor. Panos your other tours also use are copied for them. The offer lasts ${TRANSFER_OFFER_DAYS} days.`;
+    default:
+      return `${email} won’t be able to open or edit this tour any more. What they added stays in it.`;
+  }
+};
+
 const loadError = (e: unknown): string =>
   isAuthError(e)
     ? 'Sign in again to see who can edit this tour.'
@@ -56,6 +117,8 @@ export function PeopleRoute() {
   const [search] = useSearchParams();
   const navigate = useNavigate();
   const api = useAdminApi();
+  const session = useSession();
+  const { auth, origins } = useAuthEnv();
   const titleId = useModalTitleId();
   const invitePath = useHref('/invite');
   const [state, setState] = useState<LoadState>({ status: 'loading' });
@@ -66,6 +129,10 @@ export function PeopleRoute() {
   const [created, setCreated] = useState<Created | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+  const [taking, setTaking] = useState(false);
+  const [offerError, setOfferError] = useState<string | null>(null);
+  const warnedRef = useRef(false);
   const [copied, copy] = useCopy();
 
   useEffect(() => {
@@ -128,21 +195,80 @@ export function PeopleRoute() {
 
   const onConfirm = async () => {
     if (!confirming) return;
+    if (confirming.kind === 'offer') {
+      try {
+        await api.offerTransfer(tourId, confirming.member.id);
+      } catch (err) {
+        if (err instanceof ReauthRequiredError) {
+          setConfirming(null);
+          setSigningIn(true);
+          return;
+        }
+        throw new Error(changeMessage(err), { cause: err });
+      }
+      setConfirming(null);
+      reload();
+      return;
+    }
     try {
       await api.removeMember(tourId, confirming.member.id);
     } catch (err) {
-      throw new Error(
-        isAuthError(err)
-          ? 'Sign in again to change this list.'
-          : 'Something went wrong. Try again.',
-        { cause: err },
-      );
+      throw new Error(changeMessage(err), { cause: err });
     }
     const leaving = confirming.kind === 'leave';
     setConfirming(null);
     // Without access the editor under this modal has nothing to show.
     if (leaving) void navigate('/');
     else reload();
+  };
+
+  // Offering a tour wants a recent sign-in (as account delete does); back here afterwards.
+  const signInAgain = async (id: string) => {
+    const refusal = runBeforeSignIn({ force: warnedRef.current });
+    if (refusal && !warnedRef.current) {
+      warnedRef.current = true;
+      throw new Error(`${refusal} Choose a sign-in option again to continue anyway.`);
+    }
+    try {
+      await auth.signIn({
+        connection: id as ConnectionId,
+        returnTo: `/app/t/${tourId}/people${query ? `?${query}` : ''}`,
+        reauthenticate: true,
+        ...(session.user.email && { loginHint: session.user.email }),
+      });
+    } catch (e) {
+      cancelBeforeSignIn();
+      throw e;
+    }
+  };
+
+  const onWithdraw = async () => {
+    setOfferError(null);
+    try {
+      await api.cancelTransfer(tourId);
+      reload();
+    } catch (err) {
+      setOfferError(changeMessage(err));
+    }
+  };
+
+  const onTake = async () => {
+    setOfferError(null);
+    setTaking(true);
+    try {
+      const res = await api.acceptTransfer(tourId);
+      if (res.status === 'refused') {
+        setOfferError(transferMessage(res.refusal));
+        reload();
+        return;
+      }
+      // The tour is theirs now: their dashboard lists it with their own tours.
+      void navigate('/');
+    } catch (err) {
+      setOfferError(changeMessage(err));
+    } finally {
+      setTaking(false);
+    }
   };
 
   let body;
@@ -159,10 +285,32 @@ export function PeopleRoute() {
       </p>
     );
   } else {
-    const { role, ownerEmail, members, invites } = state.data;
+    const { role, ownerEmail, members, invites, transfer } = state.data;
     const owner = role === 'owner';
+    const offeredTo = transfer && members.find((m) => m.id === transfer.memberId);
     body = (
       <>
+        {offeredTo?.you && (
+          <div className="ppl__created" role="status">
+            <p className="ppl__created-text">
+              {ownerEmail ?? 'The owner'} wants to make you this tour’s owner. Its panos would move
+              to your account and count toward your limits, and they would stay on as an editor.
+            </p>
+            <div className="ppl__actions">
+              <Button busy={taking} onClick={() => void onTake()}>
+                Become the owner
+              </Button>
+              <Button variant="ghost" disabled={taking} onClick={() => void onWithdraw()}>
+                Decline
+              </Button>
+            </div>
+          </div>
+        )}
+        {offerError && (
+          <p className="ppl__error" role="alert">
+            {offerError}
+          </p>
+        )}
         {owner && (
           <form className="ppl__invite" onSubmit={(e) => void onInvite(e)}>
             <label className="ppl__label" htmlFor="ppl-email">
@@ -231,7 +379,31 @@ export function PeopleRoute() {
                   {m.email}
                   {m.you && <span className="ppl__you"> (you)</span>}
                 </span>
-                <span className="ppl__role">Editor</span>
+                <span className="ppl__role">
+                  {offeredTo?.id === m.id
+                    ? `Offered the tour until ${formatDate(transfer!.expiresAt)}`
+                    : 'Editor'}
+                </span>
+                {owner && offeredTo?.id === m.id && (
+                  <button
+                    type="button"
+                    className="ppl__action"
+                    aria-label={`Withdraw the offer to ${m.email}`}
+                    onClick={() => void onWithdraw()}
+                  >
+                    Withdraw
+                  </button>
+                )}
+                {owner && offeredTo?.id !== m.id && (
+                  <button
+                    type="button"
+                    className="ppl__action"
+                    aria-label={`Make ${m.email} the owner`}
+                    onClick={() => setConfirming({ kind: 'offer', member: m })}
+                  >
+                    Make owner
+                  </button>
+                )}
                 {owner && (
                   <button
                     type="button"
@@ -299,15 +471,21 @@ export function PeopleRoute() {
       </Modal>
       <ConfirmModal
         open={confirming !== null}
-        title={confirming?.kind === 'leave' ? 'Leave this tour?' : 'Remove this editor?'}
-        body={
-          confirming?.kind === 'leave'
-            ? 'You won’t be able to open or edit it any more. The owner can invite you again.'
-            : `${confirming?.member.email ?? ''} won’t be able to open or edit this tour any more. What they added stays in it.`
-        }
-        confirmLabel={confirming?.kind === 'leave' ? 'Leave' : 'Remove'}
+        title={CONFIRM_COPY[confirming?.kind ?? 'remove'].title}
+        body={confirmBody(confirming)}
+        confirmLabel={CONFIRM_COPY[confirming?.kind ?? 'remove'].label}
         onConfirm={onConfirm}
         onCancel={() => setConfirming(null)}
+      />
+      <SignInModal
+        open={signingIn}
+        onClose={() => setSigningIn(false)}
+        title="Sign in again to offer this tour"
+        subtitle="Giving a tour away can’t be undone by you, so confirm it’s you. You’ll come back here; offer it again to finish."
+        options={auth.connections}
+        onSignIn={signInAgain}
+        termsHref={`${origins.website}/terms`}
+        privacyHref={`${origins.website}/privacy`}
       />
     </>
   );

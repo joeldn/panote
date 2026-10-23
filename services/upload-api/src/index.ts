@@ -10,6 +10,8 @@ import {
   planPrefix,
   resolveTourAccess,
   tourKey,
+  TOUR_TRANSFERRING_ERROR,
+  tourTransferKey,
   uploadedForKey,
   type AccessStore,
   type PanoUploadedFor,
@@ -100,12 +102,19 @@ const s3Store = (r2: R2): AccessStore => ({
 
 /**
  * Whose account an upload for `tourId` goes into: the caller's when they own the tour, the
- * owner's when they are one of its editors. A Response when neither, or when the owner's
- * account is being deleted (404) or disabled by the operator (403).
+ * owner's when they are one of its editors. A Response when neither, when the owner's
+ * account is being deleted (404) or disabled by the operator (403), or while the tour is
+ * changing owner (409).
  */
 async function tourOwnerFor(r2: R2, sub: string, tourId: string): Promise<string | Response> {
-  const access = await resolveTourAccess(s3Store(r2), sub, tourId);
+  const [access, transfer] = await Promise.all([
+    resolveTourAccess(s3Store(r2), sub, tourId),
+    r2.head(tourTransferKey(tourId)),
+  ]);
   if (!access) return Response.json({ error: 'tour not found' }, { status: 404 });
+  // Changing owner (admin-api's transfer.ts): an upload now would land in the old account.
+  assertHeadIsDefinitive(transfer);
+  if (transfer.ok) return Response.json({ error: TOUR_TRANSFERRING_ERROR }, { status: 409 });
   if (access.role === 'owner') return sub;
   const [deletion, disabled] = await Promise.all([
     r2.head(accountDeletionKey(access.owner)),

@@ -1715,6 +1715,21 @@ Everything stays in the owner's account: an editor works on the owner's `tours/<
   editors' index entries; deleting an editor's account takes them off every tour they edit, and
   what they uploaded stays with the owner. While the owner's account is marked for deletion its
   editors get a 404, and while the operator has the owner disabled their editors can't write.
+- **Changing owner.** The owner can offer the tour to one of its editors
+  (`POST /api/admin/tours/<tourId>/transfer` with `{ "memberId" }`; needs a recent sign-in, like
+  account deletion). The offer is kept in `members.json`, lasts 7 days, and is withdrawn by the
+  owner, declined by the editor (`DELETE …/transfer`), or dropped when that editor is removed.
+  The editor accepts with `POST …/transfer/accept`, which runs in the tour's `TourPublisher`
+  Durable Object: it checks the new owner's limits (tours, panoramas, storage; admin-api's
+  `MAX_PANOS_PER_OWNER` and `MAX_BYTES_PER_OWNER` must equal upload-api's), writes
+  `tour-transfers/<tourId>.json` (who to whom, and each pano's id in the new account), then copies
+  the tour and its panoramas into the new owner's prefix, rewrites the owner pointer and deletes
+  the old keys. A panorama the old owner's other tours still use is copied under a new id and
+  tiled again from its original; any other one moves with its tiles. The old owner stays on as an
+  editor. While the record exists every write to the tour (admin-api and upload-api) gets a 409
+  (`tour is changing owner`); accepting again resumes it, and the daily cron finishes any left
+  behind. Until the new owner next publishes, the live tour keeps using the old copies of shared
+  panoramas, and a copied panorama can only be published once its tiles are ready.
 
 ## Backups
 

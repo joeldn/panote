@@ -153,6 +153,12 @@ export const UPLOADED_FOR_ROOT = 'uploaded-for/';
 export const userUploadedForPrefix = (u: string): string => `${UPLOADED_FOR_ROOT}${encodeId(u)}/`;
 export const uploadedForKey = (u: string, p: string): string =>
   `${userUploadedForPrefix(u)}${assertValidId(p, 'panoId')}.json`;
+// tour-transfers/<tourId>.json: a change of owner under way (admin-api's transfer.ts), so an
+// interrupted one can be finished and every write to the tour refused until it is. Private,
+// like tour-owners/: the body (TourTransferRecord) holds both owners' subs.
+export const TOUR_TRANSFERS_ROOT = 'tour-transfers/';
+export const tourTransferKey = (t: string): string =>
+  `${TOUR_TRANSFERS_ROOT}${assertValidId(t, 'tourId')}.json`;
 // Operator quarantine (takedown.ts --quarantine): a private copy of taken-down content,
 // kept as evidence under quarantine/<caseId>/<its original key>. Outside the WAF's
 // public prefixes, and nothing in the Workers reads, lists or deletes it.

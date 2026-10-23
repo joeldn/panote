@@ -1,6 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { MembersOk } from '@internal/contracts';
-import { ApiError, type AdminApi, type InviteAcceptResult } from '@internal/web-kit';
+import {
+  ApiError,
+  ReauthRequiredError,
+  type AdminApi,
+  type InviteAcceptResult,
+  type TransferAcceptResult,
+} from '@internal/web-kit';
 import { createMemoryRouter, Outlet, RouterProvider, type RouteObject } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -76,6 +82,7 @@ const owned = (over: Partial<MembersOk> = {}): MembersOk => ({
       expiresAt: '2026-10-29T00:00:00Z',
     },
   ],
+  transfer: null,
   ...over,
 });
 
@@ -175,6 +182,148 @@ describe('People', () => {
     fireEvent.click(within(confirm).getByRole('button', { name: 'Leave' }));
     await screen.findByText('Dashboard');
     expect(removeMember).toHaveBeenCalledWith('tour-1', 'm1');
+  });
+});
+
+describe('handing the tour over', () => {
+  const offered = { memberId: 'm1', expiresAt: '2026-10-30T00:00:00Z' };
+  const asEditor = (over: Partial<MembersOk> = {}) =>
+    owned({
+      role: 'editor',
+      invites: [],
+      members: [
+        {
+          id: 'm1',
+          email: 'ed@example.com',
+          role: 'editor',
+          addedAt: '2026-10-20T00:00:00Z',
+          you: true,
+        },
+      ],
+      transfer: offered,
+      ...over,
+    });
+
+  it('lets the owner offer it to an editor, after a confirm', async () => {
+    const offerTransfer = vi.fn(async () => ({ transfer: offered }));
+    const getMembers = vi.fn(async () => owned());
+    renderAt('/app/t/tour-1/people', { getMembers, offerTransfer });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Make ed@example.com the owner' }),
+    );
+    const confirm = await screen.findByRole('dialog', { name: 'Make them the owner?' });
+    expect(confirm.textContent).toContain('you stay on as an editor');
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Offer the tour' }));
+    await waitFor(() => expect(offerTransfer).toHaveBeenCalledWith('tour-1', 'm1'));
+    await waitFor(() => expect(getMembers).toHaveBeenCalledTimes(2));
+  });
+
+  it('asks the owner to sign in again when the last sign-in is too old', async () => {
+    const offerTransfer = vi.fn(async () => {
+      throw new ReauthRequiredError({ error: 'reauthentication required' });
+    });
+    const { auth } = renderAt('/app/t/tour-1/people', {
+      getMembers: async () => owned(),
+      offerTransfer,
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Make ed@example.com the owner' }),
+    );
+    fireEvent.click(
+      within(await screen.findByRole('dialog', { name: 'Make them the owner?' })).getByRole(
+        'button',
+        {
+          name: 'Offer the tour',
+        },
+      ),
+    );
+    await screen.findByRole('dialog', { name: 'Sign in again to offer this tour' });
+    fireEvent.click(screen.getByRole('button', { name: /Google/ }));
+    await waitFor(() =>
+      expect(auth.signIn).toHaveBeenCalledWith({
+        connection: 'google-oauth2',
+        returnTo: '/app/t/tour-1/people',
+        reauthenticate: true,
+      }),
+    );
+  });
+
+  it('shows the owner an open offer, which they can withdraw', async () => {
+    const cancelTransfer = vi.fn(async () => {});
+    renderAt('/app/t/tour-1/people', {
+      getMembers: async () => owned({ transfer: offered }),
+      cancelTransfer,
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    expect(await within(dialog).findByText(/^Offered the tour until/)).toBeTruthy();
+    expect(
+      within(dialog).queryByRole('button', { name: 'Make ed@example.com the owner' }),
+    ).toBeNull();
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Withdraw the offer to ed@example.com' }),
+    );
+    await waitFor(() => expect(cancelTransfer).toHaveBeenCalledWith('tour-1'));
+  });
+
+  it('lets the editor it names take the tour over, then shows their tours', async () => {
+    const acceptTransfer = vi.fn(async (): Promise<TransferAcceptResult> => ({
+      status: 'ok',
+      data: { tourId: 'tour-1' },
+    }));
+    renderAt('/app/t/tour-1/people', { getMembers: async () => asEditor(), acceptTransfer });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    expect((await within(dialog).findByRole('status')).textContent).toContain(
+      'maya@example.com wants to make you this tour’s owner',
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Become the owner' }));
+    await screen.findByText('Dashboard');
+    expect(acceptTransfer).toHaveBeenCalledWith('tour-1');
+  });
+
+  it('says why taking it over was refused, and lets the editor decline', async () => {
+    const cancelTransfer = vi.fn(async () => {});
+    renderAt('/app/t/tour-1/people', {
+      getMembers: async () => asEditor(),
+      acceptTransfer: async () => ({
+        status: 'refused',
+        refusal: { error: 'storage limit reached' },
+      }),
+      cancelTransfer,
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Become the owner' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('storage limit');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decline' }));
+    await waitFor(() => expect(cancelTransfer).toHaveBeenCalledWith('tour-1'));
+  });
+
+  it('shows another editor no offer', async () => {
+    renderAt('/app/t/tour-1/people', {
+      getMembers: async () =>
+        asEditor({
+          members: [
+            {
+              id: 'm1',
+              email: 'ed@example.com',
+              role: 'editor',
+              addedAt: '2026-10-20T00:00:00Z',
+              you: false,
+            },
+            {
+              id: 'm2',
+              email: 'kim@example.com',
+              role: 'editor',
+              addedAt: '2026-10-21T00:00:00Z',
+              you: true,
+            },
+          ],
+        }),
+    });
+    const dialog = await screen.findByRole('dialog', { name: 'People' });
+    await within(dialog).findByText('kim@example.com');
+    expect(within(dialog).queryByRole('button', { name: 'Become the owner' })).toBeNull();
   });
 });
 

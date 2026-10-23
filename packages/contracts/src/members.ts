@@ -47,12 +47,24 @@ export const TourInviteSchema = z.object({
 });
 export type TourInvite = z.infer<typeof TourInviteSchema>;
 
+/** How long an offer to take over a tour stays open. */
+export const TRANSFER_OFFER_DAYS = 7;
+
+/** The owner's offer to make one of the tour's editors its owner. One at a time. */
+export const TourTransferOfferSchema = z.object({
+  memberId: IdSchema,
+  offeredAt: z.string(),
+  expiresAt: z.string(),
+});
+export type TourTransferOffer = z.infer<typeof TourTransferOfferSchema>;
+
 export const TourMembersSchema = z.object({
   v: z.literal(1),
   /** The owner's verified email when they sent the first invite, for editors to see. */
   ownerEmail: z.string().nullable(),
   members: z.array(TourMemberSchema),
   invites: z.array(TourInviteSchema),
+  transfer: TourTransferOfferSchema.optional(),
 });
 export type TourMembers = z.infer<typeof TourMembersSchema>;
 
@@ -118,9 +130,9 @@ export type TourAccess = { owner: string; role: TourRole; members: TourMembers |
 /**
  * Who `caller` is to `tourId`: its owner when tour.json is under their own prefix, an
  * editor when the tour's owner pointer (tour-owners/) names someone whose members.json
- * lists them, else null. The pointer is written create-only by the owner's own requests,
- * and an editor is only ever added by the owner it names, so neither can be forged by a
- * caller. Account markers (deleted, disabled) are the caller's to check.
+ * lists them, else null. The pointer is written create-only by the owner's own requests
+ * and rewritten only by a change of owner the owner offered, and an editor is only ever
+ * added by the owner it names, so neither can be forged by a caller. Account markers (deleted, disabled) are the caller's to check.
  */
 export const resolveTourAccess = async (
   store: AccessStore,
@@ -166,6 +178,8 @@ export const MembersOkSchema = z.object({
   members: z.array(MemberViewSchema),
   /** Only for the owner; an editor sees no pending invites. */
   invites: z.array(InviteViewSchema),
+  /** An open offer to make an editor the owner; the editor finds it by their member id. */
+  transfer: TourTransferOfferSchema.omit({ offeredAt: true }).nullable().default(null),
 });
 export type MembersOk = z.infer<typeof MembersOkSchema>;
 
@@ -197,3 +211,46 @@ export type SharedTourSummary = z.infer<typeof SharedTourSummarySchema>;
 
 export const SharedToursOkSchema = z.object({ tours: z.array(SharedTourSummarySchema) });
 export type SharedToursOk = z.infer<typeof SharedToursOkSchema>;
+
+// --- Changing a tour's owner (docs/decisions.md, "Tour editors") ---
+
+export const TransferOfferRequestSchema = z.object({ memberId: IdSchema });
+export const TransferOfferOkSchema = z.object({
+  transfer: TourTransferOfferSchema.omit({ offeredAt: true }),
+});
+export type TransferOfferOk = z.infer<typeof TransferOfferOkSchema>;
+
+// Why taking over a tour was refused. The limits are the new owner's: the tour and its
+// panos count toward them from then on.
+export const TRANSFER_REFUSALS = [
+  'no offer',
+  'offer expired',
+  'tour limit reached',
+  'pano limit reached',
+  'storage limit reached',
+] as const;
+export const TransferRefusedSchema = z.object({ error: z.enum(TRANSFER_REFUSALS) });
+export type TransferRefused = z.infer<typeof TransferRefusedSchema>;
+export const TransferAcceptOkSchema = z.object({ tourId: z.string() });
+export type TransferAcceptOk = z.infer<typeof TransferAcceptOkSchema>;
+
+/** 409 from every write to a tour while its owner is changing. */
+export const TOUR_TRANSFERRING_ERROR = 'tour is changing owner';
+
+/**
+ * tour-transfers/<tourId>.json, written before anything moves and deleted once all of it
+ * has. `panos` maps each of the tour's panoIds to its id in the new owner's account: the
+ * same id when the pano moves, a fresh one when the old owner's other tours still use it
+ * (a copy, tiled again from its original). Fixed when the record is written, so a resumed
+ * transfer makes the same copies.
+ */
+export const TourTransferRecordSchema = z.object({
+  v: z.literal(1),
+  from: z.string().min(1),
+  to: z.string().min(1),
+  fromEmail: z.string().nullable(),
+  toEmail: z.string().nullable(),
+  startedAt: z.string(),
+  panos: z.record(IdSchema, IdSchema),
+});
+export type TourTransferRecord = z.infer<typeof TourTransferRecordSchema>;

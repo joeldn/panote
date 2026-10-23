@@ -4,6 +4,7 @@ import {
   originalKey,
   tourKey,
   tourOwnerKey,
+  tourTransferKey,
   uploadedForKey,
   deletingKey,
   uploadLogKey,
@@ -159,6 +160,13 @@ describe('an editor uploading to a shared tour', () => {
     objects.set(accountDisabledKey(OWNER), '{}');
     const r = await post('editor', { ...upload, tourId: TOUR });
     expect(r.status).toBe(403);
+  });
+
+  it('refuses while the tour is changing owner, owner and editor alike', async () => {
+    objects.set(tourTransferKey(TOUR), '{}');
+    expect((await post('editor', { ...upload, tourId: TOUR })).status).toBe(409);
+    expect((await post('owner', { ...upload, tourId: TOUR })).status).toBe(409);
+    expect(logged(OWNER)).toBe(0);
   });
 
   it('stops when either daily limit is reached', async () => {

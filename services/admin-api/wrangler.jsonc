@@ -92,6 +92,10 @@
         // Account delete wants a sign-in from the last 10 minutes (the Auth0 Action's
         // auth_time claim). "false" turns that off; docs/deploy.md, "Account deletion".
         "REQUIRE_RECENT_AUTH": "true",
+        // The new owner's limits when a tour changes hands (src/transfer.ts). Keep these
+        // equal to upload-api's own (services/upload-api/wrangler.jsonc).
+        "MAX_PANOS_PER_OWNER": "500",
+        "MAX_BYTES_PER_OWNER": "21474836480",
       },
       // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
       // the backup, which runs every 15 minutes until the day's set is complete
@@ -177,6 +181,10 @@
         "CDN_HOST": "cdn.panote.io",
         // Account delete wants a recent sign-in (see env.dev).
         "REQUIRE_RECENT_AUTH": "true",
+        // The new owner's limits when a tour changes hands (src/transfer.ts). Keep these
+        // equal to upload-api's own (services/upload-api/wrangler.jsonc).
+        "MAX_PANOS_PER_OWNER": "500",
+        "MAX_BYTES_PER_OWNER": "21474836480",
       },
       // The daily sweeps (expired slug aliases, account deletions, superseded tiles), and
       // the backup, which runs every 15 minutes until the day's set is complete

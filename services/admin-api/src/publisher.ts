@@ -22,6 +22,13 @@ import {
   type PublishBody,
   type PublishRequest,
 } from './publish.js';
+import {
+  ownerLimits,
+  readTransfer,
+  runTransfer,
+  startTransfer,
+  type StartOutcome,
+} from './transfer.js';
 
 // One instance per tourId: every publish-state change for that tour runs one at
 // a time. The Worker authenticates `sub`; each operation re-proves ownership.
@@ -101,6 +108,36 @@ export class TourPublisher extends DurableObject<Env> {
       const publishedAt = Date.parse(got.value.publishedAt);
       const at = Number.isFinite(publishedAt) && publishedAt < now ? publishedAt : now;
       await syncExplore(this.env.BUCKET, got.value, new Date(at));
+      return true;
+    });
+  }
+
+  // The editor `to` takes the tour over from `from` (transfer.ts), in this queue so no
+  // publish, rename or unpublish runs while its files move.
+  async transfer(
+    from: string,
+    to: string,
+    toEmail: string | null,
+    tourId: string,
+  ): Promise<StartOutcome> {
+    return this.serial(() =>
+      startTransfer(
+        this.env.BUCKET,
+        { from, to, toEmail },
+        tourId,
+        ownerLimits(this.env),
+        new Date(),
+      ),
+    );
+  }
+
+  // Finishes a transfer an interrupted request left (the daily sweep, or the new owner's
+  // retry). False when there is none.
+  async finishTransfer(tourId: string): Promise<boolean> {
+    return this.serial(async () => {
+      const rec = await readTransfer(this.env.BUCKET, tourId);
+      if (!rec) return false;
+      await runTransfer(this.env.BUCKET, tourId, rec);
       return true;
     });
   }
