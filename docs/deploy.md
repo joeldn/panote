@@ -1442,8 +1442,11 @@ so data made under a sign-in before it was linked (see "Account linking", **Know
 the account. After `completedAt` the sweep's late-data pass covers the account's own sub only:
 data under a linked sub from then on can only belong to a new, separate user with that provider
 id (the Auth0 user was removed and they signed up again, or the operator unlinked it), which the
-marker doesn't block, so it isn't deleted. A retry whose
-token names more linked subs adds them to the marker. The operator's `delete-account.ts --sub`
+marker doesn't block, so it isn't deleted. A retry whose token names more linked subs adds them
+to the marker and, if the delete had completed, takes `completedAt` off, so the sweep deletes them
+too; otherwise a retry on a completed delete deletes only the subs its own token names.
+`completedAt` is stamped only when every sub on the marker was among what that run deleted, so a
+linked sub added while a run was going waits for the next one. The operator's `delete-account.ts --sub`
 marks the primary sub only; to cover a linked sub there, mark that sub too.
 
 **Order, and why a retry finishes the job.**

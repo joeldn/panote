@@ -353,6 +353,90 @@ const depsWith = (overrides: Partial<AccountDeps> = {}): AccountDeps => ({
   ...overrides,
 });
 
+describe('linked subs that arrive while a delete is open', () => {
+  it("the sweep doesn't stamp completedAt over a linked sub a request added meanwhile", async () => {
+    const sub = subOf('acct-late-l2');
+    const l1 = 'email|acct-late-l2-1';
+    const l2 = 'apple|acct-late-l2-2';
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: '2026-09-01T00:00:00.000Z',
+      linkedSubs: [l1],
+    });
+    // A tour, so the sweep calls unpublishTour: a retry naming L2 lands right then.
+    await put(tourKey(sub, 'acct-late-l2-tour'), { tourId: 'acct-late-l2-tour', scenes: [] });
+    await put(originalKey(l2, 'acct-late-l2-p'), 'bytes');
+    let added = false;
+    const deps = depsWith({
+      unpublishTour: async (owner, tourId) => {
+        if (!added) {
+          added = true;
+          await markAccountForDeletion(env.BUCKET, sub, new Date(), [l1, l2]);
+        }
+        return unpublish(env.BUCKET, owner, tourId);
+      },
+    });
+    await sweepAccountDeletions(deps, new Date('2026-09-02T00:00:00.000Z'));
+    expect(added).toBe(true);
+    // L2 wasn't among what that run deleted: no stamp, so the next run takes it.
+    expect((await marker(sub))?.completedAt).toBeUndefined();
+    expect(await has(originalKey(l2, 'acct-late-l2-p'))).toBe(true);
+    await sweepAccountDeletions(depsWith(), new Date('2026-09-03T00:00:00.000Z'));
+    expect(await has(originalKey(l2, 'acct-late-l2-p'))).toBe(false);
+    expect((await marker(sub))?.completedAt).toBe('2026-09-03T00:00:00.000Z');
+  });
+
+  it('a retry after completion with a new linked sub reopens the delete for the sweep', async () => {
+    const sub = subOf('acct-reopen');
+    const l1 = 'email|acct-reopen-1';
+    const l2 = 'apple|acct-reopen-2';
+    const done = '2026-09-01T00:00:00.000Z';
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: done,
+      completedAt: done,
+      linkedSubs: [l1],
+    });
+    await put(originalKey(l2, 'acct-reopen-p'), 'bytes');
+    // The retry is interrupted before it reaches L2 (a tour of the account's own fails).
+    await put(tourKey(sub, 'acct-reopen-tour'), { tourId: 'acct-reopen-tour', scenes: [] });
+    const failing = depsWith({ clearStats: vi.fn().mockRejectedValue(new Error('stats down')) });
+    const partial = await deleteAccount(failing, sub, new Date('2026-09-05T00:00:00.000Z'), [
+      l1,
+      l2,
+    ]);
+    expect(partial.status).toBe('pending');
+    const reopened = await marker(sub);
+    expect(reopened?.completedAt).toBeUndefined();
+    expect(reopened?.linkedSubs).toEqual([l1, l2]);
+    // So the sweep treats it as open and deletes under L2.
+    await sweepAccountDeletions(depsWith(), new Date('2026-09-06T00:00:00.000Z'));
+    expect(await has(originalKey(l2, 'acct-reopen-p'))).toBe(false);
+  });
+
+  it("a retry after completion deletes only the subs its token names, not the marker's", async () => {
+    const sub = subOf('acct-retry-token');
+    const old = 'email|acct-retry-token-old';
+    const done = '2026-09-01T00:00:00.000Z';
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: done,
+      completedAt: done,
+      linkedSubs: [old],
+    });
+    // Unlinked since, and a separate user's now.
+    await put(originalKey(old, 'acct-retry-token-p'), 'bytes');
+    await put(originalKey(sub, 'acct-retry-token-late'), 'bytes');
+    const r = await deleteAccount(depsWith(), sub, new Date('2026-09-05T00:00:00.000Z'), []);
+    expect(r.status).toBe('deleted');
+    expect(await has(originalKey(sub, 'acct-retry-token-late'))).toBe(false);
+    expect(await has(originalKey(old, 'acct-retry-token-p'))).toBe(true);
+  });
+});
+
 describe('deleteAccount: interrupted, then resumed', () => {
   it('reports pending and leaves the account marked; the sweep finishes it', async () => {
     const sub = subOf('acct-resume');
