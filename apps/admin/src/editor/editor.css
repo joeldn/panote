@@ -88,6 +88,72 @@
   justify-content: flex-end;
 }
 
+/* The bar's group of controls that fold into the More menu below 860px (MoreMenu.tsx). */
+.ed-bar__tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Bar, popovers and banners. Wide, it isn't a box at all: each keeps its own place. */
+.ed-top {
+  display: contents;
+}
+
+.ed-more {
+  display: none;
+  position: relative;
+}
+
+.ed-more__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 6;
+  display: grid;
+  min-width: 210px;
+  padding: 6px;
+  border-radius: var(--r-card);
+  background: var(--cbg-solid);
+  box-shadow: var(--shadow-popover);
+  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
+}
+
+.ed-more__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: none;
+  font: 500 14px var(--fbody);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ed-more__item > i {
+  width: 16px;
+  color: var(--ink-55);
+  text-align: center;
+}
+
+.ed-more__item:hover,
+.ed-more__item:focus-visible {
+  background: var(--ink-06);
+  outline: none;
+}
+
+.ed-more__tag {
+  margin-left: auto;
+  font: 500 12px var(--fmono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-55);
+}
+
 .ed-home {
   display: inline-flex;
   color: inherit;
@@ -202,6 +268,7 @@
 
 /* --- Settings popover --- */
 .ed-popover {
+  pointer-events: auto;
   position: absolute;
   top: 66px;
   right: 16px;
@@ -1103,6 +1170,34 @@ p.ed-banner__text {
   font-weight: 600;
 }
 
+/* Keep in step with BAR_MENU_MAX_WIDTH (MoreMenu.tsx). */
+@media (max-width: 860px) {
+  .ed-bar__tools {
+    display: none;
+  }
+
+  .ed-more {
+    display: block;
+  }
+
+  .ed-bar__left {
+    flex: 1;
+  }
+
+  .ed-crumbs {
+    min-width: 0;
+  }
+
+  .ed-inline {
+    max-width: 22vw;
+  }
+
+  /* No room in the bar; Save still carries it as its description. */
+  .ed-save-hint {
+    display: none;
+  }
+}
+
 @media (max-width: 600px) {
   .ed-side {
     top: auto;
@@ -1112,22 +1207,80 @@ p.ed-banner__text {
     max-height: 46%;
   }
 
-  .ed-banners {
+  /*
+   * The bar takes two rows here (title, then controls), and its height depends on them, so
+   * the popovers and banners flow under it in one column instead of sitting at a fixed
+   * offset. The column stops above the panel sheet and scrolls its banners if they run long.
+   */
+  .ed-top {
+    position: absolute;
+    top: 8px;
     left: 8px;
     right: 8px;
-    bottom: auto;
-    top: 120px;
-  }
-
-  .ed-bar {
-    left: 8px;
-    right: 8px;
+    display: flex;
     flex-direction: column;
+    gap: 8px;
+    max-height: calc(54% - 24px);
+    pointer-events: none;
   }
 
-  /* No room in the bar; Save still carries it as its description. */
-  .ed-save-hint {
-    display: none;
+  .ed-top > .ed-bar {
+    position: static;
+    flex: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .ed-bar__left,
+  .ed-bar__right {
+    flex-wrap: nowrap;
+  }
+
+  .ed-bar__right {
+    align-self: flex-end;
+  }
+
+  .ed-inline {
+    max-width: 38vw;
+  }
+
+  .ed-top > .ed-popover {
+    position: static;
+    flex: 0 1 auto;
+    align-self: flex-end;
+    width: min(300px, 100%);
+    box-sizing: border-box;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .ed-top > .ed-banners {
+    position: static;
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* Above the panel sheet (at most 46% tall), not hidden behind it. */
+  .ed-compass {
+    top: auto;
+    bottom: calc(46% + 28px);
+    right: 12px;
+  }
+
+  .ed-stage-note {
+    bottom: calc(46% + 28px);
+  }
+
+  /* The bar's second row sits where the hint does on a wide screen. */
+  .ed-placing__hint {
+    top: auto;
+    bottom: calc(46% + 28px);
+    width: max-content;
+    max-width: calc(100% - 32px);
+    box-sizing: border-box;
+    text-align: center;
   }
 }
 
