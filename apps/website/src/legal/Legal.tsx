@@ -4,12 +4,8 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
 import { CONTACT_EMAIL } from '../landing/content.js';
-import { OPERATOR_JURISDICTION } from './operator.js';
 
 const Mail = () => <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>;
-
-// Operator details still undecided show as their placeholder, marked so nobody mistakes them.
-const Operator = ({ value }: { value: string }) => <span className="legal__todo">{value}</span>;
 
 function LegalPage({
   title,
@@ -275,13 +271,6 @@ export function Terms() {
         copies of your originals. Nothing in these terms limits liability for death or personal
         injury caused by negligence, or for fraud, or takes away any consumer rights the law doesn’t
         let us exclude.
-      </p>
-
-      <h2>Law</h2>
-      <p>
-        These terms are governed by the law of <Operator value={OPERATOR_JURISDICTION} />, and its
-        courts deal with any dispute. If you use Panote as a consumer, you keep the protection of
-        the law where you live and can bring a claim in your local courts.
       </p>
 
       <h2>Changes and contact</h2>

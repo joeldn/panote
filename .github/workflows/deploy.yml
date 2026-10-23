@@ -223,8 +223,8 @@ jobs:
               console.log(`${file}: no YOUR_ placeholders.`);
             }
           }
-          // The legal pages name the operator, governing law and so on; until those are
-          // decided they hold YOUR_ placeholders (apps/website/src/legal/operator.ts).
+          // The legal pages must not ship a YOUR_ placeholder (an operator detail left
+          // undecided) to production.
           const legalDir = "apps/website/src/legal";
           // Recursive, so a page moved into a subfolder is still scanned.
           const legalFiles = fs

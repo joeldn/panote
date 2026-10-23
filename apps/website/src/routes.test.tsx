@@ -163,7 +163,7 @@ describe('website routes', () => {
     expect(basis).toContain('Legal obligations');
   });
 
-  it('covers the minimum the law asks: rights, transfers, age and law', async () => {
+  it('covers the minimum the law asks: rights, transfers, age and ending', async () => {
     renderAt('/privacy');
     await screen.findByRole('heading', { name: 'Your rights' });
     const privacy = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
@@ -176,10 +176,10 @@ describe('website routes', () => {
 
     cleanup();
     renderAt('/terms');
-    await screen.findByRole('heading', { name: 'Law' });
+    await screen.findByRole('heading', { name: 'Ending' });
     const terms = (screen.getByRole('article').textContent ?? '').replace(/\s+/g, ' ');
     expect(terms).toContain('You must be 16 or older');
-    expect(terms).toContain('governed by the law of YOUR_GOVERNING_LAW_JURISDICTION');
+    expect(terms).not.toContain('YOUR_');
     expect(terms).toContain('aren’t liable for indirect or consequential losses');
     expect(terms).toContain('death or personal injury');
     expect(terms).toContain('we’ll tell you why');
