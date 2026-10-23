@@ -821,6 +821,39 @@ describe('released slugs cool off (slug-hold.ts)', () => {
     expect(await env.BUCKET.head(slugKey('hold-race-slug'))).toBeNull();
   });
 
+  it('a hold that does not parse, or has the wrong shape, still holds the slug', async () => {
+    await readyPano('hold-bad-o1', 'other');
+    const theirs = await createTour('Corrupt hold', ['hold-bad-o1'], 'other');
+    const corrupt = ['not json', 'null', '[]', JSON.stringify({ v: 1, owner: 7 })];
+    const badDate = JSON.stringify({ v: 1, owner: 'x', expiresAt: 'soon' });
+    for (const [i, body] of [...corrupt, badDate].entries()) {
+      await env.BUCKET.put(slugHoldKey(`hold-bad-${i}`)!, body);
+      const r = await publish(theirs, { slug: `hold-bad-${i}` }, 'other');
+      expect(r.status).toBe(409);
+      expect(await env.BUCKET.head(slugKey(`hold-bad-${i}`))).toBeNull();
+    }
+  });
+
+  it('an R2 error reading a hold fails the claim instead of letting it through', async () => {
+    await readyPano('hold-err-o1', 'other');
+    const theirs = await createTour('Hold error', ['hold-err-o1'], 'other');
+    const holdKey = slugHoldKey('hold-err-slug')!;
+    const broken = new Proxy(env.BUCKET, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return (k: string) =>
+            k === holdKey ? Promise.reject(new Error('r2 down')) : target.get(k);
+        }
+        const value = Reflect.get(target, prop) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await expect(
+      publishTour(broken, OTHER_SUB, theirs, { slug: 'hold-err-slug' }, clock()),
+    ).rejects.toThrow('r2 down');
+    expect(await env.BUCKET.head(slugKey('hold-err-slug'))).toBeNull();
+  });
+
   it('the daily cron sweeps expired holds and keeps live ones', async () => {
     const tourId = await publishedTour('hold-sweep', 'hold-sweep-a');
     await putSlug(tourId, 'hold-sweep-b');
