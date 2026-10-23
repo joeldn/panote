@@ -49,6 +49,7 @@ export default defineWorkerTestConfig({
         READ_LIMITER: { namespace_id: '1302', simple: { limit: 1_000_000, period: 60 } },
         INSIGHTS_LIMITER: { namespace_id: '1303', simple: { limit: 1_000_000, period: 60 } },
         OPERATOR_LIMITER: { namespace_id: '1304', simple: { limit: 1_000_000, period: 60 } },
+        PANO_DELETE_LIMITER: { namespace_id: '1305', simple: { limit: 1_000_000, period: 60 } },
       },
       workers: [
         {

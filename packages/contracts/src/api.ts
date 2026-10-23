@@ -333,10 +333,28 @@ export const OperatorTakedownRequestSchema = z.object({
   action: z.enum(OPERATOR_TAKEDOWN_ACTIONS),
 });
 export type OperatorTakedownRequest = z.infer<typeof OperatorTakedownRequestSchema>;
-// 200: done. `purged` counts the public keys queued for a CDN purge.
+// What a CDN purge did, item by item (a prefix or a URL each). `purged`: Cloudflare took
+// them. `pending`: they still failed after retries, or didn't fit in the request's budget,
+// and admin-api's cron retries them every 15 minutes. `failed`: neither (not configured,
+// refused outright and dead-lettered, or the queue couldn't be written). `status` sums it
+// up: `failed` if any failed, else `pending` if any are queued; `none` had nothing to purge.
+export const CDN_PURGE_STATUSES = ['none', 'purged', 'pending', 'failed', 'skipped'] as const;
+export const CdnPurgeOutcomeSchema = z.object({
+  status: z.enum(CDN_PURGE_STATUSES),
+  purged: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+});
+export type CdnPurgeOutcome = z.infer<typeof CdnPurgeOutcomeSchema>;
+// 200: done. `purged` is a misnomer kept for older scripts: it is the number of purge
+// targets PLANNED (public keys handed to the purge), not purged. What the purge actually
+// did is `purge` (`purge.purged` went through).
 export const OperatorTakedownOkSchema = z.object({
   action: z.enum(OPERATOR_TAKEDOWN_ACTIONS),
+  /** Planned purge targets, whatever became of them; see `purge` for the outcome. */
   purged: z.number().int().nonnegative(),
+  // Optional so this script still reads an admin-api deployed before it.
+  purge: CdnPurgeOutcomeSchema.optional(),
 });
 export type OperatorTakedownOk = z.infer<typeof OperatorTakedownOkSchema>;
 

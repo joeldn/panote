@@ -1,8 +1,13 @@
 import { readJsonBody, WorkerError } from '@internal/worker-kit';
 
-// Every limiter binding's `simple.period` (wrangler.jsonc), sent as the 429's
+// Every other limiter binding's `simple.period` (wrangler.jsonc), sent as the 429's
 // Retry-After. The limits themselves live in wrangler.jsonc, per env.
 export const WRITE_RATE_PERIOD_SECONDS = 60;
+// PANO_DELETE_LIMITER's, a cost cap on pano and tour deletes (R2 sweeps and a CDN prefix
+// purge each). It doesn't keep the account's prefix-purge budget whole: the purge queue
+// absorbs a 429, and takedowns purge by URL (docs/deploy.md, CDN purge on delete). A
+// delete that then 404s still counts, as any request does.
+export const PANO_DELETE_RATE_PERIOD_SECONDS = 60;
 
 /**
  * The largest scene config body PUT /api/admin/panos/:panoId/config takes. A config at

@@ -1,5 +1,9 @@
 import {
+  CDN_PURGE_DEAD_PREFIX,
+  CDN_PURGE_PENDING_PREFIX,
   manifestKey,
+  OPERATOR_TAKEDOWN_PATH,
+  OPERATOR_TOKEN_HEADER,
   originalKey,
   planKey,
   pubTourKey,
@@ -7,10 +11,17 @@ import {
   tourKey,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
-import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
+import {
+  createExecutionContext,
+  createScheduledController,
+  env,
+  SELF,
+  waitOnExecutionContext,
+} from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { RECENT_UPLOAD_MS, STALLED_TILING_MS } from './delete-owned-pano.js';
+import { BACKUP_CRON } from './backup.js';
 import worker from './index.js';
 import { PLAN_SWEEP_GRACE_MS } from './plans.js';
 
@@ -81,6 +92,17 @@ const call = async (
   );
   await waitOnExecutionContext(ctx);
   return res;
+};
+
+const pendingRecords = async () => {
+  const listed = await env.BUCKET.list({ prefix: CDN_PURGE_PENDING_PREFIX });
+  return Promise.all(
+    listed.objects.map(async (o) => (await (await env.BUCKET.get(o.key))!.json()) as unknown),
+  );
+};
+const clearPending = async () => {
+  const listed = await env.BUCKET.list({ prefix: CDN_PURGE_PENDING_PREFIX });
+  if (listed.objects.length) await env.BUCKET.delete(listed.objects.map((o) => o.key));
 };
 
 const readyPano = async (panoId: string) => {
@@ -238,15 +260,34 @@ describe('CDN purge on delete/unpublish (B6)', () => {
   });
 
   it.each([
-    ['a non-2xx', 'purge-fail-500', () => Promise.resolve(new Response('no', { status: 500 }))],
+    ['a 500', 'purge-fail-500', () => Promise.resolve(new Response('no', { status: 500 }))],
+    ['a 429', 'purge-fail-429', () => Promise.resolve(new Response('no', { status: 429 }))],
     ['a rejected fetch', 'purge-fail-reject', () => Promise.reject(new TypeError('network down'))],
-  ])('still 204s on %s from the purge API', async (_, panoId, respond) => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    await deletablePano(panoId);
-    const { spy } = mockPurgeFetch(respond);
-    expect((await call(`/api/admin/panos/${panoId}`, { method: 'DELETE' })).status).toBe(204);
-    expect(spy).toHaveBeenCalledOnce();
-  });
+  ])(
+    'still 204s on %s from the purge API, retries it, then queues it for the cron',
+    async (_, panoId, respond) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await deletablePano(panoId);
+      // The retries' backoff runs on setTimeout, after the response.
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout'], now: Date.now() });
+      const { spy } = mockPurgeFetch(respond);
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(
+        new Request(`https://x/api/admin/panos/${panoId}`, { method: 'DELETE', headers: AUTH }),
+        { ...env, CF_PURGE_TOKEN: TOKEN, CDN_ZONE_ID: ZONE },
+        ctx,
+      );
+      expect(res.status).toBe(204);
+      const done = waitOnExecutionContext(ctx);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await done;
+      expect(spy).toHaveBeenCalledTimes(3);
+      const queued = await pendingRecords();
+      expect(queued).toContainEqual(
+        expect.objectContaining({ prefixes: [`tiles/${panoId}/`], files: [] }),
+      );
+    },
+  );
 
   it('makes no purge call when CF_PURGE_TOKEN is unset (the test env)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -257,5 +298,137 @@ describe('CDN purge on delete/unpublish (B6)', () => {
     );
     expect(spy).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('operator takedown purge (M2)', () => {
+  const OPERATOR = { [OPERATOR_TOKEN_HEADER]: 'test-operator-token' };
+  const takedown = (tourId: string, action: string) =>
+    call(
+      OPERATOR_TAKEDOWN_PATH,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sub: MY_SUB, tourId, action }),
+      },
+      true,
+      OPERATOR,
+    );
+  // A tiled pano: a manifest and `n` tiles in one version dir.
+  const tiles = async (panoId: string, n: number): Promise<string[]> => {
+    const keys = Array.from({ length: n }, (_, i) => `tiles/${panoId}/t1-x/f/0/${i}.webp`);
+    for (let i = 0; i < keys.length; i += 100) {
+      await Promise.all(keys.slice(i, i + 100).map((k) => env.BUCKET.put(k, 'tile')));
+    }
+    return [manifestKey(panoId), ...keys];
+  };
+
+  it('purges every tile by URL, never by prefix, and answers with what the purge did', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tourId = await publishedTour(['op-purge-a', 'op-purge-b'], 'op-purge');
+    const tileKeys = [...(await tiles('op-purge-a', 3)), ...(await tiles('op-purge-b', 2))];
+    const { bodies } = mockPurgeFetch();
+    const r = await takedown(tourId, 'delete');
+    expect(r.status).toBe(200);
+    const json = (await r.json()) as { purged: number; purge: unknown };
+    expect(json.purge).toEqual({ status: 'purged', purged: json.purged, pending: 0, failed: 0 });
+    expect(bodies.every((b) => !('prefixes' in (b as object)))).toBe(true);
+    const urls = bodies.flatMap((b) => (b as { files: string[] }).files);
+    expect(urls).toEqual(
+      expect.arrayContaining([
+        ...tileKeys.map((k) => `https://cdn.panote.dev/${k}`),
+        `https://cdn.panote.dev/${pubTourKey(tourId)}`,
+        `https://cdn.panote.dev/${slugKey('op-purge')}`,
+      ]),
+    );
+    expect(json.purged).toBe(urls.length);
+  });
+
+  it('chunks the URLs 100 per request', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tourId = await publishedTour(['op-purge-big'], 'op-purge-big');
+    await tiles('op-purge-big', 250);
+    const { bodies } = mockPurgeFetch();
+    expect((await takedown(tourId, 'delete')).status).toBe(200);
+    const sizes = bodies.map((b) => (b as { files: string[] }).files.length);
+    expect(sizes.every((n) => n <= 100)).toBe(true);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(253);
+  });
+
+  it('reports a purge that keeps failing as pending, and queues it for the cron', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await clearPending();
+    const tourId = await publishedTour(['op-purge-fail'], 'op-purge-fail');
+    await tiles('op-purge-fail', 1);
+    // The retries' backoff runs on setTimeout, before the route answers.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout'], now: Date.now() });
+    mockPurgeFetch(async () => new Response('', { status: 503 }));
+    let answered = false;
+    const pending = takedown(tourId, 'delete').finally(() => (answered = true));
+    // Move the fake clock on while the route works; an R2 call lets real I/O progress.
+    while (!answered) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await env.BUCKET.head('tick');
+    }
+    const json = (await (await pending).json()) as {
+      purged: number;
+      purge: { status: string; pending: number };
+    };
+    expect(json.purge).toMatchObject({ status: 'pending', pending: json.purged });
+    const queued = (await pendingRecords()) as { files: string[] }[];
+    expect(queued.flatMap((q) => q.files)).toContain('tiles/op-purge-fail/t1-x/f/0/0.webp');
+  });
+
+  it('reports a purge Cloudflare refuses outright as failed, and dead-letters it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const tourId = await publishedTour(['op-purge-bad'], 'op-purge-bad');
+    await tiles('op-purge-bad', 1);
+    mockPurgeFetch(async () => new Response('', { status: 400 }));
+    const r = await takedown(tourId, 'delete');
+    expect(r.status).toBe(200);
+    const json = (await r.json()) as { purged: number; purge: { status: string; failed: number } };
+    expect(json.purge).toMatchObject({ status: 'failed', failed: json.purged });
+    const dead = await env.BUCKET.list({ prefix: CDN_PURGE_DEAD_PREFIX });
+    expect(dead.objects.length).toBeGreaterThan(0);
+  });
+
+  it('reports a skipped purge when it is not configured', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tourId = await publishedTour(['op-purge-unconf'], 'op-purge-unconf');
+    const r = await call(
+      OPERATOR_TAKEDOWN_PATH,
+      { method: 'POST', body: JSON.stringify({ sub: MY_SUB, tourId, action: 'unpublish' }) },
+      false,
+      OPERATOR,
+    );
+    expect(await r.json()).toMatchObject({ purged: 2, purge: { status: 'skipped', failed: 2 } });
+  });
+});
+
+describe('queued purge retry on the 15-minute cron', () => {
+  it('retries what is queued, and deletes the record once it went through', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await clearPending();
+    await env.BUCKET.put(
+      `${CDN_PURGE_PENDING_PREFIX}2026-10-23T00:00:00.000Z-a.json`,
+      JSON.stringify({
+        v: 1,
+        firstAt: new Date().toISOString(),
+        prefixes: ['tiles/cron-p/'],
+        files: [],
+      }),
+    );
+    const { bodies } = mockPurgeFetch();
+    const ctx = createExecutionContext();
+    await worker.scheduled(
+      createScheduledController({ scheduledTime: Date.now(), cron: BACKUP_CRON }),
+      { ...env, CF_PURGE_TOKEN: TOKEN, CDN_ZONE_ID: ZONE },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(bodies).toEqual([{ prefixes: ['cdn.panote.dev/tiles/cron-p/'] }]);
+    expect(await pendingRecords()).toEqual([]);
   });
 });
