@@ -1334,6 +1334,14 @@ describe('DLQ alert throttle', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
+  it('flushes nothing while lastSentAt is ahead of its clock', async () => {
+    await env.BUCKET.put(alertThrottleKey(QUEUE), JSON.stringify({ lastSentAt: T0, held: 2 }));
+    const send = vi.fn(async (_m: Sent) => ({ messageId: 'm' }));
+    await flushHeldDlqAlerts(withAlert(send), T0 - 60_000, [QUEUE]);
+    expect(send).not.toHaveBeenCalled();
+    expect(await state()).toEqual({ lastSentAt: T0, held: 2 });
+  });
+
   it('flushes nothing without email configured, and keeps the count when the send fails', async () => {
     await env.BUCKET.put(alertThrottleKey(QUEUE), JSON.stringify({ lastSentAt: T0, held: 2 }));
     const later = T0 + ALERT_THROTTLE_MS;

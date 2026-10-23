@@ -187,7 +187,9 @@ export const flushHeldDlqAlerts = async (
     try {
       const state = await readThrottle(env.BUCKET, queue);
       const age = now - state.lastSentAt;
-      if (state.held === 0 || (state.lastSentAt && age >= 0 && age < ALERT_THROTTLE_MS)) continue;
+      // A lastSentAt ahead of this clock is skipped too: the DLQ batch path, which treats it
+      // as an expired window, sends it with the next failure.
+      if (state.held === 0 || (state.lastSentAt && age < ALERT_THROTTLE_MS)) continue;
       const since = state.lastSentAt ? ` since ${new Date(state.lastSentAt).toISOString()}` : '';
       const text = [
         `${state.held} tile job(s) failed permanently and were dead-lettered${since}, held back`,
