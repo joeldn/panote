@@ -63,6 +63,18 @@ describe('resume record', () => {
     expect(parseResumeRecord(raw({ target }), NOW)?.target).toEqual(target);
   });
 
+  it('keeps a tour someone else owns marked as shared, and reads older records as not', () => {
+    const add = { kind: 'add', tourId: 'tour-2', shared: true };
+    expect(parseResumeRecord(raw({ target: add }), NOW)?.target).toEqual(add);
+    const replace = { kind: 'replace', panoId: 'p9', tourId: 'tour-2', shared: true };
+    expect(parseResumeRecord(raw({ target: replace }), NOW)?.target).toEqual(replace);
+    const odd = { kind: 'add', tourId: 'tour-2', shared: 'yes' };
+    expect(parseResumeRecord(raw({ target: odd }), NOW)?.target).toEqual({
+      kind: 'add',
+      tourId: 'tour-2',
+    });
+  });
+
   it.each([
     ['garbage', 'not json'],
     ['a wrong version', raw({ v: 2 })],

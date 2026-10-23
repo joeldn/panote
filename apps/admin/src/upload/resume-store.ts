@@ -1,9 +1,9 @@
 import type { UploadMode } from '@internal/web-kit';
 
-/** Where an upload's pano goes: a new tour, an existing tour, or over an existing pano's image. */
 /**
- * Where an upload goes. `shared` marks a tour someone else owns (the user edits it): its
- * panos count toward the owner's limits, not the user's.
+ * Where an upload's pano goes: a new tour, an existing tour, or over an existing pano's
+ * image. `shared` marks a tour someone else owns (the user edits it): its panos count
+ * toward the owner's limits, not the user's.
  */
 export type UploadTarget =
   | { kind: 'new-tour' }
