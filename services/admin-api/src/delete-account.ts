@@ -17,6 +17,7 @@ import { deletePrefix, getJson, listChildren, putJson } from '@internal/worker-k
 
 import { deletePano } from './delete-pano.js';
 import { isAccountDisabled } from './operator.js';
+import { deleteFromTrash } from './trash.js';
 import { deletePlans } from './plans.js';
 import { readPublishRecord } from './publish.js';
 import { mergePurges, type CdnPurge } from './purge.js';
@@ -249,6 +250,8 @@ export const deleteAccountData = async (
     }
   });
   if (panos.length < panoIds.length) return false;
+  // A closed account's originals the owner deleted before the takedown went to the trash.
+  if (!options.trash) await deleteFromTrash(bucket, panosRoot);
   // Empty objects, at most about a day's worth: not counted against the budget.
   await deletePrefix(bucket, userUploadLogPrefix(sub));
   return true;

@@ -12,6 +12,7 @@ import {
   pubTourKey,
   storedSlugKey,
   tourKey,
+  trashKey,
   tourOwnerKey,
 } from '@internal/contracts';
 import { R2PreconditionFailedError } from '@internal/worker-kit/r2-s3';
@@ -488,6 +489,19 @@ describe('owner-wide listing', () => {
     expect(panos.keys).toContain(originalKey(SUB, 'pano-1'));
     expect(panos.keys).toContain(configKey(SUB, 'pano-2'));
   });
+
+  it('includes every original of the owner’s in the trash, and nobody else’s', async () => {
+    const { store } = memoryStore({
+      [trashKey('2026-10-01', originalKey(SUB, 'gone-1'))]: 'x',
+      [trashKey('2026-10-20', originalKey(SUB, 'gone-2'))]: 'x',
+      [trashKey('2026-10-20', originalKey('auth0|other', 'gone-3'))]: 'x',
+    });
+    const panos = await ownerPanoContent(store, SUB);
+    expect(panos.keys.sort()).toEqual([
+      trashKey('2026-10-01', originalKey(SUB, 'gone-1')),
+      trashKey('2026-10-20', originalKey(SUB, 'gone-2')),
+    ]);
+  });
 });
 
 describe('quarantine', () => {
@@ -525,6 +539,16 @@ describe('quarantine', () => {
       originalKey(SUB, 'p-2'),
       configKey(SUB, 'p-2'),
     ]);
+  });
+
+  it('collects the trash copy of a scene’s original the owner deleted, not other panos’', async () => {
+    const { store, objects } = seed();
+    objects.delete(originalKey(SUB, 'p-2'));
+    objects.set(trashKey('2026-10-20', originalKey(SUB, 'p-2')), 'original two');
+    objects.set(trashKey('2026-10-20', originalKey(SUB, 'p-9')), 'not in the tour');
+    const content = await tourContent(store, SUB, 'tour-1');
+    expect(content.keys).toContain(trashKey('2026-10-20', originalKey(SUB, 'p-2')));
+    expect(content.keys).not.toContain(trashKey('2026-10-20', originalKey(SUB, 'p-9')));
   });
 
   it('collects every floor-plan image under the tour, named or not, and no other tour’s', async () => {

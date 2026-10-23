@@ -1780,6 +1780,16 @@ retried like any other interrupted one. The paths, all through `deletePano`:
   `--quarantine` already keeps the copy that must be kept, in `quarantine/<caseId>/`, and
   `--nothing-to-preserve` is the operator's word that nothing should be. A disabled owner who deletes
   their own account is deleted for real too.
+- **Trash copies made before the takedown go with it.** An owner may delete a reported pano before
+  the operator acts, leaving its original only in `trash/`. `--quarantine` copies the trash copies
+  of the tour's scenes' originals (with `--all-tours`, every trashed original the owner has) as
+  `quarantine/<caseId>/trash/<date>/...`. The route's `delete` then deletes the trash copies of
+  the originals its `tour.json` names, and closing a disabled owner's account deletes every
+  trashed original under their `panos/<owner>/`. That is one listing per day held plus a batch
+  delete, about 64 R2 operations at most. Gap: a pano removed from the tour and deleted before
+  the takedown, on an account that stays open, is not in the tour, so it stays in `trash/` until
+  it ages out (31 days at most). Close the account, or find it with
+  `restore-backup.ts --list-trash --sub`, if it must go sooner.
 - **Oversized originals** (`tiler-consumer`'s `deleteOversizedOriginal`, "Tiling failure marker"
   below) are not trashed. They are not a delete anyone asked for: the file is over the size the
   app accepts, could only arrive by bypassing the web app, can never be tiled, and keeping it 30
@@ -2186,7 +2196,8 @@ Two ways to stop abuse, usually together:
   tiles under `tiles/<panoId>/` and the tour's floor-plan image under `pub/plans/<tourId>/` stay
   reachable by anyone who has the URL); `delete` also deletes the tour, its floor-plan images and
   every pano no other tour of that owner uses, tiles included, purged from the CDN. Unlike the
-  owner's own delete it keeps no trash copy of the originals ("Trash for deleted originals"). Both
+  owner's own delete it keeps no trash copy of the originals, and deletes the trash copies of the
+tour's originals the owner had already deleted ("Trash for deleted originals"). Both
   also take the tour off Explore, and so does every script mode built on them (`--quarantine`,
   `--all-tours`, `--close-account`'s sweep). `hide` only takes it off Explore and keeps it off
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is

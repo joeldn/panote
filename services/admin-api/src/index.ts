@@ -70,7 +70,7 @@ import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
 import { checkTileGcStatus, runBackupThenTileGc } from './tile-gc.js';
-import { restoreFromTrash, sweepTrash } from './trash.js';
+import { deleteFromTrash, restoreFromTrash, sweepTrash } from './trash.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
@@ -592,7 +592,12 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
     console.warn(`[takedown] operator ${action} of tour ${tourId} on Explore done`);
     return c.json({ action, purged: 0 });
   }
-  // A takedown's delete is for real: no trash copy (quarantine keeps what must be kept).
+  // A takedown's delete is for real: no trash copy (quarantine keeps what must be kept),
+  // and the trash copies of the tour's originals an owner deleted before it go too.
+  const scenes =
+    action === 'delete'
+      ? ((await getJson<TourDoc>(c.env.BUCKET, tourKey(sub, tourId)))?.value.scenes ?? [])
+      : [];
   const purge =
     action === 'delete'
       ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId), {
@@ -600,6 +605,10 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
           now: new Date(),
         })
       : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
+  if (scenes.length) {
+    const originals = new Set(scenes.map((s) => originalKey(sub, s.panoId)));
+    await deleteFromTrash(c.env.BUCKET, userPanosPrefix(sub), (k) => originals.has(k));
+  }
   purgeLater(c, purge);
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
   console.warn(`[takedown] operator ${action} of tour ${tourId} done`);

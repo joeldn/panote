@@ -189,8 +189,18 @@ describe('every delete of an original goes through the trash', () => {
 describe('a takedown deletes for real', () => {
   it('the operator’s tour delete leaves nothing in the trash', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await json(tourKey(SUB, 't1'), { tourId: 't1', title: 't', scenes: [{ panoId: 'p1' }] });
+    await json(tourKey(SUB, 't1'), {
+      tourId: 't1',
+      title: 't',
+      scenes: [{ panoId: 'p1' }, { panoId: 'p2' }],
+    });
     await putOriginal(SUB, 'p1');
+    // The owner deleted p2 (in the tour) and p3 (not) days before the takedown.
+    const earlier = new Date(NOW.getTime() - 3 * DAY_MS);
+    for (const id of ['p2', 'p3']) {
+      await putOriginal(SUB, id);
+      await moveToTrash(env.BUCKET, originalKey(SUB, id), earlier);
+    }
 
     const res = await SELF.fetch(`https://x${OPERATOR_TAKEDOWN_PATH}`, {
       method: 'POST',
@@ -203,18 +213,28 @@ describe('a takedown deletes for real', () => {
 
     expect(res.status).toBe(200);
     expect(await env.BUCKET.head(originalKey(SUB, 'p1'))).toBeNull();
-    expect(await keysUnder(TRASH_ROOT)).toEqual([]);
+    expect(await keysUnder(TRASH_ROOT)).toEqual([trashKey('2026-10-19', originalKey(SUB, 'p3'))]);
   });
 
   it('closing a disabled owner’s account (takedown.ts --close-account) skips the trash', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await json(accountDisabledKey(SUB), { v: 1, disabledAt: NOW.toISOString() });
     await putOriginal(SUB, 'p1');
+    // Deleted by the owner before the operator disabled them, and another owner's.
+    const earlier = new Date(NOW.getTime() - 3 * DAY_MS);
+    const OTHER = 'google-oauth2|someone-else';
+    for (const [sub, id] of [
+      [SUB, 'p0'],
+      [OTHER, 'p9'],
+    ] as const) {
+      await putOriginal(sub, id);
+      await moveToTrash(env.BUCKET, originalKey(sub, id), earlier);
+    }
+    await json(accountDisabledKey(SUB), { v: 1, disabledAt: NOW.toISOString() });
 
     await deleteAccount(accountDeps(), SUB, NOW);
 
     expect(await env.BUCKET.head(originalKey(SUB, 'p1'))).toBeNull();
-    expect(await keysUnder(TRASH_ROOT)).toEqual([]);
+    expect(await keysUnder(TRASH_ROOT)).toEqual([trashKey('2026-10-19', originalKey(OTHER, 'p9'))]);
   });
 });
 

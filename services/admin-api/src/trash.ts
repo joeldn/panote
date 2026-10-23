@@ -57,6 +57,55 @@ export const discard = async (
   else await bucket.delete(key);
 };
 
+/** The days trash/ holds, oldest first. */
+const trashDays = async (bucket: R2Bucket): Promise<string[]> => {
+  const days: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({
+      prefix: TRASH_ROOT,
+      delimiter: '/',
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const p of page.delimitedPrefixes) {
+      const date = p.slice(TRASH_ROOT.length, -1);
+      if (BACKUP_DATE_PATTERN.test(date)) days.push(date);
+    }
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return days.sort();
+};
+
+/**
+ * For a takedown: deletes, from every day of the trash, the copies under `prefix` (an
+ * owner's `panos/<owner>/`) that `match` accepts (all of them without one). An owner who
+ * deleted a reported pano before the takedown left its original here, where the takedown
+ * would otherwise never look. About two R2 operations a day held (a listing per page, a
+ * batch delete), so at most about 64. Returns how many it deleted.
+ */
+export const deleteFromTrash = async (
+  bucket: R2Bucket,
+  prefix: string,
+  match: (key: string) => boolean = () => true,
+): Promise<number> => {
+  let deleted = 0;
+  for (const date of await trashDays(bucket)) {
+    const within = trashKey(date, prefix);
+    let cursor: string | undefined;
+    do {
+      const page = await bucket.list({ prefix: within, ...(cursor ? { cursor } : {}) });
+      const keys = page.objects
+        .map((o) => o.key)
+        .filter((k) => match(k.slice(trashDayPrefix(date).length)));
+      if (keys.length) await bucket.delete(keys);
+      deleted += keys.length;
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+  }
+  if (deleted) console.warn(`${LOG_PREFIX} takedown deleted ${deleted} trashed original(s)`);
+  return deleted;
+};
+
 // R2 operations one sweep makes at most: a listing page or a batch delete (up to 1,000
 // keys) each. Trash is a few objects a day, so a run normally needs a handful; what a run
 // doesn't reach waits for the next day, when the same days are still the oldest.
