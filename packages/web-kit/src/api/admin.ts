@@ -15,6 +15,7 @@ import {
   PublishConflictSchema,
   PublishOkSchema,
   PublishUnprocessableSchema,
+  ReauthRequiredSchema,
   SlugInvalidSchema,
   SlugLostSchema,
   TooManyRenamesSchema,
@@ -51,6 +52,7 @@ import {
   ApiError,
   ConflictError,
   parseWith,
+  ReauthRequiredError,
   readJson,
   unquoteEtag,
   type FetchLike,
@@ -128,6 +130,7 @@ export interface AdminApi {
   /**
    * Deletes the signed-in account and everything in it. `confirm` is the phrase
    * the owner typed; the server checks it against ACCOUNT_DELETE_CONFIRMATION.
+   * Throws `ReauthRequiredError` when the server wants a more recent sign-in.
    */
   deleteAccount(confirm: string): Promise<AccountDeleteOk>;
 }
@@ -354,6 +357,9 @@ export function createAdminApi(opts: AdminApiOptions): AdminApi {
     unpublishTour: async (tourId) => del(`${tourPath(tourId)}/publish`),
     deleteAccount: async (confirm) => {
       const { res, url, body } = await send('DELETE', '/api/admin/account', { body: { confirm } });
+      if (res.status === 403 && ReauthRequiredSchema.safeParse(body).success) {
+        throw new ReauthRequiredError(body);
+      }
       if (!res.ok) throw new ApiError(res.status, body);
       return parseWith(AccountDeleteOkSchema, url, body);
     },

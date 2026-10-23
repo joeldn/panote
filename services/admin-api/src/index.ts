@@ -15,6 +15,7 @@ import {
   PANO_DELETE_CONFLICTS,
   PANO_PATTERN,
   PublishRequestSchema,
+  REAUTH_REQUIRED_ERROR,
   SceneConfigSchema,
   SlugPutRequestSchema,
   tilesPrefix,
@@ -27,7 +28,7 @@ import {
   type TourDoc,
   type TourPublishState,
 } from '@internal/contracts';
-import { authenticate, rateLimit } from '@internal/worker-kit';
+import { authenticate, rateLimit, type AuthContext } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
@@ -54,6 +55,7 @@ import { insightsRoute } from './insights.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
+import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
 import { sweepSupersededTiles } from './tile-gc.js';
 import { purgeCdn, type CdnPurge } from './purge.js';
 import { runDailyCron } from './cron-status.js';
@@ -134,8 +136,11 @@ const loadSceneConfigs = async (
   return entries;
 };
 
-// `sub` is set by the write gate below, which has already verified the JWT.
-type AppEnv = { Bindings: Env; Variables: { sub: string | undefined } };
+// `sub` and `auth` are set by the write gate below, which has already verified the JWT.
+type AppEnv = {
+  Bindings: Env;
+  Variables: { sub: string | undefined; auth?: AuthContext };
+};
 
 const app = new Hono<AppEnv>();
 
@@ -153,10 +158,12 @@ export const WRITE_RATE_PERIOD_SECONDS = 60;
 app.use('/api/admin/*', async (c, next) => {
   if (!WRITE_METHODS.has(c.req.method)) return next();
   if (c.req.path === OPERATOR_TAKEDOWN_PATH || c.req.path === OPERATOR_RESTORE_PATH) return next();
-  const { sub: verified } = await authenticate(c.req.raw, c.env);
+  const auth = await authenticate(c.req.raw, c.env);
+  const verified = auth.sub;
   const limited = await rateLimit(c.env.WRITE_LIMITER, verified, WRITE_RATE_PERIOD_SECONDS);
   if (limited) return limited;
   c.set('sub', verified);
+  c.set('auth', auth);
   if (c.req.path === ACCOUNT_PATH) return next();
   const [deleted, disabled] = await Promise.all([
     isAccountDeleted(c.env.BUCKET, verified),
@@ -490,12 +497,22 @@ const accountDeps = (env: Env): AccountDeps => ({
 });
 
 app.delete(ACCOUNT_PATH, async (c) => {
-  const sub = await ownerOf(c);
+  const auth = c.get('auth') ?? (await authenticate(c.req.raw, c.env));
   const body = AccountDeleteRequestSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!body.success) {
     return c.json({ error: `confirm must be "${ACCOUNT_DELETE_CONFIRMATION}"` }, 400);
   }
-  const { status, purge } = await deleteAccount(accountDeps(c.env), sub, new Date());
+  // Step-up: a token alone (stolen, or left in a shared browser) can't delete the account;
+  // the admin app signs the owner in again and retries (docs/deploy.md, "Account deletion").
+  if (requiresRecentAuth(c.env) && !isRecentAuth(auth.authTime, Date.now())) {
+    return c.json({ error: REAUTH_REQUIRED_ERROR }, 403);
+  }
+  const { status, purge } = await deleteAccount(
+    accountDeps(c.env),
+    auth.sub,
+    new Date(),
+    auth.linkedSubs,
+  );
   purgeLater(c, purge);
   return c.json({ status }, status === 'deleted' ? 200 : 202);
 });

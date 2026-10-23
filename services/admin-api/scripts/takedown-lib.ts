@@ -628,12 +628,17 @@ export interface TakedownDeps {
   now: () => Date;
 }
 
+/** Printed after --disable-owner: how to ban the owner's email too (docs/deploy.md, "Email ban list"). */
+export const BAN_EMAIL_HINT = (sub: string): string =>
+  `to stop a new sign-up with the same email: in Auth0, User Management → Users, search for ${sub}, copy its email, run \`node packages/auth0-actions/scripts/ban-email.cjs <email>\` and append the printed hash to the "Block banned emails" Action's BANNED_EMAIL_SHA256 secret (docs/deploy.md, "Email ban list")`;
+
 /**
  * The whole CLI run (takedown.ts only parses and wires it): find the tour(s) and owner,
  * then, unless it's a dry run, block or unblock the owner, quarantine, take tours down
  * through admin-api, and close the account, in that order. A quarantine makes and checks
  * every copy, and writes the case record, before any delete is requested.
  */
+
 export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promise<void> {
   const { store, log } = deps;
   // Read-only from here to the dry-run stop: find the tour(s) and the owner.
@@ -669,6 +674,9 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
   if (args.ownerAction === 'disable') {
     await disableOwner(store, sub, deps.now(), args.reason);
     log('owner disabled: uploads and admin writes now answer 403');
+    // The marker blocks this Auth0 user only. The script can't see the email (it has no
+    // Auth0 access), so it names the step that stops a fresh sign-up with the same address.
+    log(BAN_EMAIL_HINT(sub));
   } else if (args.ownerAction === 'enable') {
     await enableOwner(store, sub);
     log('owner enabled again');

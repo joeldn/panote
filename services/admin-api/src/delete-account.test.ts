@@ -6,6 +6,8 @@ import {
   manifestKey,
   originalKey,
   planKey,
+  REAUTH_REQUIRED_ERROR,
+  RECENT_AUTH_MAX_AGE_SECONDS,
   publishKey,
   pubTourKey,
   encodeId,
@@ -17,21 +19,32 @@ import {
 } from '@internal/contracts';
 import { getJson } from '@internal/worker-kit/r2-binding';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
-import { env, SELF } from 'cloudflare:test';
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   ACCOUNT_MARKER_DAYS,
   deleteAccount,
+  markAccountForDeletion,
   sweepAccountDeletions,
   type AccountDeps,
 } from './delete-account.js';
+import worker from './index.js';
 import { publishTour, unpublish } from './publish.js';
 
 // Storage is shared between it() cases in this file, so each case uses its own
 // subs, tourIds, panoIds and slugs.
+// `good:<who>` signed in just now; `stale:` too long ago; `noclaim:` doesn't say when
+// (the Action isn't deployed); `linked:` also carries a linked identity, linkedOf(who).
+const linkedOf = (who: string) => `email|${who}-linked`;
 const verify = vi.fn(async (t: string) => {
-  if (t.startsWith('good:')) return { sub: `auth0|${t.slice(5)}` };
+  const [kind = '', who = ''] = t.split(':');
+  const sub = `auth0|${who}`;
+  const now = Math.floor(Date.now() / 1000);
+  if (kind === 'good') return { sub, authTime: now };
+  if (kind === 'stale') return { sub, authTime: now - RECENT_AUTH_MAX_AGE_SECONDS - 5 };
+  if (kind === 'noclaim') return { sub };
+  if (kind === 'linked') return { sub, authTime: now, linkedSubs: [linkedOf(who)] };
   throw new Error('bad');
 });
 beforeAll(() => {
@@ -41,10 +54,13 @@ beforeAll(() => {
 const bearer = (who: string) => ({ Authorization: `Bearer good:${who}` });
 const subOf = (who: string) => `auth0|${who}`;
 
-const deleteAccountReq = (who: string | null, body: unknown) =>
+const deleteAccountReq = (who: string | null, body: unknown, kind = 'good') =>
   SELF.fetch('https://x/api/admin/account', {
     method: 'DELETE',
-    headers: { ...(who ? bearer(who) : {}), 'Content-Type': 'application/json' },
+    headers: {
+      ...(who ? { Authorization: `Bearer ${kind}:${who}` } : {}),
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(body),
   });
 
@@ -194,6 +210,90 @@ describe('DELETE /api/admin/account', () => {
       body: JSON.stringify({ title: 'Still here', scenes: [] }),
     });
     expect(r.status).toBe(201);
+  });
+});
+
+describe('DELETE /api/admin/account: a recent sign-in', () => {
+  it.each([
+    ['too long ago', 'stale'],
+    ["the token doesn't say when", 'noclaim'],
+  ])('403s when the sign-in was %s, and touches nothing', async (_label, kind) => {
+    const who = `acct-stepup-${kind}`;
+    const seeded = await seedAccount(subOf(who), who);
+    const r = await deleteAccountReq(who, { confirm: ACCOUNT_DELETE_CONFIRMATION }, kind);
+    expect(r.status).toBe(403);
+    expect(await r.json()).toEqual({ error: REAUTH_REQUIRED_ERROR });
+    expect(await marker(subOf(who))).toBeNull();
+    for (const key of everyKey(subOf(who), seeded)) expect(await has(key)).toBe(true);
+  });
+
+  it('still checks the phrase first', async () => {
+    const r = await deleteAccountReq('acct-stepup-phrase', { confirm: 'nope' }, 'stale');
+    expect(r.status).toBe(400);
+  });
+
+  it('is off only when REQUIRE_RECENT_AUTH is "false"', async () => {
+    const send = async (who: string, REQUIRE_RECENT_AUTH: string) => {
+      await seedAccount(subOf(who), who);
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(
+        new Request('https://x/api/admin/account', {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer noclaim:${who}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: ACCOUNT_DELETE_CONFIRMATION }),
+        }),
+        { ...env, REQUIRE_RECENT_AUTH },
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return res.status;
+    };
+    expect(env.REQUIRE_RECENT_AUTH).toBe('true');
+    expect(await send('acct-stepup-off', 'false')).toBe(200);
+    expect(await send('acct-stepup-typo', 'no')).toBe(403);
+  });
+});
+
+describe('DELETE /api/admin/account: linked identities', () => {
+  it('also deletes what was made under a sub that was linked in later', async () => {
+    const who = 'acct-linked';
+    const mine = await seedAccount(subOf(who), who);
+    const before = await seedAccount(linkedOf(who), `${who}-2`);
+
+    const r = await deleteAccountReq(who, { confirm: ACCOUNT_DELETE_CONFIRMATION }, 'linked');
+    expect(r.status).toBe(200);
+    for (const key of everyKey(subOf(who), mine)) expect(await has(key)).toBe(false);
+    for (const key of everyKey(linkedOf(who), before)) expect(await has(key)).toBe(false);
+    expect(await marker(subOf(who))).toMatchObject({ linkedSubs: [linkedOf(who)] });
+  });
+
+  it('a retry naming a new linked sub adds it to the marker, keeping the first request', async () => {
+    const sub = subOf('acct-linked-retry');
+    const first = new Date('2026-10-01T00:00:00.000Z');
+    await markAccountForDeletion(env.BUCKET, sub, first, ['email|a']);
+    await markAccountForDeletion(env.BUCKET, sub, new Date(), ['email|a', 'apple|b', sub]);
+    expect(await marker(sub)).toEqual({
+      v: 1,
+      sub,
+      requestedAt: first.toISOString(),
+      linkedSubs: ['email|a', 'apple|b'],
+    });
+  });
+
+  it("the sweep reaches a linked sub's late data too", async () => {
+    const sub = subOf('acct-linked-sweep');
+    const linked = 'email|acct-linked-sweep';
+    const done = '2026-09-01T00:00:00.000Z';
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: done,
+      completedAt: done,
+      linkedSubs: [linked],
+    });
+    await put(originalKey(linked, 'acct-linked-sweep-p'), 'bytes');
+    await sweepAccountDeletions(depsWith(), new Date('2026-09-02T00:00:00.000Z'));
+    expect(await has(originalKey(linked, 'acct-linked-sweep-p'))).toBe(false);
   });
 });
 

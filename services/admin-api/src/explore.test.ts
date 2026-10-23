@@ -24,7 +24,10 @@ import { unpublish } from './publish.js';
 // owner, ids, titles and slugs.
 beforeAll(() => {
   setTestJwtVerifier(async (t) => {
-    if (t.startsWith('good:')) return { sub: `auth0|${t.slice(5)}` };
+    // Signed in just now, as account delete wants.
+    if (t.startsWith('good:')) {
+      return { sub: `auth0|${t.slice(5)}`, authTime: Math.floor(Date.now() / 1000) };
+    }
     throw new Error('bad');
   });
 });
