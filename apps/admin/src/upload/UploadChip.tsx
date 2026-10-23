@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router';
 
 import { useAspectNote } from './aspect-note.js';
 import type { ChipActionId, ChipModel } from './chip-model.js';
@@ -74,16 +75,22 @@ export function UploadChip({ model, file, onAction, onDismiss }: UploadChipProps
       )}
       {model.actions.length > 0 && (
         <div className="up-chip__actions">
-          {model.actions.map((a) => (
-            <button
-              key={a.id}
-              type="button"
-              className="up-chip__action"
-              onClick={() => onAction(a.id)}
-            >
-              {a.label}
-            </button>
-          ))}
+          {model.actions.map((a) =>
+            a.to ? (
+              <Link key={a.id} className="up-chip__action" to={a.to} onClick={() => onAction(a.id)}>
+                {a.label}
+              </Link>
+            ) : (
+              <button
+                key={a.id}
+                type="button"
+                className="up-chip__action"
+                onClick={() => onAction(a.id)}
+              >
+                {a.label}
+              </button>
+            ),
+          )}
         </div>
       )}
     </section>

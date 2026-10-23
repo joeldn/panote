@@ -102,53 +102,13 @@
   position: relative;
 }
 
+/* A .pn-menu, under its button at the right. */
 .ed-more__menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   z-index: 6;
-  display: grid;
   min-width: 210px;
-  padding: 6px;
-  border-radius: var(--r-card);
-  background: var(--cbg-solid);
-  box-shadow: var(--shadow-popover);
-  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
-}
-
-.ed-more__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border: 0;
-  border-radius: var(--r-chip);
-  background: none;
-  font: 500 14px var(--fbody);
-  color: var(--ink);
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.ed-more__item > i {
-  width: 16px;
-  color: var(--ink-55);
-  text-align: center;
-}
-
-.ed-more__item:hover,
-.ed-more__item:focus-visible {
-  background: var(--ink-06);
-  outline: none;
-}
-
-.ed-more__tag {
-  margin-left: auto;
-  font: 500 12px var(--fmono);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-55);
 }
 
 .ed-home {
@@ -359,26 +319,8 @@
   color: var(--ink-45);
 }
 
-.ed-langs__remove {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: var(--r-field);
-  background: none;
-  color: var(--ink-50);
-  cursor: pointer;
-}
-
-.ed-langs__remove:hover {
-  background: var(--ink-06);
+.ed-langs__remove:hover:not(:disabled) {
   color: var(--accent);
-}
-
-.ed-langs__pick:focus-visible,
-.ed-langs__remove:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .ed-langs__add-row {
@@ -543,12 +485,6 @@
 
 .ed-side__notes > .ed-note {
   margin: 10px 16px 0;
-}
-
-.ed-card__toggle:focus-visible,
-.ed-map__dot:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 /* Room round the plan so a dot on its edge shows whole; a query container for its size. */
@@ -846,27 +782,6 @@
   border: 0;
 }
 
-.ed-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border: 1px solid var(--ink-13);
-  border-radius: var(--r-field);
-  background: #fff;
-  font: 400 13.5px var(--fbody);
-  color: var(--ink);
-}
-
-.ed-input:focus {
-  outline: 1.5px solid var(--accent);
-  border-color: transparent;
-}
-
-.ed-textarea {
-  resize: vertical;
-  min-height: 72px;
-}
-
 .ed-icons {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
@@ -934,11 +849,6 @@
   top: auto;
   bottom: calc(100% + 6px);
   min-width: 180px;
-}
-
-.ed-more__item--danger,
-.ed-more__item--danger > i {
-  color: var(--accent);
 }
 
 .ed-format {
@@ -1069,32 +979,26 @@
 }
 
 .ed-scene__star {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border: 0;
   background: none;
   color: var(--ink-13);
   cursor: pointer;
 }
 
+/* Pressed at 32px, like the row's icon buttons. */
+.ed-scene__star::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+}
+
 .ed-scene__star--on {
   color: var(--accent);
-}
-
-.ed-icon-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--r-chip);
-  background: none;
-  color: var(--ink-45);
-  cursor: pointer;
-}
-
-.ed-icon-btn:hover {
-  background: var(--ink-06);
-  color: var(--ink);
 }
 
 /* A connection from the open pano: a quiet line under the row, in the secondary ink. */
@@ -1124,10 +1028,15 @@
   color: var(--ink-55);
 }
 
-.ed-conn .ed-icon-btn {
+/* Drawn at 22px to keep the line quiet; still pressed at 32px. */
+.ed-conn .pn-icon-btn {
   width: 22px;
   height: 22px;
   color: var(--ink-40);
+}
+
+.ed-conn .pn-icon-btn::before {
+  inset: -5px;
 }
 
 .ed-conn .ed-conn__aim {
@@ -1547,19 +1456,6 @@ p.ed-banner__text {
   color: var(--ink-50);
 }
 
-.ed-lib__alert {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: var(--r-row);
-  background: color-mix(in srgb, var(--accent) 8%, #fff);
-  font: 400 14px/1.5 var(--fbody);
-  color: var(--ink);
-}
-
 .ed-lib__list {
   display: flex;
   flex-direction: column;
@@ -1620,4 +1516,26 @@ p.ed-banner__text {
 
 .ed-lib__in {
   flex: none;
+}
+
+/* Touch: the bar's buttons are finger-sized (the phone column above lets the bar grow). */
+@media (pointer: coarse) {
+  .ed-glass-btn,
+  .ed-saved {
+    height: 44px;
+  }
+
+  .ed-glass-btn--icon {
+    width: 44px;
+  }
+
+  .ed-lang-btn {
+    height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 480px) {
+  .ed-preview-btn {
+    width: 44px;
+  }
 }

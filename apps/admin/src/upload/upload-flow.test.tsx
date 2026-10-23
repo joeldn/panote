@@ -117,6 +117,62 @@ describe('fresh upload from /app/new', () => {
     expect(screen.getByText('Start with a pano')).toBeTruthy();
   });
 
+  it('out of panos, the chip offers to free up space among the unused ones', async () => {
+    const { backend, router } = setup('/app/');
+    backend.state.presignStatus = 403;
+    backend.state.presignError = 'pano limit reached';
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'New tour' }));
+    fireEvent.change(screen.getByTestId('upload-picker'), {
+      target: { files: [pngFile('Hall.png')] },
+    });
+    await tick();
+    await tick();
+    expect(chipTitle()).toBe('Upload limit reached');
+    const free = within(chip()).getByRole('link', { name: 'Free up space' });
+    expect(free.getAttribute('href')).toBe('/app?view=unused');
+    fireEvent.click(free);
+    await tick();
+    await tick();
+    expect(router.state.location.pathname).toMatch(/^\/app\/?$/);
+    expect(router.state.location.search).toBe('?view=unused');
+    expect(screen.getByText('Every pano you’ve uploaded is in a tour.')).toBeTruthy();
+    // The failed upload is done with: the chip goes.
+    expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
+  });
+
+  it('a daily limit, or a tour someone else owns, has no space to free', async () => {
+    const { backend } = setup('/app/');
+    backend.state.presignStatus = 403;
+    backend.state.presignError = 'daily upload limit reached';
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'New tour' }));
+    fireEvent.change(screen.getByTestId('upload-picker'), {
+      target: { files: [pngFile('Hall.png')] },
+    });
+    await tick();
+    await tick();
+    expect(chipTitle()).toBe('Upload limit reached');
+    expect(within(chip()).queryByRole('link', { name: 'Free up space' })).toBeNull();
+    cleanup();
+
+    // An editor's upload counts toward the owner's panos, which aren't theirs to delete.
+    const shared = setup('/app/t/tour-1');
+    shared.backend.state.role = 'editor';
+    shared.backend.state.presignStatus = 403;
+    shared.backend.state.presignError = 'storage limit reached';
+    await tick();
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'Upload a pano' }));
+    fireEvent.change(screen.getByTestId('upload-picker'), {
+      target: { files: [pngFile('Hall.png')] },
+    });
+    await tick();
+    await tick();
+    expect(chipTitle()).toBe('Upload limit reached');
+    expect(within(chip()).queryByRole('link', { name: 'Free up space' })).toBeNull();
+  });
+
   it('photos dropped on the dashboard start a new tour', async () => {
     const { backend, router } = setup('/app/');
     await tick();

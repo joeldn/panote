@@ -1,4 +1,4 @@
-import { LogoMark, Modal, useModalTitleId } from '@internal/ui';
+import { LogoMark, Modal, Notice, useModalTitleId } from '@internal/ui';
 import { UPLOAD_CONTENT_TYPES } from '@internal/web-kit';
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
@@ -117,14 +117,14 @@ export function UploadOverlay({
           {TITLES[target.kind]}
         </h2>
         {shownNotice && (
-          <p className="up-overlay__notice" role="note">
+          <Notice role="note" className="up-overlay__notice">
             {shownNotice}
-          </p>
+          </Notice>
         )}
         {queues && (
-          <p className="up-overlay__notice" role="note">
+          <Notice role="note" className="up-overlay__notice">
             Another upload is still running. Anything you add here waits its turn.
-          </p>
+          </Notice>
         )}
         <button
           type="button"

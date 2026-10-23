@@ -51,6 +51,38 @@ describe('styles', () => {
     expect(used.filter((u) => !defined.has(u) && !local.has(u as string))).toEqual([]);
   });
 
+  it('has one focus ring for everything, which components may adjust but not out-rank', () => {
+    const css = read('components.css');
+    const ring = /:where\(:focus-visible\) \{\s*outline: 2px solid var\(--accent\);/;
+    expect(css).toMatch(ring);
+    // The primitives no longer each repeat the ring.
+    for (const f of ['components.css', 'share.css']) {
+      expect(read(f)).not.toMatch(
+        /\.pn-(btn|seg__opt|chip|modal__close|signin__option):focus-visible/,
+      );
+    }
+  });
+
+  it('turns a modal into a bottom sheet on a phone, clear of the safe areas', () => {
+    const css = read('components.css');
+    const at = css.indexOf('@media (max-width: 600px) {');
+    expect(at).toBeGreaterThan(css.indexOf('\n.pn-modal {'));
+    const block = css.slice(at, css.indexOf('/* --- ConfirmModal', at));
+    expect(block).toMatch(/\.pn-scrim \{[^}]*align-items: flex-end;/);
+    expect(block).toMatch(/\.pn-modal \{[^}]*env\(safe-area-inset-bottom, 0px\)/);
+    expect(block).toMatch(/\.pn-modal \{[^}]*border-radius:[^;]*0 0;/);
+  });
+
+  it('gives touch screens finger-sized targets', () => {
+    const css = read('components.css');
+    const block = css.slice(css.indexOf('@media (pointer: coarse) {'));
+    expect(block).toMatch(
+      /\.pn-btn:not\(\.pn-btn--sm, \.pn-btn--link\),\s*\.pn-menu__item \{\s*min-height: 44px;/,
+    );
+    expect(css).toMatch(/\n\.pn-icon-btn \{[^}]*width: 32px;[^}]*height: 32px;/);
+    expect(css).toMatch(/\n\.pn-menu__item \{[^}]*min-height: 32px;/);
+  });
+
   it('self-hosts fonts and icons: every url() is a woff2 file that exists', () => {
     const urls = [...read('fonts.css').matchAll(/url\('([^']+)'\)/g)].map((m) => m[1] as string);
     const icons = [...read('icons.css').matchAll(/url\('([^']+)'\)/g)].map((m) => m[1] as string);

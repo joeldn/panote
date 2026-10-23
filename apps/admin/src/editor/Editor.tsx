@@ -55,6 +55,7 @@ import { useSession } from '../session.js';
 import type { ShareOutletContext } from '../share/ShareRoute.js';
 import { UNTITLED_TOUR } from '../upload/finalize.js';
 import { FileDrop } from '../upload/FileDrop.js';
+import type { UploadTarget } from '../upload/resume-store.js';
 import { UploadEnvContext, useUploads } from '../upload/upload-context.js';
 import { ConflictBanner, ErrorBanner, Notices } from './Banners.js';
 import { InlineText } from './InlineText.js';
@@ -323,6 +324,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   const config = useConfig();
   const session = useSession();
   const uploads = useUploads();
+  // Photos go into this tour; one the user only edits counts toward its owner's limits.
+  const addTarget = {
+    kind: 'add',
+    tourId: docs.tourId,
+    ...(editor.role !== 'owner' && { shared: true }),
+  } as const satisfies UploadTarget;
   const { fetch: authFetch } = useAuthEnv();
   const createViewer = useContext(StageFactoryContext);
   const [params, setParams] = useSearchParams();
@@ -804,7 +811,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 size="sm"
                 pill
                 icon="fa-solid fa-arrow-up-from-bracket"
-                onClick={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
+                onClick={() => uploads.pick(addTarget)}
               >
                 Upload a pano
               </Button>
@@ -822,8 +829,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           })}
           {...(scene &&
             (currentStatus === 'failed' || currentStatus === 'timed-out') && {
-              onReplace: () =>
-                uploads.pick({ kind: 'replace', tourId: docs.tourId, panoId: currentId }),
+              onReplace: () => uploads.pick({ ...addTarget, kind: 'replace', panoId: currentId }),
               onRemove: () => setConfirm({ kind: 'remove-pano', panoId: currentId }),
             })}
           {...(currentStatus === 'timed-out' &&
@@ -1077,8 +1083,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
             }
             // The library is the signed-in user's own panos: not for someone else's tour.
             {...(editor.role === 'owner' && { onAddFromLibrary: () => setLibraryOpen(true) })}
-            onAddPano={() => uploads.pick({ kind: 'add', tourId: docs.tourId })}
-            onReplace={(panoId) => uploads.pick({ kind: 'replace', tourId: docs.tourId, panoId })}
+            onAddPano={() => uploads.pick(addTarget)}
+            onReplace={(panoId) => uploads.pick({ ...addTarget, kind: 'replace', panoId })}
           />
           {cfg && currentId && (
             <PanelCard panel="pano" className="ed-pano-settings">
@@ -1322,10 +1328,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           onAdded={addedFromLibrary}
         />
       )}
-      <FileDrop
-        target={{ kind: 'add', tourId: docs.tourId }}
-        label="Drop 360° photos to add them to this tour"
-      />
+      <FileDrop target={addTarget} label="Drop 360° photos to add them to this tour" />
       <Outlet context={shareContext} />
     </main>
   );

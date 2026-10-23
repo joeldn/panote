@@ -1,3 +1,4 @@
+import { IconButton } from '@internal/ui';
 import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { Link } from 'react-router';
 
@@ -90,33 +91,26 @@ export function CardMenu({ label, items, busy = false }: CardMenuProps) {
       {item.label}
     </>
   );
-  const cls = (item: CardMenuItem) =>
-    `dash-menu__item${item.danger ? ' dash-menu__item--danger' : ''}`;
+  const cls = (item: CardMenuItem) => `pn-menu__item${item.danger ? ' pn-menu__item--danger' : ''}`;
 
   return (
     <div ref={root} className="dash-menu" onBlur={onBlur}>
-      <button
+      <IconButton
         ref={button}
-        type="button"
-        className="dash-card__action"
-        aria-label={label}
+        icon={busy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-ellipsis'}
+        label={label}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         aria-busy={busy || undefined}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onButtonKey}
-      >
-        <i
-          className={busy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-ellipsis'}
-          aria-hidden="true"
-        />
-      </button>
+      />
       {open && (
         <div
           ref={menu}
           id={menuId}
-          className="dash-menu__list"
+          className="pn-menu dash-menu__list"
           role="menu"
           aria-label={label}
           onKeyDown={onKey}

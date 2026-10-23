@@ -1,5 +1,5 @@
 import { MAX_HOTSPOT_BODY_LENGTH, MAX_TITLE_LENGTH, type Hotspot } from '@internal/contracts';
-import { Button, FALLBACK_ICON, MediaEmbed, pointIcon, Segmented } from '@internal/ui';
+import { Button, FALLBACK_ICON, IconButton, MediaEmbed, pointIcon, Segmented } from '@internal/ui';
 import {
   useId,
   useLayoutEffect,
@@ -148,7 +148,7 @@ function BodyField({ value: body, onValue, placeholder }: BodyFieldProps) {
       <textarea
         ref={area}
         id={`${id}-body`}
-        className="ed-input ed-textarea"
+        className="pn-input"
         value={body}
         {...(placeholder && { placeholder })}
         maxLength={MAX_HOTSPOT_BODY_LENGTH}
@@ -208,7 +208,7 @@ function MediaField({ point, onChange }: FieldProps) {
           </label>
           <input
             id={`${id}-url`}
-            className="ed-input"
+            className="pn-input"
             value={text}
             placeholder={MEDIA_PLACEHOLDER[kind]}
             inputMode="url"
@@ -244,15 +244,17 @@ function PointMenu({ onDuplicate, onDelete }: Pick<PointEditorProps, 'onDuplicat
   const { open, close, rootProps, buttonProps, menuProps } = useMenu();
   return (
     <div {...rootProps} className="ed-more ed-point__more">
-      <button {...buttonProps} type="button" className="ed-icon-btn" aria-label="Point actions">
-        <i className="fa-solid fa-ellipsis" aria-hidden="true" />
-      </button>
+      <IconButton {...buttonProps} icon="fa-solid fa-ellipsis" label="Point actions" />
       {open && (
-        <div {...menuProps} className="ed-more__menu ed-more__menu--up" aria-label="Point actions">
+        <div
+          {...menuProps}
+          className="pn-menu ed-more__menu ed-more__menu--up"
+          aria-label="Point actions"
+        >
           <button
             type="button"
             role="menuitem"
-            className="ed-more__item"
+            className="pn-menu__item"
             onClick={() => {
               close(false);
               onDuplicate();
@@ -264,7 +266,7 @@ function PointMenu({ onDuplicate, onDelete }: Pick<PointEditorProps, 'onDuplicat
           <button
             type="button"
             role="menuitem"
-            className="ed-more__item ed-more__item--danger"
+            className="pn-menu__item pn-menu__item--danger"
             onClick={() => {
               // Back on ⋯ first: the confirm dialog returns focus there if it's cancelled.
               close(true);
@@ -313,7 +315,7 @@ export function PointEditor({
         </label>
         <input
           id={`${id}-title`}
-          className="ed-input"
+          className="pn-input"
           value={title}
           {...(translation && { placeholder: point.title, lang: translation.lang })}
           maxLength={MAX_TITLE_LENGTH}
@@ -344,7 +346,7 @@ export function PointEditor({
         </label>
         <input
           id={`${id}-icon`}
-          className="ed-input"
+          className="pn-input"
           type="search"
           placeholder="Search icons"
           value={iconQuery}

@@ -1,7 +1,7 @@
 import './account.css';
 
 import { MAX_TOURS_PER_OWNER, type AccountView, type UploadUsage } from '@internal/contracts';
-import { Button, Modal, ModalHeader, useCopy, useModalTitleId } from '@internal/ui';
+import { Button, Modal, ModalHeader, Notice, useCopy, useModalTitleId } from '@internal/ui';
 import { KNOWN_CONNECTIONS, type AdminApi } from '@internal/web-kit';
 import { useCallback, useEffect, useId, useState } from 'react';
 import { Link } from 'react-router';
@@ -84,12 +84,16 @@ function Meter({
 
 function Retry({ text, onRetry }: { text: string; onRetry: () => void }) {
   return (
-    <div className="acct__retry" role="alert">
-      <span>{text}</span>
-      <Button size="sm" variant="ghost" onClick={onRetry}>
-        Try again
-      </Button>
-    </div>
+    <Notice
+      tone="warn"
+      actions={
+        <Button size="sm" variant="secondary" onClick={onRetry}>
+          Try again
+        </Button>
+      }
+    >
+      {text}
+    </Notice>
   );
 }
 

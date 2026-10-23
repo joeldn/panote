@@ -40,11 +40,11 @@ export function MoreMenu({
         <i className="fa-solid fa-ellipsis" aria-hidden="true" />
       </button>
       {open && (
-        <div {...menuProps} className="ed-more__menu" aria-label="Tour menu">
+        <div {...menuProps} className="pn-menu ed-more__menu" aria-label="Tour menu">
           <button
             type="button"
             role="menuitem"
-            className="ed-more__item"
+            className="pn-menu__item"
             data-settings-toggle
             onClick={() => {
               close(false);
@@ -57,7 +57,7 @@ export function MoreMenu({
           <button
             type="button"
             role="menuitem"
-            className="ed-more__item"
+            className="pn-menu__item"
             data-languages-toggle
             aria-label={`Languages, editing ${langName}`}
             onClick={() => {
@@ -67,11 +67,11 @@ export function MoreMenu({
           >
             <i className="fa-solid fa-globe" aria-hidden="true" />
             Languages
-            <span className="ed-more__tag">{lang}</span>
+            <span className="pn-menu__tag">{lang}</span>
           </button>
           <Link
             role="menuitem"
-            className="ed-more__item"
+            className="pn-menu__item"
             to={peopleTo}
             onClick={() => close(false)}
           >
@@ -80,7 +80,7 @@ export function MoreMenu({
           </Link>
           <Link
             role="menuitem"
-            className="ed-more__item"
+            className="pn-menu__item"
             to={insightsTo}
             onClick={() => close(false)}
           >

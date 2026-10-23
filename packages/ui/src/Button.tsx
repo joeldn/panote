@@ -2,7 +2,12 @@ import type { ComponentPropsWithRef } from 'react';
 
 import { cx } from './cx.js';
 
-export type ButtonVariant = 'primary' | 'accent' | 'danger' | 'ghost' | 'glass';
+/**
+ * `secondary` is a quiet bordered button beside a primary one, or on a tinted Notice;
+ * `link` is a text action inside a row or a sentence (it ignores `size`).
+ */
+export type ButtonVariant =
+  'primary' | 'accent' | 'danger' | 'secondary' | 'ghost' | 'glass' | 'link';
 
 export interface ButtonProps extends ComponentPropsWithRef<'button'> {
   variant?: ButtonVariant;

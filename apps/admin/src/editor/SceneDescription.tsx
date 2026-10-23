@@ -32,7 +32,7 @@ export function SceneDescription({
       </label>
       <textarea
         id={id}
-        className="ed-input ed-textarea"
+        className="pn-input"
         value={text}
         // What it's for, in the empty field only (the default text while translating).
         placeholder={

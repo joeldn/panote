@@ -2,7 +2,7 @@ import './dashboard.css';
 
 import type { TourSummary } from './types.js';
 import { MAX_TOURS_PER_OWNER } from '@internal/contracts';
-import { Button, ConfirmModal } from '@internal/ui';
+import { Button, ConfirmModal, Notice } from '@internal/ui';
 import { createPublicApi, tilesBaseUrl } from '@internal/web-kit';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Outlet, useSearchParams } from 'react-router';
@@ -96,42 +96,50 @@ function Filters({
 function PendingDeletes({ dash }: { dash: DashboardData }) {
   if (dash.resuming.length) {
     return (
-      <p className="dash__banner" role="status">
-        <i className="fa-solid fa-spinner fa-spin" aria-hidden="true" /> Finishing an interrupted
-        delete ({plural(dash.resuming.length, 'pano')})…
-      </p>
+      <Notice className="dash__notice" icon="fa-solid fa-spinner fa-spin">
+        Finishing an interrupted delete ({plural(dash.resuming.length, 'pano')})…
+      </Notice>
     );
   }
   if (!dash.stuck.length) return null;
   return (
-    <div className="dash__banner dash__banner--warn" role="alert">
-      <span>
-        {plural(dash.stuck.length, 'pano')} didn’t finish deleting. They stay hidden until the
-        delete completes.
-      </span>
-      <Button size="sm" variant="ghost" onClick={() => void dash.finishDeleting()}>
-        Finish deleting
-      </Button>
-    </div>
+    <Notice
+      tone="warn"
+      className="dash__notice"
+      actions={
+        <Button size="sm" variant="secondary" onClick={() => void dash.finishDeleting()}>
+          Finish deleting
+        </Button>
+      }
+    >
+      {plural(dash.stuck.length, 'pano')} didn’t finish deleting. They stay hidden until the delete
+      completes.
+    </Notice>
   );
 }
 
+/** A list that didn't load: a warning, or a quiet line (`quiet`) when it's a side list. */
 function Retry({
   text,
   onRetry,
-  role = 'alert',
+  quiet = false,
 }: {
   text: string;
   onRetry(): void;
-  role?: string;
+  quiet?: boolean;
 }) {
   return (
-    <div className={`dash__banner${role === 'alert' ? ' dash__banner--warn' : ''}`} role={role}>
-      <span>{text}</span>
-      <Button size="sm" variant="ghost" onClick={onRetry}>
-        Try again
-      </Button>
-    </div>
+    <Notice
+      tone={quiet ? 'info' : 'warn'}
+      className="dash__notice"
+      actions={
+        <Button size="sm" variant="secondary" onClick={onRetry}>
+          Try again
+        </Button>
+      }
+    >
+      {text}
+    </Notice>
   );
 }
 
@@ -313,19 +321,24 @@ export function Dashboard() {
         />
         {ready && <PendingDeletes dash={dash} />}
         {ready && dash.notice && (
-          <div className="dash__banner dash__banner--warn" role="alert">
-            <span>{dash.notice}</span>
-            <Button size="sm" variant="ghost" onClick={dash.dismissNotice}>
-              Dismiss
-            </Button>
-          </div>
+          <Notice
+            tone="warn"
+            className="dash__notice"
+            actions={
+              <Button size="sm" variant="secondary" onClick={dash.dismissNotice}>
+                Dismiss
+              </Button>
+            }
+          >
+            {dash.notice}
+          </Notice>
         )}
         {list}
         {view === 'yours' && dash.shared.status === 'error' && (
           <Retry
             text="Couldn’t load the tours shared with you."
             onRetry={dash.reloadShared}
-            role="status"
+            quiet
           />
         )}
       </>

@@ -1,10 +1,14 @@
 import type { UploadMode } from '@internal/web-kit';
 
-/** Where an upload's pano goes: a new tour, an existing tour, or over an existing pano's image. */
+/**
+ * Where an upload's pano goes: a new tour, an existing tour, or over an existing pano's
+ * image. `shared` marks a tour someone else owns (the user edits it): its panos count
+ * toward the owner's limits, not the user's.
+ */
 export type UploadTarget =
   | { kind: 'new-tour' }
-  | { kind: 'add'; tourId: string }
-  | { kind: 'replace'; panoId: string; tourId: string };
+  | { kind: 'add'; tourId: string; shared?: true }
+  | { kind: 'replace'; panoId: string; tourId: string; shared?: true };
 
 /**
  * What survives a sign-in redirect. The File can't, so `landed` (the image already
@@ -39,8 +43,9 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 function parseTarget(v: unknown): UploadTarget | null {
   if (!isObj(v)) return null;
   if (v.kind === 'new-tour') return { kind: 'new-tour' };
+  const shared = v.shared === true ? ({ shared: true } as const) : {};
   if (v.kind === 'add' && typeof v.tourId === 'string' && ID.test(v.tourId)) {
-    return { kind: 'add', tourId: v.tourId };
+    return { kind: 'add', tourId: v.tourId, ...shared };
   }
   if (
     v.kind === 'replace' &&
@@ -49,7 +54,7 @@ function parseTarget(v: unknown): UploadTarget | null {
     typeof v.tourId === 'string' &&
     ID.test(v.tourId)
   ) {
-    return { kind: 'replace', panoId: v.panoId, tourId: v.tourId };
+    return { kind: 'replace', panoId: v.panoId, tourId: v.tourId, ...shared };
   }
   return null;
 }

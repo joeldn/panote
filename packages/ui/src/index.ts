@@ -18,8 +18,10 @@ export {
   SOLID_ICONS,
   UI_ICONS,
 } from './icons/names.js';
+export { IconButton, type IconButtonProps } from './IconButton.js';
 export { Logo, LogoMark, type LogoMarkProps, type LogoProps } from './Logo.js';
 export { Modal, ModalHeader, type ModalHeaderProps, type ModalProps } from './Modal.js';
+export { Notice, type NoticeProps, type NoticeTone } from './Notice.js';
 export {
   PanoStage,
   type PanoStageProps,

@@ -1,4 +1,4 @@
-import { Button, cx } from '@internal/ui';
+import { Button, cx, IconButton } from '@internal/ui';
 import {
   useEffect,
   useId,
@@ -252,14 +252,14 @@ export function TourPanel({
             >
               <div className="ed-scene__row">
                 {reorder && (
-                  <button
+                  <IconButton
                     ref={(el) => {
                       if (el) handles.current.set(panoId, el);
                       else handles.current.delete(panoId);
                     }}
-                    type="button"
-                    className="ed-icon-btn ed-scene__grip"
-                    aria-label={`Move ${name}, position ${index + 1} of ${scenes.length}`}
+                    className="ed-scene__grip"
+                    icon="fa-solid fa-grip-vertical"
+                    label={`Move ${name}, position ${index + 1} of ${scenes.length}`}
                     aria-describedby={keysId}
                     title="Drag to reorder"
                     onPointerDown={(e) => dragStart(e, panoId, index)}
@@ -268,9 +268,7 @@ export function TourPanel({
                     onPointerCancel={() => setDrag(null)}
                     onLostPointerCapture={() => setDrag(null)}
                     onKeyDown={(e) => keyMove(e, panoId, index)}
-                  >
-                    <i className="fa-solid fa-grip-vertical" aria-hidden="true" />
-                  </button>
+                  />
                 )}
                 <button
                   type="button"
@@ -305,37 +303,32 @@ export function TourPanel({
                   <i className="fa-solid fa-star" aria-hidden="true" />
                 </button>
                 {!missing && busy && (
-                  <button
-                    type="button"
-                    className="ed-icon-btn"
-                    aria-label={`Replace the image of ${name}`}
+                  <IconButton
+                    size="sm"
+                    icon="fa-solid fa-camera"
+                    label={`Replace the image of ${name}`}
                     title="You can replace the image once it’s ready"
                     disabled
-                  >
-                    <i className="fa-solid fa-camera" aria-hidden="true" />
-                  </button>
+                  />
                 )}
                 {!missing && !busy && (
-                  <button
-                    type="button"
-                    className="ed-icon-btn"
-                    aria-label={`Replace the image of ${name}`}
+                  <IconButton
+                    size="sm"
+                    icon="fa-solid fa-camera"
+                    label={`Replace the image of ${name}`}
                     title="Replace image"
                     onClick={() => onReplace(panoId)}
-                  >
-                    <i className="fa-solid fa-camera" aria-hidden="true" />
-                  </button>
+                  />
                 )}
                 {isCurrent && <span className="ed-scene__badge">Current</span>}
-                <button
-                  type="button"
-                  className="ed-icon-btn ed-scene__remove"
-                  aria-label={`Remove ${name} from tour`}
+                <IconButton
+                  size="sm"
+                  className="ed-scene__remove"
+                  icon="fa-solid fa-xmark"
+                  label={`Remove ${name} from tour`}
                   title="Remove from tour"
                   onClick={() => onRemove(panoId)}
-                >
-                  <i className="fa-solid fa-xmark" aria-hidden="true" />
-                </button>
+                />
               </div>
               {from && !isCurrent && !missing && (
                 <div className="ed-conn" role="group" aria-label={`Connection to ${name}`}>
@@ -344,24 +337,22 @@ export function TourPanel({
                     <>
                       <span className="ed-conn__label">connection</span>
                       <span className="ed-conn__deg">{yawDegrees(link.yaw)}°</span>
-                      <button
-                        type="button"
-                        className="ed-icon-btn ed-conn__nudge ed-conn__act"
+                      <IconButton
+                        size="sm"
+                        className="ed-conn__nudge ed-conn__act"
+                        icon="fa-solid fa-chevron-left"
+                        label={`Nudge left ${NUDGE_DEG}°`}
                         disabled={lookOnly}
-                        aria-label={`Nudge left ${NUDGE_DEG}°`}
                         onClick={() => onNudge(panoId, -NUDGE)}
-                      >
-                        <i className="fa-solid fa-chevron-left" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="ed-icon-btn ed-conn__nudge ed-conn__act"
+                      />
+                      <IconButton
+                        size="sm"
+                        className="ed-conn__nudge ed-conn__act"
+                        icon="fa-solid fa-chevron-right"
+                        label={`Nudge right ${NUDGE_DEG}°`}
                         disabled={lookOnly}
-                        aria-label={`Nudge right ${NUDGE_DEG}°`}
                         onClick={() => onNudge(panoId, NUDGE)}
-                      >
-                        <i className="fa-solid fa-chevron-right" aria-hidden="true" />
-                      </button>
+                      />
                       <button
                         type="button"
                         className="ed-conn__aim ed-conn__act"
@@ -370,15 +361,14 @@ export function TourPanel({
                       >
                         <i className="fa-solid fa-crosshairs" aria-hidden="true" /> Aim
                       </button>
-                      <button
-                        type="button"
-                        className="ed-icon-btn ed-conn__act"
+                      <IconButton
+                        size="sm"
+                        className="ed-conn__act"
+                        icon="fa-solid fa-xmark"
+                        label={`Remove connection to ${name}`}
                         disabled={lookOnly}
-                        aria-label={`Remove connection to ${name}`}
                         onClick={() => onDisconnect(panoId)}
-                      >
-                        <i className="fa-solid fa-xmark" aria-hidden="true" />
-                      </button>
+                      />
                     </>
                   ) : (
                     <>

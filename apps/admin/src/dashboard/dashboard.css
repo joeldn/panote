@@ -84,16 +84,17 @@
   color: var(--paper);
 }
 
-.dash__filter:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
 .dash__filter-n {
   font: 500 11.5px var(--fmono);
   opacity: 0.7;
 }
 
+/* A Notice above the list. */
+.dash__notice {
+  margin: 0 0 22px;
+}
+
+/* The ops pages' banners (the dashboard itself uses Notice). */
 .dash__banner {
   display: flex;
   align-items: center;
@@ -294,12 +295,6 @@
   text-decoration: underline;
 }
 
-.dash-card__views:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 3px;
-}
-
 .dash-card__foot {
   display: flex;
   flex-wrap: wrap;
@@ -334,7 +329,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 32px;
   padding: 0 10px;
   border: 0;
   border-radius: var(--r-chip);
@@ -349,26 +344,6 @@
   color: var(--ink);
 }
 
-.dash-card__copy:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.dash-card__action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--r-chip);
-  background: transparent;
-  color: var(--ink-55);
-  font-size: 13px;
-  cursor: pointer;
-}
-
 /* Clipped to nothing; .dash-card__actions (position: relative) holds it. */
 .dash-card__sr {
   position: absolute;
@@ -379,17 +354,7 @@
   white-space: nowrap;
 }
 
-.dash-card__action:hover {
-  background: rgba(26, 24, 21, 0.07);
-  color: var(--ink);
-}
-
-.dash-card__action:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* --- A tour card's "⋯" menu --- */
+/* --- A tour card's "⋯" menu (a .pn-menu): under its button, at the card's right edge --- */
 .dash-menu {
   position: relative;
 }
@@ -399,50 +364,6 @@
   top: calc(100% + 6px);
   right: 0;
   z-index: 6;
-  display: grid;
-  min-width: 190px;
-  padding: 6px;
-  border-radius: var(--r-card);
-  background: var(--cbg-solid);
-  box-shadow: var(--shadow-popover);
-  animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
-}
-
-.dash-menu__item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border: 0;
-  border-radius: var(--r-chip);
-  background: none;
-  font: 500 14px var(--fbody);
-  color: var(--ink);
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.dash-menu__item > i {
-  width: 16px;
-  color: var(--ink-55);
-  text-align: center;
-}
-
-.dash-menu__item:hover,
-.dash-menu__item:focus-visible {
-  background: var(--ink-06);
-  outline: none;
-}
-
-.dash-menu__item--danger,
-.dash-menu__item--danger > i {
-  color: var(--accent);
-}
-
-.dash-menu__item[aria-disabled='true'] {
-  cursor: default;
-  opacity: 0.5;
 }
 
 @media (max-width: 600px) {
@@ -531,7 +452,7 @@
   flex: none;
   align-items: center;
   gap: 6px;
-  height: 30px;
+  height: 32px;
   padding: 0 10px;
   border: 0;
   border-radius: var(--r-chip);
@@ -544,9 +465,4 @@
 .unused__delete:hover {
   background: rgba(181, 72, 58, 0.1);
   color: var(--accent);
-}
-
-.unused__delete:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }

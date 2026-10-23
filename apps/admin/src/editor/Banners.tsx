@@ -1,4 +1,4 @@
-import { Button } from '@internal/ui';
+import { Button, IconButton } from '@internal/ui';
 import { Link } from 'react-router';
 
 import { docLabel, type DocKey, type EditorDocs } from './model.js';
@@ -155,14 +155,7 @@ export function Notices({
               Discard
             </Button>
           )}
-          <button
-            type="button"
-            className="ed-icon-btn"
-            aria-label="Dismiss"
-            onClick={() => onDismiss(n.id)}
-          >
-            <i className="fa-solid fa-xmark" aria-hidden="true" />
-          </button>
+          <IconButton icon="fa-solid fa-xmark" label="Dismiss" onClick={() => onDismiss(n.id)} />
         </div>
       ))}
     </>

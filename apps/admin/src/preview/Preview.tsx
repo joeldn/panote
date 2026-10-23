@@ -95,6 +95,7 @@ function PreviewScreen({
 
   return (
     <TourViewer
+      className="pv-tour"
       data={vt}
       title={title}
       description={description}
@@ -111,13 +112,21 @@ function PreviewScreen({
           </Link>
         ),
         extras: () => (
-          <Chip tone="light" mono icon="fa-solid fa-eye" className="pv-badge">
-            {unsaved ? 'Preview · not saved yet' : 'Preview'}
+          <Chip
+            tone="light"
+            mono
+            icon="fa-solid fa-eye"
+            className={unsaved ? 'pv-badge pv-badge--unsaved' : 'pv-badge'}
+          >
+            <span className="pv-badge__text">
+              {unsaved ? 'Preview · not saved yet' : 'Preview'}
+            </span>
           </Chip>
         ),
         end: (
-          <Link className="pn-tourbar__btn" to={editor}>
-            Back to editor
+          <Link className="pn-tourbar__btn pv-back" to={editor}>
+            <i className="fa-solid fa-arrow-left" aria-hidden="true" />
+            <span className="pv-back__label">Back to editor</span>
           </Link>
         ),
       }}

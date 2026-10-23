@@ -175,7 +175,10 @@ function limitOf(e: unknown): UploadLimit {
   if (e.status === 410) return 'account';
   if (e.status !== 403) return null;
   const code = (e.body as { error?: unknown } | null)?.error;
-  return code === 'account disabled' ? 'account' : 'quota';
+  if (code === 'account disabled') return 'account';
+  // Only these two are freed by deleting unused panos. 'plan storage limit reached' is a
+  // tour's floor-plan images, which panos don't count toward, so it stays a plain quota.
+  return code === 'pano limit reached' || code === 'storage limit reached' ? 'space' : 'quota';
 }
 
 const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null): boolean => {
@@ -855,6 +858,10 @@ export function UploadProvider({ children }: { children: ReactNode }) {
       case 'repick':
         setRepick({ target: j.target, fileName: j.fileName, reason: 'retry' });
         openPicker(j.target);
+        return;
+      case 'free-space':
+        // The chip's link goes to the unused panos; the failed upload is done with.
+        dismiss();
         return;
     }
   };
