@@ -75,7 +75,12 @@ describe('POST /api/admin/operator/takedown', () => {
     const s = await seedTour(sub, 'op-unpub');
     const r = await takedown({ sub, tourId: s.tourId, action: 'unpublish' });
     expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ action: 'unpublish', purged: 2 });
+    // The test env has no CF_PURGE_TOKEN: the purge is skipped, and says so.
+    expect(await r.json()).toEqual({
+      action: 'unpublish',
+      purged: 2,
+      purge: { status: 'skipped', purged: 0, pending: 0, failed: 2 },
+    });
     expect(await has(pubTourKey(s.tourId))).toBe(false);
     expect(await has(storedSlugKey(s.slug)!)).toBe(false);
     expect(await has(publishKey(sub, s.tourId))).toBe(false);
@@ -92,7 +97,9 @@ describe('POST /api/admin/operator/takedown', () => {
     try {
       expect((await takedown({ sub, tourId: s.tourId, action: 'unpublish' })).status).toBe(200);
       const lines = warn.mock.calls.map((args) => args.join(' '));
-      expect(lines).toContain(`[takedown] operator unpublish of tour ${s.tourId} done`);
+      expect(lines).toContain(
+        `[takedown] operator unpublish of tour ${s.tourId} done; cdn purge skipped`,
+      );
       expect(lines.join('\n')).not.toContain(sub);
     } finally {
       warn.mockRestore();

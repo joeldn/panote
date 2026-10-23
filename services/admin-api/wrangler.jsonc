@@ -67,6 +67,14 @@
           "namespace_id": "1304",
           "simple": { "limit": 120, "period": 60 },
         },
+        // Pano and tour deletes per owner per minute, on top of WRITE_LIMITER: a cost cap (each
+        // sweeps R2 and sends a CDN prefix purge), not the purge budget's guard; see
+        // PANO_DELETE_RATE_PERIOD_SECONDS in src/limits.ts.
+        {
+          "name": "PANO_DELETE_LIMITER",
+          "namespace_id": "1305",
+          "simple": { "limit": 10, "period": 60 },
+        },
       ],
       "vars": {
         "OAUTH_ISSUER": "https://panote-dev.au.auth0.com/",
@@ -141,6 +149,14 @@
           "name": "OPERATOR_LIMITER",
           "namespace_id": "2304",
           "simple": { "limit": 120, "period": 60 },
+        },
+        // Pano and tour deletes per owner per minute, on top of WRITE_LIMITER: a cost cap (each
+        // sweeps R2 and sends a CDN prefix purge), not the purge budget's guard; see
+        // PANO_DELETE_RATE_PERIOD_SECONDS in src/limits.ts.
+        {
+          "name": "PANO_DELETE_LIMITER",
+          "namespace_id": "2305",
+          "simple": { "limit": 10, "period": 60 },
         },
       ],
       "vars": {

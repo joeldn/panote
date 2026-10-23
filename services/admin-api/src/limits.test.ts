@@ -15,7 +15,7 @@ import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloud
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import wrangler from '../wrangler.jsonc?raw';
-import worker, { WRITE_RATE_PERIOD_SECONDS } from './index.js';
+import worker, { PANO_DELETE_RATE_PERIOD_SECONDS, WRITE_RATE_PERIOD_SECONDS } from './index.js';
 import { countTours } from './lists.js';
 
 const LIMITED_SUB = 'auth0|limited';
@@ -127,9 +127,67 @@ describe('per-owner write rate limit', () => {
         ['READ_LIMITER', WRITE_RATE_PERIOD_SECONDS],
         ['INSIGHTS_LIMITER', WRITE_RATE_PERIOD_SECONDS],
         ['OPERATOR_LIMITER', WRITE_RATE_PERIOD_SECONDS],
+        ['PANO_DELETE_LIMITER', PANO_DELETE_RATE_PERIOD_SECONDS],
       ]);
     },
   );
+});
+
+describe('per-owner pano delete rate limit', () => {
+  const allow = { limit: async () => ({ success: true }) };
+
+  it('429s a pano delete with Retry-After, keyed by the owner, before it touches the pano', async () => {
+    const limit = vi.fn(async () => ({ success: false }));
+    await env.BUCKET.put(originalKey(LIMITED_SUB, 'rl-del-p1'), 'img');
+    const r = await call(
+      '/api/admin/panos/rl-del-p1',
+      { method: 'DELETE', headers: bearer('limited') },
+      { WRITE_LIMITER: allow, PANO_DELETE_LIMITER: { limit } },
+    );
+    expect(r.status).toBe(429);
+    expect(r.headers.get('Retry-After')).toBe(String(PANO_DELETE_RATE_PERIOD_SECONDS));
+    expect(limit).toHaveBeenCalledWith({ key: LIMITED_SUB });
+    expect(await env.BUCKET.head(deletingKey(LIMITED_SUB, 'rl-del-p1'))).toBeNull();
+    expect(await env.BUCKET.head(originalKey(LIMITED_SUB, 'rl-del-p1'))).not.toBeNull();
+  });
+
+  it('counts a tour delete too: it sweeps the panos only that tour used', async () => {
+    const limit = vi.fn(async () => ({ success: false }));
+    const r = await call(
+      '/api/admin/tours/rl-del-t1',
+      { method: 'DELETE', headers: bearer('limited') },
+      { WRITE_LIMITER: allow, PANO_DELETE_LIMITER: { limit } },
+    );
+    expect(r.status).toBe(429);
+    expect(limit).toHaveBeenCalledWith({ key: LIMITED_SUB });
+  });
+
+  it('is tighter than the write limit', () => {
+    type Config = {
+      env: Record<string, { ratelimits?: { name: string; simple: { limit: number } }[] }>;
+    };
+    for (const name of ['dev', 'production']) {
+      const limiters = (parseJsonc(wrangler) as Config).env[name]?.ratelimits ?? [];
+      const of = (n: string) => limiters.find((l) => l.name === n)?.simple.limit ?? Infinity;
+      expect(of('PANO_DELETE_LIMITER')).toBeLessThanOrEqual(10);
+      expect(of('PANO_DELETE_LIMITER')).toBeLessThan(of('WRITE_LIMITER'));
+    }
+  });
+
+  it('leaves every other write to the write limit alone', async () => {
+    const limit = vi.fn(async () => ({ success: false }));
+    const r = await call(
+      '/api/admin/tours',
+      {
+        method: 'POST',
+        headers: bearer('limited'),
+        body: JSON.stringify({ title: 'T', scenes: [] }),
+      },
+      { WRITE_LIMITER: allow, PANO_DELETE_LIMITER: { limit } },
+    );
+    expect(r.status).toBe(201);
+    expect(limit).not.toHaveBeenCalled();
+  });
 });
 
 describe(`at most ${MAX_TOURS_PER_OWNER} tours per owner`, () => {

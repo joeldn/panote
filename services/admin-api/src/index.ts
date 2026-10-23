@@ -24,6 +24,7 @@ import {
   tourKey,
   userPanosPrefix,
   VisibilityPatchRequestSchema,
+  type CdnPurgeOutcome,
   type SceneConfig,
   type TourConfigEntry,
   type TourDoc,
@@ -35,7 +36,7 @@ import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding'
 import { Hono, type Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
 
-import { BACKUP_CRON, restoreFromBackup } from './backup.js';
+import { BACKUP_CRON, BACKUP_RUN_BUDGET, restoreFromBackup } from './backup.js';
 import {
   conditionalGet,
   guardedPut,
@@ -58,6 +59,7 @@ import {
   jsonBody,
   jsonObjectBody,
   MAX_CONFIG_BODY_BYTES,
+  PANO_DELETE_RATE_PERIOD_SECONDS,
   WRITE_RATE_PERIOD_SECONDS,
 } from './limits.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
@@ -65,7 +67,14 @@ import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
 import { isRecentAuth, requiresRecentAuth } from './recent-auth.js';
 import { checkTileGcStatus, runBackupThenTileGc } from './tile-gc.js';
-import { purgeCdn, type CdnPurge } from './purge.js';
+import {
+  meteredBucket,
+  PENDING_RECORD_MAX_ITEMS,
+  purgeCdn,
+  RETRY_RUN_MAX_SUBREQUESTS,
+  retryPendingPurges,
+  type CdnPurge,
+} from './purge.js';
 import { runDailyCron } from './cron-status.js';
 import { referencedPanoIds } from './references.js';
 import { TourPublisher } from './publisher.js';
@@ -155,7 +164,22 @@ const app = new Hono<AppEnv>();
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const READ_METHODS = new Set(['GET', 'HEAD']);
 const ACCOUNT_PATH = '/api/admin/account';
-export { WRITE_RATE_PERIOD_SECONDS };
+export { PANO_DELETE_RATE_PERIOD_SECONDS, WRITE_RATE_PERIOD_SECONDS };
+// The 15-minute cron's R2 budget once the purge retry has run first: the backup, the tile
+// sweep and its status share it, so the invocation's total is BACKUP_RUN_BUDGET (900):
+// RETRY_RUN_MAX_SUBREQUESTS (97) + 803.
+export const FIFTEEN_MINUTE_RUN_OPS = BACKUP_RUN_BUDGET - RETRY_RUN_MAX_SUBREQUESTS;
+// The operator takedown's purge before it answers: at most this many purge API requests
+// (100 URLs each, retries included) and this long. The rest is queued for the cron, and
+// the answer says so. Bounded so the request stays quick and leaves the invocation's
+// subrequests for the tour delete's R2 calls and the queue writes.
+export const OPERATOR_PURGE_MAX_REQUESTS = 100;
+export const OPERATOR_PURGE_DEADLINE_MS = 20_000;
+// The Workers Paid per-invocation subrequest limit this repo sizes against (backup.ts),
+// and what the takedown keeps back from it besides the queue writes: the publisher calls,
+// the failure marker and the dead letters, with slack.
+const SUBREQUEST_LIMIT = 1_000;
+const OPERATOR_ROUTE_RESERVE = 25;
 
 // The operator routes have no Auth0 user; their own secret guards them. A per-IP limit
 // (an IPv6 client per /64) runs first, so a wrong or missing token spends it too and the
@@ -328,6 +352,8 @@ app.delete('/api/admin/panos/:panoId', async (c) => {
   if (!isContentId(panoId)) {
     return c.json({ error: contentIdError('panoId') }, 400);
   }
+  const limited = await rateLimit(c.env.PANO_DELETE_LIMITER, sub, PANO_DELETE_RATE_PERIOD_SECONDS);
+  if (limited) return limited;
   const result = await deleteOwnedPano(c.env.BUCKET, sub, panoId);
   if (!result.ok) {
     return result.status === 404
@@ -446,6 +472,9 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   if (!isContentId(tourId)) {
     return c.json({ error: contentIdError('tourId') }, 400);
   }
+  // Counts like a pano delete: it sweeps every pano only this tour used.
+  const limited = await rateLimit(c.env.PANO_DELETE_LIMITER, sub, PANO_DELETE_RATE_PERIOD_SECONDS);
+  if (limited) return limited;
   const stub = publisher(c.env, tourId);
   purgeLater(c, await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId)));
   return c.body(null, 204);
@@ -570,14 +599,33 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
     console.warn(`[takedown] operator ${action} of tour ${tourId} on Explore done`);
     return c.json({ action, purged: 0 });
   }
+  // Tiles are purged by URL, not by prefix, so a takedown never waits on the prefix budget
+  // anyone's pano deletes can use up; and before answering, so the operator sees the outcome.
+  // Metered, so the purge only spends the subrequests the delete left (a big tour's
+  // delete is many R2 calls); what doesn't fit is queued, never lost.
+  const meter = meteredBucket(c.env.BUCKET);
   const purge =
     action === 'delete'
-      ? await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId))
+      ? await deleteTour(meter.bucket, sub, tourId, () => stub.unpublish(sub, tourId), {
+          tilesByUrl: true,
+        })
       : { prefixes: [], files: await stub.unpublish(sub, tourId, true) };
-  purgeLater(c, purge);
+  const planned = purge.prefixes.length + purge.files.length;
+  const room =
+    SUBREQUEST_LIMIT -
+    meter.calls() -
+    OPERATOR_ROUTE_RESERVE -
+    Math.ceil(planned / PENDING_RECORD_MAX_ITEMS);
+  // purgeCdn doesn't throw; the catch only makes sure a takedown whose R2 data is
+  // already gone never answers 500.
+  const outcome = await purgeCdn(c.env, purge, {
+    maxRequests: Math.max(0, Math.min(OPERATOR_PURGE_MAX_REQUESTS, room)),
+    deadline: Date.now() + OPERATOR_PURGE_DEADLINE_MS,
+    priority: true,
+  }).catch((): CdnPurgeOutcome => ({ status: 'failed', purged: 0, pending: 0, failed: planned }));
   // An audit line for the logs: what was done to which tour. Never the sub (reversible to the owner).
-  console.warn(`[takedown] operator ${action} of tour ${tourId} done`);
-  return c.json({ action, purged: purge.prefixes.length + purge.files.length });
+  console.warn(`[takedown] operator ${action} of tour ${tourId} done; cdn purge ${outcome.status}`);
+  return c.json({ action, purged: planned, purge: outcome });
 });
 
 // Operator restore (scripts/restore-backup.ts): copies keys back from a day's backup set,
@@ -609,16 +657,23 @@ export default {
   // tile sweep has been finishing cleanly.
   // The backup has its own, more frequent cron (backup.ts), so it gets its own
   // invocation's subrequest budget and can resume a set the last run didn't finish.
-  // The same invocation then deletes tile versions a re-tile superseded more than a
-  // day ago, with what the backup left of that budget (tile-gc.ts; no purge: nothing
-  // references their URLs any more, and edge copies age out on their own).
+  // The same invocation first retries queued CDN purges (purge.ts, at most
+  // RETRY_RUN_MAX_SUBREQUESTS), and after the backup deletes tile versions a re-tile
+  // superseded more than a day ago, with what the backup left (tile-gc.ts; no purge:
+  // nothing references their URLs any more, and edge copies age out on their own).
   // It returns before runDailyCron, so the 15-minute cron never runs the daily
   // tasks or records a daily cron run.
   // runDailyCron logs each task that throws and records the run for the health check.
   scheduled(controller, env, ctx) {
     const now = new Date(controller.scheduledTime);
     if (controller.cron === BACKUP_CRON) {
-      ctx.waitUntil(runBackupThenTileGc(env.BUCKET, now));
+      ctx.waitUntil(
+        retryPendingPurges(env, now)
+          .catch((e: unknown) => {
+            console.error('cdn purge retry failed:', e instanceof Error ? e.name : 'unknown error');
+          })
+          .then(() => runBackupThenTileGc(env.BUCKET, now, { totalOps: FIFTEEN_MINUTE_RUN_OPS })),
+      );
       return;
     }
     ctx.waitUntil(

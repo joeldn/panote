@@ -20,6 +20,7 @@ import {
   QUARANTINE_ROOT,
   SlugRecordSchema,
   storedSlugKey,
+  tilesPrefix,
   tourKey,
   tourOwnerKey,
   TourOwnerRecordSchema,
@@ -63,6 +64,8 @@ export interface TakedownArgs {
   r2: R2Config;
   /** admin-api's operator route; only set (and required) for a tour action. */
   api: { origin: string; token: string } | undefined;
+  /** The CDN origin checked after a takedown (cdn.<host>); unset skips the check. */
+  cdn: string | undefined;
 }
 
 export const USAGE =
@@ -207,6 +210,7 @@ export function parseTakedownArgs(
 
   const r2 = r2ConfigFromEnv(env, values['--allow-bucket']);
   const api = tourAction ? operatorApiFromEnv(env, r2.bucket, values['--allow-bucket']) : undefined;
+  const cdn = tourAction ? cdnOriginFromEnv(env, r2.bucket) : undefined;
   return {
     slug,
     tourId,
@@ -221,7 +225,28 @@ export function parseTakedownArgs(
     dryRun,
     r2,
     api,
+    cdn,
   };
+}
+
+const DEFAULT_CDN_ORIGINS: Record<string, string> = {
+  'pano-content-dev': 'https://cdn.panote.dev',
+  'pano-content': 'https://cdn.panote.io',
+};
+
+/**
+ * Where the bucket's public keys are served, for the check after a takedown: the
+ * bucket's own CDN host, or CDN_ORIGIN. Undefined (no check) for any other bucket.
+ */
+export function cdnOriginFromEnv(
+  env: Record<string, string | undefined>,
+  bucket: string,
+): string | undefined {
+  const origin = env.CDN_ORIGIN || DEFAULT_CDN_ORIGINS[bucket];
+  if (origin !== undefined && !/^https:\/\/[^/]+$/.test(origin)) {
+    throw new Error('CDN_ORIGIN must be an https origin with no path');
+  }
+  return origin;
 }
 
 export type TakedownStore = Pick<
@@ -587,6 +612,8 @@ export async function panosWithTiles(
   return left;
 }
 
+export const TAKEDOWN_REQUEST_TIMEOUT_MS = 120_000;
+
 /** admin-api's operator route: the owner's own unpublish or tour delete, CDN purge included. */
 export async function requestTourTakedown(
   fetchFn: FetchLike,
@@ -595,7 +622,10 @@ export async function requestTourTakedown(
   sleep?: Sleep,
 ): Promise<OperatorTakedownOk> {
   const res = await fetchWaitingOut429(
-    fetchFn,
+    // Each attempt gets its own timeout, far past the route's own bounds (its purge stops
+    // after 20 seconds), so a hung connection fails the run instead of holding it.
+    (input, init) =>
+      fetchFn(input, { ...init, signal: AbortSignal.timeout(TAKEDOWN_REQUEST_TIMEOUT_MS) }),
     `${api.origin}${OPERATOR_TAKEDOWN_PATH}`,
     {
       method: 'POST',
@@ -618,6 +648,90 @@ export async function requestTourTakedown(
   const parsed = OperatorTakedownOkSchema.safeParse(json);
   if (!parsed.success) throw new Error(`takedown ${body.action}: unexpected response`);
   return parsed.data;
+}
+
+/** What admin-api says its CDN purge did, for the operator. */
+export function describePurge(done: OperatorTakedownOk): string {
+  const p = done.purge;
+  // An admin-api from before it reported the outcome.
+  if (!p) return `${done.purged} CDN purge target(s) planned (outcome not reported)`;
+  switch (p.status) {
+    case 'none':
+      return 'nothing to purge from the CDN';
+    case 'purged':
+      return `CDN purge done (${p.purged} URL(s))`;
+    case 'pending':
+      return `CDN purge: ${p.purged} URL(s) done, ${p.pending} queued (admin-api retries them every 15 minutes)`;
+    case 'failed':
+      return `CDN purge FAILED for ${p.failed} URL(s) (${p.purged} done, ${p.pending} queued); see admin-api's logs`;
+    case 'skipped':
+      return 'CDN purge SKIPPED: admin-api has no CF_PURGE_TOKEN or CDN_ZONE_ID; edge copies stay until they expire';
+  }
+}
+
+/** A public key to fetch from the CDN after the takedown; `panoId` for a pano's tiles. */
+export interface CdnSample {
+  key: string;
+  panoId?: string;
+}
+
+// Panos sampled for the CDN check: enough to show the purge worked, few enough to be quick.
+export const CDN_CHECK_MAX_PANOS = 20;
+
+/**
+ * Before a takedown: public keys that exist now and should be gone from the CDN after it.
+ * Each tour's bundle, and with `withTiles` (a delete) each pano's manifest and one tile.
+ */
+export async function sampleCdnKeys(
+  store: TakedownStore,
+  tourIds: readonly string[],
+  panoIds: readonly string[],
+  withTiles: boolean,
+): Promise<CdnSample[]> {
+  const out: CdnSample[] = [];
+  for (const tourId of tourIds) {
+    if (await headExists(store, pubTourKey(tourId))) out.push({ key: pubTourKey(tourId) });
+  }
+  if (!withTiles) return out;
+  for (const panoId of panoIds.slice(0, CDN_CHECK_MAX_PANOS)) {
+    const keys = (await store.listObjects(tilesPrefix(panoId))).map((o) => o.key);
+    const manifest = manifestKey(panoId);
+    const tile = keys.find((k) => k !== manifest);
+    if (keys.includes(manifest)) out.push({ key: manifest, panoId });
+    if (tile !== undefined) out.push({ key: tile, panoId });
+  }
+  return out;
+}
+
+/**
+ * After a takedown: fetches each sample from the CDN (skipping panos whose tiles were
+ * kept) and returns the URLs it still serves. Only the edge this runs near is seen.
+ */
+export async function checkCdn(
+  fetchFn: FetchLike,
+  cdn: string,
+  samples: readonly CdnSample[],
+  keptPanos: ReadonlySet<string>,
+): Promise<{ checked: number; served: string[]; unreachable: string[] }> {
+  const out = { checked: 0, served: [] as string[], unreachable: [] as string[] };
+  for (const { key, panoId } of samples) {
+    if (panoId !== undefined && keptPanos.has(panoId)) continue;
+    const url = `${cdn}/${key}`;
+    out.checked++;
+    try {
+      const res = await fetchFn(url, { method: 'GET', signal: AbortSignal.timeout(15_000) });
+      await res.body?.cancel();
+      if (res.ok) out.served.push(url);
+    } catch {
+      out.unreachable.push(url);
+    }
+  }
+  return out;
+}
+
+export interface TakedownResult {
+  /** URLs the CDN still served after the takedown (empty when there was no check). */
+  cdnStillServed: string[];
 }
 
 /** One line for the operator about the owner's state. */
@@ -647,7 +761,8 @@ export const BAN_EMAIL_HINT = (sub: string): string =>
  * through admin-api, and close the account, in that order. A quarantine makes and checks
  * every copy, and writes the case record, before any delete is requested.
  */
-export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promise<void> {
+export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promise<TakedownResult> {
+  const result: TakedownResult = { cdnStillServed: [] };
   const { store, log } = deps;
   // Read-only from here to the dry-run stop: find the tour(s) and the owner.
   const tourId = args.slug !== undefined ? await tourIdForSlug(store, args.slug) : args.tourId;
@@ -672,10 +787,10 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
       `${routeAction} ${tourIds.length} tour(s) via ${args.api?.origin}`,
     args.closeAccount && 'mark the account for deletion',
   ].filter(Boolean);
-  if (planned.length === 0) return;
+  if (planned.length === 0) return result;
   if (args.dryRun) {
     log(`DRY RUN: would ${planned.join(', then ')} in ${args.r2.bucket}`);
-    return;
+    return result;
   }
 
   // Owner first: a disabled owner can't republish, or add to what's being copied.
@@ -707,6 +822,17 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
     log(`${copied.length} object(s) copied to ${quarantineKey(caseId, '')} (case.json lists them)`);
   }
 
+  // What should be gone from the CDN once the tours are down, read before they are.
+  const takesDown = routeAction === 'delete' || routeAction === 'unpublish';
+  let samples: CdnSample[] = [];
+  if (takesDown && args.cdn !== undefined) {
+    if (routeAction === 'delete' && args.tourAction !== 'quarantine') {
+      for (const id of tourIds)
+        (await tourContent(store, sub, id)).panoIds.forEach((p) => panoIds.add(p));
+    }
+    samples = await sampleCdnKeys(store, tourIds, [...panoIds], routeAction === 'delete');
+  }
+
   if (args.tourAction && args.api) {
     // One at a time: each delete checks which panos the owner's other tours still use.
     for (const id of tourIds) {
@@ -716,7 +842,10 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
         { sub, tourId: id, action: routeAction! },
         deps.sleep,
       );
-      log(`tour ${id} ${TOUR_ACTION_DONE[done.action]}; ${done.purged} CDN purge target(s) queued`);
+      log(
+        `tour ${id} ${TOUR_ACTION_DONE[done.action]}` +
+          (done.action === 'hide' || done.action === 'unhide' ? '' : `; ${describePurge(done)}`),
+      );
     }
     if (routeAction === 'unpublish') {
       log('panos and their tiles are kept (reachable by direct URL); --quarantine removes them');
@@ -742,4 +871,24 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
           : " (another of the owner's tours uses them; --all-tours takes those down too)"),
     );
   }
+
+  // The purge's proof: what was taken down no longer comes back from the CDN.
+  if (args.cdn !== undefined && samples.length > 0) {
+    const check = await checkCdn(deps.fetch, args.cdn, samples, new Set(tiled));
+    result.cdnStillServed = check.served;
+    if (check.served.length > 0) {
+      log(
+        `CDN STILL SERVES ${check.served.length} of ${check.checked} URL(s) checked: ${check.served.join(', ')}. ` +
+          'If the purge was queued, admin-api retries it every 15 minutes; check again after that, ' +
+          'and if it persists, purge them by URL in the Cloudflare dashboard (Caching > Configuration > Custom Purge).',
+      );
+    } else if (check.unreachable.length === check.checked) {
+      log(
+        `CDN check: ${args.cdn} unreachable; check the URLs by hand: ${check.unreachable.join(', ')}`,
+      );
+    } else {
+      log(`CDN check: none of ${check.checked} URL(s) checked is served any more from ${args.cdn}`);
+    }
+  }
+  return result;
 }
