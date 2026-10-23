@@ -95,7 +95,7 @@ describe('the account window', () => {
     const { router } = renderAdmin('/app/', { fetch });
     const dialog = await openAccount();
     expect(router.state.location.pathname).toBe('/app/');
-    expect(screen.getByText('Your tours')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /^Welcome/ })).toBeTruthy();
 
     expect(await dialog.findByText('maya@example.com')).toBeTruthy();
     expect(
@@ -158,7 +158,7 @@ describe('the account window', () => {
     const { router } = renderAdmin('/app/account', { fetch: server() });
     const dialog = within(await screen.findByRole('dialog', { name: 'Account' }));
     expect(await dialog.findByText('maya@example.com')).toBeTruthy();
-    expect(screen.getByText('Your tours')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /^Welcome/ })).toBeTruthy();
     fireEvent.click(dialog.getByRole('button', { name: 'Close' }));
     // The dashboard's own address (the basename, with or without its slash).
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/app\/?$/));
@@ -276,7 +276,7 @@ describe('the account menu', () => {
 
     const fetch = server();
     renderAdmin('/app/', { fetch });
-    await screen.findByText('Your tours');
+    await screen.findByRole('heading', { name: /^Welcome/ });
     // Not asked on page load, only once the menu opens.
     expect(accountCalls(fetch)).toBe(0);
     await openMenu();

@@ -5,7 +5,7 @@ import { MAX_TOURS_PER_OWNER } from '@internal/contracts';
 import { Button, ConfirmModal } from '@internal/ui';
 import { createPublicApi, tilesBaseUrl } from '@internal/web-kit';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, Outlet, useSearchParams } from 'react-router';
+import { Outlet, useSearchParams } from 'react-router';
 
 import { useAuthEnv } from '../auth-context.js';
 import { useConfig } from '../config-context.js';

@@ -65,7 +65,7 @@ describe('admin routes', () => {
   it('opens the account window over the dashboard at /app/account', async () => {
     renderAt('/app/account');
     expect(await screen.findByRole('dialog', { name: 'Account' })).toBeTruthy();
-    expect(screen.getByText('Your tours')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /^Welcome/ })).toBeTruthy();
   });
 
   it('404s an unknown share tab and unknown paths', async () => {
