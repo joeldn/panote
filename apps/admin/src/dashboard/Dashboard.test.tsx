@@ -86,6 +86,10 @@ describe('Dashboard', () => {
     const { fetch } = server(lists([]));
     renderAdmin('/app/', { fetch });
     expect(await screen.findByRole('heading', { name: 'No tours yet' })).toBeTruthy();
+    // Someone with no tours is new here: no "Welcome back".
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+      'Welcome to panote, Maya Larsson.',
+    );
     expect(screen.getByRole('link', { name: 'Upload a pano' }).getAttribute('href')).toBe(
       '/app/new',
     );
@@ -97,6 +101,9 @@ describe('Dashboard', () => {
     renderAdmin('/app/', { fetch, strict: true });
     const link = await screen.findByRole('link', { name: 'St Lawrence Jewry' });
     expect(link.getAttribute('href')).toBe('/app/t/t1');
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(
+      'Welcome back, Maya Larsson.',
+    );
     await waitFor(() => expect(card('St Lawrence Jewry').textContent).toContain('4.4k views'));
     expect(card('St Lawrence Jewry').textContent).toContain('3 panos');
     const totals = document.querySelector('.dash__totals')!;
@@ -193,6 +200,8 @@ describe('Dashboard', () => {
     });
     renderAdmin('/app/', { fetch });
     expect((await screen.findByRole('alert')).textContent).toContain('Couldn’t load your tours');
+    // Not knowing whether they have tours, it doesn't say "back".
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Welcome, Maya Larsson.');
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('link', { name: 'St Lawrence Jewry' })).toBeTruthy();

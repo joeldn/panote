@@ -85,6 +85,16 @@ function deleteBody(tour: TourSummary): string {
   return `“${tour.title}” will be permanently deleted.${panos}${link} This can’t be undone.`;
 }
 
+/**
+ * "Welcome back" only once the list shows this owner has made something: someone with no
+ * tours yet is new here (or starting over), and a plain welcome holds while the list loads.
+ */
+function greeting(dash: Pick<DashboardData, 'status' | 'tours'>, name?: string): string {
+  const to = name ? `, ${name}` : '';
+  if (dash.status !== 'ready') return `Welcome${to}.`;
+  return dash.tours.length === 0 ? `Welcome to panote${to}.` : `Welcome back${to}.`;
+}
+
 /** Owner home (design screens 02 and 13): tour cards, totals, duplicate and delete. */
 export function Dashboard() {
   const { api, user } = useSession();
@@ -180,7 +190,7 @@ export function Dashboard() {
       <header className="dash__head">
         <div>
           <p className="dash__kicker">Your tours</p>
-          <h1 className="dash__title">{name ? `Welcome back, ${name}.` : 'Welcome back.'}</h1>
+          <h1 className="dash__title">{greeting(dash, name)}</h1>
         </div>
         <Link to="/new" className="pn-btn pn-btn--primary pn-btn--lg">
           <i className="fa-solid fa-plus" aria-hidden="true" />
