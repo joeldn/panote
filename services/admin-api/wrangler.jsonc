@@ -32,8 +32,8 @@
       },
       "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TourPublisher"] }],
       // namespace_id is ours to choose (any integer, unique in the account; nothing to
-      // create), dev 13xx and production 23xx. `period` (10 or 60) must match
-      // WRITE_RATE_PERIOD_SECONDS in src/index.ts, which is the 429's Retry-After.
+      // create), dev 13xx and production 23xx. Every `period` (10 or 60) must match
+      // WRITE_RATE_PERIOD_SECONDS in src/limits.ts, which is the 429's Retry-After.
       // Writes (POST/PUT/PATCH/DELETE) per owner (Auth0 sub) per minute. 300 lets two
       // Saves of a full tour through in one minute: each is MAX_TOUR_SCENES (100) configs
       // + tour + publish.
@@ -42,6 +42,28 @@
           "name": "WRITE_LIMITER",
           "namespace_id": "1301",
           "simple": { "limit": 300, "period": 60 },
+        },
+        // Reads (GET/HEAD) per owner per minute. The editor polls each pano still tiling
+        // every 10 s: 50 at once (a day's uploads) is 300, and a poll that gets a 429 just
+        // tries again later.
+        {
+          "name": "READ_LIMITER",
+          "namespace_id": "1302",
+          "simple": { "limit": 300, "period": 60 },
+        },
+        // Insights per owner per minute, on top of READ_LIMITER: each uncached answer is
+        // 4 calls to the Analytics Engine SQL API.
+        {
+          "name": "INSIGHTS_LIMITER",
+          "namespace_id": "1303",
+          "simple": { "limit": 30, "period": 60 },
+        },
+        // The operator routes (takedown, restore) per client IP per minute, wrong tokens
+        // included.
+        {
+          "name": "OPERATOR_LIMITER",
+          "namespace_id": "1304",
+          "simple": { "limit": 10, "period": 60 },
         },
       ],
       "vars": {
@@ -93,6 +115,28 @@
           "name": "WRITE_LIMITER",
           "namespace_id": "2301",
           "simple": { "limit": 300, "period": 60 },
+        },
+        // Reads (GET/HEAD) per owner per minute. The editor polls each pano still tiling
+        // every 10 s: 50 at once (a day's uploads) is 300, and a poll that gets a 429 just
+        // tries again later.
+        {
+          "name": "READ_LIMITER",
+          "namespace_id": "2302",
+          "simple": { "limit": 300, "period": 60 },
+        },
+        // Insights per owner per minute, on top of READ_LIMITER: each uncached answer is
+        // 4 calls to the Analytics Engine SQL API.
+        {
+          "name": "INSIGHTS_LIMITER",
+          "namespace_id": "2303",
+          "simple": { "limit": 30, "period": 60 },
+        },
+        // The operator routes (takedown, restore) per client IP per minute, wrong tokens
+        // included.
+        {
+          "name": "OPERATOR_LIMITER",
+          "namespace_id": "2304",
+          "simple": { "limit": 10, "period": 60 },
         },
       ],
       "vars": {

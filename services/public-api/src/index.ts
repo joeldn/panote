@@ -13,13 +13,17 @@ import { createMiddleware } from 'hono/factory';
 // is bi-modal (D1) - logged-in users dedupe by Auth0 sub via authenticateOptional,
 // anonymous ones by an opaque X-Client-Id header. Do NOT remove this import as
 // part of a later "public-api has no auth" cleanup - see port spec section 3.
-import { authenticateOptional, rateLimit, type RateLimiter } from '@internal/worker-kit';
+import {
+  authenticateOptional,
+  rateLimit,
+  rateLimitKeyForIp,
+  type RateLimiter,
+} from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 
 import { logClientError } from './client-error.js';
-import { readJsonBody, toDataPoint } from './events.js';
+import { readBeaconBody, toDataPoint } from './events.js';
 import { listExplore } from './explore.js';
-import { rateLimitKeyForIp } from './ip-key.js';
 import { createPublishedCheck } from './published.js';
 import { TourStats } from './stats.js';
 
@@ -36,7 +40,7 @@ const isPublished = createPublishedCheck();
 // Retry-After. The limits themselves live in wrangler.jsonc, per env.
 export const RATE_PERIOD_SECONDS = 60;
 
-// Per client IP, an IPv6 client per /64 (ip-key.ts). Cloudflare always sets
+// Per client IP, an IPv6 client per /64 (worker-kit's ip-key.ts). Cloudflare always sets
 // CF-Connecting-IP in front of a Worker; without it (a test, a local dev
 // request) every caller shares one key.
 const limitByIp = (pick: (env: Env) => RateLimiter) =>
@@ -56,6 +60,24 @@ app.use('/api/tours/:tourId/*', async (c, next) => {
   await next();
 });
 
+// Beacons and error reports only come from our own pages, which are same-origin: the
+// tour page and the embed (an iframe on another site, but its document, and so every
+// beacon it sends, is on our origin). A browser marks a cross-site request with
+// Sec-Fetch-Site and Origin; a non-browser client sends neither and is let through (the
+// limiter is its brake). Checked before the limiter, so a cross-site page can't spend a
+// visitor's quota, nor have its visitors' browsers send fake views from their own IPs.
+const sameOriginOnly = createMiddleware<{ Bindings: Env }>(async (c, next) => {
+  const site = c.req.header('Sec-Fetch-Site');
+  const origin = c.req.header('Origin');
+  if ((site && site !== 'same-origin') || (origin && origin !== new URL(c.req.url).origin)) {
+    return c.json({ error: 'cross-origin' }, 403);
+  }
+  await next();
+});
+app.post('/api/tours/:tourId/view', sameOriginOnly);
+app.post('/api/tours/:tourId/events', sameOriginOnly);
+app.post('/api/errors', sameOriginOnly);
+
 // Rate limits, one per route, run before the handlers below.
 app.post(
   '/api/tours/:tourId/view',
@@ -69,25 +91,13 @@ app.post(
   '/api/tours/:tourId/like',
   limitByIp((env) => env.LIKE_LIMITER),
 );
-// Error reports only come from our own pages, which are same-origin. A browser
-// marks a cross-site request with Sec-Fetch-Site and Origin; a non-browser
-// client sends neither and is let through (the limiter is its brake). Checked
-// before the limiter, so a cross-site page can't spend a visitor's quota.
-app.post('/api/errors', async (c, next) => {
-  const site = c.req.header('Sec-Fetch-Site');
-  const origin = c.req.header('Origin');
-  if ((site && site !== 'same-origin') || (origin && origin !== new URL(c.req.url).origin)) {
-    return c.json({ error: 'cross-origin' }, 403);
-  }
-  await next();
-});
 app.post(
   '/api/errors',
   limitByIp((env) => env.ERRORS_LIMITER),
 );
 
 app.post('/api/tours/:tourId/view', async (c) => {
-  const body = await readJsonBody(c.req.raw);
+  const body = await readBeaconBody(c.req.raw);
   if (!body.ok) return c.json({ error: 'invalid body' }, body.status);
   const parsed = ViewBeaconSchema.safeParse(body.value);
   if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
@@ -101,7 +111,7 @@ app.post('/api/tours/:tourId/view', async (c) => {
 });
 
 app.post('/api/tours/:tourId/events', async (c) => {
-  const body = await readJsonBody(c.req.raw);
+  const body = await readBeaconBody(c.req.raw);
   if (!body.ok) return c.json({ error: 'invalid body' }, body.status);
   const parsed = AnalyticsEventBatchSchema.safeParse(body.value);
   if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
@@ -137,7 +147,7 @@ app.post('/api/tours/:tourId/like', async (c) => {
 
 // Frontend error reports (both SPAs). Logged to Workers Logs, stored nowhere else.
 app.post('/api/errors', async (c) => {
-  const body = await readJsonBody(c.req.raw);
+  const body = await readBeaconBody(c.req.raw);
   if (!body.ok) return c.json({ error: 'invalid body' }, body.status);
   const parsed = ClientErrorReportSchema.safeParse(body.value);
   if (!parsed.success) return c.json({ error: 'invalid body' }, 400);
@@ -147,6 +157,10 @@ app.post('/api/errors', async (c) => {
 
 // Not checked against the bundle: a read stores nothing (an unknown id reads zeros
 // from an empty Durable Object), and the dashboard reads counts for unpublished tours.
+app.get(
+  '/api/tours/:tourId/stats',
+  limitByIp((env) => env.STATS_LIMITER),
+);
 app.get('/api/tours/:tourId/stats', async (c) => {
   const res = await stat(c, c.req.param('tourId')).fetch('https://do/');
   return new Response(res.body, {

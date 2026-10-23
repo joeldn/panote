@@ -5,7 +5,7 @@ import { MAX_DWELL_MS, pubTourKey } from '@internal/contracts';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { clampDwell, toDataPoint } from './events.js';
-import app from './index.js';
+import app, { RATE_PERIOD_SECONDS } from './index.js';
 
 const setup = () => {
   const writeDataPoint = vi.fn<(p?: AnalyticsEngineDataPoint) => void>();
@@ -36,6 +36,7 @@ beforeAll(async () => {
     'ae-ev-clamp',
     'ae-ev-priv',
     'ae-ev-cap',
+    'ae-embed',
   ]) {
     await env.BUCKET.put(pubTourKey(id), '{}');
   }
@@ -168,6 +169,98 @@ describe('POST /api/tours/:tourId/view', () => {
     const r = await app.request(req, undefined, { ...env, EVENTS: { writeDataPoint } } as Env);
     expect(r.status).toBe(413);
     expect(writeDataPoint).not.toHaveBeenCalled();
+  });
+});
+
+describe('beacon bodies are read up to the cap', () => {
+  it('stops reading a chunked body with no Content-Length past the cap, and cancels it', async () => {
+    const { writeDataPoint } = setup();
+    const seen = { pulled: 0, cancelled: false };
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (seen.pulled === 100) return controller.close();
+          seen.pulled += 1;
+          controller.enqueue(new Uint8Array(1024).fill(0x20));
+        },
+        cancel() {
+          seen.cancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const req = new Request('https://x/api/tours/ae-view-1/view', {
+      method: 'POST',
+      body,
+      duplex: 'half',
+    } as RequestInit);
+    const r = await app.request(req, undefined, { ...env, EVENTS: { writeDataPoint } } as Env);
+    expect(r.status).toBe(413);
+    // 9 KiB passes the 8 KiB cap: the other 91 chunks are never read.
+    expect(seen.pulled).toBe(9);
+    expect(seen.cancelled).toBe(true);
+    expect(writeDataPoint).not.toHaveBeenCalled();
+  });
+});
+
+describe('views and events only from our own pages', () => {
+  it.each(['view', 'events'])(
+    '403s a cross-site /%s before it costs a limiter call or writes anything',
+    async (route) => {
+      const { writeDataPoint } = setup();
+      const limit = vi.fn(async (_o: { key: string }) => ({ success: true }));
+      for (const headers of [
+        { 'Sec-Fetch-Site': 'cross-site' },
+        { 'Sec-Fetch-Site': 'same-site' },
+        { Origin: 'https://elsewhere.example' },
+      ]) {
+        const r = await app.request(
+          `/api/tours/ae-embed/${route}`,
+          { method: 'POST', headers, body: route === 'view' ? '{}' : '{"events":[]}' },
+          {
+            ...env,
+            EVENTS: { writeDataPoint },
+            VIEW_LIMITER: { limit },
+            EVENTS_LIMITER: { limit },
+          } as Env,
+        );
+        expect(r.status).toBe(403);
+        expect(await r.json()).toEqual({ error: 'cross-origin' });
+      }
+      expect(limit).not.toHaveBeenCalled();
+      expect(writeDataPoint).not.toHaveBeenCalled();
+    },
+  );
+
+  // The embed is an iframe on someone else's site, but its document is ours, so its
+  // beacons are same-origin requests to the API.
+  it('counts a view from the embed (same-origin) and from a client that sends neither header', async () => {
+    const { writeDataPoint, post } = setup();
+    const embed = await post(
+      '/api/tours/ae-embed/view',
+      { surface: 'embed' },
+      {
+        'Sec-Fetch-Site': 'same-origin',
+        Origin: 'http://localhost',
+      },
+    );
+    expect(embed.status).toBe(200);
+    expect((await post('/api/tours/ae-embed/view', {})).status).toBe(200);
+    expect(writeDataPoint).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('GET /api/tours/:tourId/stats', () => {
+  it('429s with Retry-After, keyed by CF-Connecting-IP', async () => {
+    const limit = vi.fn(async (_o: { key: string }) => ({ success: false }));
+    const r = await app.request(
+      '/api/tours/ae-embed/stats',
+      { headers: { 'CF-Connecting-IP': '198.51.100.9' } },
+      { ...env, STATS_LIMITER: { limit } },
+    );
+    expect(r.status).toBe(429);
+    expect(r.headers.get('Retry-After')).toBe(String(RATE_PERIOD_SECONDS));
+    expect(limit).toHaveBeenCalledWith({ key: '198.51.100.9' });
   });
 });
 

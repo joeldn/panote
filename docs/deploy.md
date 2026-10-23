@@ -1726,18 +1726,23 @@ errors the request goes through and `rate limiter unavailable` is logged.
 |---|---|---|---|---|---|
 | `upload-api` | `UPLOAD_URL_LIMITER` | `POST /api/upload-url` | owner (Auth0 sub), checked after the JWT | 60/min | `1101` / `2101` |
 | `admin-api` | `WRITE_LIMITER` | every `POST`/`PUT`/`PATCH`/`DELETE` under `/api/admin/*` except the operator routes (takedown, restore) | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1301` / `2301` |
+| `admin-api` | `READ_LIMITER` | every `GET`/`HEAD` under `/api/admin/*` | owner (Auth0 sub), checked after the JWT, before any R2 read | 300/min | `1302` / `2302` |
+| `admin-api` | `INSIGHTS_LIMITER` | `GET /api/admin/tours/:id/insights`, on top of `READ_LIMITER` | owner (Auth0 sub) | 30/min | `1303` / `2303` |
+| `admin-api` | `OPERATOR_LIMITER` | the operator routes (takedown, restore), before the token check, so a wrong token counts | client IP (IPv6 per /64) | 10/min | `1304` / `2304` |
 | `public-api` | `VIEW_LIMITER` | `POST /api/tours/:id/view` | client IP (IPv6 per /64) | 30/min | `1201` / `2201` |
 | `public-api` | `LIKE_LIMITER` | `POST /api/tours/:id/like` | client IP (IPv6 per /64) | 10/min | `1202` / `2202` |
 | `public-api` | `EVENTS_LIMITER` | `POST /api/tours/:id/events` | client IP (IPv6 per /64) | 120/min | `1203` / `2203` |
 | `public-api` | `ERRORS_LIMITER` | `POST /api/errors` | client IP (IPv6 per /64) | 20/min | `1204` / `2204` |
 | `public-api` | `EXPLORE_LIMITER` | `GET /api/explore` | client IP (IPv6 per /64) | 60/min | `1205` / `2205` |
+| `public-api` | `STATS_LIMITER` | `GET /api/tours/:id/stats` | client IP (IPv6 per /64) | 60/min | `1206` / `2206` |
 
 `namespace_id` is ours to pick, an integer unique within the Cloudflare account; there is nothing
 to create first (Cloudflare docs, "Rate Limiting" binding, checked 2026-10-21). Two bindings with
 the same id share counters, so every binding and every env has its own. The dashboard doesn't show
 these limits: watch for `429`s in Workers Logs. To change a limit, edit `simple.limit` in both env
 blocks; `period` may only be `10` or `60`, and if it changes, change the matching constant
-(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS`) too. The per-IP keys are coarse: an
+(`UPLOAD_URL_RATE_PERIOD_SECONDS`, `RATE_PERIOD_SECONDS`, `WRITE_RATE_PERIOD_SECONDS` in
+`services/admin-api/src/limits.ts`, which every admin-api limiter shares) too. The per-IP keys are coarse: an
 office or a carrier NAT shares one IP, which is why those limits are well above what one browser
 sends (a view per page load, an events beacon at most every 5s, a like per click). The IP is only
 the limiter's key, held in Cloudflare's short-lived counters: nothing of ours stores it, and AE and
@@ -1745,6 +1750,21 @@ the limiter's key, held in Cloudflare's short-lived counters: nothing of ours st
 300/min lets two editor Saves of a full tour through in one minute (each is up to `MAX_TOUR_SCENES`
 = 100 configs, the tour and the publish); people editing by hand stay far below it. A Save cut off
 by a `429` keeps the refused documents unsaved, and pressing Save again sends just those.
+`admin-api`'s 300 reads a minute cover the editor polling every pano still tiling once each 10 s
+for 50 panos at once (a day's uploads); a poll that gets a `429` tries again on its next turn.
+
+Request bodies are read through a capped reader (`readJsonBody`, `packages/worker-kit/src/body.ts`):
+a `Content-Length` over the cap is refused before anything is read, and a body sent without one
+(chunked) is counted as it streams in and cancelled once it passes the cap, so nothing past the cap
+is buffered. Over the cap is `413`. The caps: `public-api`'s beacons and error reports 8 KiB
+(`MAX_BODY_BYTES`), `admin-api`'s scene config `PUT` 16 MiB (`MAX_CONFIG_BODY_BYTES`: a config at
+every schema cap is about 4.5 MiB in ASCII and 12.6 MiB in 3-byte characters), and every other
+`admin-api` write 256 KiB (`MAX_WRITE_BODY_BYTES`; a tour at its caps is under 50 KiB).
+
+Ids in a route or a hand-built body (`panoId`, `tourId`, a list `cursor`) must match `PANO_PATTERN`
+and be at most 64 characters (`isContentId` in `@internal/contracts`, the same rule as every body
+schema): anything else is a `400` in `admin-api` and `upload-api`, and `public-api`'s
+`400 {"error":"invalid tourId"}`, before the id reaches an R2 key or a Durable Object.
 
 ### admin-api object caps
 
@@ -1806,7 +1826,18 @@ unpublish or a takedown its views, events and likes can still count for up to 30
 cached: an unknown id costs a `HEAD` per request, braked by the per-IP limit, and a tour counts as
 soon as it is published. The website's view and events beacons ignore the `404`. Stats reads
 (`GET .../stats`) don't check the bundle: a read stores nothing (an unknown id reads zeros), and the
-admin dashboard reads the view counts of unpublished tours too.
+admin dashboard reads the view counts of unpublished tours too. They are limited per IP
+(`STATS_LIMITER`, see Rate limits).
+
+Views and events are refused from other sites the same way error reports are (see Error reporting,
+"Same origin only"): a `Sec-Fetch-Site` other than `same-origin`, or an `Origin` other than the
+API's own, gets `403 {"error":"cross-origin"}` before the limiter. Otherwise any page could have
+its visitors' browsers send views for any tour from their own IPs, past the per-IP limit. The
+embed is not affected: the iframe sits on another site, but its document is served from Panote's
+own origin (`/s/<slug>/embed`), so its beacons are same-origin requests. An embed placed in a
+`sandbox` iframe without `allow-same-origin` has an opaque origin, and its views stop counting; the
+embed snippet has no `sandbox`. A local Vite dev server proxying `/api` sends a localhost `Origin`,
+so its views and events are refused too.
 
 ### Owner quotas
 
@@ -1877,7 +1908,9 @@ Two ways to stop abuse, usually together:
   (the tour stays live by link, so there is nothing to purge); `unhide` lists it again if it is
   still published and Public (see Explore). It answers `404` for a missing or wrong token, and
   always while the `OPERATOR_TOKEN` secret isn't set on that env, so the route doesn't exist until
-  you set it. It skips the write gate (no Auth0 user).
+  you set it. It skips the write gate (no Auth0 user); instead `OPERATOR_LIMITER` allows 10
+  requests a minute per client IP, takedown and restore together, counted before the token is
+  checked, so wrong guesses spend it too (`429` with `Retry-After: 60`; see Rate limits).
 - **Disable the owner.** A marker `accounts/<owner>/disabled.json` (`{ v, disabledAt, reason? }`).
   While it exists every `admin-api` write and `upload-api`'s upload URL answer
   `403 {"error":"account disabled"}` (one more R2 `HEAD` each, in parallel with the deletion
@@ -2353,6 +2386,12 @@ for `GET /api/admin/tours/:tourId/insights`. The event schema and privacy rules 
 - **Vars.** `CF_ACCOUNT_ID` (`12e2809e05de8a2bf20b815fd394ec9a`) and `AE_DATASET` are plain vars
   in both `admin-api` env blocks; `AE_DATASET` must match `public-api`'s `EVENTS` dataset for the
   same env. Nothing to do beyond deploying.
+- **Limits and cache.** Each owner gets 30 Insights requests a minute (`INSIGHTS_LIMITER`, on
+  top of the read limit; see Rate limits). A full answer is kept in the Cache API of the
+  Cloudflare location for 60 s (`INSIGHTS_CACHE_SECONDS`), one entry per tour and `days`, so
+  refreshing doesn't run the 4 SQL queries again: new views show up within a minute or so, on top
+  of AE's own ingestion delay. The route checks the caller owns the tour before it reads the
+  cache, and a `502` is never cached. The browser still gets `private, no-store`.
 - **Smoke test (dev).** After both Workers deploy and the secret is set, open a tour a few times,
   wait a minute or two for AE ingestion, then `GET /api/admin/tours/<tourId>/insights` as the
   owner and check `daily` shows today's views. The same token can run ad-hoc queries against
@@ -2554,7 +2593,7 @@ the account has the resources the config names.
     **Status: outstanding.**
 
 11. **Rate limits and Analytics Engine: nothing to create.** The production `namespace_id`s
-    (`2101`, `2201`–`2205`, `2301`, Rate limits) are already in config and only have to be unique in the
+    (`2101`, `2201`–`2206`, `2301`–`2304`, Rate limits) are already in config and only have to be unique in the
     account; the `panote_events` dataset appears on the first write (Insights).
     Verify: `grep -rn namespace_id services/*/wrangler.jsonc` shows no id used twice.
     **Status: done in config.**

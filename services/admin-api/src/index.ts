@@ -3,7 +3,9 @@ import {
   AccountDeleteRequestSchema,
   checkSlug,
   configKey,
+  contentIdError,
   deletingKey,
+  isContentId,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
   OPERATOR_RESTORE_PATH,
@@ -13,7 +15,6 @@ import {
   OperatorTakedownRequestSchema,
   originalKey,
   PANO_DELETE_CONFLICTS,
-  PANO_PATTERN,
   PublishRequestSchema,
   REAUTH_REQUIRED_ERROR,
   SceneConfigSchema,
@@ -28,10 +29,11 @@ import {
   type TourDoc,
   type TourPublishState,
 } from '@internal/contracts';
-import { authenticate, rateLimit, type AuthContext } from '@internal/worker-kit';
+import { authenticate, rateLimit, rateLimitKeyForIp, type AuthContext } from '@internal/worker-kit';
 import { errorHandler } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
+import { createMiddleware } from 'hono/factory';
 
 import { BACKUP_CRON, restoreFromBackup, runBackup } from './backup.js';
 import {
@@ -52,6 +54,12 @@ import {
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
 import { insightsRoute } from './insights.js';
+import {
+  jsonBody,
+  jsonObjectBody,
+  MAX_CONFIG_BODY_BYTES,
+  WRITE_RATE_PERIOD_SECONDS,
+} from './limits.js';
 import { isAccountDisabled, isOperator, recordTourOwner, tourExists } from './operator.js';
 import { sweepPlans } from './plans.js';
 import { readPublishRecord, sweepExpiredAliases } from './publish.js';
@@ -82,8 +90,8 @@ const parseListQuery = (c: {
   req: { query: (n: string) => string | undefined };
 }): { cursor: string | undefined; limit: number } | { error: string } => {
   const cursor = c.req.query('cursor');
-  if (cursor !== undefined && !PANO_PATTERN.test(cursor)) {
-    return { error: `cursor must match ${PANO_PATTERN}` };
+  if (cursor !== undefined && !isContentId(cursor)) {
+    return { error: contentIdError('cursor') };
   }
   const limit = parseListLimit(c.req.query('limit'));
   if (!limit.ok) return { error: `limit must be an integer between 1 and ${MAX_LIST_LIMIT}` };
@@ -136,7 +144,7 @@ const loadSceneConfigs = async (
   return entries;
 };
 
-// `sub` and `auth` are set by the write gate below, which has already verified the JWT.
+// `sub` (and `auth`, for writes) are set by the gate below, which has already verified the JWT.
 type AppEnv = {
   Bindings: Env;
   Variables: { sub: string | undefined; auth?: AuthContext };
@@ -145,17 +153,40 @@ type AppEnv = {
 const app = new Hono<AppEnv>();
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const READ_METHODS = new Set(['GET', 'HEAD']);
 const ACCOUNT_PATH = '/api/admin/account';
-// The WRITE_LIMITER binding's `simple.period` (wrangler.jsonc), sent as the
-// 429's Retry-After. The limit itself lives in wrangler.jsonc, per env.
-export const WRITE_RATE_PERIOD_SECONDS = 60;
+export { WRITE_RATE_PERIOD_SECONDS };
 
+// The operator routes have no Auth0 user; their own secret guards them. A per-IP limit
+// (an IPv6 client per /64) runs first, so a wrong or missing token spends it too and the
+// secret can't be guessed at speed. Cloudflare always sets CF-Connecting-IP in front of a
+// Worker; without it (a test) every caller shares one key.
+const operatorLimit = createMiddleware<AppEnv>(async (c, next) => {
+  const ip = rateLimitKeyForIp(c.req.header('CF-Connecting-IP') ?? 'unknown');
+  const limited = await rateLimit(c.env.OPERATOR_LIMITER, ip, WRITE_RATE_PERIOD_SECONDS);
+  if (limited) return limited;
+  await next();
+});
+app.use(OPERATOR_TAKEDOWN_PATH, operatorLimit);
+app.use(OPERATOR_RESTORE_PATH, operatorLimit);
+
+// Every read is rate limited per owner too, on its own budget, before any R2 read: a
+// list costs R2 operations on every call, and nothing else would stop a loop on it.
+// Insights has its own, tighter limit on top (insights.ts).
+//
 // Every write is rate limited per owner, before any R2 read. Once an account is
 // marked for deletion it is read-only: no write may recreate what the delete is
 // removing. The account route itself stays open for retries, and for a disabled
 // owner too: they may still delete their own account. The operator routes have no
 // Auth0 user; their own secret guards them.
 app.use('/api/admin/*', async (c, next) => {
+  if (READ_METHODS.has(c.req.method)) {
+    const { sub } = await authenticate(c.req.raw, c.env);
+    const limited = await rateLimit(c.env.READ_LIMITER, sub, WRITE_RATE_PERIOD_SECONDS);
+    if (limited) return limited;
+    c.set('sub', sub);
+    return next();
+  }
   if (!WRITE_METHODS.has(c.req.method)) return next();
   if (c.req.path === OPERATOR_TAKEDOWN_PATH || c.req.path === OPERATOR_RESTORE_PATH) return next();
   const auth = await authenticate(c.req.raw, c.env);
@@ -175,7 +206,7 @@ app.use('/api/admin/*', async (c, next) => {
   return next();
 });
 
-// The caller's sub: from the write gate when it ran, else verified here (reads).
+// The caller's sub: from the gate when it ran, else verified here.
 const ownerOf = async (c: Context<AppEnv>): Promise<string> =>
   c.get('sub') ?? (await authenticate(c.req.raw, c.env)).sub;
 
@@ -221,9 +252,9 @@ app.get('/api/admin/panos', async (c) => {
 app.get('/api/admin/panos/:panoId', async (c) => {
   const sub = await ownerOf(c);
   const panoId = c.req.param('panoId');
-  if (!PANO_PATTERN.test(panoId)) {
+  if (!isContentId(panoId)) {
     c.header('Cache-Control', NO_STORE);
-    return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
+    return c.json({ error: contentIdError('panoId') }, 400);
   }
   // Cheap polling path (the upload chip's failure detection, every 15s):
   // skips reading config.json entirely, unlike the full GET below.
@@ -256,7 +287,7 @@ app.put('/api/admin/panos/:panoId/config', async (c) => {
   const sub = await ownerOf(c);
   const panoId = c.req.param('panoId');
   const parsed = SceneConfigSchema.safeParse({
-    ...((await c.req.json().catch(() => null)) ?? {}),
+    ...(await jsonObjectBody(c.req.raw, MAX_CONFIG_BODY_BYTES)),
     panoId,
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
@@ -294,8 +325,8 @@ app.delete('/api/admin/panos/:panoId', async (c) => {
   const sub = await ownerOf(c);
   const panoId = c.req.param('panoId');
   // No body schema here, so check panoId directly or it throws a 500 below.
-  if (!PANO_PATTERN.test(panoId)) {
-    return c.json({ error: `panoId must match ${PANO_PATTERN}` }, 400);
+  if (!isContentId(panoId)) {
+    return c.json({ error: contentIdError('panoId') }, 400);
   }
   const result = await deleteOwnedPano(c.env.BUCKET, sub, panoId);
   if (!result.ok) {
@@ -312,7 +343,7 @@ app.post('/api/admin/tours', async (c) => {
   const sub = await ownerOf(c);
   const tourId = crypto.randomUUID();
   const parsed = TourDocSchema.safeParse({
-    ...(await c.req.json().catch(() => ({}))),
+    ...(await jsonObjectBody(c.req.raw)),
     tourId,
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
@@ -346,9 +377,9 @@ app.get('/api/admin/tours', async (c) => {
 app.get('/api/admin/tours/:tourId', async (c) => {
   const sub = await ownerOf(c);
   const tourId = c.req.param('tourId');
-  if (!PANO_PATTERN.test(tourId)) {
+  if (!isContentId(tourId)) {
     c.header('Cache-Control', NO_STORE);
-    return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
+    return c.json({ error: contentIdError('tourId') }, 400);
   }
   const [obj, stored] = await Promise.all([
     c.env.BUCKET.get(tourKey(sub, tourId)),
@@ -378,7 +409,7 @@ app.put('/api/admin/tours/:tourId', async (c) => {
   const sub = await ownerOf(c);
   const tourId = c.req.param('tourId');
   const parsed = TourDocSchema.safeParse({
-    ...(await c.req.json().catch(() => ({}))),
+    ...(await jsonObjectBody(c.req.raw)),
     tourId,
   });
   if (!parsed.success) return c.json({ error: parsed.error.format() }, 400);
@@ -412,8 +443,8 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
   const tourId = c.req.param('tourId');
   // No body schema here, so check tourId directly (same reasoning as the
   // pano DELETE above) or tourKey() throws a 500 below.
-  if (!PANO_PATTERN.test(tourId)) {
-    return c.json({ error: `tourId must match ${PANO_PATTERN}` }, 400);
+  if (!isContentId(tourId)) {
+    return c.json({ error: contentIdError('tourId') }, 400);
   }
   const stub = publisher(c.env, tourId);
   purgeLater(c, await deleteTour(c.env.BUCKET, sub, tourId, () => stub.unpublish(sub, tourId)));
@@ -421,7 +452,7 @@ app.delete('/api/admin/tours/:tourId', async (c) => {
 });
 
 const tourIdError = (tourId: string): string | null =>
-  PANO_PATTERN.test(tourId) ? null : `tourId must match ${PANO_PATTERN}`;
+  isContentId(tourId) ? null : contentIdError('tourId');
 
 const slugError = (slug: string): string | null => {
   const check = checkSlug(slug);
@@ -436,7 +467,7 @@ app.post('/api/admin/tours/:tourId/publish', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const body = PublishRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = PublishRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = body.data.slug !== undefined ? slugError(body.data.slug) : null;
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
@@ -451,7 +482,7 @@ app.put('/api/admin/tours/:tourId/slug', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const body = SlugPutRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = SlugPutRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const invalidSlug = slugError(body.data.slug);
   if (invalidSlug) return c.json({ error: invalidSlug }, 400);
@@ -464,7 +495,7 @@ app.patch('/api/admin/tours/:tourId/visibility', async (c) => {
   const tourId = c.req.param('tourId');
   const idError = tourIdError(tourId);
   if (idError) return c.json({ error: idError }, 400);
-  const body = VisibilityPatchRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = VisibilityPatchRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const out = await publisher(c.env, tourId).setVisibility(sub, tourId, body.data.visibility);
   return c.json(out.body, out.status);
@@ -498,7 +529,7 @@ const accountDeps = (env: Env): AccountDeps => ({
 
 app.delete(ACCOUNT_PATH, async (c) => {
   const auth = c.get('auth') ?? (await authenticate(c.req.raw, c.env));
-  const body = AccountDeleteRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = AccountDeleteRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) {
     return c.json({ error: `confirm must be "${ACCOUNT_DELETE_CONFIRMATION}"` }, 400);
   }
@@ -524,7 +555,7 @@ app.post(OPERATOR_TAKEDOWN_PATH, async (c) => {
   if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
     return c.json({ error: 'not found' }, 404);
   }
-  const body = OperatorTakedownRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = OperatorTakedownRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const { sub, tourId, action } = body.data;
   if (!(await tourExists(c.env.BUCKET, sub, tourId))) {
@@ -555,7 +586,7 @@ app.post(OPERATOR_RESTORE_PATH, async (c) => {
   if (!(await isOperator(c.env.OPERATOR_TOKEN, c.req.header(OPERATOR_TOKEN_HEADER)))) {
     return c.json({ error: 'not found' }, 404);
   }
-  const body = OperatorRestoreRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+  const body = OperatorRestoreRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const { date, keys, overwrite } = body.data;
   const out = await restoreFromBackup(c.env.BUCKET, date, keys, overwrite);

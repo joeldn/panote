@@ -1,10 +1,11 @@
 import {
   accountDeletionKey,
   accountDisabledKey,
+  contentIdError,
   deletingKey,
+  isContentId,
   MAX_PLAN_BYTES,
   originalKey,
-  PANO_PATTERN,
   planKey,
   tourKey,
   type PlanImageType,
@@ -147,8 +148,8 @@ export default {
           { status: 400 },
         );
       }
-      if (isPlan && (typeof body.tourId !== 'string' || !PANO_PATTERN.test(body.tourId))) {
-        return Response.json({ error: `tourId must match ${PANO_PATTERN}` }, { status: 400 });
+      if (isPlan && !isContentId(body.tourId)) {
+        return Response.json({ error: contentIdError('tourId') }, { status: 400 });
       }
 
       const r2 = createR2S3Client({
@@ -187,8 +188,8 @@ export default {
         if (typeof body.panoId !== 'string' || body.panoId.length === 0) {
           return Response.json({ error: 'panoId must be a non-empty string' }, { status: 400 });
         }
-        if (!PANO_PATTERN.test(body.panoId)) {
-          return Response.json({ error: `panoId must match ${PANO_PATTERN}` }, { status: 400 });
+        if (!isContentId(body.panoId)) {
+          return Response.json({ error: contentIdError('panoId') }, { status: 400 });
         }
         panoId = body.panoId;
         const [original, tombstone] = await Promise.all([

@@ -116,7 +116,7 @@ describe('per-owner write rate limit', () => {
   });
 
   it.each(['dev', 'production'])(
-    '%s: WRITE_LIMITER period is WRITE_RATE_PERIOD_SECONDS',
+    '%s: every limiter period is WRITE_RATE_PERIOD_SECONDS',
     (name) => {
       type Config = {
         env: Record<string, { ratelimits?: { name: string; simple: { period: number } }[] }>;
@@ -124,6 +124,9 @@ describe('per-owner write rate limit', () => {
       const limiters = (parseJsonc(wrangler) as Config).env[name]?.ratelimits ?? [];
       expect(limiters.map((l) => [l.name, l.simple.period])).toEqual([
         ['WRITE_LIMITER', WRITE_RATE_PERIOD_SECONDS],
+        ['READ_LIMITER', WRITE_RATE_PERIOD_SECONDS],
+        ['INSIGHTS_LIMITER', WRITE_RATE_PERIOD_SECONDS],
+        ['OPERATOR_LIMITER', WRITE_RATE_PERIOD_SECONDS],
       ]);
     },
   );

@@ -59,6 +59,18 @@ export const MAX_HOTSPOT_ID_LENGTH = 64;
 // load; admin-api does not truncate on read to make it fit.
 export const MAX_ID_LENGTH = 64;
 
+/**
+ * A panoId or tourId taken from a URL or a hand-built body, held to what every body schema
+ * allows: PANO_PATTERN and at most MAX_ID_LENGTH characters. Checked before the id reaches
+ * an R2 key, a Durable Object name or a SQL string, so an overlong id is a 400, not a 500.
+ */
+export const isContentId = (id: unknown): id is string =>
+  typeof id === 'string' && id.length <= MAX_ID_LENGTH && PANO_PATTERN.test(id);
+
+/** The 400 message for an id that fails isContentId. */
+export const contentIdError = (label: string): string =>
+  `${label} must match ${PANO_PATTERN} and be at most ${MAX_ID_LENGTH} characters`;
+
 // Translations (Q4) sit beside the text they translate, keyed by language tag: a
 // hotspot's live in the hotspot, so deleting or duplicating it carries them along and
 // nothing can point at an id that is gone. Each string has the same cap as the field it

@@ -49,6 +49,12 @@
           "namespace_id": "1205",
           "simple": { "limit": 60, "period": 60 },
         },
+        // GET /api/tours/:id/stats: one read per tour page load, and again after a like.
+        {
+          "name": "STATS_LIMITER",
+          "namespace_id": "1206",
+          "simple": { "limit": 60, "period": 60 },
+        },
       ],
       // Read-only: a like needs the tour's public bundle (pub/tours/<tourId>.json) to exist,
       // and Explore reads its index (explore/) and re-checks each entry against pub/.
@@ -94,6 +100,12 @@
         {
           "name": "EXPLORE_LIMITER",
           "namespace_id": "2205",
+          "simple": { "limit": 60, "period": 60 },
+        },
+        // GET /api/tours/:id/stats: one read per tour page load, and again after a like.
+        {
+          "name": "STATS_LIMITER",
+          "namespace_id": "2206",
           "simple": { "limit": 60, "period": 60 },
         },
       ],

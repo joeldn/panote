@@ -219,6 +219,20 @@ describe('upload-url', () => {
       expect(r.status).toBe(400);
     });
 
+    it('400 for a panoId over 64 characters, never building a key from it', async () => {
+      const long = 'p'.repeat(65);
+      const fetchSpy = vi.fn(
+        async (_input: Request | string) => new Response(null, { status: 404 }),
+      );
+      vi.stubGlobal('fetch', fetchSpy);
+      const r = await post({ ...validBody, panoId: long });
+      expect(r.status).toBe(400);
+      const urls = fetchSpy.mock.calls.map(([input]) =>
+        typeof input === 'string' ? input : input.url,
+      );
+      expect(urls.some((u) => u.includes(long))).toBe(false);
+    });
+
     it.each([123, null, '', ['p1'], {}])(
       '400 for a non-string/empty panoId (%j), rather than silently minting a new pano',
       async (panoId) => {
@@ -809,6 +823,7 @@ describe('upload-url for a floor-plan image (kind: plan)', () => {
   it('400s a bad tourId, a missing one, a bad type and an unknown kind', async () => {
     vi.stubGlobal('fetch', stub());
     expect((await post({ ...planBody, tourId: '../x' })).status).toBe(400);
+    expect((await post({ ...planBody, tourId: 't'.repeat(65) })).status).toBe(400);
     const { tourId: _gone, ...noTour } = planBody;
     expect((await post(noTour)).status).toBe(400);
     expect((await post({ ...planBody, contentType: 'image/svg+xml' })).status).toBe(400);
