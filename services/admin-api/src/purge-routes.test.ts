@@ -21,8 +21,9 @@ import {
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { RECENT_UPLOAD_MS, STALLED_TILING_MS } from './delete-owned-pano.js';
-import { BACKUP_CRON } from './backup.js';
-import worker from './index.js';
+import { BACKUP_CRON, BACKUP_RUN_BUDGET } from './backup.js';
+import worker, { FIFTEEN_MINUTE_RUN_OPS } from './index.js';
+import { meteredBucket, RETRY_RUN_MAX_SUBREQUESTS } from './purge.js';
 import { PLAN_SWEEP_GRACE_MS } from './plans.js';
 
 const MY_SUB = 'auth0|purge-me';
@@ -431,4 +432,52 @@ describe('queued purge retry on the 15-minute cron', () => {
     expect(bodies).toEqual([{ prefixes: ['cdn.panote.dev/tiles/cron-p/'] }]);
     expect(await pendingRecords()).toEqual([]);
   });
+});
+
+describe('the 15-minute invocation as a whole', () => {
+  it('gives the backup and tile sweep what the purge retry may not spend', () => {
+    expect(FIFTEEN_MINUTE_RUN_OPS).toBe(BACKUP_RUN_BUDGET - RETRY_RUN_MAX_SUBREQUESTS);
+    expect(RETRY_RUN_MAX_SUBREQUESTS + FIFTEEN_MINUTE_RUN_OPS).toBe(900);
+  });
+
+  it(`stays within ${BACKUP_RUN_BUDGET} R2 operations and purge requests, with every part busy`, async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await clearPending();
+    // A full queue whose purges all fail (each record rotates: a PUT and a DELETE)...
+    for (let i = 0; i < 25; i++) {
+      await env.BUCKET.put(
+        `${CDN_PURGE_PENDING_PREFIX}2026-10-23T00:00:00.000Z-${String(i).padStart(3, '0')}.json`,
+        JSON.stringify({
+          v: 1,
+          firstAt: new Date().toISOString(),
+          prefixes: [`tiles/b${i}/`],
+          files: [],
+        }),
+      );
+    }
+    // ...and more for the backup to copy than one run's budget allows.
+    const keys = Array.from({ length: 600 }, (_, i) => `slugs/budget-${i}.json`);
+    for (let i = 0; i < keys.length; i += 100) {
+      await Promise.all(
+        keys.slice(i, i + 100).map((k) => env.BUCKET.put(k, JSON.stringify({ v: 1, tourId: 't' }))),
+      );
+    }
+    const { spy } = mockPurgeFetch(async () => new Response('', { status: 503 }));
+    const meter = meteredBucket(env.BUCKET);
+    const ctx = createExecutionContext();
+    // A later day than this file's other cron run, so a new backup set starts.
+    const day = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    await worker.scheduled(
+      createScheduledController({ scheduledTime: day, cron: BACKUP_CRON }),
+      { ...env, BUCKET: meter.bucket, CF_PURGE_TOKEN: TOKEN, CDN_ZONE_ID: ZONE },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    const total = meter.calls() + spy.mock.calls.length;
+    expect(total).toBeLessThanOrEqual(BACKUP_RUN_BUDGET);
+    // Not vacuous: the backup used most of what it was given.
+    expect(total).toBeGreaterThan(FIFTEEN_MINUTE_RUN_OPS);
+  }, 60_000);
 });

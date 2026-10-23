@@ -759,10 +759,11 @@ failing after 7 days (`cdn purge given up after 7 days`), go to `ops/cdn-purge/d
 The queue is capped at 1,000 records: past that, each run drops the 200 oldest owner records
 after its own (never a takedown's) in one batch delete, logs `cdn purge queue over 1000 records`
 and alerts; those edge copies stay until their TTL. A run makes at most 97 subrequests
-(`RETRY_RUN_MAX_SUBREQUESTS`). It runs first in the 15-minute invocation, and the backup then
-gets `BACKUP_RUN_BUDGET` (900) less those 97, so the invocation stays within 900, under the 1,000
-per-invocation limit: the cap holds because both are capped. Anything else that comes to share
-the backup's invocation must share what the backup is given, not add to it.
+(`RETRY_RUN_MAX_SUBREQUESTS`). It runs first in the 15-minute invocation; the backup, the tile
+sweep and the sweep's status then share the other 803 (`FIFTEEN_MINUTE_RUN_OPS`, passed to
+`runBackupThenTileGc` as `totalOps`), so the invocation makes at most 900
+(`BACKUP_RUN_BUDGET`), under the 1,000 per-invocation limit: the cap holds because every part is
+capped. Anything else that comes to share the invocation must come out of those 900, not add to them.
 With the token unset or `CDN_ZONE_ID` not a real 32-hex id it logs `cdn purge skipped`, does
 nothing and queues nothing (the cron leaves the queue alone too).
 
@@ -1234,18 +1235,19 @@ any check fails:
 
 A pano whose original is gone has been deleted; its record and dir just go.
 
-**Limits.** The sweep shares the 15-minute invocation with the backup, and the two together, with
-the sweep's status record, make at most `BACKUP_RUN_BUDGET` (900) R2 operations, the figure the
-backup was already sized to keep under the per-invocation subrequest limit: the backup gets that
-total less 2, and the sweep whatever the backup run left (`runBackupThenTileGc` in
-`services/admin-api/src/tile-gc.ts`, which takes the total as `totalOps`, so another task on the
-same cron can spend part of it first and pass what is left). Once a day's backup set is
-complete a backup run costs 2 operations, so most runs give the sweep about 900. A record costs 3
+**Limits.** The sweep shares the 15-minute invocation with the queued CDN purge retry and the
+backup. The invocation makes at most `BACKUP_RUN_BUDGET` (900) R2 operations and purge requests,
+the figure the backup was already sized to keep under the per-invocation subrequest limit: the
+purge retry runs first and may spend 97 (CDN purge on delete), and the backup, the sweep and the
+sweep's status share the other 803 (`runBackupThenTileGc` in `services/admin-api/src/tile-gc.ts`,
+called with `totalOps: FIFTEEN_MINUTE_RUN_OPS`): the backup gets that less 2, and the sweep
+whatever the backup run left. Once a day's backup set is complete a backup run costs 2
+operations, so most runs give the sweep about 800. A record costs 3
 operations to check, plus one list per 1,000 objects in the dir to look for newer writes and one
 list and one delete per 1,000 to delete it: about 7 for a typical pano, 31 at most (a full
 16,384 px pyramid, 8,192 objects). A run starts a record only with 31 operations left, and also
-stops after acting on 200 records or looking at 500. That is roughly 125 typical records a run,
-about 12,000 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
+stops after acting on 200 records or looking at 500. That is roughly 110 typical records a run,
+about 10,500 a day at 96 runs (the old daily run did 50). Each run starts at one of 16 points in
 `tile-gc/`, moving on each quarter hour, and wraps round, so kept records listed early can't take
 every run's budget. Kept ones are checked again on a later run. CPU is not a constraint (a record
 is a few small JSON parses).
@@ -1643,8 +1645,8 @@ including a deleted account's, until its set ages out, at most 31 days.
 **Schedule and retention.** Its own Cron Trigger, `*/15 * * * *` (`BACKUP_CRON`, in both env
 blocks of `wrangler.jsonc` beside the daily `17 3 * * *`), so it gets an invocation, and a
 subrequest budget, of its own. The first run after 00:00 UTC starts that day's set. Each run makes
-at most `BACKUP_RUN_BUDGET` (900) R2 operations, less the 97 the queued CDN purge retry may
-spend first in the same invocation (CDN purge on delete), records how far it got in `progress.json`, and
+at most `BACKUP_RUN_BUDGET` (900) R2 operations less the 97 the queued CDN purge retry may
+spend first and the tile sweep's status's 2 (so 801; the sweep gets what it leaves), records how far it got in `progress.json`, and
 the next run carries on from there; a set that runs past midnight is finished before the next
 day's starts, so sets are never left half-done by the calendar. Once a day's set is complete, a
 run costs one GET and one HEAD. A run saves its progress every 100 objects and after every
