@@ -342,7 +342,10 @@ export const sweepAccountDeletions = async (
   let retained = 0;
   for (const { key, record } of await listMarkers(deps.bucket)) {
     const { sub, completedAt } = record;
-    const owners = ownersOf(record);
+    // Linked subs only until the delete completes. After that, data under one of them can
+    // only come from a new, separate user with that provider id (the Auth0 user was
+    // removed and they signed up again, or the operator unlinked it): not ours to delete.
+    const owners = completedAt ? [sub] : ownersOf(record);
     try {
       let done = true;
       if (!completedAt || (await hasData(deps.bucket, owners))) {

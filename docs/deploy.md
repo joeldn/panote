@@ -1373,8 +1373,12 @@ Nothing else is affected.
 **Linked identities.** The marker also records the token's linked subs (`linkedSubs`, the
 `https://panote.io/linked_subs` claim, at most 10): every identity linked into this Auth0 user, as
 the user id it had before the link. Their `tours/`, `panos/` and `upload-log/` prefixes are deleted
-exactly like the account's own, by the route and by the daily sweep, so data made under a sign-in
-before it was linked (see "Account linking", **Known gap**) goes with the account. A retry whose
+exactly like the account's own, by the route and by the daily sweep until the delete completes,
+so data made under a sign-in before it was linked (see "Account linking", **Known gap**) goes with
+the account. After `completedAt` the sweep's late-data pass covers the account's own sub only:
+data under a linked sub from then on can only belong to a new, separate user with that provider
+id (the Auth0 user was removed and they signed up again, or the operator unlinked it), which the
+marker doesn't block, so it isn't deleted. A retry whose
 token names more linked subs adds them to the marker. The operator's `delete-account.ts --sub`
 marks the primary sub only; to cover a linked sub there, mark that sub too.
 

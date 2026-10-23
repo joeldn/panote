@@ -133,7 +133,17 @@ async function isBanned(event, log = console.log) {
  * @param {{ access: { deny: (reason: string) => void } }} api
  */
 exports.onExecutePostLogin = async (event, api) => {
-  if (!(await isBanned(event))) return;
+  let banned;
+  try {
+    banned = await isBanned(event);
+  } catch (e) {
+    // A runtime problem (crypto.subtle missing, say) must not lock everyone out: log the
+    // error's name only and let the login through.
+    // eslint-disable-next-line no-console
+    console.log(LOG, 'ban check failed, sign-in allowed:', e instanceof Error ? e.name : 'unknown');
+    return;
+  }
+  if (!banned) return;
   // Never the address or the user id: the log is enough to tell the ban worked.
   // eslint-disable-next-line no-console
   console.log(LOG, 'sign-in refused: the email is on the ban list');

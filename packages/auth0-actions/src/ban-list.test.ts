@@ -120,6 +120,21 @@ describe('onExecutePostLogin', () => {
     expect(api.access.deny).not.toHaveBeenCalled();
   });
 
+  it('lets the login through, and logs, when the check itself fails', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.stubGlobal('crypto', {});
+    try {
+      const api = fakeApi();
+      await action.onExecutePostLogin({ user: { email: 'banned@gmail.com' }, secrets }, api);
+      expect(api.access.deny).not.toHaveBeenCalled();
+      expect(log.mock.calls.flat().join(' ')).toContain('ban check failed');
+      expect(log.mock.calls.flat().join(' ')).not.toContain('banned@');
+    } finally {
+      vi.unstubAllGlobals();
+      log.mockRestore();
+    }
+  });
+
   it('refuses nobody while the secret is missing or empty', async () => {
     const api = fakeApi();
     await action.onExecutePostLogin({ user: { email: 'banned@gmail.com' } }, api);

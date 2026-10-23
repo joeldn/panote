@@ -311,7 +311,21 @@ describe('DELETE /api/admin/account: linked identities', () => {
     );
   });
 
-  it("the sweep reaches a linked sub's late data too", async () => {
+  it("the sweep finishes an interrupted delete's linked subs too", async () => {
+    const sub = subOf('acct-linked-resume');
+    const linked = 'email|acct-linked-resume';
+    await put(accountDeletionKey(sub), {
+      v: 1,
+      sub,
+      requestedAt: '2026-09-01T00:00:00.000Z',
+      linkedSubs: [linked],
+    });
+    await put(originalKey(linked, 'acct-linked-resume-p'), 'bytes');
+    await sweepAccountDeletions(depsWith(), new Date('2026-09-02T00:00:00.000Z'));
+    expect(await has(originalKey(linked, 'acct-linked-resume-p'))).toBe(false);
+  });
+
+  it("leaves a linked sub's data alone once the delete has completed", async () => {
     const sub = subOf('acct-linked-sweep');
     const linked = 'email|acct-linked-sweep';
     const done = '2026-09-01T00:00:00.000Z';
@@ -324,7 +338,9 @@ describe('DELETE /api/admin/account: linked identities', () => {
     });
     await put(originalKey(linked, 'acct-linked-sweep-p'), 'bytes');
     await sweepAccountDeletions(depsWith(), new Date('2026-09-02T00:00:00.000Z'));
-    expect(await has(originalKey(linked, 'acct-linked-sweep-p'))).toBe(false);
+    // A new, separate user with that provider id: the marker doesn't block them, so the
+    // sweep must not delete what they upload.
+    expect(await has(originalKey(linked, 'acct-linked-sweep-p'))).toBe(true);
   });
 });
 
