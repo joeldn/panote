@@ -110,14 +110,17 @@ export function Notices({
   onRepublish,
   onDiscardDraft,
   saving,
+  failed,
 }: {
   notices: EditorNotice[];
   onDismiss: (id: string) => void;
   busy: boolean;
   onRepublish: () => void;
   onDiscardDraft: () => void;
-  /** A save is under way: discarding now would race it. */
+  /** A save is under way: discarding now would race it, publishing would catch it halfway. */
   saving: boolean;
+  /** Some documents of the last save failed: publishing now would mix new and old. */
+  failed: boolean;
 }) {
   return (
     <>
@@ -136,7 +139,14 @@ export function Notices({
             )}
           </p>
           {n.action === 'republish' && (
-            <Button variant="primary" size="sm" onClick={onRepublish} busy={busy}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={onRepublish}
+              busy={busy}
+              disabled={saving || failed}
+              title={saving || failed ? 'Save your changes first' : undefined}
+            >
               Try again
             </Button>
           )}
