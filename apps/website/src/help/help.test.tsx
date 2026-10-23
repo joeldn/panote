@@ -36,7 +36,7 @@ describe('help pages', () => {
         .getAllByRole('link')
         .map((a) => [a.textContent, a.getAttribute('href')]),
     ).toEqual([
-      ['Help', '/help'],
+      ['Docs', '/help'],
       ['Camera guide', '/help/cameras'],
       ['Embedding', '/help/embedding'],
     ]);
@@ -48,6 +48,10 @@ describe('help pages', () => {
     expect(document.querySelector('pre')?.textContent).toBe(
       '<iframe src="https://panote.io/s/your-tour/embed"\n  width="100%" height="480" style="border:0"\n  allow="fullscreen"></iframe>',
     );
+    cleanup();
+    renderSite('/help');
+    await screen.findByRole('heading', { level: 1, name: 'Help' });
+    expect(document.body.textContent).toContain('can upload up to 50 photos a day');
     cleanup();
     renderSite('/help/cameras');
     await screen.findByRole('heading', { level: 1, name: 'Camera guide' });

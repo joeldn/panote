@@ -172,8 +172,9 @@ export function Help() {
       <h2>Limits</h2>
       <p>
         Everything is free. Each account holds up to {ACCOUNT_LIMITS.panoramas} panoramas,{' '}
-        {ACCOUNT_LIMITS.tours} tours and {ACCOUNT_LIMITS.storageGb} GB. A photo can be up to{' '}
-        {MAX_MB} MB and {MAX_MP} megapixels.
+        {ACCOUNT_LIMITS.tours} tours and {ACCOUNT_LIMITS.storageGb} GB, and can upload up to{' '}
+        {ACCOUNT_LIMITS.uploadsPerDay} photos a day. A photo can be up to {MAX_MB} MB and {MAX_MP}{' '}
+        megapixels.
       </p>
     </HelpPage>
   );

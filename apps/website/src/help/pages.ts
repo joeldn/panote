@@ -3,14 +3,14 @@
 
 export interface HelpPage {
   path: string;
-  /** The footer and side-nav label. */
+  /** The footer and side-nav label (design README: Docs / Camera guide / Embedding). */
   label: string;
   /** The page's `<h1>`, and its tab title before " · panote". */
   title: string;
 }
 
 export const HELP_PAGES = [
-  { path: '/help', label: 'Help', title: 'Help' },
+  { path: '/help', label: 'Docs', title: 'Help' },
   { path: '/help/cameras', label: 'Camera guide', title: 'Camera guide' },
   { path: '/help/embedding', label: 'Embedding', title: 'Embedding a tour' },
 ] as const satisfies readonly HelpPage[];

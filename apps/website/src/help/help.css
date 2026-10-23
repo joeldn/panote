@@ -95,7 +95,7 @@
 .help__code {
   font: 400 0.88em var(--fmono);
   padding: 1px 5px;
-  border-radius: 5px;
+  border-radius: var(--r-xs);
   background: var(--ink-06);
 }
 
@@ -103,9 +103,9 @@
   margin: 0 0 18px;
   padding: 16px 18px;
   overflow-x: auto;
-  border-radius: 10px;
-  background: #14130f;
-  color: #9fd0e0;
+  border-radius: var(--r-field);
+  background: var(--dark-panel);
+  color: var(--code-text);
   font: 400 12.5px/1.55 var(--fmono);
 }
 

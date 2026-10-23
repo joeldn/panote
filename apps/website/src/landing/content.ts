@@ -3,13 +3,14 @@
 import { MAX_HOTSPOTS, MAX_TOURS_PER_OWNER } from '@internal/contracts';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_PIXELS } from '@internal/web-kit';
 
-// Per-account quotas. panoramas and storageGb mirror upload-api's MAX_PANOS_PER_OWNER and
-// MAX_BYTES_PER_OWNER vars (services/upload-api/wrangler.jsonc, docs/deploy.md "Owner quotas"),
+// Per-account quotas. panoramas, storageGb and uploadsPerDay mirror upload-api's
+// MAX_PANOS_PER_OWNER, MAX_BYTES_PER_OWNER and MAX_UPLOADS_PER_OWNER_PER_DAY vars (services/upload-api/wrangler.jsonc, docs/deploy.md "Owner quotas"),
 // which are server config the site can't import, so keep them in step by hand.
 export const ACCOUNT_LIMITS = {
   panoramas: 500,
   storageGb: 20,
   tours: MAX_TOURS_PER_OWNER,
+  uploadsPerDay: 50,
 } as const;
 
 export const NAV_SECTIONS = [
