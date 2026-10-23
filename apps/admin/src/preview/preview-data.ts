@@ -9,6 +9,8 @@ import { sameValue, type EditorDocs } from '../editor/model.js';
 export function previewData(docs: EditorDocs, publish: TourPublishState | null): TourWithConfigsOk {
   const configs: TourWithConfigsOk['configs'] = {};
   for (const [panoId, scene] of Object.entries(docs.scenes)) {
+    // hasOriginal and etag are placeholders: the preview only reads, and never offers a
+    // retile or sends an If-Match.
     if (scene.kind === 'missing') {
       configs[panoId] = { missing: true, deleting: scene.deleting, hasOriginal: false };
     } else if (scene.etag === null && sameValue(scene.base, scene.current)) {

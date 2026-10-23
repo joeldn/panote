@@ -1167,10 +1167,18 @@ describe('editor: points, connections, views and settings', () => {
     expect(ui.getByRole('link', { name: 'Share' }).getAttribute('title')).toBe(
       'Saves your changes first',
     );
+    // A new-tab click is left to the browser: nothing is saved, and the editor stays.
+    const sharePath = router.state.location.pathname;
+    fireEvent.click(ui.getByRole('link', { name: 'Share' }), { ctrlKey: true });
+    expect(router.state.location.pathname).toBe(sharePath);
+    expect(ui.getByRole('button', { name: 'Save' })).toBeTruthy();
+
     fireEvent.click(ui.getByRole('link', { name: 'Share' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/app/t/t1/share/link'));
     expect(server.tour!.body.title).toBe('New town');
     expect(ui.queryByRole('button', { name: 'Save' })).toBeNull();
+    // The save is announced from the bar's one live region.
+    expect(ui.getAllByRole('status').some((s) => s.textContent === 'Changes saved')).toBe(true);
   });
 
   it('keeps the bar to Preview, Save only when needed, Share and one tour menu', async () => {
@@ -1293,7 +1301,7 @@ describe('editor: map', () => {
     fireEvent.click(ui.getByRole('button', { name: /^Map/ }));
     expect(ui.queryByRole('button', { name: /^Church,/ })).toBeNull();
     fireEvent.click(ui.getByRole('button', { name: 'Suggest positions' }));
-    const status = ui.getByRole('status');
+    const status = ui.getAllByRole('status').find((s) => s.textContent?.startsWith('Placed'))!;
     expect(status.textContent).toBe('Placed 2 panos, 1 from their links. Drag any that are off.');
     const church = ui.getByRole('button', { name: /^Church, \d+% across, 50% down/ });
     expect(parseFloat(church.style.left)).toBeGreaterThan(20);

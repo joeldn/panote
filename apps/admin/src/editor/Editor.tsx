@@ -203,7 +203,8 @@ function EditorMessage({ title, children }: { title: string; children?: ReactNod
 function useUnsavedGuards(dirty: boolean, tourId: string) {
   // Share, insights, people and preview keep the editor (and its unsaved edits); anything
   // else unmounts it.
-  const inside = new RegExp(`/t/${tourId}(/(share/[a-z]+|insights|people|preview))?/?$`);
+  const id = tourId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inside = new RegExp(`/t/${id}(/(share/[a-z]+|insights|people|preview))?/?$`);
   return useBlocker(
     ({ currentLocation, nextLocation }) =>
       dirty &&
@@ -228,6 +229,34 @@ function SaveButton({ editor }: { editor: EditorController }) {
     const timer = setTimeout(() => setFaded(savedAt), Math.max(0, left));
     return () => clearTimeout(timer);
   }, [savedAt]);
+  const flash = savedAt && savedAt !== faded;
+  const conflict = conflicts.length > 0;
+  // One live region that stays put, so a screen reader hears each change of state.
+  const said = conflict
+    ? 'Save conflict'
+    : !saving && dirty.length === 0 && flash
+      ? 'Changes saved'
+      : '';
+  return (
+    <>
+      <span className="pn-sr-only" role="status">
+        {said}
+      </span>
+      <SaveState editor={editor} conflict={conflict} flash={!!flash} />
+    </>
+  );
+}
+
+function SaveState({
+  editor,
+  conflict,
+  flash,
+}: {
+  editor: EditorController;
+  conflict: boolean;
+  flash: boolean;
+}) {
+  const { saving, dirty, savedAt } = editor;
   if (saving) {
     return (
       <Button variant="glass" pill busy>
@@ -235,10 +264,10 @@ function SaveButton({ editor }: { editor: EditorController }) {
       </Button>
     );
   }
-  if (conflicts.length > 0) {
+  if (conflict) {
     // Resolved from the conflict banner (reload or overwrite), never by a blind re-save.
     return (
-      <span className="ed-saved ed-saved--conflict" role="status">
+      <span className="ed-saved ed-saved--conflict">
         <i className="fa-solid fa-code-merge" aria-hidden="true" /> Conflict
       </span>
     );
@@ -266,8 +295,8 @@ function SaveButton({ editor }: { editor: EditorController }) {
       </>
     );
   }
-  return savedAt && savedAt !== faded ? (
-    <span className="ed-saved" role="status" title={`Saved ${savedAt.toLocaleTimeString()}`}>
+  return flash && savedAt ? (
+    <span className="ed-saved" title={`Saved ${savedAt.toLocaleTimeString()}`}>
       <i className="fa-solid fa-circle-check" aria-hidden="true" /> Saved
     </span>
   ) : null;
@@ -598,10 +627,12 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
   // can't start (a conflict is open), stays here with its banner instead.
   const navigate = useNavigate();
   const saveThen = (to: string) => {
-    void (async () => {
+    (async () => {
       // A save already under way finishes first; then whatever was edited meanwhile.
       if ((await editor.save()) && (await editor.save())) void navigate(to);
-    })();
+    })().catch((e: unknown) => {
+      editor.notify({ id: 'save-error', tone: 'warn', text: (e as Error).message });
+    });
   };
 
   return (
@@ -821,6 +852,8 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
                 {...(dirty.length > 0 && {
                   title: 'Saves your changes first',
                   onClick: (e: MouseEvent) => {
+                    // A new tab or window opens the share page as it is.
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
                     e.preventDefault();
                     saveThen('share/link');
                   },
