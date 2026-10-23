@@ -14,3 +14,8 @@ config:
   panote-infra:cacheRulesFile: cache-rules.production.json
   panote-infra:noindexAllResponses: false
   panote-infra:wwwRedirect: true
+  # GitHub (src/github.ts): nothing is declared until the import names the
+  # owner here with `github:owner` (infra/README.md, step 19). Production
+  # owns only its Environment; dev owns the repository-wide settings.
+  panote-infra:githubRepository: panote
+  panote-infra:githubEnvironmentReviewer: joeldn

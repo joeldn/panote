@@ -43,10 +43,12 @@ catalog:
   # The Pulumi CLI that runs the program is installed separately, at the same
   # version as @pulumi/pulumi (infra/README.md). @pulumi/cloudflare 6.x is
   # bridged from the Terraform provider v5, @pulumi/auth0 3.x from the
-  # Terraform auth0 provider v1.
+  # Terraform auth0 provider v1, @pulumi/github 6.x from the Terraform github
+  # provider v6.
   '@pulumi/pulumi': 3.268.0
   '@pulumi/cloudflare': 6.22.0
   '@pulumi/auth0': 3.55.1
+  '@pulumi/github': 6.15.0
 
   # --- Runtime libraries ---
   # zod is pinned at 3.x deliberately - see the port spec's zod 3-vs-4 analysis.

@@ -3,7 +3,7 @@ import { defineConfig, mergeConfig } from 'vitest/config';
 
 /**
  * Unit tests run the program against Pulumi's mocks (no engine, no
- * provider, no Cloudflare, no Auth0). `src/index.ts` and the two `*-cli.ts`
+ * provider, no Cloudflare, no Auth0, no GitHub). `src/index.ts` and the three `*-cli.ts`
  * scripts are thin entry points over tested modules, so they are left out of
  * coverage.
  *
@@ -22,7 +22,12 @@ export default mergeConfig(
     test: {
       name: '@internal/infra',
       coverage: {
-        exclude: ['src/index.ts', 'src/import-file-cli.ts', 'src/auth0-import-file-cli.ts'],
+        exclude: [
+          'src/index.ts',
+          'src/import-file-cli.ts',
+          'src/auth0-import-file-cli.ts',
+          'src/github-import-file-cli.ts',
+        ],
         thresholds: { statements: 90, branches: 85, functions: 90, lines: 90 },
       },
     },

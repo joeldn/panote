@@ -187,6 +187,9 @@ describe('parseStackConfig', () => {
         '  cloudflare:apiToken: nope',
         '  auth0:domain: panote-dev.au.auth0.com',
         '  auth0:clientSecret: nope',
+        '  github:owner: joeldn',
+        '  github:token:',
+        '    secure: v1:abc',
         '  panote-infra:bannedEmailSha256:',
         '    secure: v1:abc',
       ].join('\n'),
@@ -196,6 +199,7 @@ describe('parseStackConfig', () => {
       bucket: 'pano-content-dev',
       auth0LocalDevCallbacks: 'true',
       'auth0:domain': 'panote-dev.au.auth0.com',
+      'github:owner': 'joeldn',
     });
   });
 });

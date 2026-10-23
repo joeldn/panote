@@ -978,22 +978,35 @@ and both apps' configs (and the apps' `.env.production`) rather than duplicated 
 per-service check, and would otherwise deploy to production regardless of the other three
 services' placeholders. Before this workflow can succeed:
 
-- GitHub Environment `dev` (created automatically on first use if it doesn't exist yet), with a
-  deployment-branch policy restricted to `main`, the same as `production`'s, so the `dev` secret
-  is only released to a job running from `main` even if the workflow guard is edited away on a
-  branch.
+The repository's settings are Pulumi now (`infra/pulumi/src/github.ts`, `infra/README.md`
+steps 17-21): the two Environments and their branch policies, `infra-preview`, the repository
+variables `CLOUDFLARE_ACCOUNT_ID` and `DEV_AUTO_DEPLOY`, squash-only merges, the Actions workflow
+permissions and `main`'s protection. Change them there, not in Settings: the next `up` undoes a
+change made by hand. The secrets and `PRODUCTION_PROVISIONED` stay manual (why: `infra/README.md`,
+GitHub). Until a stack names `github:owner` (step 19), the list below is still kept by hand.
+
+- GitHub Environment `dev`, with a deployment-branch policy restricted to `main`, the same as
+  `production`'s, so the `dev` secret is only released to a job running from `main` even if the
+  workflow guard is edited away on a branch. No reviewer: it would hold every automatic deploy.
+  (Pulumi: the `dev` stack.)
 - GitHub Environment `production`, with required reviewers configured and a
   deployment-branch policy restricted to `main` — the approval gate the workflow relies on. The
   `resolve-environment` job's "Guard deploys to main" step is a workflow-level backstop, not
-  a substitute for this Environment protection rule.
+  a substitute for this Environment protection rule. (Pulumi: the `production` stack.)
+- `main` protected: the checks Gate and Coverage required (by name), no force push,
+  no deletion, no required review (one maintainer merges his own pull requests). Merges are
+  squash only and delete the branch; workflows get a read-only `GITHUB_TOKEN` and can't approve
+  pull requests. (Pulumi: the `dev` stack, which owns everything repository-wide.)
 - `CLOUDFLARE_API_TOKEN` as an environment secret on **both** `dev` and `production` (scoped
   separately per environment, even though today both would point at the same Cloudflare
   account). The token needs Workers Scripts, Workers Routes, Containers, Queues, and R2 edit
   permissions.
 - `CLOUDFLARE_ACCOUNT_ID` as a repository variable (not per-environment — one account for both).
+  (Pulumi: the `dev` stack, from the stacks' `accountId`.)
 - Optional: GitHub Environment `infra-preview` with the secrets `infra-preview.yml` needs to run
   `pulumi preview` on pull requests (listed in `infra/README.md`, CI preview). Without them the
-  workflow ends with a notice.
+  workflow ends with a notice. (The Environment and its required reviewer: Pulumi, the `dev`
+  stack; the secrets: by hand.)
 - `PRODUCTION_PROVISIONED` as a repository variable, set to the literal string `true` **only**
   once steps 1-11 of the Production runbook below are done (step 12 is setting it). Until then, leave it unset or anything other than `true` — the
   `resolve-environment` job's "Fail unless production is provisioned" step is a hard stop
@@ -1006,7 +1019,7 @@ services' placeholders. Before this workflow can succeed:
   cut-over would have failed on every `CI` success on `main`. **Known gap (accepted):** auto-deploy
   has no pre-deploy check specific to `tiler-consumer`/queue-consumer changes — a change there
   deploys straight to the live dev queue on the next green `CI` run on `main`, same as any other
-  service.
+  service. (Pulumi: the `dev` stack's `devAutoDeploy`; set it to `false` there to pause.)
 
 After every deploy, dev included, a `smoke-test` job (needs all the deploy jobs) curls public
 URLs on the environment just deployed, with no secrets: `GET /api/tours/x/stats` → `200`,
