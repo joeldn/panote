@@ -58,4 +58,23 @@ describe('editor layout CSS', () => {
     }
     expect(narrow).toBeLessThan(phone);
   });
+
+  it('keeps the banners and popovers clickable inside the phone column', () => {
+    // .ed-top (and .ed-banners) let presses through to the pano; each banner and popover
+    // takes them back, and its buttons inherit that.
+    expect(mediaBlock(600).body).toMatch(/\.ed-top\s*{[^}]*pointer-events:\s*none;/);
+    expect(css).toMatch(/\n\.ed-banner\s*{\s*pointer-events:\s*auto;/);
+    expect(css).toMatch(/\n\.ed-popover\s*{\s*pointer-events:\s*auto;/);
+  });
+
+  it('has no rule spliced into another’s selector', () => {
+    // A comment inside a selector list means a rule was pasted into the middle of another.
+    for (const selector of css.matchAll(/(?:^|})\s*([^{}@]+){/g)) {
+      const own = selector[1]!.replace(/^(\s*\/\*[\s\S]*?\*\/)*/, '').trim();
+      expect(own).not.toMatch(/\/\*/);
+    }
+    expect(css).toMatch(/\n\.ed-map__image \.ed-label\s*{\s*margin-right:\s*auto;/);
+    expect(css).toMatch(/\n\.ed-empty\s*{/);
+    expect(css).not.toMatch(/\n\.ed-label\s*{\s*margin-right/);
+  });
 });
