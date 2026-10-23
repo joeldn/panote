@@ -1,0 +1,32 @@
+{
+  "name": "@internal/infra",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pulumi program for panote's Cloudflare account: R2, queues, zone rulesets and settings, usage alerts",
+  "license": "UNLICENSED",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "import-file": "node dist/import-file-cli.js"
+  },
+  "dependencies": {
+    "@pulumi/cloudflare": "catalog:",
+    "@pulumi/pulumi": "catalog:"
+  },
+  "devDependencies": {
+    "@internal/typescript-config": "workspace:*",
+    "@internal/vitest-config": "workspace:*",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

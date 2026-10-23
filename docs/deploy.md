@@ -245,7 +245,8 @@ missing or new mode fails safe to noindex. Production has to be explicit: `deplo
 - CI's `deploy-dry-run` job checks the real dev and production builds' `_headers` and
   `robots.txt`.
 
-**Zone-wide guard (MANUAL, dev zone only).** Covers everything the code doesn't: the API Workers,
+**Zone-wide guard (dev zone only).** Pulumi declares it (`noindexAllResponses: true` in
+`infra/pulumi/Pulumi.dev.yaml`, never set on production); the steps below are the manual fallback. Covers everything the code doesn't: the API Workers,
 `cdn.panote.dev` (R2 tiles and covers) and any future hostname on the zone. It doesn't reach
 `*.workers.dev`, which is off for every dev Worker anyway. Never create this on panote.io.
 
@@ -548,6 +549,14 @@ Production is unprovisioned, like the rest (see Production runbook).
 
 ## One-time provisioning
 
+**Pulumi now does this.** Since 2026-10, `infra/pulumi` declares the bucket, its CORS, the r2.dev
+URL (off), `cdn.<zone>`, the R2 → queue notification, both queues, the zone's WAF, rate-limit,
+cache and response-header rules, HSTS, URL normalization and the apex record, for dev and
+production. [`infra/README.md`](../infra/README.md) is the entry point: install, state backend,
+importing dev, creating production. The commands below are the manual fallback and the record of
+how dev was first built; anything changed with them by hand shows up as drift in the next
+`pulumi preview`.
+
 Account-level commands (bucket, queues, notification, CORS) work from any Worker package —
 `wrangler` is a devDependency of each `services/*` workspace, not a global install. Commands
 below run through `@service/admin-api`; any of the four would do. All commands below assume
@@ -633,7 +642,8 @@ pnpm --filter @service/admin-api exec wrangler r2 bucket cors set pano-content \
   --file ../../infra/r2/cors.json
 ```
 
-**Status: needs re-applying to dev, outstanding for production** — `pano-content-dev`'s CORS
+Pulumi applies `cors.json` to the bucket on every `up` (the file stays the single source), so the
+commands above are the fallback. **Status: needs re-applying to dev, outstanding for production** — `pano-content-dev`'s CORS
 ruleset was set from `infra/r2/cors.json` before the PUT rule gained `if-match` and
 `if-none-match`: run the dev command above again before, or together with, the upload-api deploy that signs them, or uploads fail at the
 preflight. `pano-content` doesn't exist yet. Rollback: this command always
@@ -676,6 +686,9 @@ normalization (Rules → Settings) is enabled on the zone, verified live against
 through to R2; and `/tiles/../panos/` also returns `403`, confirming the path-traversal trick can't
 slip past the check. Mirror the same rule for `cdn.panote.io` on the `panote.io` zone in
 production, host `cdn.panote.io`, before attaching that domain.
+
+Pulumi declares this rule (and a second one blocking any query string on the CDN) in
+`infra/pulumi/src/rules.ts`, and attaches the domain only after the ruleset exists.
 
 #### Attaching the domain
 
@@ -817,27 +830,12 @@ Production has no token and `CDN_ZONE_ID` is still `YOUR_PANOTE_IO_ZONE_ID`.
 
 ### CDN cache rules
 
-Cache Rules on the CDN zone live in `infra/cloudflare/cache-rules.<env>.json` and go live with
-`infra/cloudflare/apply-cache-rules.sh <env>`. Cloudflare keeps all of a zone's cache rules in
-one `http_request_cache_settings` entrypoint ruleset, and a PUT replaces all of it, so the script:
-
-1. GETs the live entrypoint (a zone with no cache rules yet has none, which counts as empty),
-2. keeps every rule the file doesn't manage exactly as it is (today `tiles-404-short-ttl`, which
-   was made in the dashboard), and replaces or appends each managed rule by its `ref`,
-3. prints a unified diff of live vs after, and
-4. PUTs only with `--yes`. Without it, or with `--dry-run`, nothing is written (both flags
-   together is an error). If nothing changed it says so and exits. Right before the PUT it reads
-   the live rules again and stops without writing if they changed since the diff.
-
-```bash
-# Token: My Profile → API Tokens → Custom token, Zone → Cache Rules: Edit, scoped to panote.dev
-# (Read is enough for --dry-run). Not the wrangler OAuth login.
-export CF_API_TOKEN=...
-infra/cloudflare/apply-cache-rules.sh dev --dry-run   # show the diff
-infra/cloudflare/apply-cache-rules.sh dev --yes       # apply it
-# Offline: diff against a saved GET response instead of the API
-infra/cloudflare/apply-cache-rules.sh dev --dry-run --live-file saved.json
-```
+Cache Rules on the CDN zone live in `infra/cloudflare/cache-rules.<env>.json` (the Rulesets API's
+own shape) and Pulumi applies them as the zone's whole `http_request_cache_settings` ruleset
+(`infra/README.md`). The ruleset is replaced as a unit, so a rule made in the dashboard is
+removed by the next `up`: add it to the file instead. `apply-cache-rules.sh`, which upserted the
+file into the live ruleset, is gone; Pulumi superseded it. Manual fallback: Rules → Cache Rules in
+the dashboard, mirroring the file.
 
 The managed rule today is `panote-json-edge-cache`: on `cdn.panote.dev`, `/slugs/*` and `/pub/*`
 are eligible for cache with the edge TTL taken from the origin (`max-age=30` from the R2 binding
@@ -847,8 +845,9 @@ purpose: after an image replace, admin's `refreshManifestCache` only refreshes t
 so an edge copy would keep the old manifest for up to 30s. The tour page primes the start
 manifest anyway (Tour page priming, above).
 
-**Status: written, not applied.** The dry run against the live dev ruleset (read 2026-10-10)
-shows `tiles-404-short-ttl` kept and the one new rule appended. After applying, check:
+**Status: written, not applied.** The first dev `pulumi up` (infra/README.md, steps 7-9) applies
+it, and replaces the dashboard's `tiles-404-short-ttl` with `panote-tiles-404-no-store`, the rule
+production uses for the same thing. After applying, check:
 - `curl -sI https://cdn.panote.dev/slugs/<live-slug>.json` twice: the second is
   `cf-cache-status: HIT`.
 - `curl -sI https://cdn.panote.dev/slugs/no-such-slug.json`: `404`, never `HIT`.
@@ -857,13 +856,10 @@ shows `tiles-404-short-ttl` kept and the one new rule appended. After applying, 
   CORS header must not leak across origins; tiles already work this way).
 - A tile 404 is still `BYPASS` and a manifest is still `DYNAMIC`.
 
-Rollback: taking the rule out of the JSON doesn't remove it live, because the script only
-upserts. Remove it in the dashboard (Rules → Cache Rules) instead.
+Rollback: take the rule out of the JSON and `pulumi up`.
 
-Production has its own `cache-rules.production.json` (hosts `cdn.panote.io`), applied with
-`apply-cache-rules.sh production` (Production runbook, step 5). It also manages the tile-404 rule
-that dev keeps in the dashboard, as `panote-tiles-404-no-store`. Its `zoneId` is
-`YOUR_PANOTE_IO_ZONE_ID` until then, and the script refuses any `zoneId` that isn't a 32-hex id.
+Production has its own `cache-rules.production.json` (hosts `cdn.panote.io`). The program refuses
+a rule whose host isn't the stack's `cdn.<zone>`, so dev's file can't land on production.
 
 ---
 
@@ -987,6 +983,9 @@ services' placeholders. Before this workflow can succeed:
   account). The token needs Workers Scripts, Workers Routes, Containers, Queues, and R2 edit
   permissions.
 - `CLOUDFLARE_ACCOUNT_ID` as a repository variable (not per-environment — one account for both).
+- Optional: GitHub Environment `infra-preview` with the secrets `infra-preview.yml` needs to run
+  `pulumi preview` on pull requests (listed in `infra/README.md`, CI preview). Without them the
+  workflow ends with a notice.
 - `PRODUCTION_PROVISIONED` as a repository variable, set to the literal string `true` **only**
   once steps 1-11 of the Production runbook below are done (step 12 is setting it). Until then, leave it unset or anything other than `true` — the
   `resolve-environment` job's "Fail unless production is provisioned" step is a hard stop
@@ -3081,6 +3080,11 @@ on the one before, and step 4 must be done before step 6, or the private keys un
 `tours/` become public the moment the domain attaches. Each step links to the section that
 explains it; the dev version of every step has been done and is recorded there.
 
+Steps 1-7 are one `pulumi up --stack production` now (`infra/README.md`, step 10): bucket,
+queues, notification, CORS, WAF rules (with URL normalization), cache rules, `cdn.panote.io`, and
+the apex and `www` records with the redirect. Their **Verify** lines still apply. The manual
+commands stay below as the fallback.
+
 All commands run from the repo root. CI already dry-runs every Worker with `--env production`
 (`deploy-dry-run` in `ci.yml`), so the production config bundles; what it can't check is whether
 the account has the resources the config names.
@@ -3115,18 +3119,13 @@ the account has the resources the config names.
    first thing.
    **Status: outstanding.**
 
-5. **Cache rules.** In your local checkout, put the `panote.io` zone id (Overview → API → Zone
-   ID) into `infra/cloudflare/cache-rules.production.json` in place of `YOUR_PANOTE_IO_ZONE_ID`
-   (the script refuses the placeholder), then
-   `infra/cloudflare/apply-cache-rules.sh production --dry-run` and `--yes` (CDN cache rules; the
-   token is scoped to `panote.io` this time). Production's file manages two rules:
-   `panote-json-edge-cache`, as on dev, and `panote-tiles-404-no-store`, which does what dev's
-   dashboard-made `tiles-404-short-ttl` does (a tile `404` is never edge-cached), so production
-   needs no dashboard rule. It sets only the `404` TTL, not `cache`, and leaves out
-   `manifest.json`, so the manifest stays `DYNAMIC` (see Known limitations). Keep the zone id
-   edit uncommitted for now: step 10 commits it with the other placeholders.
-   Verify: the dry run on an empty zone shows only the two rules being added; after `--yes` the
-   script prints both as `enabled=true`. Their effect is checked in the final block.
+5. **Cache rules.** `infra/cloudflare/cache-rules.production.json`, applied by Pulumi. It
+   manages two rules: `panote-json-edge-cache`, as on dev, and `panote-tiles-404-no-store` (a
+   tile `404` is never edge-cached). It sets only the `404` TTL, not `cache`, and leaves out
+   `manifest.json`, so the manifest stays `DYNAMIC` (see Known limitations). Manual fallback:
+   the dashboard's Rules → Cache Rules, mirroring the file.
+   Verify: the `panote.io` zone's Rules → Cache Rules lists both, enabled. Their effect is
+   checked in the final block.
    **Status: outstanding.**
 
 6. **Attach `cdn.panote.io` to `pano-content`** (Attaching the domain; dashboard, or
@@ -3188,12 +3187,12 @@ the account has the resources the config names.
     the tenant may be regional, `https://<name>.<region>.auth0.com/`); `CDN_ZONE_ID` in
     `services/admin-api/wrangler.jsonc`; `VITE_AUTH0_DOMAIN` and `VITE_AUTH0_CLIENT_ID` in
     `apps/website/.env.production` and `apps/admin/.env.production` (the SPA's client id is
-    public); and step 5's zone id. Replace each only with the real value, never another made-up
+    public). `CDN_ZONE_ID` is `pulumi stack output zoneId --stack production`. Replace each only with the real value, never another made-up
     name (`docs/decisions.md`). Run `pnpm -r run types` and commit any `env.d.ts` change (CI fails
     on drift).
     Verify: this prints nothing (comment lines mention `YOUR_` and are skipped):
     ```bash
-    grep -rn YOUR_ services/*/wrangler.jsonc apps/*/wrangler.jsonc apps/*/.env.production infra/cloudflare \
+    grep -rn YOUR_ services/*/wrangler.jsonc apps/*/wrangler.jsonc apps/*/.env.production \
       | grep -vE '^[^:]+:[0-9]+:\s*(#|//)'
     ```
     CI's production dry-runs and production app build must pass too. Merging deploys dev
@@ -3377,15 +3376,15 @@ the container, queue, JWKS, and S3 paths are actually exercised rather than theo
   `max-age=14400`). A Cache Rule `tiles-404-short-ttl` on the `cdn.panote.dev` zone now matches
   `starts_with(http.request.uri.path, "/tiles/")` and gives a 404 response a short/no-store edge
   TTL instead (plan: `docs/wave6-plan.md` section 3.5, unit O1), added via the dashboard (Rules →
-  Cache Rules; not scriptable with wrangler). `apply-cache-rules.sh` carries it over unchanged
-  (CDN cache rules). Verified live: a tile 404 returns
+  Cache Rules; not scriptable with wrangler). Pulumi replaces it with the equivalent
+  `panote-tiles-404-no-store` (CDN cache rules). Verified live: a tile 404 returns
   `cf-cache-status: BYPASS`, an existing tile still `HIT`, and `manifest.json` is unaffected —
   still `DYNAMIC`, as it already was.
 - **`manifest.json` isn't edge-cached.** It comes back `cf-cache-status: DYNAMIC` — Cloudflare
   doesn't cache `.json` by default — so its `cache-control: max-age=30` has no effect at the edge;
   every manifest fetch hits R2 directly. Correct behavior, just not what the `max-age` might
   suggest. It stays that way on purpose; `/slugs/` and `/pub/` get an edge cache rule once
-  `apply-cache-rules.sh` runs (CDN cache rules).
+  Pulumi applies `cache-rules.<env>.json` (CDN cache rules).
 - **`wrangler r2 bucket info`'s `object_count` lags badly** — it reported `0` while the bucket
   held 32 objects. Don't rely on it for an emptiness check (see the pre-cut-over check's caveat
   above); probe specific keys with `wrangler r2 object get --remote` instead, since wrangler 4.120

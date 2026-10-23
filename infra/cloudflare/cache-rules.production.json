@@ -1,6 +1,4 @@
 {
-  "zone": "panote.io",
-  "zoneId": "YOUR_PANOTE_IO_ZONE_ID",
   "rules": [
     {
       "ref": "panote-json-edge-cache",

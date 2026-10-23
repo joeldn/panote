@@ -1,0 +1,12 @@
+# Non-secret settings for dev (src/settings.ts). Run `pulumi stack init dev`
+# once against the state bucket and commit the encryptionsalt it adds here.
+config:
+  panote-infra:accountId: 12e2809e05de8a2bf20b815fd394ec9a
+  panote-infra:zone: panote.dev
+  panote-infra:bucket: pano-content-dev
+  panote-infra:uploadsQueue: pano-uploads-dev
+  panote-infra:deadLetterQueue: pano-uploads-dlq-dev
+  panote-infra:corsFile: cors.json
+  panote-infra:cacheRulesFile: cache-rules.dev.json
+  panote-infra:noindexAllResponses: true
+  panote-infra:wwwRedirect: false
