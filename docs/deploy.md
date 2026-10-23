@@ -2083,7 +2083,8 @@ page, so change both if the var changes. The public bundle `pub/tours/<tourId>.j
 listed is fingerprinted: the SHA-256 of its bundle with keys sorted, leaving out only
 `visibility`, `publishedAt` and `heldUntil`, so the title, slug, description, scenes, hotspot
 text and linked media all count. It is listed only while `explore/approved/<tourId>.json`
-names that fingerprint; otherwise its entry goes, any old approval is deleted first, and it
+names that fingerprint; otherwise its entry goes, any old approval is deleted first (publish
+deletes it before writing the new bundle, and a failure there fails the publish), and it
 waits in `explore/pending/` for the operator at `/app/ops/explore` (Operator pages). Any Save
 that changes what the tour shows therefore takes an approved tour off Explore until it is
 approved again (the queue marks it "Changed since approved"); a Save with no change, a trip to

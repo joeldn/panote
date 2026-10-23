@@ -258,6 +258,20 @@ describe('POST /api/admin/operator/backfill', () => {
     expect(got?.key.startsWith(EXPLORE_INDEX_ROOT)).toBe(true);
   });
 
+  it('refreshes a queue entry whose fingerprint no longer matches the live bundle', async () => {
+    const t = await oldTour('bf-stalefp');
+    await backfill({ apply: true });
+    const first = (await pending(t.tourId))!;
+    await env.BUCKET.put(
+      explorePendingKey(t.tourId),
+      JSON.stringify({ ...first, fingerprint: 'from-an-older-bundle' }),
+    );
+    expect(await (await backfill({ apply: true })).json()).toMatchObject({
+      tours: [{ tourId: t.tourId, changes: ['explore'] }],
+    });
+    expect((await pending(t.tourId))?.fingerprint).toBe(first.fingerprint);
+  });
+
   it('leaves an Unlisted tour off Explore, and a tour saved since alone', async () => {
     const who = 'bf-unl';
     await readyPano(who, `${who}-p1`);

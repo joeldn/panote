@@ -497,3 +497,57 @@ describe('Explore approval queue', () => {
     expect(await listed(tourId)).toBeNull();
   });
 });
+
+describe('Explore approval: the verifier’s cases', () => {
+  it('a changed Save drops the approval before the new bundle is live, even if the sync fails', async () => {
+    const who = 'ex-q-syncfail';
+    const { tourId, panoId } = await publishedTour(who, { visibility: 'public' });
+    expect(await has(exploreApprovedKey(tourId))).toBe(true);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const realHead = env.BUCKET.head.bind(env.BUCKET);
+    const head = vi.spyOn(env.BUCKET, 'head').mockImplementation(async (key: string) => {
+      if (key === exploreHiddenKey(tourId)) throw new Error('r2 down');
+      return realHead(key);
+    });
+    try {
+      await api(who, 'PUT', `/tours/${tourId}`, { title: 'Swapped', scenes: [{ panoId }] });
+      const r = await api(who, 'POST', `/tours/${tourId}/publish`, { afterSave: true });
+      expect(r.status).toBe(200);
+    } finally {
+      head.mockRestore();
+      error.mockRestore();
+    }
+    expect((await readJson<PublishedTour>(pubTourKey(tourId)))?.title).toBe('Swapped');
+    // public-api lists nothing without an approval, whatever the entry says.
+    expect(await has(exploreApprovedKey(tourId))).toBe(false);
+  });
+
+  it('an approve or reject after a hide is refused and leaves no approval', async () => {
+    const who = 'ex-q-hidden';
+    const { tourId } = await publishedTour(who, { visibility: 'public' }, undefined, {
+      approved: false,
+    });
+    const { fingerprint } = (await waiting(tourId))!;
+    expect((await takedown(subOf(who), tourId, 'hide')).status).toBe(200);
+    expect((await decide(tourId, 'approve', fingerprint)).status).toBe(409);
+    expect((await decide(tourId, 'reject', fingerprint)).status).toBe(409);
+    expect(await has(exploreApprovedKey(tourId))).toBe(false);
+  });
+
+  it('a start scene not ready keeps the tour’s place in the queue', async () => {
+    const who = 'ex-q-notready';
+    const { tourId, panoId } = await publishedTour(who, { visibility: 'public' }, undefined, {
+      approved: false,
+    });
+    const first = (await waiting(tourId))!;
+    const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
+    const manifest = await env.BUCKET.get(manifestKey(panoId));
+    const body = await manifest!.text();
+    await env.BUCKET.delete(manifestKey(panoId));
+    await syncExploreQuietly(env.BUCKET, bundle, new Date(Date.now() + 1000));
+    expect((await waiting(tourId))?.queuedAt).toBe(first.queuedAt);
+    await env.BUCKET.put(manifestKey(panoId), body);
+    await syncExploreQuietly(env.BUCKET, bundle, new Date(Date.now() + 2000));
+    expect((await waiting(tourId))?.queuedAt).toBe(first.queuedAt);
+  });
+});

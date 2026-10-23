@@ -11,6 +11,7 @@ import {
   manifestKey,
   PANO_PATTERN,
   PublishedTourSchema,
+  type PublishedTour,
   pubTourKey,
   TourDocSchema,
   tourOwnerKey,
@@ -20,6 +21,7 @@ import {
 } from '@internal/contracts';
 import { putJson } from '@internal/worker-kit/r2-binding';
 
+import { bundleFingerprint } from './explore.js';
 import { tourCustomMetadata } from './lists.js';
 
 // The operator's backfill (scripts/backfill-covers.ts, "Cover and Explore backfill" in
@@ -65,7 +67,8 @@ const currentCover = async (bucket: R2Bucket, panoId: string) => {
 
 /** Whether the tour's Explore entry is missing or out of date with its live bundle. */
 const exploreStale = async (bucket: R2Bucket, tourId: string): Promise<boolean> => {
-  const bundle = PublishedTourSchema.safeParse(await readJson(bucket, pubTourKey(tourId)));
+  const raw = await readJson(bucket, pubTourKey(tourId));
+  const bundle = PublishedTourSchema.safeParse(raw);
   if (!bundle.success || bundle.data.visibility !== 'public' || bundle.data.scenes.length === 0) {
     return false;
   }
@@ -77,7 +80,12 @@ const exploreStale = async (bucket: R2Bucket, tourId: string): Promise<boolean> 
     const pending = ExplorePendingSchema.safeParse(
       await readJson(bucket, explorePendingKey(tourId)),
     );
-    return !pending.success || JSON.stringify(pending.data.cover) !== JSON.stringify(cover);
+    return (
+      !pending.success ||
+      JSON.stringify(pending.data.cover) !== JSON.stringify(cover) ||
+      // Of the bundle as stored, as publish fingerprints it: parsing could fill defaults.
+      pending.data.fingerprint !== (await bundleFingerprint(raw as PublishedTour))
+    );
   }
   const pointer = ExplorePointerSchema.safeParse(await readJson(bucket, exploreTourKey(tourId)));
   if (!pointer.success) return true;

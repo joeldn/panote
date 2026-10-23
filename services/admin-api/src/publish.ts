@@ -29,7 +29,7 @@ import {
 import { getJson, putJson } from '@internal/worker-kit/r2-binding';
 
 import { heldUntil } from './account-age.js';
-import { removeFromExplore, syncExploreQuietly } from './explore.js';
+import { removeFromExplore, revokeStaleApproval, syncExploreQuietly } from './explore.js';
 import { heldByOther, holdSlug, sweepExpiredHolds } from './slug-hold.js';
 
 export const DEFAULT_SLUG_ALIAS_DAYS = 30;
@@ -337,6 +337,9 @@ const commit = async (
   );
   if (!wrote.ok) return { ok: false, status: 409 };
   const expiries = await applyAliases(bucket, tourId, c.plan, c.record.slug, c.freshExpiresAt);
+  // Not best-effort: an approval for other content must be gone before the bundle changes,
+  // or Explore would list what the operator never saw (a failure here fails the publish).
+  const revoked = await revokeStaleApproval(bucket, c.bundle);
   // The metadata lets public-api's Explore check a listed tour with a HEAD.
   await putJson(bucket, pubTourKey(tourId), c.bundle, undefined, {
     visibility: c.bundle.visibility,
@@ -347,7 +350,7 @@ const commit = async (
     await unpublish(bucket, sub, tourId);
     return { ok: false, status: 404 };
   }
-  await syncExploreQuietly(bucket, c.bundle, new Date());
+  await syncExploreQuietly(bucket, c.bundle, new Date(), { revoked });
   return { ok: true, expiries };
 };
 

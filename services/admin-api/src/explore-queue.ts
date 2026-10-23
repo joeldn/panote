@@ -1,12 +1,9 @@
 import {
   ExploreDecisionRequestSchema,
   EXPLORE_STALE_ERROR,
-  explorePendingKey,
-  ExplorePendingSchema,
   isContentId,
   REAUTH_REQUIRED_ERROR,
 } from '@internal/contracts';
-import { getJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
 
 import { listApprovalQueue } from './explore.js';
@@ -38,21 +35,15 @@ exploreQueueRoutes.post('/:tourId', async (c) => {
   const body = ExploreDecisionRequestSchema.safeParse(await jsonBody(c.req.raw));
   if (!body.success) return c.json({ error: body.error.format() }, 400);
   const { action, fingerprint } = body.data;
-  // Only a tour still waiting, as the operator saw it: a reject of a tour that changed
-  // since is refused like an approval, so the operator looks at what they're hiding.
-  const got = await getJson<unknown>(c.env.BUCKET, explorePendingKey(tourId)).catch(() => null);
-  const pending = got ? ExplorePendingSchema.safeParse(got.value) : null;
-  if (!pending?.success || pending.data.fingerprint !== fingerprint) {
-    return c.json({ error: EXPLORE_STALE_ERROR }, 409);
-  }
+  // Only a tour still waiting as the operator saw it, checked in the tour's TourPublisher:
+  // a reject of a tour that changed since is refused like an approval, so the operator
+  // looks at what they're hiding.
   const stub = publisher(c.env, tourId);
-  if (action === 'approve') {
-    if ((await stub.approveExplore(tourId, fingerprint)) === 'stale') {
-      return c.json({ error: EXPLORE_STALE_ERROR }, 409);
-    }
-  } else {
-    await stub.rejectExplore(tourId);
-  }
+  const out =
+    action === 'approve'
+      ? await stub.approveExplore(tourId, fingerprint)
+      : await stub.rejectExplore(tourId, fingerprint);
+  if (out === 'stale') return c.json({ error: EXPLORE_STALE_ERROR }, 409);
   console.warn(`[explore] operator ${action} of tour ${tourId} done ${await by(c)}`);
   return queueNow(c);
 });
