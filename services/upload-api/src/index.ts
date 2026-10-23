@@ -1,15 +1,22 @@
 import {
   accountDeletionKey,
   accountDisabledKey,
+  contentIdError,
   deletingKey,
+  isContentId,
   MAX_PLAN_BYTES,
   originalKey,
-  PANO_PATTERN,
   planKey,
   tourKey,
   type PlanImageType,
 } from '@internal/contracts';
-import { authenticate, rateLimit, toErrorResponse, WorkerError } from '@internal/worker-kit';
+import {
+  authenticate,
+  rateLimit,
+  readJsonBody,
+  toErrorResponse,
+  WorkerError,
+} from '@internal/worker-kit';
 import { createR2S3Client, type R2HeadResult } from '@internal/worker-kit/r2-s3';
 
 import {
@@ -36,6 +43,9 @@ export const UPLOAD_URL_RATE_PERIOD_SECONDS = 60;
 // only when the request starts) were to check expiry at the end of a slow upload.
 export const UPLOAD_URL_EXPIRY_SECONDS = 600;
 const ALLOWED_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+// The request body is a handful of short fields (contentType, size, panoId or kind and
+// tourId): anything bigger than this is not ours, and is never buffered.
+export const MAX_BODY_BYTES = 8 * 1024;
 
 interface UploadUrlBody {
   /** Absent for a pano's original; `'plan'` for a tour's floor-plan image. */
@@ -119,7 +129,13 @@ export default {
       // Per owner, before any R2 request: a runaway client can't run up S3 calls.
       const limited = await rateLimit(env.UPLOAD_URL_LIMITER, sub, UPLOAD_URL_RATE_PERIOD_SECONDS);
       if (limited) return limited;
-      const raw: unknown = (await req.json().catch(() => null)) ?? {};
+      // Read at most MAX_BODY_BYTES (worker-kit's body.ts). Not JSON reads as {}: the field
+      // checks below answer the 400.
+      const read = await readJsonBody(req, MAX_BODY_BYTES);
+      if (!read.ok && read.status === 413) {
+        return Response.json({ error: 'body too large' }, { status: 413 });
+      }
+      const raw: unknown = (read.ok ? read.value : null) ?? {};
       // A primitive or an array would throw on `in` below (a 500): a 400 instead.
       if (typeof raw !== 'object' || Array.isArray(raw)) {
         return Response.json({ error: 'body must be a JSON object' }, { status: 400 });
@@ -147,8 +163,8 @@ export default {
           { status: 400 },
         );
       }
-      if (isPlan && (typeof body.tourId !== 'string' || !PANO_PATTERN.test(body.tourId))) {
-        return Response.json({ error: `tourId must match ${PANO_PATTERN}` }, { status: 400 });
+      if (isPlan && !isContentId(body.tourId)) {
+        return Response.json({ error: contentIdError('tourId') }, { status: 400 });
       }
 
       const r2 = createR2S3Client({
@@ -187,8 +203,8 @@ export default {
         if (typeof body.panoId !== 'string' || body.panoId.length === 0) {
           return Response.json({ error: 'panoId must be a non-empty string' }, { status: 400 });
         }
-        if (!PANO_PATTERN.test(body.panoId)) {
-          return Response.json({ error: `panoId must match ${PANO_PATTERN}` }, { status: 400 });
+        if (!isContentId(body.panoId)) {
+          return Response.json({ error: contentIdError('panoId') }, { status: 400 });
         }
         panoId = body.panoId;
         const [original, tombstone] = await Promise.all([

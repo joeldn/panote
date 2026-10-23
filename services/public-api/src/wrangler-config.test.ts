@@ -25,6 +25,7 @@ describe('wrangler.jsonc ratelimits', () => {
       'EVENTS_LIMITER',
       'EXPLORE_LIMITER',
       'LIKE_LIMITER',
+      'STATS_LIMITER',
       'VIEW_LIMITER',
     ]);
     for (const l of limiters)

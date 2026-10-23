@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
+  contentIdError,
   HotspotSchema,
+  isContentId,
   isHttpsMediaUrl,
   MAX_HOTSPOT_BODY_LENGTH,
   MAX_HOTSPOT_ID_LENGTH,
@@ -15,6 +17,29 @@ import {
   TourSceneSchema,
   ViewSchema,
 } from './schema.js';
+
+describe('isContentId', () => {
+  it('accepts what the body schemas accept, up to MAX_ID_LENGTH', () => {
+    expect(isContentId('p'.repeat(MAX_ID_LENGTH))).toBe(true);
+    expect(isContentId('a-b_C9')).toBe(true);
+  });
+
+  it.each([
+    ['one character too long', 'p'.repeat(MAX_ID_LENGTH + 1)],
+    ['empty', ''],
+    ['a slash', 'a/b'],
+    ['a dot-dot', '..'],
+    ['not a string', 42],
+  ])('rejects an id that is %s', (_label, id) => {
+    expect(isContentId(id)).toBe(false);
+  });
+
+  it('names the field and both rules in its message', () => {
+    expect(contentIdError('tourId')).toBe(
+      `tourId must match /^[A-Za-z0-9_-]+$/ and be at most ${MAX_ID_LENGTH} characters`,
+    );
+  });
+});
 
 describe('SceneConfigSchema', () => {
   it('accepts a minimal scene', () => {

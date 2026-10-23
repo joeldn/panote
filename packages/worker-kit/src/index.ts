@@ -8,3 +8,5 @@ export {
 export { bearerToken } from './bearer.js';
 export { authenticate, authenticateOptional } from './auth.js';
 export { rateLimit, type RateLimiter } from './rate-limit.js';
+export { rateLimitKeyForIp } from './ip-key.js';
+export { readBodyText, readJsonBody, type BodyResult, type BodyTextResult } from './body.js';

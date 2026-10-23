@@ -42,10 +42,13 @@ export default defineWorkerTestConfig({
         // A secret in a real env; operator.test.ts also runs without it.
         OPERATOR_TOKEN: 'test-operator-token',
       },
-      // Every test writes as the same few subs, far past the real 300/min: lift
-      // the limit here. The 429 path is tested with a stubbed limiter instead.
+      // Every test reads and writes as the same few subs, far past the real limits:
+      // lift them here. The 429 path is tested with a stubbed limiter instead.
       ratelimits: {
         WRITE_LIMITER: { namespace_id: '1301', simple: { limit: 1_000_000, period: 60 } },
+        READ_LIMITER: { namespace_id: '1302', simple: { limit: 1_000_000, period: 60 } },
+        INSIGHTS_LIMITER: { namespace_id: '1303', simple: { limit: 1_000_000, period: 60 } },
+        OPERATOR_LIMITER: { namespace_id: '1304', simple: { limit: 1_000_000, period: 60 } },
       },
       workers: [
         {

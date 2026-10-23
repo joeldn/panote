@@ -17,7 +17,7 @@ import {
   tourKey,
   tourOwnerKey,
 } from '@internal/contracts';
-import { env, SELF } from 'cloudflare:test';
+import { createExecutionContext, env, SELF, waitOnExecutionContext } from 'cloudflare:test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -31,6 +31,7 @@ import {
   type RestoreStore,
 } from '../scripts/restore-backup-lib.ts';
 import { runBackup } from './backup.js';
+import worker from './index.js';
 import { moveToTrash } from './trash.js';
 
 const SUB = 'google-oauth2|restore-1';
@@ -308,6 +309,49 @@ describe('runRestore', () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(await has(configKey(SUB, 'bulk-119'))).toBe(true);
   }, 20_000);
+});
+
+describe('runRestore past the operator rate limit', () => {
+  it('waits out each 429 and finishes a restore of many batches', async () => {
+    const n = 350;
+    for (let i = 0; i < n; i++) await put(configKey(SUB, `many-${i}`), { i });
+    // A budget big enough to finish the set in one run.
+    await runBackup(env.BUCKET, NOW, 10_000);
+    await env.BUCKET.delete(Array.from({ length: n }, (_, i) => configKey(SUB, `many-${i}`)));
+    const { lines, deps: d } = deps();
+    // 4 batches against a limiter that lets 2 requests through per window; a wait (the
+    // script's sleep) starts a new one.
+    let inWindow = 0;
+    const limit = vi.fn(async () => ({ success: ++inWindow <= 2 }));
+    const sleep = vi.fn(async (_ms: number) => {
+      inWindow = 0;
+    });
+    const fetchFn = async (input: string, init: RequestInit) => {
+      const ctx = createExecutionContext();
+      const res = await worker.fetch(
+        new Request(input, init),
+        { ...env, OPERATOR_LIMITER: { limit } },
+        ctx,
+      );
+      await waitOnExecutionContext(ctx);
+      return res;
+    };
+
+    const code = await runRestore(restoreArgs({ kind: 'owner', sub: SUB }), {
+      ...d,
+      fetch: fetchFn,
+      sleep,
+    });
+
+    expect(code).toBe(0);
+    expect(sleep).toHaveBeenCalled();
+    expect(sleep.mock.calls.every(([ms]) => ms === 60_000)).toBe(true);
+    expect(lines.join('\n')).toMatch(new RegExp(`restored ${n} key\\(s\\);.* 0 failed`));
+    const restored = await Promise.all(
+      Array.from({ length: n }, (_, i) => has(configKey(SUB, `many-${i}`))),
+    );
+    expect(restored.every(Boolean)).toBe(true);
+  }, 60_000);
 });
 
 describe('runRestore failures', () => {

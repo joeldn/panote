@@ -38,6 +38,7 @@ import {
   requestAccountDeletion,
   type R2Config,
 } from './delete-account-lib.ts';
+import { fetchWaitingOut429, type Sleep } from './operator-fetch.ts';
 
 export type OwnerAction = 'disable' | 'enable';
 /** What happens to the tour(s): the operator route's two actions, or copy-then-delete. */
@@ -591,12 +592,18 @@ export async function requestTourTakedown(
   fetchFn: FetchLike,
   api: { origin: string; token: string },
   body: { sub: string; tourId: string; action: OperatorTakedownAction },
+  sleep?: Sleep,
 ): Promise<OperatorTakedownOk> {
-  const res = await fetchFn(`${api.origin}${OPERATOR_TAKEDOWN_PATH}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', [OPERATOR_TOKEN_HEADER]: api.token },
-    body: JSON.stringify(body),
-  });
+  const res = await fetchWaitingOut429(
+    fetchFn,
+    `${api.origin}${OPERATOR_TAKEDOWN_PATH}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [OPERATOR_TOKEN_HEADER]: api.token },
+      body: JSON.stringify(body),
+    },
+    sleep,
+  );
   const json: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const error =
@@ -626,6 +633,8 @@ export interface TakedownDeps {
   fetch: FetchLike;
   log: (line: string) => void;
   now: () => Date;
+  /** How a 429 is waited out (operator-fetch.ts); tests pass one that doesn't wait. */
+  sleep?: Sleep;
 }
 
 /** Printed after --disable-owner: how to ban the owner's email too (docs/deploy.md, "Email ban list"). */
@@ -701,11 +710,12 @@ export async function runTakedown(args: TakedownArgs, deps: TakedownDeps): Promi
   if (args.tourAction && args.api) {
     // One at a time: each delete checks which panos the owner's other tours still use.
     for (const id of tourIds) {
-      const done = await requestTourTakedown(deps.fetch, args.api, {
-        sub,
-        tourId: id,
-        action: routeAction!,
-      });
+      const done = await requestTourTakedown(
+        deps.fetch,
+        args.api,
+        { sub, tourId: id, action: routeAction! },
+        deps.sleep,
+      );
       log(`tour ${id} ${TOUR_ACTION_DONE[done.action]}; ${done.purged} CDN purge target(s) queued`);
     }
     if (routeAction === 'unpublish') {

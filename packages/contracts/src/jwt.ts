@@ -44,6 +44,8 @@ interface Claims {
  */
 export const AUTH_TIME_CLAIM = 'https://panote.io/auth_time';
 export const LINKED_SUBS_CLAIM = 'https://panote.io/linked_subs';
+/** The user's address, lower case; the Action sets it only when a trusted provider verified it. */
+export const EMAIL_CLAIM = 'https://panote.io/email';
 /** At most this many linked subs are read from the token; the Action sends no more. */
 export const MAX_LINKED_SUBS = 10;
 // An Auth0 user id: `<provider>|<id>`, no whitespace, bounded.
@@ -60,6 +62,8 @@ export interface VerifiedClaims {
    * made under one of them before it was linked is this user's too.
    */
   linkedSubs?: readonly string[];
+  /** The user's verified email, lower case, from EMAIL_CLAIM. */
+  email?: string;
 }
 
 const readAuthTime = (v: unknown): number | undefined =>
@@ -73,6 +77,16 @@ const readLinkedSubs = (v: unknown, sub: string): string[] | undefined => {
   );
   return [...new Set(subs)].slice(0, MAX_LINKED_SUBS);
 };
+
+// Loose on purpose: the Action decides what is verified, this only refuses junk.
+const MAX_EMAIL_LENGTH = 254;
+const readEmail = (v: unknown): string | undefined =>
+  typeof v === 'string' &&
+  v.length <= MAX_EMAIL_LENGTH &&
+  v === v.trim().toLowerCase() &&
+  /^[^@\s]+@[^@\s]+$/.test(v)
+    ? v
+    : undefined;
 
 const b64urlToBytes = (s: string): Uint8Array<ArrayBuffer> => {
   const pad = s.length % 4 ? '='.repeat(4 - (s.length % 4)) : '';
@@ -100,10 +114,12 @@ export const assertClaims = (
   }
   const authTime = readAuthTime(c[AUTH_TIME_CLAIM]);
   const linkedSubs = readLinkedSubs(c[LINKED_SUBS_CLAIM], c.sub);
+  const email = readEmail(c[EMAIL_CLAIM]);
   return {
     sub: c.sub,
     ...(authTime !== undefined && { authTime }),
     ...(linkedSubs !== undefined && { linkedSubs }),
+    ...(email !== undefined && { email }),
   };
 };
 
