@@ -888,6 +888,33 @@
   color: var(--accent);
 }
 
+.ed-scene__grip {
+  flex: none;
+  width: 18px;
+  margin-right: -2px;
+  color: var(--ink-40);
+  cursor: grab;
+  /* A drag on the handle reorders the list; it must not scroll it. */
+  touch-action: none;
+}
+
+.ed-scene--dragging {
+  opacity: 0.55;
+}
+
+.ed-scene--dragging .ed-scene__grip {
+  cursor: grabbing;
+}
+
+/* Where the dragged pano would land: a line above or below this row. */
+.ed-scene--drop-before {
+  box-shadow: 0 -3px 0 -1px var(--accent);
+}
+
+.ed-scene--drop-after {
+  box-shadow: 0 3px 0 -1px var(--accent);
+}
+
 .ed-scene__star {
   border: 0;
   background: none;

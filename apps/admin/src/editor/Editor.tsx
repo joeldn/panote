@@ -903,6 +903,7 @@ function EditorScreen({ editor, docs }: { editor: EditorController; docs: Editor
           lookOnly={lookOnly}
           onSelect={select}
           onSetStart={(panoId) => dispatch({ type: 'tour/start', panoId })}
+          onMove={(panoId, to) => dispatch({ type: 'tour/move-scene', panoId, to })}
           onRemove={(panoId) => setConfirm({ kind: 'remove-pano', panoId })}
           onAim={(to, title) => {
             const v = view();

@@ -108,6 +108,13 @@ describe('toViewerTour', () => {
     }
   });
 
+  it('lists the scenes in the tour’s order, not the configs’ (the viewer’s scene list)', () => {
+    const doc = tour({ scenes: [{ panoId: 'nave' }, { panoId: 'hall' }] });
+    const v = toViewerTour(doc, { hall, nave });
+    expect(Object.keys(v.tour?.scenes ?? {})).toEqual(['nave', 'hall']);
+    expect(Object.keys(v.titles)).toEqual(['nave', 'hall']);
+  });
+
   it('accepts admin ?include=configs entries and reports missing scenes', () => {
     const doc = tour({ scenes: [{ panoId: 'hall' }, { panoId: 'crypt' }, { panoId: 'nave' }] });
     const v = toViewerTour(doc, {
