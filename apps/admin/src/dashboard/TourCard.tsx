@@ -199,7 +199,7 @@ export function TourCard({
               title="Insights"
               aria-label={`Insights for “${tour.title}”`}
             >
-              <i className="fa-solid fa-chart-simple" aria-hidden="true" />
+              <i className="fa-solid fa-chart-line" aria-hidden="true" />
             </Link>
             <button
               type="button"

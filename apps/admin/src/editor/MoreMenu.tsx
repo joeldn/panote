@@ -134,7 +134,7 @@ export function MoreMenu({
             to={insightsTo}
             onClick={() => close(false)}
           >
-            <i className="fa-solid fa-chart-simple" aria-hidden="true" />
+            <i className="fa-solid fa-chart-line" aria-hidden="true" />
             Insights
           </Link>
           <Link
