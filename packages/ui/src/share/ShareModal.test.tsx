@@ -191,7 +191,7 @@ describe('ShareModal', () => {
       renderModal({ tab: 'privacy' });
       const radios = within(screen.getByRole('radiogroup')).getAllByRole('radio');
       expect(radios.map((r) => r.querySelector('.pn-share__option-desc')?.textContent)).toEqual([
-        'Listed on Explore and can appear in search, once your account is a week old.',
+        'Listed on Explore once reviewed, and can appear in search once your account is a week old.',
         'Only people with the link.',
       ]);
     });

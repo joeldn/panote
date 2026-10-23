@@ -590,3 +590,50 @@ describe('tour members', () => {
     expect(call(3).url).toBe('https://panote.test/api/admin/panos/p1?status=1');
   });
 });
+
+describe('Explore approval queue', () => {
+  const waiting = {
+    v: 1,
+    tourId: 't1',
+    slug: 'old-town',
+    title: 'Old town',
+    sceneCount: 2,
+    cover: null,
+    fingerprint: 'fp1',
+    reason: 'new',
+    queuedAt: '2026-10-20T00:00:00.000Z',
+    updatedAt: '2026-10-20T00:00:00.000Z',
+  };
+
+  it('reads the queue and sends a decision with the fingerprint seen', async () => {
+    const { api, call } = setup(json({ tours: [waiting] }), json({ tours: [] }));
+    await expect(api.exploreQueue()).resolves.toEqual({ tours: [waiting] });
+    expect(call(0).url).toBe('https://panote.test/api/admin/ops/explore');
+    await expect(api.exploreDecide('t1', 'approve', 'fp1')).resolves.toEqual({ tours: [] });
+    expect(call(1).url).toBe('https://panote.test/api/admin/ops/explore/t1');
+    expect(call(1).init.method).toBe('POST');
+    expect(JSON.parse(String(call(1).init.body))).toEqual({
+      action: 'approve',
+      fingerprint: 'fp1',
+    });
+  });
+
+  it('throws ReauthRequiredError for a stale sign-in and ApiError for a changed tour', async () => {
+    const { api } = setup(
+      json({ error: 'reauthentication required' }, 403),
+      json({ error: 'tour changed since you looked' }, 409),
+    );
+    await expect(api.exploreDecide('t1', 'reject', 'fp1')).rejects.toBeInstanceOf(
+      ReauthRequiredError,
+    );
+    const err = await api.exploreDecide('t1', 'reject', 'fp1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(409);
+  });
+
+  it('refuses a tourId that could leave the path', async () => {
+    const { api, fetch } = setup();
+    await expect(api.exploreDecide('../x', 'approve', 'fp1')).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

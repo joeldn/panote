@@ -23,6 +23,7 @@ import {
   REAUTH_REQUIRED_ERROR,
   SceneConfigSchema,
   SUPPORT_USERS_PATH,
+  EXPLORE_QUEUE_PATH,
   signInOf,
   TOUR_TRANSFERRING_ERROR,
   type TransferFinishing,
@@ -73,6 +74,7 @@ import {
 } from './delete-account.js';
 import { deleteOwnedPano } from './delete-owned-pano.js';
 import { deleteTour } from './delete-tour.js';
+import { exploreQueueRoutes } from './explore-queue.js';
 import { insightsRoute } from './insights.js';
 import {
   jsonBody,
@@ -1080,6 +1082,8 @@ app.post(OPERATOR_BACKFILL_PATH, async (c) => {
 
 // The operator's support pages (support.ts), behind the operator gate.
 app.route(SUPPORT_USERS_PATH, supportRoutes);
+// The operator's Explore approval queue (explore-queue.ts), behind the operator gate.
+app.route(EXPLORE_QUEUE_PATH, exploreQueueRoutes);
 
 app.onError(errorHandler);
 

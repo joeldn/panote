@@ -1,5 +1,7 @@
 import {
+  exploreApprovedKey,
   EXPLORE_INDEX_ROOT,
+  explorePendingKey,
   exploreTourKey,
   manifestKey,
   OPERATOR_BACKFILL_PATH,
@@ -9,6 +11,7 @@ import {
   tourKey,
   tourOwnerKey,
   type ExploreEntry,
+  type ExplorePending,
   type ExplorePointer,
   type PublishedTour,
 } from '@internal/contracts';
@@ -98,9 +101,8 @@ const oldTour = async (who: string) => {
     httpMetadata: { contentType: 'application/json' },
     customMetadata: { title: `Tour ${who}`, sceneCount: '2', coverPanoId: p1 },
   });
-  await env.BUCKET.delete(tourOwnerKey(tourId));
-  const pointer = await readJson<ExplorePointer>(exploreTourKey(tourId));
-  await env.BUCKET.delete([pointer!.key, exploreTourKey(tourId)]);
+  await env.BUCKET.delete([tourOwnerKey(tourId), explorePendingKey(tourId)]);
+  expect(await env.BUCKET.head(exploreTourKey(tourId))).toBeNull();
   // A pre-Explore bundle was published months ago.
   const bundle = (await readJson<PublishedTour>(pubTourKey(tourId)))!;
   const head = await env.BUCKET.head(pubTourKey(tourId));
@@ -110,6 +112,18 @@ const oldTour = async (who: string) => {
     { httpMetadata: head!.httpMetadata ?? {}, customMetadata: head!.customMetadata ?? {} },
   );
   return { tourId, p1, p2, key };
+};
+
+const pending = (tourId: string) => readJson<ExplorePending>(explorePendingKey(tourId));
+/** The operator's approval of the tour as it waits, as the queue route would write it. */
+const approve = async (tourId: string) => {
+  const fingerprint = (await pending(tourId))!.fingerprint;
+  await env.BUCKET.put(
+    exploreApprovedKey(tourId),
+    JSON.stringify({ v: 1, approvedAt: new Date().toISOString(), fingerprint }),
+  );
+  const stub = env.PUBLISHER.get(env.PUBLISHER.idFromName(tourId));
+  expect(await stub.refreshExplore(tourId)).toBe(true);
 };
 
 const listed = async (tourId: string) => {
@@ -132,9 +146,10 @@ describe('POST /api/admin/operator/backfill', () => {
     expect((await env.BUCKET.head(t.key))!.etag).toBe(before!.etag);
     expect(await env.BUCKET.head(tourOwnerKey(t.tourId))).toBeNull();
     expect(await listed(t.tourId)).toBeNull();
+    expect(await pending(t.tourId)).toBeNull();
   });
 
-  it('with apply, fixes the cover, writes the pointer and lists the tour at its publish time', async () => {
+  it('with apply, fixes the cover, writes the pointer and queues the tour for approval', async () => {
     const t = await oldTour('bf-apply');
     const body = await (await env.BUCKET.get(t.key))!.text();
 
@@ -151,13 +166,14 @@ describe('POST /api/admin/operator/backfill', () => {
     });
     expect(await tour!.text()).toBe(body);
     expect(await readJson(tourOwnerKey(t.tourId))).toEqual({ v: 1, sub: subOf('bf-apply') });
-    const got = await listed(t.tourId);
-    expect(got?.entry).toMatchObject({
+    // Never approved, so it waits for the operator, queued at its publish time.
+    expect(await listed(t.tourId)).toBeNull();
+    expect(await pending(t.tourId)).toMatchObject({
       tourId: t.tourId,
       cover: { panoId: t.p2, version: 't1-abc', image: 'og' },
-      listedAt: '2026-06-01T00:00:00.000Z',
+      queuedAt: '2026-06-01T00:00:00.000Z',
+      reason: 'new',
     });
-    expect(got?.key.startsWith(EXPLORE_INDEX_ROOT)).toBe(true);
     // The dashboard reads the fixed cover straight away.
     const list = await api('bf-apply', 'GET', '/tours');
     expect(
@@ -212,7 +228,6 @@ describe('POST /api/admin/operator/backfill', () => {
   it('refreshes an Explore cover a re-tile left on an old version', async () => {
     const t = await oldTour('bf-retile');
     await backfill({ apply: true });
-    const firstKey = (await listed(t.tourId))!.key;
     await env.BUCKET.put(
       manifestKey(t.p2),
       JSON.stringify({ pano: t.p2, version: 't2-new', preview: true }),
@@ -221,10 +236,26 @@ describe('POST /api/admin/operator/backfill', () => {
     const out = await (await backfill({ apply: true })).json();
 
     expect(out).toMatchObject({ tours: [{ tourId: t.tourId, changes: ['explore'] }] });
+    expect((await pending(t.tourId))?.cover).toEqual({
+      panoId: t.p2,
+      version: 't2-new',
+      image: 'preview',
+    });
+    await approve(t.tourId);
+    const approvedKey = (await listed(t.tourId))!.key;
+    await env.BUCKET.put(
+      manifestKey(t.p2),
+      JSON.stringify({ pano: t.p2, version: 't3-newer', preview: true }),
+    );
+
+    expect(await (await backfill({ apply: true })).json()).toMatchObject({
+      tours: [{ tourId: t.tourId, changes: ['explore'] }],
+    });
     const got = await listed(t.tourId);
-    expect(got?.entry?.cover).toEqual({ panoId: t.p2, version: 't2-new', image: 'preview' });
-    // Same place in the list.
-    expect(got?.key).toBe(firstKey);
+    expect(got?.entry?.cover).toEqual({ panoId: t.p2, version: 't3-newer', image: 'preview' });
+    // Same place in the list, still approved: a re-tile isn't a change to the bundle.
+    expect(got?.key).toBe(approvedKey);
+    expect(got?.key.startsWith(EXPLORE_INDEX_ROOT)).toBe(true);
   });
 
   it('leaves an Unlisted tour off Explore, and a tour saved since alone', async () => {

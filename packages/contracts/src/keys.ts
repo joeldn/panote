@@ -319,6 +319,14 @@ export const exploreTourKey = (t: string): string =>
 // Operator marker: the tour stays published by link but is never listed.
 export const exploreHiddenKey = (t: string): string =>
   `${EXPLORE_ROOT}hidden/${assertValidId(t, 'tourId')}.json`;
+// The operator's approval ({ v, approvedAt, fingerprint }): a tour is listed only while
+// one exists and names the fingerprint of its live bundle. Deleted when the bundle changes.
+export const exploreApprovedKey = (t: string): string =>
+  `${EXPLORE_ROOT}approved/${assertValidId(t, 'tourId')}.json`;
+// A tour waiting for that approval: the operator's review queue (ExplorePendingSchema).
+export const EXPLORE_PENDING_ROOT = `${EXPLORE_ROOT}pending/`;
+export const explorePendingKey = (t: string): string =>
+  `${EXPLORE_PENDING_ROOT}${assertValidId(t, 'tourId')}.json`;
 
 // Nightly backup (admin-api's backup.ts): a private copy of every JSON document that
 // defines user content, under backup/<YYYY-MM-DD>/<its original key>, kept 30 days. Outside
@@ -354,7 +362,7 @@ export const BACKUP_PROGRESS_KEY = `${BACKUP_ROOT}progress.json`;
  */
 export const BACKUP_SOURCES: readonly { prefix: string; match: RegExp }[] = [
   { prefix: ACCOUNTS_ROOT, match: /^accounts\/[^/]+\/(deletion|disabled)\.json$/ },
-  { prefix: EXPLORE_ROOT, match: /^explore\/(index|tours|hidden)\/[^/]+\.json$/ },
+  { prefix: EXPLORE_ROOT, match: /^explore\/(index|tours|hidden|approved|pending)\/[^/]+\.json$/ },
   { prefix: 'panos/', match: /^panos\/[^/]+\/[^/]+\/config\.json$/ },
   { prefix: 'pub/', match: new RegExp(`^(?:pub/.+\\.json|${PLAN_KEY_PATTERN})$`) },
   { prefix: SLUGS_ROOT, match: /^slugs\/[^/]+\.json$/ },

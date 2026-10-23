@@ -1774,7 +1774,7 @@ define user content to a private, dated prefix in the **same** bucket every day
 
 **What's in a set.** `BACKUP_SOURCES` in `@internal/contracts` (`keys.ts`): every `tours/<owner>/<tourId>/*.json`
 (`tour.json`, `publish.json`, `sharing-stopped.json`), each pano's `panos/<owner>/<panoId>/config.json`,
-`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden}/*.json`, the
+`pub/**.json`, `slugs/*.json`, `tour-owners/*.json`, `explore/{index,tours,hidden,approved,pending}/*.json`, the
 account markers `accounts/<owner>/{deletion,disabled}.json`, and the tours' floor-plan images
 `pub/plans/<tourId>/<planId>.{webp,jpg,png}` (at most 4 MiB each, `MAX_PLAN_BYTES`). Not in it:
 originals (large; a deleted one waits 30 days in `trash/` instead, see "Trash for deleted
@@ -2036,8 +2036,8 @@ fixes it.
 
 ## Explore
 
-`https://panote.dev/explore` (and `panote.io`) lists every **Public** tour, newest first, 24 to a
-page with a "Load more" cursor. Unlisted tours are never listed. Cards show the cover, title and
+`https://panote.dev/explore` (and `panote.io`) lists every **Public** tour the operator has
+approved, newest first, 24 to a page with a "Load more" cursor. Unlisted tours are never listed. Cards show the cover, title and
 scene count and link to `/s/<slug>`; nothing on them names the owner. Code:
 `services/admin-api/src/explore.ts` (writes), `services/public-api/src/explore.ts` (reads),
 `apps/website/src/explore/`; schemas and keys in `@internal/contracts` (`explore.ts`, `keys.ts`).
@@ -2049,6 +2049,8 @@ scene count and link to `/s/<slug>`; nothing on them names the owner. Code:
 | `explore/index/<rank>-<tourId>.json` | The card: `{ v, tourId, slug, title, sceneCount, cover, publishedAt, listedAt, updatedAt }`. `rank` is `9999999999999 - listedAt ms`, 13 digits, so an R2 list (ascending) is newest-listed first and a page is one `list` call. `cover` is `{ panoId, version, image: "og" \| "preview" }` (the start scene's `og.jpg` or `preview.webp`) or `null` | admin-api, inside the tour's `TourPublisher` |
 | `explore/tours/<tourId>.json` | Pointer `{ v, key }` to the tour's entry, so a removal needs only the tourId. It outlives the entry while the tour exists (see below), so the key it names keeps the tour's listing time | same |
 | `explore/hidden/<tourId>.json` | Operator marker `{ v, hiddenAt }`: never list this tour | the takedown route (`hide` / `unhide`) |
+| `explore/approved/<tourId>.json` | The operator's approval `{ v, approvedAt, fingerprint }` of one version of the tour (see Approval queue) | the approval queue's Approve, inside the `TourPublisher` |
+| `explore/pending/<tourId>.json` | The tour waiting for approval: `{ v, tourId, slug, title, sceneCount, cover, fingerprint, reason: "new" \| "changed", queuedAt, updatedAt }` | admin-api, inside the tour's `TourPublisher` |
 
 Every key is owner-free, like `pub/`. A tour keeps its `listedAt` (its place in the list) across
 Saves, renames and republishes, and also through a trip to Unlisted and back, a start scene that
@@ -2077,9 +2079,27 @@ the share modal's Public option reads "once your account is a week old", as does
 page, so change both if the var changes. The public bundle `pub/tours/<tourId>.json` now also carries
 `customMetadata: { visibility, slug }`, so the read side checks a listed tour with a `HEAD`.
 
+**Approval queue.** Nothing is listed without the operator's say-so. Every tour that would be
+listed is fingerprinted: the SHA-256 of its bundle with keys sorted, leaving out only
+`visibility`, `publishedAt` and `heldUntil`, so the title, slug, description, scenes, hotspot
+text and linked media all count. It is listed only while `explore/approved/<tourId>.json`
+names that fingerprint; otherwise its entry goes, any old approval is deleted first, and it
+waits in `explore/pending/` for the operator at `/app/ops/explore` (Operator pages). Any Save
+that changes what the tour shows therefore takes an approved tour off Explore until it is
+approved again (the queue marks it "Changed since approved"); a Save with no change, a trip to
+Unlisted and back, a scene not ready yet or the owner's Stop sharing keep the approval. A tour
+delete, an account delete and every operator takedown (`unpublish`, `delete`, `hide`) delete it.
+A re-tile or replaced photo changes no bundle, so it doesn't re-queue the tour on its own.
+Approve runs in the tour's `TourPublisher`, checks the fingerprint the operator saw against the
+live bundle (else `409`, so nothing is approved unseen), writes the approval and lists the tour
+as new at that moment (or where it was, for a tour listed before). Reject is the hide below.
+After this shipped, tours listed before it have no approval and drop off Explore; the backfill
+(below) moves them to the queue.
+
 **Writes.** Every publish (each Save), slug rename and visibility change rewrites the entry after
-the bundle: listed while the bundle is Public, the start scene's manifest exists (a ready scene)
-and there is no hidden marker; removed otherwise. These writes are best-effort: a failure is
+the bundle: listed while the bundle is Public, the start scene's manifest exists (a ready scene),
+there is no hidden marker and the operator approved this version; queued for approval or removed
+otherwise. These writes are best-effort: a failure is
 logged as `[explore] index update failed` and the publish still succeeds, so at worst a tour is
 missing from Explore until its next Save (or the backfill below). Removal on unpublish is not best-effort: the owner's
 Stop sharing, tour delete, account delete (and its daily sweep), and the operator's `unpublish`
@@ -2092,10 +2112,11 @@ finishes it.
 **Reads.** `GET /api/explore[?cursor=<rank>-<tourId>]` on public-api answers
 `{ tours: [...], cursor: string | null }` (`ExplorePageSchema`, which the website validates). It
 re-checks every entry before showing it: dropped if `pub/tours/<tourId>.json` is gone or not
-Public, if `explore/hidden/<tourId>.json` exists, or if the entry doesn't parse or has no scenes.
+Public, if `explore/hidden/<tourId>.json` exists, if `explore/approved/<tourId>.json` doesn't, or
+if the entry doesn't parse or has no scenes.
 So an entry that outlived its tour (a failed removal, a race with an operator hide) is never
 shown, and so is one filed later than now (a held tour). Per page that is one `list` plus a `GET`
-and two `HEAD`s per entry, and at most three
+and three `HEAD`s per entry, and at most three
 `list` calls when many entries are dropped. Responses are `Cache-Control: public, max-age=60` and
 kept in the edge cache (Cache API, keyed by path plus `cursor` only), so a taken-down tour can
 linger on a cached Explore page for up to 60 s; its `/s/<slug>` link stops working at once. A bad
@@ -2145,7 +2166,9 @@ its admin-api origin, with the usual `--allow-bucket` for anything but a `-dev` 
 - re-syncs the Explore entry through the tour's `TourPublisher`, as a publish does, when the tour
   is Public, published, not hidden, has a ready start scene, and has no entry or an entry whose
   cover differs from the start scene's current one. A tour listed for the first time this way
-  takes its last publish time as its place, so old tours don't jump to the top.
+  takes its last publish time as its place, so old tours don't jump to the top. A tour with no
+  approval (every tour listed before the approval queue) is moved to the queue instead, queued at
+  its last publish time, and one already waiting is refreshed only when its cover is out of date.
 
 ```bash
 export R2_BUCKET=pano-content-dev OPERATOR_TOKEN=...
@@ -3007,6 +3030,19 @@ printf %s 'google-oauth2|1234' | sha256sum
 
 and add the 64-hex hash to `OPERATOR_SUB_SHA256` for that env, in a PR. It takes effect on the
 next deploy. Removing one is the same edit the other way.
+
+### Explore queue
+
+`/app/ops/explore` (`apps/admin/src/ops/ExploreQueueRoute.tsx`, API in
+`services/admin-api/src/explore-queue.ts` under `/api/admin/ops/explore`) lists every Public tour
+waiting to be listed on Explore, oldest first, with its cover, link and why it waits (new, or
+changed since it was approved). Open the link, then **Approve** (it is listed) or **Reject** (it
+gets the Explore hidden marker, so it stays off Explore through later Saves, and its share link
+keeps working; Show on Explore on the Users page undoes that and sends it back to the queue).
+A decision names the version shown: if the tour changed since the page loaded it is refused and
+the page reloads. Decisions need a recent sign-in, like the support writes, and log
+`[explore] operator approve|reject of tour <tourId>` with the operator's hash prefix. See Explore,
+"Approval queue".
 
 ### Users (support)
 

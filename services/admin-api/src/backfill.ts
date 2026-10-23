@@ -1,7 +1,10 @@
 import {
   decodeId,
   ExploreCoverSchema,
+  exploreApprovedKey,
   exploreHiddenKey,
+  explorePendingKey,
+  ExplorePendingSchema,
   exploreTourKey,
   ExploreEntrySchema,
   ExplorePointerSchema,
@@ -31,6 +34,8 @@ import { tourCustomMetadata } from './lists.js';
 // - explore: a Public tour published before #126 has no Explore entry, and an entry's
 //   cover names a tile version a re-tile may have replaced since. The TourPublisher
 //   re-syncs it from the live bundle (explore.ts's syncExplore), as a publish would.
+//   A tour listed before the approval queue has no approval, so this moves it to the
+//   queue; one already waiting there is only refreshed when its cover is out of date.
 
 const TOUR_KEY_RE = /^tours\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)\/tour\.json$/;
 
@@ -68,6 +73,12 @@ const exploreStale = async (bucket: R2Bucket, tourId: string): Promise<boolean> 
   const cover = await currentCover(bucket, bundle.data.startPanoId);
   // A start scene with no manifest isn't ready: a publish wouldn't list it either.
   if (cover === undefined) return false;
+  if (!(await bucket.head(exploreApprovedKey(tourId)))) {
+    const pending = ExplorePendingSchema.safeParse(
+      await readJson(bucket, explorePendingKey(tourId)),
+    );
+    return !pending.success || JSON.stringify(pending.data.cover) !== JSON.stringify(cover);
+  }
   const pointer = ExplorePointerSchema.safeParse(await readJson(bucket, exploreTourKey(tourId)));
   if (!pointer.success) return true;
   const entry = ExploreEntrySchema.safeParse(await readJson(bucket, pointer.data.key));

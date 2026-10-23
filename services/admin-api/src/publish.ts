@@ -564,8 +564,10 @@ export const unpublish = async (
   }
   await bucket.delete(pubTourKey(tourId));
   // Not best-effort: an error leaves publish.json, so a retry still finds the tour.
-  // Stop sharing keeps the tour's Explore pointer, so sharing it again doesn't list it as new.
-  await removeFromExplore(bucket, tourId, { keepPlace: stopSharing && !!tour });
+  // Stop sharing keeps the tour's Explore pointer, so sharing it again doesn't list it as new,
+  // and its approval, unless it is a takedown: then sharing it again goes back to the queue.
+  const keepPlace = stopSharing && !!tour;
+  await removeFromExplore(bucket, tourId, { keepPlace, keepApproval: keepPlace && !takedown });
   await bucket.delete(publishKey(sub, tourId));
   return [pubTourKey(tourId), ...removed];
 };

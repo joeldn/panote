@@ -1,6 +1,10 @@
 import {
   ACCOUNT_DELETE_CONFIRMATION,
+  exploreApprovedKey,
   EXPLORE_INDEX_ROOT,
+  EXPLORE_QUEUE_PATH,
+  EXPLORE_STALE_ERROR,
+  explorePendingKey,
   exploreHiddenKey,
   exploreTourKey,
   manifestKey,
@@ -10,7 +14,9 @@ import {
   publishKey,
   pubTourKey,
   type ExploreEntry,
+  type ExplorePending,
   type ExplorePointer,
+  type ExploreQueue,
   type PublishedTour,
 } from '@internal/contracts';
 import { setTestJwtVerifier } from '@internal/worker-kit/testing';
@@ -59,8 +65,35 @@ const readyPano = async (who: string, panoId: string, manifest: object = { og: t
   );
 };
 
-/** A one-scene tour, published with `body` (a slug and a visibility, say). */
-const publishedTour = async (who: string, body: object, manifest?: object) => {
+const queue = async (): Promise<ExplorePending[]> => {
+  const r = await SELF.fetch(`https://x${EXPLORE_QUEUE_PATH}`, { headers: bearer('operator') });
+  expect(r.status).toBe(200);
+  return ((await r.json()) as ExploreQueue).tours;
+};
+const waiting = async (tourId: string) => (await queue()).find((t) => t.tourId === tourId);
+const decide = (tourId: string, action: string, fingerprint: string) =>
+  SELF.fetch(`https://x${EXPLORE_QUEUE_PATH}/${tourId}`, {
+    method: 'POST',
+    headers: bearer('operator'),
+    body: JSON.stringify({ action, fingerprint }),
+  });
+/** The operator approves the tour as it waits in the queue. */
+const approve = async (tourId: string) => {
+  const pending = await waiting(tourId);
+  expect(pending).toBeDefined();
+  expect((await decide(tourId, 'approve', pending!.fingerprint)).status).toBe(200);
+};
+
+/**
+ * A one-scene tour, published with `body` (a slug and a visibility, say). A Public one
+ * is approved for Explore too, unless `approved` is false.
+ */
+const publishedTour = async (
+  who: string,
+  body: { visibility?: string; slug?: string },
+  manifest?: object,
+  { approved = true }: { approved?: boolean } = {},
+) => {
   const panoId = `${who}-p1`;
   await readyPano(who, panoId, manifest);
   const created = await api(who, 'POST', '/tours', {
@@ -70,6 +103,7 @@ const publishedTour = async (who: string, body: object, manifest?: object) => {
   const { tourId } = (await created.json()) as { tourId: string };
   const r = await api(who, 'POST', `/tours/${tourId}/publish`, body);
   expect(r.status).toBe(200);
+  if (body.visibility === 'public' && approved) await approve(tourId);
   return { tourId, panoId };
 };
 
@@ -141,6 +175,10 @@ describe('Explore index: publish', () => {
     });
     expect(put.status).toBe(200);
     await api(who, 'POST', `/tours/${tourId}/publish`, { afterSave: true });
+    // A change to what it shows takes it off until the operator has looked again.
+    expect(await listed(tourId)).toBeNull();
+    expect(await waiting(tourId)).toMatchObject({ reason: 'changed', title: 'Renamed tour' });
+    await approve(tourId);
     const second = await listed(tourId);
     expect(second?.key).toBe(first?.key);
     expect(second?.entry.title).toBe('Renamed tour');
@@ -154,6 +192,7 @@ describe('Explore index: publish', () => {
     const before = await listed(tourId);
     const r = await api(who, 'PUT', `/tours/${tourId}/slug`, { slug: 'ex-rename-b' });
     expect(r.status).toBe(200);
+    await approve(tourId);
     const after = await listed(tourId);
     expect(after?.key).toBe(before?.key);
     expect(after?.entry.slug).toBe('ex-rename-b');
@@ -170,7 +209,8 @@ describe('Explore index: publish', () => {
     await new Promise((r) => setTimeout(r, 5));
     await api(who, 'PATCH', `/tours/${tourId}/visibility`, { visibility: 'public' });
     const again = await listed(tourId);
-    // Not listed as new: a round trip through Unlisted can't bump a tour to the top.
+    // Unchanged, so still approved; and not listed as new: a round trip through Unlisted
+    // can't bump a tour to the top.
     expect(again?.key).toBe(first?.key);
     expect(again?.entry.listedAt).toBe(first?.entry.listedAt);
     expect(await indexKeys(tourId)).toEqual([first?.key]);
@@ -328,7 +368,7 @@ describe('operator hide from Explore', () => {
     expect(await indexKeys(tourId)).toEqual([]);
   });
 
-  it('unhide lists a published Public tour again', async () => {
+  it('unhide queues a published Public tour for approval again', async () => {
     const who = 'ex-unhide';
     const sub = subOf(who);
     const { tourId } = await publishedTour(who, { visibility: 'public' });
@@ -336,6 +376,9 @@ describe('operator hide from Explore', () => {
     const r = await takedown(sub, tourId, 'unhide');
     expect(await r.json()).toEqual({ action: 'unhide', purged: 0 });
     expect(await has(exploreHiddenKey(tourId))).toBe(false);
+    // Back through the queue: hiding withdrew the approval.
+    expect(await listed(tourId)).toBeNull();
+    await approve(tourId);
     expect((await listed(tourId))?.entry.tourId).toBe(tourId);
   });
 
@@ -345,5 +388,112 @@ describe('operator hide from Explore', () => {
     expect(r.status).toBe(404);
     expect(await has(exploreHiddenKey(tourId))).toBe(false);
     expect(await listed(tourId)).not.toBeNull();
+  });
+});
+
+describe('Explore approval queue', () => {
+  it('a Public publish waits in the queue, listed only once approved', async () => {
+    const who = 'ex-q-new';
+    const { tourId, panoId } = await publishedTour(
+      who,
+      { slug: 'ex-q-new-tour', visibility: 'public' },
+      undefined,
+      { approved: false },
+    );
+    expect(await listed(tourId)).toBeNull();
+    const pending = await waiting(tourId);
+    expect(pending).toMatchObject({
+      v: 1,
+      tourId,
+      slug: 'ex-q-new-tour',
+      title: `Tour ${who}`,
+      sceneCount: 1,
+      cover: { panoId, version: 't1-abc', image: 'og' },
+      reason: 'new',
+    });
+    expect(pending?.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(pending)).not.toContain('auth0');
+    await approve(tourId);
+    expect((await listed(tourId))?.entry.slug).toBe('ex-q-new-tour');
+    expect(await waiting(tourId)).toBeUndefined();
+    expect(await readJson(exploreApprovedKey(tourId))).toMatchObject({
+      v: 1,
+      fingerprint: pending?.fingerprint,
+    });
+  });
+
+  it('a republish with nothing changed keeps the tour listed', async () => {
+    const who = 'ex-q-same';
+    const { tourId } = await publishedTour(who, { visibility: 'public' });
+    const { key } = (await listed(tourId))!;
+    await api(who, 'POST', `/tours/${tourId}/publish`, { afterSave: true });
+    expect((await listed(tourId))?.key).toBe(key);
+    expect(await waiting(tourId)).toBeUndefined();
+  });
+
+  it('keeps its first place in the queue while it changes, and an Unlisted switch leaves it', async () => {
+    const who = 'ex-q-wait';
+    const { tourId, panoId } = await publishedTour(who, { visibility: 'public' }, undefined, {
+      approved: false,
+    });
+    const first = (await waiting(tourId))!;
+    await new Promise((r) => setTimeout(r, 5));
+    await api(who, 'PUT', `/tours/${tourId}`, { title: 'Second title', scenes: [{ panoId }] });
+    await api(who, 'POST', `/tours/${tourId}/publish`, { afterSave: true });
+    const second = (await waiting(tourId))!;
+    expect(second.queuedAt).toBe(first.queuedAt);
+    expect(second.fingerprint).not.toBe(first.fingerprint);
+    // The operator saw the first version: approving it now is refused.
+    const stale = await decide(tourId, 'approve', first.fingerprint);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: EXPLORE_STALE_ERROR });
+    expect(await listed(tourId)).toBeNull();
+    await api(who, 'PATCH', `/tours/${tourId}/visibility`, { visibility: 'unlisted' });
+    expect(await has(explorePendingKey(tourId))).toBe(false);
+  });
+
+  it('reject hides the tour from Explore, keeps its share link, and a later Save stays off', async () => {
+    const who = 'ex-q-reject';
+    const { tourId } = await publishedTour(who, { visibility: 'public' }, undefined, {
+      approved: false,
+    });
+    const pending = (await waiting(tourId))!;
+    const r = await decide(tourId, 'reject', pending.fingerprint);
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as ExploreQueue).tours.some((t) => t.tourId === tourId)).toBe(false);
+    expect(await has(exploreHiddenKey(tourId))).toBe(true);
+    expect(await has(pubTourKey(tourId))).toBe(true);
+    await api(who, 'POST', `/tours/${tourId}/publish`, { afterSave: true });
+    expect(await waiting(tourId)).toBeUndefined();
+    expect(await listed(tourId)).toBeNull();
+  });
+
+  it('a tour leaving for good leaves the queue and loses its approval', async () => {
+    const who = 'ex-q-gone';
+    const a = await publishedTour(who, { visibility: 'public' }, undefined, { approved: false });
+    expect((await api(who, 'DELETE', `/tours/${a.tourId}`)).status).toBe(204);
+    expect(await has(explorePendingKey(a.tourId))).toBe(false);
+    const b = await publishedTour(`${who}-2`, { visibility: 'public' });
+    expect((await takedown(subOf(`${who}-2`), b.tourId, 'unpublish')).status).toBe(200);
+    expect(await has(exploreApprovedKey(b.tourId))).toBe(false);
+  });
+
+  it('is for operators only, and decisions take a valid tour and fingerprint', async () => {
+    const who = 'ex-q-gate';
+    const { tourId } = await publishedTour(who, { visibility: 'public' }, undefined, {
+      approved: false,
+    });
+    const asOwner = await SELF.fetch(`https://x${EXPLORE_QUEUE_PATH}`, { headers: bearer(who) });
+    expect(asOwner.status).toBe(404);
+    const ownerApprove = await SELF.fetch(`https://x${EXPLORE_QUEUE_PATH}/${tourId}`, {
+      method: 'POST',
+      headers: bearer(who),
+      body: JSON.stringify({ action: 'approve', fingerprint: 'x' }),
+    });
+    expect(ownerApprove.status).toBe(404);
+    expect((await decide('not a tour!', 'approve', 'x')).status).toBe(404);
+    expect((await decide(tourId, 'promote', 'x')).status).toBe(400);
+    expect((await decide(tourId, 'approve', 'wrong')).status).toBe(409);
+    expect(await listed(tourId)).toBeNull();
   });
 });

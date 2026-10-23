@@ -15,8 +15,10 @@ import {
   backupSetPrefix,
   encodeId,
   EXPLORE_INDEX_ROOT,
+  exploreApprovedKey,
   exploreCursorOf,
   exploreHiddenKey,
+  explorePendingKey,
   exploreTourKey,
   isBackedUpKey,
   isRestorableKey,
@@ -277,7 +279,7 @@ const scenePanoIds = (doc: unknown): string[] => {
 
 /**
  * The tour's keys outside its owner's prefix, as the set has them: public bundle, owner
- * index, Explore pointer, entry and hidden marker, floor-plan images, and each share link (live slug and
+ * index, Explore pointer, entry, hidden marker, approval and queue entry, floor-plan images, and each share link (live slug and
  * aliases from its backed-up publish record) that the backup shows pointing at it.
  */
 async function tourPublicKeys(
@@ -292,6 +294,8 @@ async function tourPublicKeys(
     tourOwnerKey(tourId),
     exploreTourKey(tourId),
     exploreHiddenKey(tourId),
+    exploreApprovedKey(tourId),
+    explorePendingKey(tourId),
   ];
   for (const k of inSet) {
     if (k.startsWith(EXPLORE_INDEX_ROOT) && exploreCursorOf(k)?.endsWith(`-${tourId}`))

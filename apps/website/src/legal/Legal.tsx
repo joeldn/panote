@@ -46,8 +46,9 @@ export function Privacy() {
         </li>
         <li>
           <strong>What you upload.</strong> Panoramas, tours and their text. Anyone with a published
-          tour’s link can open it. Once your account is a week old, a public tour is also listed on
-          Explore (title, cover image and scene count, never your name) and can appear in search.
+          tour’s link can open it. Once your account is a week old, a public tour can appear in
+          search, and once reviewed it is listed on Explore (title, cover image and scene count,
+          never your name).
         </li>
         <li>
           <strong>Likes.</strong> Signed out, a random id in your browser’s local storage, so a like

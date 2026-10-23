@@ -48,9 +48,7 @@ describe('website routes', () => {
     expect(page).toContain('account menu, Delete account');
     expect(page).toContain('up to 31 days');
     expect(page).toContain('people who already viewed it may still load its images');
-    expect(page).toContain(
-      'Once your account is a week old, a public tour is also listed on Explore',
-    );
+    expect(page).toContain('Once your account is a week old, a public tour can appear in search');
     expect(page).toContain('complain to your data protection authority');
     expect(page).toContain('isn’t for anyone under 16');
     expect(page).toContain('Last updated 23 October 2026');
