@@ -22,7 +22,11 @@ const policies = (environment: string) =>
 /** What the repository has today, set up by hand. */
 const LIVE = {
   [REPO]: { full_name: 'joeldn/panote' },
+  // `main` reads as protected under a ruleset too; only this is the classic rule.
   [`${REPO}/branches/main`]: { name: 'main', protected: true },
+  [`${REPO}/branches/main/protection`]: {
+    required_status_checks: { contexts: ['Gate', 'Coverage'] },
+  },
   [`${REPO}/actions/variables/CLOUDFLARE_ACCOUNT_ID`]: { name: 'CLOUDFLARE_ACCOUNT_ID' },
   [`${REPO}/actions/variables/DEV_AUTO_DEPLOY`]: { name: 'DEV_AUTO_DEPLOY', value: 'true' },
   [`${REPO}/environments/infra-preview`]: { name: 'infra-preview' },
@@ -78,7 +82,6 @@ describe('buildGithubImportPlan', () => {
       stackSettingsWithGithub('dev'),
       fakeApi({
         [REPO]: { full_name: 'joeldn/panote' },
-        [`${REPO}/branches/main`]: { name: 'main', protected: false },
       }),
     );
     expect(plan.resources.map((e) => e.name)).toEqual([
@@ -93,6 +96,18 @@ describe('buildGithubImportPlan', () => {
       'github-environment',
       'github-environment-main-policy',
     ]);
+  });
+
+  it.each([
+    ['main has no protection at all', { [`${REPO}/branches/main`]: { protected: false } }],
+    ['main is protected only by a ruleset', { [`${REPO}/branches/main`]: { protected: true } }],
+  ])('plans the classic rule as new when %s', async (_, branch) => {
+    const { [`${REPO}/branches/main/protection`]: _rule, ...withoutRule } = LIVE;
+    const api = fakeApi({ ...withoutRule, ...branch });
+    const plan = await buildGithubImportPlan(stackSettingsWithGithub('dev'), api);
+    expect(plan.missing).toEqual(['github-main-protection']);
+    expect(plan.resources.map((e) => e.name)).not.toContain('github-main-protection');
+    expect(api.paths).toContain(`${REPO}/branches/main/protection`);
   });
 
   it('plans the main policy as new when the Environment allows any branch', async () => {
@@ -111,12 +126,6 @@ describe('buildGithubImportPlan', () => {
       stackSettingsWithGithub('dev'),
       { ...LIVE, [REPO]: undefined },
       /joeldn\/panote not found/,
-    ],
-    [
-      'main is not there',
-      stackSettingsWithGithub('dev'),
-      { ...LIVE, [`${REPO}/branches/main`]: undefined },
-      /has no main/,
     ],
     [
       'two main policies',

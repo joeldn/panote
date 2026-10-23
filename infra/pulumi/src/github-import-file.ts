@@ -9,7 +9,7 @@ import type { Settings } from './settings.js';
  * only ever GETs.
  *
  * Like import-file.ts, names and types come from names.ts. The repository and
- * its Actions workflow permissions always exist; `main`'s protection, the
+ * its Actions workflow permissions always exist; `main`'s classic protection, the
  * variables, the Environments and their `main` branch policy are looked up and
  * planned as new when they aren't there.
  */
@@ -50,12 +50,12 @@ export async function buildGithubImportPlan(
     add('githubRepository', repository);
     // Every repository has Actions workflow permissions.
     add('githubWorkflowPermissions', repository);
-    const branch = (await get(`${repo}/branches/${PROTECTED_BRANCH}`)) as
-      { protected?: unknown } | undefined;
-    if (branch === undefined) throw new Error(`${owner}/${repository} has no ${PROTECTED_BRANCH}`);
+    // The classic rule itself: a branch's `protected` is also true under a
+    // ruleset alone, which this resource can't import. 404 means no rule.
+    const protection = await get(`${repo}/branches/${PROTECTED_BRANCH}/protection`);
     add(
       'githubMainProtection',
-      branch.protected === true ? `${repository}:${PROTECTED_BRANCH}` : undefined,
+      protection === undefined ? undefined : `${repository}:${PROTECTED_BRANCH}`,
     );
     for (const [key, name] of Object.entries(VARIABLES) as [keyof typeof VARIABLES, string][]) {
       const variable = await get(`${repo}/actions/variables/${name}`);

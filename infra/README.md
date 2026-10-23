@@ -570,7 +570,8 @@ All but `github:owner` are committed already. To pause dev's automatic deploys, 
 
 Everything on GitHub was set up by hand. `import-file-github` reads it (GETs only) and writes
 `infra/pulumi/import.github.<stack>.json`: the repository and its workflow permissions (always
-there), `main`'s protection if `main` is protected, the two variables, the `infra-preview`
+there), `main`'s classic protection rule if it has one (`GET .../branches/main/protection`; a
+ruleset alone doesn't count, and is planned as a new classic rule), the two variables, the `infra-preview`
 Environment (dev), and the stack's own Environment with its `main` branch policy. Whatever isn't
 there is listed as `create`.
 
