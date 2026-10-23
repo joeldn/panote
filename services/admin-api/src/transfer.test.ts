@@ -1,4 +1,5 @@
 import {
+  ACCOUNT_DELETE_CONFIRMATION,
   configKey,
   lentPanosKey,
   manifestKey,
@@ -363,6 +364,94 @@ describe('panos the old owner still holds', () => {
     expect((await take('tr-t', tourId)).status).toBe(200);
     const after = await stored<TourMembers>(membersKey(subOf('tr-t'), tourId));
     expect(after?.members.find((m) => m.sub === subOf('tr-s'))?.email).toBe(emailOf('tr-s'));
+  });
+});
+
+describe('the old owner’s account deleted', () => {
+  const deleteAccount = (who: string) =>
+    SELF.fetch('https://x/api/admin/account', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer good:${who}` },
+      body: JSON.stringify({ confirm: ACCOUNT_DELETE_CONFIRMATION }),
+    });
+
+  it('leaves the tiles the handed-on tour still serves, and its owner pointer', async () => {
+    await readyPano('tr-u', 'tr-u-shared');
+    await readyPano('tr-u', 'tr-u-own');
+    const tourId = await newTour('tr-u', ['tr-u-shared', 'tr-u-own']);
+    await newTour('tr-u', ['tr-u-shared']);
+    expect((await api('tr-u', 'POST', `/tours/${tourId}/publish`, {})).status).toBe(200);
+    const memberId = await share('tr-u', 'tr-v', tourId);
+    expect((await offer('tr-u', tourId, memberId)).status).toBe(201);
+    expect((await take('tr-v', tourId)).status).toBe(200);
+
+    expect((await deleteAccount('tr-u')).status).toBe(200);
+    expect(await env.BUCKET.head(originalKey(subOf('tr-u'), 'tr-u-shared'))).toBeNull();
+    // The live bundle still names the old id until tr-v publishes again.
+    expect(await env.BUCKET.head(manifestKey('tr-u-shared'))).not.toBeNull();
+    expect(await env.BUCKET.head(manifestKey('tr-u-own'))).not.toBeNull();
+    expect(await stored(tourOwnerKey(tourId))).toEqual({ v: 1, sub: subOf('tr-v') });
+    expect(await env.BUCKET.head(lentPanosKey(subOf('tr-u'), tourId))).toBeNull();
+  });
+
+  it('finishes a transfer under way first, and leaves the tour to its new owner', async () => {
+    await readyPano('tr-w', 'tr-w-p1');
+    const tourId = await newTour('tr-w', ['tr-w-p1']);
+    expect((await api('tr-w', 'POST', `/tours/${tourId}/publish`, {})).status).toBe(200);
+    await share('tr-w', 'tr-x', tourId);
+    const record: TourTransferRecord = {
+      v: 1,
+      from: subOf('tr-w'),
+      to: subOf('tr-x'),
+      fromEmail: emailOf('tr-w'),
+      toEmail: emailOf('tr-x'),
+      startedAt: new Date().toISOString(),
+      panos: { 'tr-w-p1': 'tr-w-p1' },
+    };
+    // Half done: the pointer already names the new owner.
+    await env.BUCKET.put(tourTransferKey(tourId), JSON.stringify(record));
+    await env.BUCKET.put(tourOwnerKey(tourId), JSON.stringify({ v: 1, sub: subOf('tr-x') }));
+
+    expect((await deleteAccount('tr-w')).status).toBe(200);
+    expect(await env.BUCKET.head(tourTransferKey(tourId))).toBeNull();
+    expect(await env.BUCKET.head(tourKey(subOf('tr-x'), tourId))).not.toBeNull();
+    expect(await env.BUCKET.head(publishKey(subOf('tr-x'), tourId))).not.toBeNull();
+    expect(await env.BUCKET.head(originalKey(subOf('tr-x'), 'tr-w-p1'))).not.toBeNull();
+    expect(await env.BUCKET.head(manifestKey('tr-w-p1'))).not.toBeNull();
+    expect(await stored(tourOwnerKey(tourId))).toEqual({ v: 1, sub: subOf('tr-x') });
+  });
+
+  it('never deletes an owner pointer that names someone else', async () => {
+    await readyPano('tr-aa', 'tr-aa-p1');
+    const tourId = await newTour('tr-aa', ['tr-aa-p1']);
+    // A leftover copy of a tour that is now tr-ab's.
+    await env.BUCKET.put(tourOwnerKey(tourId), JSON.stringify({ v: 1, sub: subOf('tr-ab') }));
+    expect((await deleteAccount('tr-aa')).status).toBe(200);
+    expect(await stored(tourOwnerKey(tourId))).toEqual({ v: 1, sub: subOf('tr-ab') });
+  });
+});
+
+describe('a transfer that doesn’t finish in one request', () => {
+  it('answers 202, and stays locked until it does', async () => {
+    await readyPano('tr-y', 'tr-y-p1');
+    const tourId = await newTour('tr-y', ['tr-y-p1']);
+    await share('tr-y', 'tr-z', tourId);
+    const record: TourTransferRecord = {
+      v: 1,
+      from: subOf('tr-y'),
+      to: subOf('tr-z'),
+      fromEmail: emailOf('tr-y'),
+      toEmail: emailOf('tr-z'),
+      startedAt: new Date().toISOString(),
+      panos: { 'tr-y-p1': 'tr-y-p1' },
+    };
+    await env.BUCKET.put(tourTransferKey(tourId), JSON.stringify(record));
+    // Something the run trips over.
+    await env.BUCKET.put(tourKey(subOf('tr-y'), tourId), 'not json');
+    const r = await take('tr-z', tourId);
+    expect(r.status).toBe(202);
+    expect(await r.json()).toEqual({ tourId, finishing: true });
+    expect(await env.BUCKET.head(tourTransferKey(tourId))).not.toBeNull();
   });
 });
 

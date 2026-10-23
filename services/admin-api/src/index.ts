@@ -842,6 +842,7 @@ app.get('/api/admin/shared-tours', async (c) => {
 const accountDeps = (env: Env): AccountDeps => ({
   bucket: env.BUCKET,
   unpublishTour: (sub, tourId) => publisher(env, tourId).unpublish(sub, tourId),
+  finishTransfer: (tourId) => publisher(env, tourId).finishTransfer(tourId),
   clearStats: async (tourId) => {
     // public-api's TourStats, one per tourId (see its stats.ts for the protocol).
     const res = await env.STATS.get(env.STATS.idFromName(tourId)).fetch('https://do/', {

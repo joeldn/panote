@@ -46,6 +46,11 @@ export type AccountDeps = {
   unpublishTour: (sub: string, tourId: string) => Promise<string[]>;
   /** Clears public-api's view/like counters for the tour. */
   clearStats: (tourId: string) => Promise<void>;
+  /**
+   * Finishes a change of owner under way, through the tour's TourPublisher so it never
+   * runs beside an accept. Left out (tests), it runs here.
+   */
+  finishTransfer?: (tourId: string) => Promise<unknown>;
 };
 
 // Null for a missing or unparsable object, instead of getJson's throw.
@@ -286,7 +291,9 @@ export const deleteAccountData = async (
     const transfer = PANO_PATTERN.test(tourId) ? await readTransfer(bucket, tourId) : null;
     if (transfer) {
       try {
-        await runTransfer(bucket, tourId, transfer);
+        await (deps.finishTransfer
+          ? deps.finishTransfer(tourId)
+          : runTransfer(bucket, tourId, transfer));
       } catch (e) {
         console.error(`${LOG_PREFIX} transfer failed:`, errorName(e));
         finished = false;
