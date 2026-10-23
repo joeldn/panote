@@ -1,3 +1,5 @@
+import { redactOwner } from '@internal/contracts';
+
 export class WorkerError extends Error {
   constructor(
     message: string,
@@ -28,11 +30,12 @@ export class PreconditionRequiredError extends WorkerError {
  *
  * Only the 500 branch logs: a WorkerError is an expected, already-meaningful
  * rejection, but an unrecognised throw otherwise left a bare 500 with
- * nothing in the logs to explain it.
+ * nothing in the logs to explain it. The message goes through redactOwner: an
+ * R2 or S3 error names the key, whose owner segment decodes back to the sub.
  */
 export const toErrorResponse = (err: unknown): Response => {
   if (err instanceof WorkerError)
     return Response.json({ error: err.message }, { status: err.status });
-  console.error('internal error:', err instanceof Error ? err.message : err);
+  console.error('internal error:', redactOwner(err instanceof Error ? err.message : String(err)));
   return Response.json({ error: 'internal' }, { status: 500 });
 };

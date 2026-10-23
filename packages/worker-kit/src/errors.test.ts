@@ -46,6 +46,19 @@ describe('toErrorResponse', () => {
     await expect(res.json()).resolves.toEqual({ error: 'internal' });
   });
 
+  it('masks the owner segment of an R2 key in the logged message', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    toErrorResponse(
+      new Error('R2 PUT upload-log/Z29vZ2xl/x -> 500; HEAD panos/Z29vZ2xl/p1/original'),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      'internal error:',
+      'R2 PUT upload-log/<owner>/x -> 500; HEAD panos/<owner>/p1/original',
+    );
+    toErrorResponse('tours/Z29vZ2xl/t1/tour.json');
+    expect(errorSpy).toHaveBeenLastCalledWith('internal error:', 'tours/<owner>/t1/tour.json');
+  });
+
   it('does not log for an expected 4xx WorkerError', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     toErrorResponse(new UnauthorizedError());

@@ -114,6 +114,117 @@ describe('scrubErrorText', () => {
     );
   });
 
+  it.each([
+    ['a JWT', 'jwt eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln failed', 'jwt <jwt> failed'],
+    ['a JWE', 'eyJhbGci.a.b.c.d', '<jwt>'],
+    [
+      'a bearer token',
+      'Authorization: Bearer abc.def-123 rejected',
+      'Authorization: Bearer <token> rejected',
+    ],
+    [
+      'a code and state pair',
+      'callback code=Zx9&state=s3 failed',
+      'callback code=<redacted>&state=<redacted> failed',
+    ],
+    [
+      'a fragment token',
+      '#access_token=AT&id_token=IT&token_type=x',
+      '#access_token=<redacted>&id_token=<redacted>&token_type=x',
+    ],
+    [
+      'any *_token',
+      'refresh_token=R,client_secret=S',
+      'refresh_token=<redacted>,client_secret=<redacted>',
+    ],
+    [
+      'a presigned URL signature',
+      'X-Amz-Signature=abc;sig=d',
+      'X-Amz-Signature=<redacted>;sig=<redacted>',
+    ],
+    ['a %40-encoded email', 'no user jane%40example.com', 'no user <email>'],
+    ['a %40-encoded email in a path', '/u/Jane%40Example.Com/x', '/u/<email>/x'],
+    ['an IDN domain', 'for jane@exämple.de now', 'for <email> now'],
+    ['a non-ASCII local part', 'for josé.müller@example.com', 'for <email>'],
+    ['a punycode TLD', 'a@b.xn--p1ai', '<email>'],
+    [
+      'URL userinfo',
+      'GET https://joel:pw@cdn.example.com/x failed',
+      'GET https://<userinfo>@cdn.example.com/x failed',
+    ],
+    [
+      'userinfo without a password',
+      'wss://joel@sock.example.com/',
+      'wss://<userinfo>@sock.example.com/',
+    ],
+  ])('masks %s', (_label, text, scrubbed) => {
+    expect(scrubErrorText(text)).toBe(scrubbed);
+  });
+
+  it('keeps what only looks like a secret', () => {
+    for (const text of [
+      'keyJar is fine',
+      'barcode is fine',
+      'decode=1 and encodestate=2',
+      'see %40 alone',
+      'react@18.3.1',
+      'Bearer',
+      'at https://panote.dev/a.js:1:2',
+    ])
+      expect(scrubErrorText(text)).toBe(text);
+  });
+
+  it('masks the owner segment of every owner-keyed R2 key', () => {
+    expect(scrubErrorText('R2 GET panos/Z29vZ2xl/p1/original -> 403')).toBe(
+      'R2 GET panos/:owner/p1/original -> 403',
+    );
+    expect(scrubErrorText('tours/Z29v/t1/tour.json')).toBe('tours/:owner/t1/tour.json');
+    expect(scrubErrorText('accounts/Z29v/deletion.json')).toBe('accounts/:owner/deletion.json');
+    expect(scrubErrorText('upload-log/Z29v/20260101T000000000Z-p1')).toBe(
+      'upload-log/:owner/20260101T000000000Z-p1',
+    );
+    expect(scrubErrorText('https://x.r2.cloudflarestorage.com/b/panos/Z29v/p1/original')).toBe(
+      'https://x.r2.cloudflarestorage.com/b/panos/:owner/p1/original',
+    );
+    expect(scrubErrorText('backup/2026-01-01/tours/Z29v/t1/tour.json')).toBe(
+      'backup/2026-01-01/tours/:owner/t1/tour.json',
+    );
+  });
+
+  it('masks pano and tour ids in R2 keys and CDN URLs', () => {
+    expect(scrubErrorText('GET https://cdn.panote.dev/tiles/p_1/v1/0/px/0-0.webp 404')).toBe(
+      'GET https://cdn.panote.dev/tiles/:panoId/v1/0/px/0-0.webp 404',
+    );
+    expect(scrubErrorText('R2 PUT tiles/p_1/manifest.json')).toBe(
+      'R2 PUT tiles/:panoId/manifest.json',
+    );
+    expect(scrubErrorText('tile-gc/p_1/v.json')).toBe('tile-gc/:panoId/v.json');
+    expect(scrubErrorText('pub/plans/t_1/plan.webp and tour-owners/t_1.json')).toBe(
+      'pub/plans/:tourId/plan.webp and tour-owners/:tourId',
+    );
+    expect(scrubErrorText('explore/tours/t_1.json explore/hidden/t_2.json')).toBe(
+      'explore/tours/:tourId explore/hidden/:tourId',
+    );
+    expect(scrubErrorText('DELETE /api/admin/panos/p_1 500')).toBe(
+      'DELETE /api/admin/panos/:panoId 500',
+    );
+  });
+
+  it('keeps routes that share a word with a key root', () => {
+    expect(scrubErrorText('at /app/panos/unused')).toBe('at /app/panos/unused');
+    expect(scrubErrorText('/api/tours/t_1/like')).toBe('/api/tours/:tourId/like');
+  });
+
+  it('masks bare UUIDs', () => {
+    expect(scrubErrorText('pano 0b6f1c3e-8a2d-4f7b-9c1e-2d3f4a5b6c7d not found')).toBe(
+      'pano <id> not found',
+    );
+    expect(scrubErrorText('0B6F1C3E-8A2D-4F7B-9C1E-2D3F4A5B6C7D')).toBe('<id>');
+    expect(scrubErrorText('0b6f1c3e-8a2d-4f7b-9c1e-2d3f4a5b6c7d0')).toBe(
+      '0b6f1c3e-8a2d-4f7b-9c1e-2d3f4a5b6c7d0',
+    );
+  });
+
   // Linear, not backtracking: these took seconds each before. The bound is
   // generous on purpose; a regression is orders of magnitude slower.
   it.each([
@@ -125,6 +236,18 @@ describe('scrubErrorText', () => {
     ['many host candidates', `${'=a.bc'.repeat(20_000)}!?x`],
     ['many path and IP candidates', `${',/1.2.3.4:5'.repeat(10_000)}?x`],
     ['many schemes', `${'a://'.repeat(25_000)}?x`],
+    ['many userinfo candidates', `${'a://b:c@'.repeat(12_000)}`],
+    ['one long authority', `a://${'b:'.repeat(50_000)}@x`],
+    ['many JWT starts', `${'eyJ.'.repeat(25_000)}`],
+    ['many secret keys', `${'a_b_token_'.repeat(10_000)}`],
+    ['many secret pairs', `${'code=&'.repeat(16_000)}`],
+    ['many encoded @', `${'a%40'.repeat(25_000)}`],
+    ['a long unicode domain', `a@${'ä.'.repeat(50_000)}`],
+    ['many key roots', `${'panos/'.repeat(16_000)}`],
+    ['many route-like roots', `${'api/tours/'.repeat(10_000)}`],
+    ['bearer before a long gap', `Bearer${' '.repeat(100_000)})`],
+    ['many bearers', `${'Bearer '.repeat(14_000)}`],
+    ['near-UUIDs', `${'0b6f1c3e-8a2d-4f7b-9c1e-'.repeat(4_000)}`],
   ])('scrubs %s of ~100k chars quickly', (_label, text) => {
     const started = performance.now();
     scrubErrorText(text);

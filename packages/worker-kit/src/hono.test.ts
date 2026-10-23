@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { errorHandler } from './hono.js';
 import { PreconditionRequiredError, UnauthorizedError } from './errors.js';
@@ -38,6 +38,18 @@ describe('errorHandler', () => {
     const res = await app.request('/');
     expect(res.status).toBe(500);
     await expect(res.json()).resolves.toEqual({ error: 'internal' });
+  });
+
+  it('logs the error with the owner segment of an R2 key masked', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = appWithRoute(() => {
+      throw new Error('R2 GET tours/Z29vZ2xl/t1/tour.json -> 500');
+    });
+    await app.request('/');
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = String(errorSpy.mock.calls[0]![1]);
+    expect(logged).toContain('Error: R2 GET tours/<owner>/t1/tour.json -> 500');
+    expect(logged).not.toContain('Z29vZ2xl');
   });
 
   it("lets Hono's own HTTPException pass through unchanged", async () => {

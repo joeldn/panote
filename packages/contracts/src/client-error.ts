@@ -39,12 +39,45 @@ const HOST_AFTER = new Set(['=', ':', ',', '[', '@']);
 const SCHEME_CHAR = /[a-z0-9+.-]/i;
 // The `:line:col` a stack frame puts after a URL, which is kept.
 const LINE_COL = /:\d+:\d+$/;
-// Sticky, so it only runs from the character after an `@`.
-const EMAIL_DOMAIN = /[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/iy;
-const NOT_LOCAL_PART = new Set(['/', ':', '@', ',', ';', '=']);
+// Sticky, so it only runs from the character after an `@`. Labels may be
+// non-ASCII (an internationalized domain); the TLD is letters or punycode.
+const EMAIL_DOMAIN =
+  /[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*\.(?:xn--[a-z0-9-]+|\p{L}[\p{L}\p{M}]+)/iuy;
+const NOT_LOCAL_PART = new Set(['/', ':', '@', ',', ';', '=', '<', '>']);
+// `%40` is an encoded `@`: `jane%40example.com` is still an email.
+const ENCODED_AT = /%40/gi;
+// `Bearer <token>`, whatever the token looks like.
+const BEARER = /\bBearer\s+[^\s()'"<>`]+/gi;
+// A JWT (or JWE): base64url of `{"...`, then up to four more dot-separated parts.
+const JWT = /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){0,4}/g;
+// A secret-bearing `key=value` outside a query string (a fragment, a form body,
+// a message): OAuth's code, state and *_token, and the usual secret names. The
+// value runs to the next `&`, `#`, `;` or `,`.
+const SECRET_PAIR =
+  /(?<![A-Za-z0-9_-])(code|state|nonce|password|sig|signature|x-amz-[a-z-]+|(?:[a-z0-9_]*_)?(?:token|secret))=[^&#;,]*/gi;
+// The segment after an R2 key root, wherever the key shows up (an error, a CDN
+// URL, a backup copy's key). The owner segment is base64url(sub), which decodes
+// back to the sub; a pano id is enough to fetch an unlisted tour's images; a tour
+// id or slug can be an unlisted tour's only secret. Not the same word inside a
+// route (`/api/tours/`, `/app/panos/`), which ID_SEGMENT below handles.
+const KEY_SEGMENT =
+  /(?<![A-Za-z0-9_.-])(?<!(?:api|admin|app|pub|explore)\/)(panos|tours|accounts|upload-log|tiles|tile-gc|tour-owners|slugs|pub\/tours|pub\/plans|explore\/tours|explore\/hidden)\/[^/\s?#()'"<>`]+/gi;
+const KEY_LABEL: Record<string, string> = {
+  panos: ':owner',
+  tours: ':owner',
+  accounts: ':owner',
+  'upload-log': ':owner',
+  tiles: ':panoId',
+  'tile-gc': ':panoId',
+  slugs: ':slug',
+};
 // A tour's slug can be its only secret (an unlisted tour), and its id points at
-// one owner's content, wherever they show up: page paths, API paths, R2 keys.
-const ID_SEGMENT = /\/(s|slugs|pub\/tours|api\/tours|api\/admin\/tours|app\/t)\/[^/\s?#()'"<>`]+/gi;
+// one owner's content, wherever they show up: page paths and API paths.
+const ID_SEGMENT =
+  /\/(s|slugs|pub\/tours|api\/tours|api\/admin\/tours|api\/admin\/panos|app\/t)\/[^/\s?#()'"<>`]+/gi;
+// Pano and tour ids are crypto.randomUUID(), and so is a visitor's like id.
+const UUID =
+  /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi;
 
 // Index of the first place a URL starts in the token, or -1.
 const urlStart = (token: string): number => {
@@ -83,6 +116,27 @@ const stripQuery = (token: string): string => {
   return token.slice(0, q) + (LINE_COL.exec(token.slice(q))?.[0] ?? '');
 };
 
+// `scheme://user:pass@host` becomes `scheme://<userinfo>@host`. Each scan stops
+// at the next `/`, which the next `://` holds, so the whole pass is linear.
+const maskUserinfo = (token: string): string => {
+  let out = '';
+  let last = 0;
+  for (let s = token.indexOf('://'); s !== -1; s = token.indexOf('://', s + 1)) {
+    const host = s + 3;
+    if (host < last) continue;
+    let at = -1;
+    let end = host;
+    for (; end < token.length && !'/?#'.includes(token[end]!); end++) {
+      if (token[end] === '@') at = end;
+    }
+    if (at > host) {
+      out += `${token.slice(last, host)}<userinfo>`;
+      last = at;
+    }
+  }
+  return out + token.slice(last);
+};
+
 // `local@host.tld` becomes `<email>`. A Firefox frame (`fn@https://...`) has an
 // `@` too, but no dotted host right after it.
 const maskEmails = (token: string): string => {
@@ -102,17 +156,44 @@ const maskEmails = (token: string): string => {
   return out + token.slice(last);
 };
 
+// Emails with `%40` decoded; the token comes back unchanged if none was found.
+const maskEncodedEmails = (token: string): string => {
+  const decoded = token.replace(ENCODED_AT, '@');
+  const masked = maskEmails(decoded);
+  return decoded === token || masked !== decoded ? masked : token;
+};
+
+const scrubToken = (token: string): string =>
+  maskEncodedEmails(
+    stripQuery(maskUserinfo(token))
+      .replace(SECRET_PAIR, (_m, key: string) => `${key}=<redacted>`)
+      .replace(JWT, '<jwt>'),
+  );
+
 /**
  * Drops query strings and fragments from URLs wherever they start in a token
  * (absolute, data: and blob: URLs, paths, IPv4/localhost and host.tld hosts),
- * and masks emails, tour slugs and tour ids.
+ * and masks what could identify a person or open private content: emails
+ * (`%40`-encoded and internationalized too), URL userinfo, bearer tokens, JWTs,
+ * secret `key=value` pairs, the owner and id segments of R2 keys, tour slugs,
+ * tour and pano ids, and UUIDs. Every step is linear in the text.
  */
 export const scrubErrorText = (text: string): string =>
   text
-    .replace(TOKEN, (token) => maskEmails(stripQuery(token)))
+    .replace(BEARER, 'Bearer <token>')
+    .replace(TOKEN, scrubToken)
+    .replace(
+      KEY_SEGMENT,
+      (_m, root: string) => `${root}/${KEY_LABEL[root.toLowerCase()] ?? ':tourId'}`,
+    )
     .replace(ID_SEGMENT, (_m, prefix: string) =>
-      /^s(lugs)?$/i.test(prefix) ? `/${prefix}/:slug` : `/${prefix}/:tourId`,
-    );
+      /^s(lugs)?$/i.test(prefix)
+        ? `/${prefix}/:slug`
+        : /panos$/i.test(prefix)
+          ? `/${prefix}/:panoId`
+          : `/${prefix}/:tourId`,
+    )
+    .replace(UUID, '<id>');
 
 export const ClientErrorReportSchema = z.object({
   app: z.enum(CLIENT_ERROR_APPS),

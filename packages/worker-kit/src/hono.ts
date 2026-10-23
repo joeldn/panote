@@ -1,3 +1,4 @@
+import { redactOwner } from '@internal/contracts';
 import { HTTPException } from 'hono/http-exception';
 import type { Context } from 'hono';
 
@@ -14,6 +15,8 @@ export const errorHandler = (err: Error, _c: Context): Response => {
   }
   // Hono throws HTTPException itself (bad method, malformed body); honour it.
   if (err instanceof HTTPException) return err.getResponse();
-  console.error('unhandled worker error:', err);
+  // The stack (or message), with any R2 key's owner segment masked: logging the
+  // Error itself would print a key's base64url(sub) as is.
+  console.error('unhandled worker error:', redactOwner(err.stack ?? `${err.name}: ${err.message}`));
   return Response.json({ error: 'internal' }, { status: 500 });
 };
