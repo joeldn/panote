@@ -18,6 +18,32 @@ export const lit = (s: string): string => JSON.stringify(s);
 export const between = (from: Date, to: Date): string =>
   `datetime_geq: ${lit(from.toISOString())}, datetime_leq: ${lit(to.toISOString())}`;
 
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * `between` for a window longer than a dataset allows in one query: one filter per week
+ * at most, oldest first, each ending where the next starts (`datetime_lt`) so no instant is
+ * counted twice, the last one at `to` inclusive. Workers' invocations allow at most a week
+ * per query, so a month so far is up to five.
+ */
+export const weeks = (from: Date, to: Date): string[] => {
+  const out: string[] = [];
+  for (let start = from.getTime(); ; start += WEEK_MS) {
+    const end = start + WEEK_MS;
+    if (end >= to.getTime()) {
+      out.push(between(new Date(start), to));
+      return out;
+    }
+    out.push(
+      `datetime_geq: ${lit(new Date(start).toISOString())}, datetime_lt: ${lit(new Date(end).toISOString())}`,
+    );
+  }
+};
+
+/** An OpsUnavailable from GraphQL itself (a field or dataset it doesn't know), not the network. */
+export const isSchemaRefusal = (err: unknown): err is OpsUnavailable =>
+  err instanceof OpsUnavailable && err.message.startsWith('GraphQL: ');
+
 /**
  * Runs `body` (the aliased dataset selections) for this account, and returns each alias's
  * rows. Any GraphQL error, HTTP failure or odd shape is OpsUnavailable with a short reason:

@@ -64,7 +64,7 @@ const METRICS: OpsMetrics = {
         {
           queueId: 'q1',
           name: 'pano-uploads-dev',
-          backlogAvg: 1,
+          backlogAvg: null,
           writes: 10,
           reads: 10,
           acked: 8,
@@ -76,7 +76,7 @@ const METRICS: OpsMetrics = {
       ],
     },
   },
-  durableObjects: { status: 'ok', data: { requests: 70, errors: 0, storedBytes: 4096 } },
+  durableObjects: { status: 'ok', data: { requests: 70, errors: null, storedBytes: 4096 } },
   containers: {
     status: 'ok',
     data: {
@@ -140,6 +140,13 @@ const METRICS: OpsMetrics = {
         { event: 'tour-published', detail: 'save', service: 'admin-api', n: 7, value: 0 },
         { event: 'rate-limited', detail: 'WRITE_LIMITER', service: 'admin-api', n: 2, value: 0 },
         { event: 'client-error', detail: 'website', service: 'public-api', n: 6, value: 0 },
+        {
+          event: 'server-error',
+          detail: '500 PUT /api/admin/tours/:tourId',
+          service: 'admin-api',
+          n: 3,
+          value: 0,
+        },
       ],
       tileP95Ms: 41_000,
       series: hours(24, (i) => (i === 22 ? 4 : 0)).map(({ t, v }) => ({
@@ -148,6 +155,62 @@ const METRICS: OpsMetrics = {
         tiled: v,
         failed: 0,
       })),
+    },
+  },
+  moderation: {
+    status: 'ok',
+    data: {
+      explore: {
+        waiting: 2,
+        changed: 1,
+        oldest: [
+          {
+            tourId: 'tour-1',
+            title: 'Old Town',
+            slug: 'old-town',
+            reason: 'changed',
+            queuedAt: '2026-10-21T10:20:00.000Z',
+          },
+          {
+            tourId: 'tour-2',
+            title: '',
+            slug: 'harbour',
+            reason: 'new',
+            queuedAt: '2026-10-23T09:40:00.000Z',
+          },
+        ],
+      },
+      flags: { viewer: 3, screening: 1, more: true, newestAt: '2026-10-23T09:00:00.000Z' },
+    },
+  },
+  accounts: {
+    status: 'ok',
+    data: {
+      partial: false,
+      totals: {
+        accounts: 2,
+        panos: 3,
+        originalBytes: 5 * 2 ** 20,
+        tours: 3,
+        shared: 2,
+        public: 1,
+        uploads24h: 2,
+      },
+      heaviest: [
+        { sub: 'auth0|big', panos: 2, originalBytes: 4 * 2 ** 20, tours: 2, uploads24h: 0 },
+        { sub: 'auth0|small', panos: 1, originalBytes: 2 ** 20, tours: 1, uploads24h: 2 },
+      ],
+      busiest: [{ sub: 'auth0|small', panos: 1, originalBytes: 2 ** 20, tours: 1, uploads24h: 2 }],
+      recentlyPublished: [
+        {
+          tourId: 't1',
+          sub: 'auth0|small',
+          title: 'Harbour',
+          slug: 'harbour',
+          visibility: 'public',
+          at: '2026-10-23T08:00:00.000Z',
+        },
+      ],
     },
   },
 };
@@ -216,6 +279,32 @@ describe('the operator dashboard', () => {
     expect(within(workers).getByText('5 (0.5%)')).toBeTruthy();
     expect(within(workers).getByText('scriptThrewException 5')).toBeTruthy();
 
+    // The Workers tile counts exceptions; the 500s the code answers are their own panel.
+    expect(within(workers).getAllByText('Exceptions').length).toBeGreaterThan(0);
+    const errors = panel('Server errors');
+    expect(within(errors).getByText('PUT /api/admin/tours/:tourId')).toBeTruthy();
+    expect(within(errors).getByText('500')).toBeTruthy();
+
+    const waiting = panel('Waiting for you');
+    expect(within(waiting).getAllByText('2 d')).toHaveLength(2);
+    expect(within(waiting).getByText('40 min')).toBeTruthy();
+    expect(within(waiting).getAllByText('Changed since approved')).toHaveLength(2);
+    expect(
+      within(waiting).getByRole('link', { name: 'Untitled tour' }).getAttribute('href'),
+    ).toMatch(/\/s\/harbour$/);
+    expect(within(waiting).getByText('4+')).toBeTruthy();
+    expect(
+      within(waiting).getByRole('link', { name: 'Open the approval queue' }).getAttribute('href'),
+    ).toBe('/app/ops/explore');
+
+    const accounts = panel('Accounts and content');
+    expect(within(accounts).getByText('2 (1)')).toBeTruthy();
+    expect(
+      within(accounts).getAllByRole('link', { name: 'auth0|small' })[0]!.getAttribute('href'),
+    ).toBe('/app/ops/users?sub=auth0%7Csmall');
+    expect(within(accounts).getByRole('link', { name: 'Harbour' })).toBeTruthy();
+
+    expect(within(panel('Durable Objects')).getByText('—')).toBeTruthy();
     expect(within(panel('Storage')).getByText(/Unavailable: GraphQL: unknown field/)).toBeTruthy();
     expect(within(panel('Upload queue')).getByText('pano-uploads-dev')).toBeTruthy();
     expect(within(panel('This month')).getByText('9,000,000 of 10,000,000')).toBeTruthy();

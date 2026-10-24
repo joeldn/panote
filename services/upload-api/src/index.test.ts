@@ -1217,6 +1217,27 @@ describe('operator events', () => {
     expect(s.events()).toEqual([['rate-limited', 'UPLOAD_URL_LIMITER', 'upload-api', 'o1']]);
   });
 
+  it('records a 5xx answer as a server error, by route', async () => {
+    const s = sink();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: Request | string) => {
+        const reqUrl = new URL(typeof input === 'string' ? input : input.url);
+        if (reqUrl.searchParams.get('list-type') === '2')
+          return new Response(null, { status: 500 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const res = await call(validBody, { OPS_EVENTS: s });
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(s.events()).toContainEqual([
+      'server-error',
+      `${res.status} POST /api/upload-url`,
+      'upload-api',
+      'o1',
+    ]);
+  });
+
   it('records nothing for a bad request, a usage read or another path', async () => {
     const s = sink();
     await call({ contentType: 'image/gif', size: 1 }, { OPS_EVENTS: s });

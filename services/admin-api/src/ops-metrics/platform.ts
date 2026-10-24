@@ -9,7 +9,17 @@ import type {
 } from '@internal/contracts';
 
 import { addTo, bucketOf, fillSeries, type OpsWindow } from './window.js';
-import { at, between, dim, has, lit, queryAccount, type GqlRow } from './graphql.js';
+import {
+  at,
+  between,
+  dim,
+  has,
+  isSchemaRefusal,
+  lit,
+  queryAccount,
+  weeks,
+  type GqlRow,
+} from './graphql.js';
 import { OpsUnavailable } from './unavailable.js';
 
 // The platform sections, one GraphQL request each (graphql.ts). Dataset and field names are
@@ -163,23 +173,57 @@ const queueNames = async (env: CfEnv): Promise<Map<string, string> | null> => {
   }
 };
 
+// Cloudflare's Queues docs spell the id dimension both `queueId` and `queueID`, and the
+// backlog dataset both `queueBacklog…` and `queuesBacklog…`: each spelling is tried in turn,
+// and the first GraphQL accepts is used. Only a refusal by GraphQL itself moves on.
+const QUEUE_ID_FIELDS = ['queueId', 'queueID'] as const;
+const QUEUE_BACKLOG_DATASETS = ['queueBacklogAdaptiveGroups', 'queuesBacklogAdaptiveGroups'];
+
+/** The first of `tries` GraphQL accepts; if none does, the first one's refusal. */
+const firstAccepted = async <T, R>(tries: readonly T[], run: (t: T) => Promise<R>) => {
+  let first: unknown;
+  for (const t of tries) {
+    try {
+      return { used: t, rows: await run(t) };
+    } catch (err) {
+      if (!isSchemaRefusal(err)) throw err;
+      first ??= err;
+    }
+  }
+  throw first;
+};
+
 export const queuesSection = async (
   env: CfEnv,
   w: OpsWindow,
   res: OpsResources,
 ): Promise<OpsQueues> => {
-  const [rows, named] = await Promise.all([
-    queryAccount(
-      env,
-      `backlog: queueBacklogAdaptiveGroups(limit: 1000, filter: { ${between(w.from, w.to)} }) {
-        avg { messages } dimensions { queueId }
-      }
-      ops: queueMessageOperationsAdaptiveGroups(limit: 1000, filter: { ${between(w.from, w.to)} }) {
-        count avg { lagTime retryCount } dimensions { queueId actionType outcome }
-      }`,
+  const range = between(w.from, w.to);
+  const [ops, named] = await Promise.all([
+    firstAccepted(QUEUE_ID_FIELDS, (id) =>
+      queryAccount(
+        env,
+        `ops: queueMessageOperationsAdaptiveGroups(limit: 1000, filter: { ${range} }) {
+          count avg { lagTime retryCount } dimensions { ${id} actionType outcome }
+        }`,
+      ),
     ),
     queueNames(env),
   ]);
+  const idField = ops.used;
+  // The backlog is a nicety next to the operations: a dataset that refuses costs only it.
+  const backlog = await firstAccepted(QUEUE_BACKLOG_DATASETS, (dataset) =>
+    queryAccount(
+      env,
+      `backlog: ${dataset}(limit: 1000, filter: { ${range} }) {
+        avg { messages } dimensions { ${idField} }
+      }`,
+    ),
+  ).catch((err: unknown) => {
+    if (err instanceof OpsUnavailable) return null;
+    throw err;
+  });
+  const rows = { ops: ops.rows.ops ?? [], backlog: backlog?.rows.backlog ?? null };
   type Acc = OpsQueues['queues'][number] & { lagWeight: number; retryWeight: number };
   const byId = new Map<string, Acc>();
   const get = (queueId: string): Acc => {
@@ -188,7 +232,7 @@ export const queuesSection = async (
       q = {
         queueId,
         name: named?.get(queueId) ?? null,
-        backlogAvg: 0,
+        backlogAvg: rows.backlog === null ? null : 0,
         writes: 0,
         reads: 0,
         acked: 0,
@@ -204,11 +248,11 @@ export const queuesSection = async (
     return q;
   };
   for (const r of rows.backlog ?? []) {
-    const id = dim(r, 'queueId');
-    if (id) get(id).backlogAvg = Math.max(get(id).backlogAvg, at(r, 'avg.messages'));
+    const id = dim(r, idField);
+    if (id) get(id).backlogAvg = Math.max(get(id).backlogAvg ?? 0, at(r, 'avg.messages'));
   }
-  for (const r of rows.ops ?? []) {
-    const id = dim(r, 'queueId');
+  for (const r of rows.ops) {
+    const id = dim(r, idField);
     if (!id) continue;
     const q = get(id);
     const n = at(r, 'count');
@@ -244,26 +288,49 @@ export const queuesSection = async (
   return { queues };
 };
 
+/** A query whose answer is a nicety: null when GraphQL refuses it, not the whole section. */
+const optional = async <T>(work: () => Promise<T>): Promise<T | null> => {
+  try {
+    return await work();
+  } catch (err) {
+    if (err instanceof OpsUnavailable) return null;
+    throw err;
+  }
+};
+
+// Three requests, not one: `errors` on invocations isn't in Cloudflare's docs, and the
+// storage dataset is a separate one, so either refusing leaves the request count standing.
 export const durableObjectsSection = async (
   env: CfEnv,
   w: OpsWindow,
 ): Promise<OpsDurableObjects> => {
   const day = w.from.toISOString().slice(0, 10);
-  const rows = await queryAccount(
-    env,
-    `inv: durableObjectsInvocationsAdaptiveGroups(limit: 100, filter: { ${between(w.from, w.to)} }) {
-      sum { requests errors }
-    }
-    stored: durableObjectsStorageGroups(limit: 1, orderBy: [date_DESC], filter: { date_geq: ${lit(day)} }) {
-      max { storedBytes } dimensions { date }
-    }`,
-  );
-  const inv = rows.inv ?? [];
-  const stored = rows.stored?.[0];
+  const filter = `filter: { ${between(w.from, w.to)} }`;
+  const [inv, errors, stored] = await Promise.all([
+    queryAccount(
+      env,
+      `inv: durableObjectsInvocationsAdaptiveGroups(limit: 100, ${filter}) { sum { requests } }`,
+    ),
+    optional(() =>
+      queryAccount(
+        env,
+        `err: durableObjectsInvocationsAdaptiveGroups(limit: 100, ${filter}) { sum { errors } }`,
+      ),
+    ),
+    optional(() =>
+      queryAccount(
+        env,
+        `stored: durableObjectsStorageGroups(limit: 1, orderBy: [date_DESC], filter: { date_geq: ${lit(day)} }) {
+          max { storedBytes } dimensions { date }
+        }`,
+      ),
+    ),
+  ]);
+  const latest = stored?.stored?.[0];
   return {
-    requests: inv.reduce((s, r) => s + at(r, 'sum.requests'), 0),
-    errors: inv.reduce((s, r) => s + at(r, 'sum.errors'), 0),
-    storedBytes: stored ? at(stored, 'max.storedBytes') : null,
+    requests: (inv.inv ?? []).reduce((s, r) => s + at(r, 'sum.requests'), 0),
+    errors: errors ? (errors.err ?? []).reduce((s, r) => s + at(r, 'sum.errors'), 0) : null,
+    storedBytes: latest ? at(latest, 'max.storedBytes') : null,
   };
 };
 
@@ -345,6 +412,15 @@ export const usageSection = async (
   res: OpsResources,
 ): Promise<OpsUsage> => {
   const month = between(w.monthStart, w.to);
+  // Workers' invocations answer at most a week per query; the queue and Durable Object
+  // datasets don't document theirs, so they get the same weeks to be safe.
+  const monthWeeks = weeks(w.monthStart, w.to);
+  const perWeek = (alias: string, dataset: string, fields: string) =>
+    monthWeeks
+      .map((f, i) => `${alias}${i}: ${dataset}(limit: 10, filter: { ${f} }) { sum { ${fields} } }`)
+      .join('\n');
+  const weekly = (rows: Record<string, GqlRow[]>, alias: string, path: string) =>
+    monthWeeks.reduce((sum, _f, i) => sum + total(rows[`${alias}${i}`], path), 0);
   // Storage is a level, not a month's sum: the latest sample, which early on the 1st may
   // still be last month's.
   const recent = between(new Date(w.to.getTime() - STORAGE_LOOKBACK_MS), w.to);
@@ -375,11 +451,8 @@ export const usageSection = async (
 
   const groups = await Promise.all([
     usageLines(async () => {
-      const rows = await queryAccount(
-        env,
-        `w: workersInvocationsAdaptive(limit: 10, filter: { ${month} }) { sum { requests } }`,
-      );
-      return [{ ...workers, used: total(rows.w, 'sum.requests') }];
+      const rows = await queryAccount(env, perWeek('w', 'workersInvocationsAdaptive', 'requests'));
+      return [{ ...workers, used: weekly(rows, 'w', 'sum.requests') }];
     }, [workers]),
     usageLines(async () => {
       const rows = await queryAccount(
@@ -416,20 +489,16 @@ export const usageSection = async (
     usageLines(async () => {
       const rows = await queryAccount(
         env,
-        `q: queueMessageOperationsAdaptiveGroups(limit: 10, filter: { ${month} }) {
-          sum { billableOperations }
-        }`,
+        perWeek('q', 'queueMessageOperationsAdaptiveGroups', 'billableOperations'),
       );
-      return [{ ...queues, used: total(rows.q, 'sum.billableOperations') }];
+      return [{ ...queues, used: weekly(rows, 'q', 'sum.billableOperations') }];
     }, [queues]),
     usageLines(async () => {
       const rows = await queryAccount(
         env,
-        `d: durableObjectsInvocationsAdaptiveGroups(limit: 10, filter: { ${month} }) {
-          sum { requests }
-        }`,
+        perWeek('d', 'durableObjectsInvocationsAdaptiveGroups', 'requests'),
       );
-      return [{ ...dos, used: total(rows.d, 'sum.requests') }];
+      return [{ ...dos, used: weekly(rows, 'd', 'sum.requests') }];
     }, [dos]),
     usageLines(async () => {
       const rows = await queryAccount(

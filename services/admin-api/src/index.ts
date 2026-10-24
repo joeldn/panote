@@ -51,7 +51,7 @@ import {
   type AuthContext,
   type OpsEvent,
 } from '@internal/worker-kit';
-import { errorHandler } from '@internal/worker-kit/hono';
+import { errorHandler, recordServerErrors } from '@internal/worker-kit/hono';
 import { getJson, listChildren, putJson } from '@internal/worker-kit/r2-binding';
 import { Hono, type Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
@@ -203,7 +203,12 @@ type AppEnv = {
   Variables: { sub: string | undefined; auth?: AuthContext };
 };
 
+// This Worker's name in the operator event stream (@internal/contracts ops-events.ts).
+const SERVICE = 'admin-api';
+
 const app = new Hono<AppEnv>();
+// First, so it sees every answer: a 5xx is an operator event (Cloudflare counts it a success).
+app.use('*', recordServerErrors(SERVICE));
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const OPERATOR_PATHS = new Set([
@@ -301,7 +306,6 @@ app.use('/api/admin/*', async (c, next) => {
 app.use('/api/admin/ops/*', requireOperator);
 
 // The operator event stream (@internal/contracts ops-events.ts): what happened, never who.
-const SERVICE = 'admin-api';
 const ops = (c: { env: Env }, e: OpsEvent): void => recordOps(c.env.OPS_EVENTS, SERVICE, e);
 const limiterEvents = (env: Env, limiter: string) => ({
   sink: env.OPS_EVENTS,

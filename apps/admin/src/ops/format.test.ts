@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   backupTone,
+  formatAge,
   formatMs,
   formatPercent,
   formatPoint,
@@ -11,6 +12,14 @@ import {
 } from './format.js';
 
 describe('ops formatting', () => {
+  it('ages in minutes, then hours, then days', () => {
+    expect(formatAge(-5)).toBe('0 min');
+    expect(formatAge(40 * 60_000)).toBe('40 min');
+    expect(formatAge(5 * 3_600_000)).toBe('5 h');
+    expect(formatAge(47 * 3_600_000)).toBe('47 h');
+    expect(formatAge(3 * 86_400_000)).toBe('3 d');
+  });
+
   it('sizes from bytes up', () => {
     expect(formatSize(512)).toBe('512 B');
     expect(formatSize(4096)).toBe('4 KB');

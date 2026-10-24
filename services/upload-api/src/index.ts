@@ -295,6 +295,7 @@ const pruneLater = (r2: R2, expired: readonly string[], ctx: ExecutionContext): 
 };
 
 const SERVICE = 'upload-api';
+const UPLOAD_URL_PATH = '/api/upload-url';
 // What a POST's refusal is recorded as: the account, access, quota and ceiling answers,
 // not a 400 for a malformed body or the rate limit's 429 (rateLimit records that one).
 const REFUSAL_STATUSES = new Set([403, 404, 410, 503]);
@@ -317,7 +318,7 @@ const REFUSAL_CODES: Record<string, string> = {
 /** An operator event for a POST to the route that was refused (ops-events.ts). */
 const recordRefusal = async (req: Request, res: Response, env: Env): Promise<void> => {
   if (req.method !== 'POST' || !REFUSAL_STATUSES.has(res.status)) return;
-  if (new URL(req.url).pathname !== '/api/upload-url') return;
+  if (new URL(req.url).pathname !== UPLOAD_URL_PATH) return;
   const body = (await res
     .clone()
     .json()
@@ -332,7 +333,7 @@ const recordRefusal = async (req: Request, res: Response, env: Env): Promise<voi
 const api = {
   async handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
-    if (url.pathname !== '/api/upload-url' || (req.method !== 'POST' && req.method !== 'GET')) {
+    if (url.pathname !== UPLOAD_URL_PATH || (req.method !== 'POST' && req.method !== 'GET')) {
       return Response.json({ error: 'not found' }, { status: 404 });
     }
     const reserved: Reserved = { held: null };
@@ -507,6 +508,13 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const res = await api.handle(req, env, ctx);
     await recordRefusal(req, res, env);
+    // Cloudflare counts a 5xx answer as a success; this is its only count. One route here.
+    if (res.status >= 500) {
+      recordOps(env.OPS_EVENTS, SERVICE, {
+        event: 'server-error',
+        detail: `${res.status} ${req.method} ${UPLOAD_URL_PATH}`,
+      });
+    }
     return res;
   },
 };

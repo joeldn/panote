@@ -19,6 +19,8 @@ import {
   usageSection,
   workersSection,
 } from './platform.js';
+import { accountsSection } from './accounts.js';
+import { moderationSection } from './moderation.js';
 import { pipelineSection } from './pipeline.js';
 import { productSection } from './product.js';
 import { healthSection } from './state.js';
@@ -29,8 +31,9 @@ import { opsWindow } from './window.js';
 // docs/deploy.md, "Operator pages".
 
 export const OPS_METRICS_PATH = '/api/admin/ops/metrics';
-// One answer per range is reused this long (this location's cache): a page load is about a
-// dozen Cloudflare API calls, and GraphQL allows 300 per 5 minutes per user.
+// One answer per range is reused this long (this location's cache): a page load is up
+// to about thirty GraphQL node queries and 75 R2 list pages, and GraphQL allows 300
+// queries per 5 minutes per user.
 export const OPS_METRICS_CACHE_SECONDS = 60;
 
 export const parseRange = (raw: string | undefined): OpsRange | null =>
@@ -72,18 +75,31 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
       if (typeof resources === 'string') throw new OpsUnavailable(resources);
       return work(resources);
     });
-  const [health, workers, storage, queues, durableObjects, containers, usage, product, pipeline] =
-    await Promise.all([
-      settle(() => healthSection(env.BUCKET, now)),
-      settle(() => cf((r) => workersSection(env, w, r))),
-      settle(() => cf((r) => storageSection(env, w, r))),
-      settle(() => cf((r) => queuesSection(env, w, r))),
-      settle(() => account(() => durableObjectsSection(env, w))),
-      settle(() => account(() => containersSection(env, w))),
-      settle(() => cf((r) => usageSection(env, w, r))),
-      settle(() => productSection(env, env.BUCKET, w)),
-      settle(() => pipelineSection(env, w)),
-    ]);
+  const [
+    health,
+    workers,
+    storage,
+    queues,
+    durableObjects,
+    containers,
+    usage,
+    product,
+    pipeline,
+    moderation,
+    accounts,
+  ] = await Promise.all([
+    settle(() => healthSection(env.BUCKET, now)),
+    settle(() => cf((r) => workersSection(env, w, r))),
+    settle(() => cf((r) => storageSection(env, w, r))),
+    settle(() => cf((r) => queuesSection(env, w, r))),
+    settle(() => account(() => durableObjectsSection(env, w))),
+    settle(() => account(() => containersSection(env, w))),
+    settle(() => cf((r) => usageSection(env, w, r))),
+    settle(() => productSection(env, env.BUCKET, w)),
+    settle(() => pipelineSection(env, w)),
+    settle(() => moderationSection(env.BUCKET)),
+    settle(() => accountsSection(env.BUCKET, now)),
+  ]);
   return {
     range,
     from: w.from.toISOString(),
@@ -97,6 +113,8 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
     usage,
     product,
     pipeline,
+    moderation,
+    accounts,
   };
 };
 
