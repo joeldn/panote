@@ -34,15 +34,11 @@
   font: 500 13px/1.4 var(--fbody);
   color: var(--accent);
 }
-.ppl__created {
+.ppl__notice {
   margin-top: 18px;
-  padding: 14px;
-  border-radius: var(--r-card);
-  background: var(--ink-05);
 }
-.ppl__created-text {
-  margin: 0 0 10px;
-  font: 400 13px/1.5 var(--fbody);
+.ppl__invite-row--link {
+  margin-top: 10px;
 }
 .ppl__section {
   margin-top: 24px;

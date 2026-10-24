@@ -179,18 +179,6 @@
 
 .ins__unavailable {
   margin-top: 22px;
-  padding: 18px;
-  border-radius: var(--r-card);
-  background: var(--ink-05);
-}
-.ins__unavailable-title {
-  margin: 0 0 4px;
-  font: 600 14px var(--fbody);
-}
-.ins__unavailable-body {
-  margin: 0 0 14px;
-  font: 400 13px/1.5 var(--fbody);
-  color: var(--ink-62);
 }
 
 @media (max-width: 480px) {
