@@ -25,7 +25,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import worker from '../index.js';
 import { ACCOUNT_SCAN_PAGES, accountsSection } from './accounts.js';
 import { weeks } from './graphql.js';
-import { getOpsMetrics, opsResources, parseRange } from './index.js';
+import { cachedAccounts, getOpsMetrics, opsResources, parseRange } from './index.js';
 import { moderationSection } from './moderation.js';
 import { buildPipelineQueries } from './pipeline.js';
 import { INCLUDED, r2ClassOf, usageLines } from './platform.js';
@@ -748,6 +748,19 @@ describe('accountsSection', () => {
         ['t2', 'auth0|big', 'Hidden', 'unlisted'],
       ]),
     );
+  });
+
+  it('lists the bucket once for every range, from its own cache entry', async () => {
+    const list = vi.spyOn(env.BUCKET, 'list');
+    const origin = 'https://accounts-cache.test';
+    await cachedAccounts(env.BUCKET, NOW, origin);
+    const listed = list.mock.calls.length;
+    expect(listed).toBe(3);
+    await cachedAccounts(env.BUCKET, NOW, origin);
+    expect(list.mock.calls.length).toBe(listed);
+    // Without an origin (a direct call), nothing is cached.
+    await cachedAccounts(env.BUCKET, NOW);
+    expect(list.mock.calls.length).toBe(listed + 3);
   });
 
   it('says partial when a listing stops at its budget', async () => {

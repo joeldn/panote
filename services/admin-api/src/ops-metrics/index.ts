@@ -2,6 +2,7 @@ import {
   DEFAULT_OPS_RANGE,
   OPS_RANGES,
   OpsResourcesSchema,
+  type OpsAccounts,
   type OpsMetrics,
   type OpsRange,
   type OpsResources,
@@ -35,6 +36,27 @@ export const OPS_METRICS_PATH = '/api/admin/ops/metrics';
 // to about thirty GraphQL node queries and 75 R2 list pages, and GraphQL allows 300
 // queries per 5 minutes per user.
 export const OPS_METRICS_CACHE_SECONDS = 60;
+// The accounts section lists the bucket (Class A operations) and is the same whatever the
+// range, so it has its own entry, kept longer: stocks move slowly.
+export const OPS_ACCOUNTS_CACHE_SECONDS = 300;
+
+/** accountsSection, from this location's cache when `origin` names one (the route's). */
+export const cachedAccounts = async (
+  bucket: R2Bucket,
+  now: Date,
+  origin?: string,
+): Promise<OpsAccounts> => {
+  if (!origin) return accountsSection(bucket, now);
+  const key = new Request(new URL(`${OPS_METRICS_PATH}/accounts`, origin).toString());
+  const hit = await caches.default.match(key);
+  if (hit) return hit.json<OpsAccounts>();
+  const data = await accountsSection(bucket, now);
+  await caches.default.put(
+    key,
+    Response.json(data, { headers: { 'Cache-Control': `max-age=${OPS_ACCOUNTS_CACHE_SECONDS}` } }),
+  );
+  return data;
+};
 
 export const parseRange = (raw: string | undefined): OpsRange | null =>
   raw === undefined
@@ -60,7 +82,13 @@ const settle = async <T>(work: () => Promise<T>): Promise<OpsSection<T>> => {
   }
 };
 
-export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promise<OpsMetrics> => {
+/** Every section for `range`; with `origin`, the accounts section comes through its cache. */
+export const getOpsMetrics = async (
+  env: Env,
+  range: OpsRange,
+  now: Date,
+  origin?: string,
+): Promise<OpsMetrics> => {
   const w = opsWindow(range, now);
   const resources = opsResources(env.OPS_RESOURCES);
   // Every Cloudflare section needs the token; most also need this env's resource names.
@@ -98,7 +126,7 @@ export const getOpsMetrics = async (env: Env, range: OpsRange, now: Date): Promi
     settle(() => productSection(env, env.BUCKET, w)),
     settle(() => pipelineSection(env, w)),
     settle(() => moderationSection(env.BUCKET)),
-    settle(() => accountsSection(env.BUCKET, now)),
+    settle(() => cachedAccounts(env.BUCKET, now, origin)),
   ]);
   return {
     range,
@@ -137,7 +165,7 @@ export const opsMetricsRoute = async (
   const cache = caches.default;
   const hit = await cache.match(key);
   if (hit) return c.json(await hit.json<OpsMetrics>());
-  const metrics = await getOpsMetrics(c.env, range, new Date());
+  const metrics = await getOpsMetrics(c.env, range, new Date(), c.req.url);
   const stored = Response.json(metrics, {
     headers: { 'Cache-Control': `max-age=${OPS_METRICS_CACHE_SECONDS}` },
   });

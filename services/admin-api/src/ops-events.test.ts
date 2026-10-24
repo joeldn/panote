@@ -57,6 +57,22 @@ const readyPano = async (events: ReturnType<typeof sink>, panoId: string) => {
 };
 
 describe('operator events', () => {
+  it('records a 500 by its route pattern, never the path', async () => {
+    const events = sink();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const list = vi.spyOn(env.BUCKET, 'list').mockRejectedValue(new Error('R2 down'));
+    try {
+      expect((await call(events, '/api/admin/tours')).status).toBe(500);
+    } finally {
+      list.mockRestore();
+    }
+    expect(events.points.map((p) => p.blobs.slice(0, 3))).toContainEqual([
+      'server-error',
+      '500 GET /api/admin/tours',
+      'admin-api',
+    ]);
+  });
+
   it('records a tour created, shared, unshared and deleted', async () => {
     const events = sink();
     await readyPano(events, 'ops-ev-p1');

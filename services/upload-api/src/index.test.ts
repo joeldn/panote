@@ -1238,6 +1238,23 @@ describe('operator events', () => {
     ]);
   });
 
+  it('counts an uploads-paused 503 as a refusal only, not a server error', async () => {
+    const s = sink();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: Request | string) =>
+        isList(input) ? emptyListing() : new Response(null, { status: 404 }),
+      ),
+    );
+    const res = await call(validBody, { OPS_EVENTS: s, MAX_UPLOADS_PER_DAY_GLOBAL: '0' });
+    expect(res.status).toBe(503);
+    expect(s.events()).toEqual([['upload-refused', 'paused', 'upload-api', 'o1']]);
+  });
+
   it('records nothing for a bad request, a usage read or another path', async () => {
     const s = sink();
     await call({ contentType: 'image/gif', size: 1 }, { OPS_EVENTS: s });
