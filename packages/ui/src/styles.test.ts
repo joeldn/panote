@@ -45,6 +45,8 @@ describe('styles', () => {
     const local = new Set([
       '--pn-modal-width',
       '--pn-modal-radius',
+      '--pn-vv-top',
+      '--pn-keyboard',
       '--pn-hs-scale',
       '--pn-plan-ratio',
     ]);
@@ -71,6 +73,10 @@ describe('styles', () => {
     expect(block).toMatch(/\.pn-scrim \{[^}]*align-items: flex-end;/);
     expect(block).toMatch(/\.pn-modal \{[^}]*env\(safe-area-inset-bottom, 0px\)/);
     expect(block).toMatch(/\.pn-modal \{[^}]*border-radius:[^;]*0 0;/);
+    // Above an on-screen keyboard: Modal.tsx sets these from the visual viewport.
+    expect(block).toMatch(
+      /\.pn-scrim \{[^}]*var\(--pn-vv-top, 0px\)[^}]*var\(--pn-keyboard, 0px\)/,
+    );
   });
 
   it('gives touch screens finger-sized targets', () => {
@@ -80,6 +86,9 @@ describe('styles', () => {
       /\.pn-btn:not\(\.pn-btn--sm, \.pn-btn--link\),\s*\.pn-menu__item \{\s*min-height: 44px;/,
     );
     expect(css).toMatch(/\n\.pn-icon-btn \{[^}]*width: 32px;[^}]*height: 32px;/);
+    // The small one grows to 32px so the -6px reach makes 44px, as the regular one does.
+    expect(block).toMatch(/\.pn-icon-btn::before \{[^}]*inset: -6px;/);
+    expect(block).toMatch(/\.pn-icon-btn--sm \{\s*width: 32px;\s*height: 32px;/);
     expect(css).toMatch(/\n\.pn-menu__item \{[^}]*min-height: 32px;/);
   });
 

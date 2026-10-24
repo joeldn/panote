@@ -94,6 +94,33 @@ describe('Modal', () => {
     expect(document.activeElement).toBe(opener);
     opener.remove();
   });
+
+  it('keeps clear of an on-screen keyboard, following the visual viewport', () => {
+    const vv = Object.assign(new EventTarget(), { height: 800, offsetTop: 0 });
+    vi.stubGlobal('visualViewport', vv);
+    vi.stubGlobal('innerHeight', 800);
+    const { unmount } = render(
+      <Modal open onClose={() => {}} aria-label="Delete">
+        <input aria-label="Type DELETE" />
+      </Modal>,
+    );
+    const scrim = screen.getByRole('dialog').parentElement as HTMLElement;
+    expect(scrim.style.getPropertyValue('--pn-keyboard')).toBe('0px');
+    // The keyboard takes the bottom 340px, and Safari pans the page 40px to the field.
+    act(() => {
+      Object.assign(vv, { height: 420, offsetTop: 40 });
+      vv.dispatchEvent(new Event('resize'));
+    });
+    expect(scrim.style.getPropertyValue('--pn-keyboard')).toBe('340px');
+    expect(scrim.style.getPropertyValue('--pn-vv-top')).toBe('40px');
+    act(() => {
+      Object.assign(vv, { height: 800, offsetTop: 0 });
+      vv.dispatchEvent(new Event('scroll'));
+    });
+    expect(scrim.style.getPropertyValue('--pn-keyboard')).toBe('0px');
+    unmount();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('ConfirmModal', () => {

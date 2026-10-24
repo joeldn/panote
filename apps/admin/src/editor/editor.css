@@ -1509,6 +1509,18 @@
   .ed-lang-btn {
     height: 40px;
   }
+
+  /* The row's buttons, drawn at 32px and pressed at 44px, as .pn-icon-btn is on touch. */
+  .ed-scene__star,
+  .ed-conn .pn-icon-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .ed-scene__star::before,
+  .ed-conn .pn-icon-btn::before {
+    inset: -6px;
+  }
 }
 
 @media (pointer: coarse) and (max-width: 480px) {

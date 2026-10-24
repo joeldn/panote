@@ -76,6 +76,17 @@ describe('editor layout CSS', () => {
     );
   });
 
+  it('gives the pano rows’ small buttons a 44px target on touch', () => {
+    const coarse = css.slice(css.indexOf('@media (pointer: coarse) {'));
+    // Drawn at 32px, reaching 6px past each edge: 44px, and only into the 6px gaps.
+    expect(coarse).toMatch(
+      /\.ed-scene__star,\s*\.ed-conn \.pn-icon-btn\s*{\s*width: 32px;\s*height: 32px;/,
+    );
+    expect(coarse).toMatch(
+      /\.ed-scene__star::before,\s*\.ed-conn \.pn-icon-btn::before\s*{\s*inset: -6px;/,
+    );
+  });
+
   it('has no rule spliced into another’s selector', () => {
     // A comment inside a selector list means a rule was pasted into the middle of another.
     for (const selector of css.matchAll(/(?:^|})\s*([^{}@]+){/g)) {
