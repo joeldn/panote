@@ -62,7 +62,8 @@ export interface ChipModel {
   /** Determinate bar percentage; null = indeterminate (or no bar). */
   pct: number | null;
   bar: 'determinate' | 'indeterminate' | 'none';
-  note: string;
+  /** One line under the title; null when the title says it all. */
+  note: string | null;
   /** "3 more waiting": the rest of a batch, one line under the note. */
   queue: string | null;
   /** Buttons, or links where `to` is set (they also run their action, e.g. to dismiss). */
@@ -186,7 +187,7 @@ export function chipModel(a: ActiveUpload): ChipModel | null {
         value: null,
         pct: null,
         bar: 'none',
-        note: 'Tiles cached · zoom into every pixel',
+        note: null,
         queue: null,
         actions: [],
         dismissLabel: 'Dismiss',

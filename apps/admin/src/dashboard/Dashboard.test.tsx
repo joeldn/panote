@@ -296,7 +296,7 @@ describe('Dashboard', () => {
       renderAdmin('/app/?view=unused', { fetch });
       fireEvent.click(await screen.findByRole('button', { name: 'Delete “Old porch”' }));
       fireEvent.click(screen.getByRole('button', { name: 'Delete pano' }));
-      expect(await screen.findByText('Every pano you’ve uploaded is in a tour.')).toBeTruthy();
+      expect(await screen.findByText(/^Every pano you’ve uploaded is in a tour\./)).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Unused panos 0' })).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Your tours 1' }));
       expect(await screen.findByRole('link', { name: 'St Lawrence Jewry' })).toBeTruthy();

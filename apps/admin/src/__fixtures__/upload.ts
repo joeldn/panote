@@ -65,7 +65,7 @@ export function fakeBackend() {
     publishNotReady: [] as string[],
     /** What the library listing (`GET /api/admin/panos`) returns. */
     library: [] as Array<Record<string, unknown>>,
-    /** The user's role on the tour, as the editor's load says it (unset: the owner). */
+    /** The user's role on the tour, as its reads say it (unset: the owner). */
     role: null as 'editor' | null,
   };
 
@@ -166,7 +166,11 @@ export function fakeBackend() {
     }
     if (method === 'GET' && path === '/api/admin/tours/tour-1') {
       if (state.getTourStatus !== 200) return json({ error: 'nope' }, state.getTourStatus);
-      return json({ tour: state.tour, etag: state.tourEtag }, 200, { etag: `"${state.tourEtag}"` });
+      return json(
+        { tour: state.tour, etag: state.tourEtag, ...(state.role && { role: state.role }) },
+        200,
+        { etag: `"${state.tourEtag}"` },
+      );
     }
     if (method === 'DELETE' && path === '/api/admin/tours/tour-1') {
       return new Response(null, { status: 204 });

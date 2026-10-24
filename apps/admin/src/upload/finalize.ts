@@ -67,13 +67,14 @@ export const TOUR_FULL_PENDING_MESSAGE =
 /**
  * Refuses up front (before any upload) when the tour can't take `count` more panos,
  * on top of `reserved` ones already on their way into it (uploading or queued).
+ * `shared` says the caller only edits it, so its panos count toward the owner's limits.
  */
 export async function assertTourHasRoom(
   api: TourApi,
   tourId: string,
   count = 1,
   reserved = 0,
-): Promise<void> {
+): Promise<{ shared: boolean }> {
   const got = await api.getTour(tourId);
   if (got.status !== 'ok') throw new FinalizeError('This tour no longer exists.', false);
   const free = MAX_TOUR_SCENES - got.data.tour.scenes.length;
@@ -81,6 +82,7 @@ export async function assertTourHasRoom(
   const room = free - reserved;
   if (room <= 0) throw new FinalizeError(TOUR_FULL_PENDING_MESSAGE, false);
   if (count > room) throw new FinalizeError(tourRoomMessage(room), false);
+  return { shared: got.data.role === 'editor' };
 }
 
 /**

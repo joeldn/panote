@@ -136,7 +136,10 @@ describe('fresh upload from /app/new', () => {
     await tick();
     expect(router.state.location.pathname).toMatch(/^\/app\/?$/);
     expect(router.state.location.search).toBe('?view=unused');
-    expect(screen.getByText('Every pano you’ve uploaded is in a tour.')).toBeTruthy();
+    // None unused yet: it says where else room comes from.
+    expect(
+      screen.getByText(/^Every pano you’ve uploaded is in a tour\. To make room/),
+    ).toBeTruthy();
     // The failed upload is done with: the chip goes.
     expect(screen.queryByRole('region', { name: 'Upload status' })).toBeNull();
   });
@@ -168,6 +171,18 @@ describe('fresh upload from /app/new', () => {
       target: { files: [pngFile('Hall.png')] },
     });
     await tick();
+    await tick();
+    expect(chipTitle()).toBe('Upload limit reached');
+    expect(within(chip()).queryByRole('link', { name: 'Free up space' })).toBeNull();
+  });
+
+  it('a typed /app/new?tour= link learns from the tour that someone else owns it', async () => {
+    const { backend } = setup('/app/new?tour=tour-1');
+    backend.state.role = 'editor';
+    backend.state.presignStatus = 403;
+    backend.state.presignError = 'pano limit reached';
+    await tick();
+    await pick(pngFile('Hall.png'));
     await tick();
     expect(chipTitle()).toBe('Upload limit reached');
     expect(within(chip()).queryByRole('link', { name: 'Free up space' })).toBeNull();
@@ -252,6 +267,8 @@ describe('fresh upload from /app/new', () => {
     expect(chipTitle()).toBe('Processing on our side');
     await tick(1_500);
     expect(chipTitle()).toBe('Ready at full resolution');
+    // The title says it all: no empty note line under it.
+    expect(chip().querySelector('.up-chip__note')).toBeNull();
 
     // Readiness reads bypass the HTTP cache; once ready, the viewer's copy is refreshed.
     expect(backend.manifestPolls().every((c) => c.cache === 'no-store')).toBe(true);
@@ -1417,6 +1434,60 @@ describe('sign-in during an upload', () => {
     ).toEqual(['Kitchen.png', 'Cellar.png']);
     expect(pending.peek()).toBe(files[0]);
     expect(readResumeRecord()).toMatchObject({ fileName: 'Hall.png', landed: null });
+  });
+
+  it('a 401 starting several photos also names the ones the checks left out', async () => {
+    const { backend, pending } = setup();
+    backend.state.createTourStatus = 401;
+    await tick();
+    const gif = new File(['GIF89a'], 'Loft.gif', { type: 'image/gif' });
+    const files = [pngFile('Hall.png'), gif, pngFile('Kitchen.png')];
+    fireEvent.change(screen.getByTestId('upload-input'), { target: { files } });
+    await tick();
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain(
+      'Only “Hall.png” is kept while you sign in: there’s room for one photo. Add these again after, apart from any with a problem noted:',
+    );
+    expect(
+      within(alert)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Kitchen.png', 'Loft.gif: Use a JPG, PNG or WebP image.']);
+    expect(pending.peek()).toBe(files[0]);
+    cleanup();
+
+    // The same from the dashboard's New tour, which skips the dialog until something's wrong.
+    const dash = setup('/app/');
+    dash.backend.state.createTourStatus = 401;
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'New tour' }));
+    fireEvent.change(screen.getByTestId('upload-picker'), { target: { files } });
+    await tick();
+    expect(
+      within(screen.getByRole('alert'))
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Kitchen.png', 'Loft.gif: Use a JPG, PNG or WebP image.']);
+  });
+
+  it('a 401 with one photo left after the checks names the one left out', async () => {
+    const { backend, pending } = setup();
+    backend.state.createTourStatus = 401;
+    await tick();
+    const gif = new File(['GIF89a'], 'Loft.gif', { type: 'image/gif' });
+    const files = [gif, pngFile('Hall.png')];
+    fireEvent.change(screen.getByTestId('upload-input'), { target: { files } });
+    await tick();
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain(
+      'You’ve been signed out. Sign in again to continue. This one was left out:',
+    );
+    expect(
+      within(alert)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Loft.gif: Use a JPG, PNG or WebP image.']);
+    expect(pending.peek()).toBe(files[1]);
   });
 
   it('a 401 while polling resumes polling after sign-in, with no file and no re-upload', async () => {

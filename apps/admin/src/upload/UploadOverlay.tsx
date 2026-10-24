@@ -83,7 +83,7 @@ export function UploadOverlay({
       // The rest are on their way: say which were left out (this dialog has closed).
       if (check.skipped.length > 0) uploads.report(target, someSkipped(check.skipped));
     } catch (e) {
-      setStatus({ kind: 'error', ...startProblem(e) });
+      setStatus({ kind: 'error', ...startProblem(e, check.skipped) });
     }
   }
 

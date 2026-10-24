@@ -57,14 +57,29 @@ export const replaceTakesOne = (extras: string[]): StartProblem => ({
   files: extras,
 });
 
-export function startProblem(e: unknown): StartProblem {
+/**
+ * `leftOut` is what the checks (or a replace) already set aside. It is only said for a
+ * sign-out, where one photo still uploads after sign-in: any other failure starts nothing,
+ * so the next try names them again.
+ */
+export function startProblem(e: unknown, leftOut: readonly string[] = []): StartProblem {
   if (e instanceof SignedOutBatchError) {
+    const kept = `Only “${e.kept}” is kept while you sign in: there’s room for one photo.`;
     return {
-      message: `You’ve been signed out. Sign in again to continue. Only “${e.kept}” is kept while you sign in: there’s room for one photo. Add these again after:`,
-      files: e.dropped,
+      message: `You’ve been signed out. Sign in again to continue. ${kept} ${
+        leftOut.length > 0
+          ? 'Add these again after, apart from any with a problem noted:'
+          : 'Add these again after:'
+      }`,
+      files: [...e.dropped, ...leftOut],
     };
   }
-  if (isAuthError(e)) return { message: 'You’ve been signed out. Sign in again to continue.' };
+  if (isAuthError(e)) {
+    const signedOut = 'You’ve been signed out. Sign in again to continue.';
+    if (leftOut.length === 0) return { message: signedOut };
+    const which = leftOut.length === 1 ? 'This one was left out:' : 'These were left out:';
+    return { message: `${signedOut} ${which}`, files: [...leftOut] };
+  }
   // A tour that's gone or full: retrying won't help, so say exactly why.
   if (e instanceof FinalizeError) return { message: e.message };
   return { message: 'Couldn’t start the upload. Please try again.' };

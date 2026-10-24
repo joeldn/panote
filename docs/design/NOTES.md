@@ -119,6 +119,10 @@ The prototype keeps `mx`/`my` per scene and draws a plan in the corner. The code
   when tried (it stays, so it can be tried again; only a refused permission
   hides it). On an iPhone, where the frame can't go fullscreen, the embed's
   fullscreen button opens the tour page in a new tab instead.
+- **Ready chip note.** The README gives the `ready` phase the note "Tiles
+  cached · zoom into every pixel". The chip shows the title "Ready at full
+  resolution" alone: the note told the user nothing they could act on, and
+  the admin UX pass (2026-10) cut copy like it.
 
 ## Auth
 

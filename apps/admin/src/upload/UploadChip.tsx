@@ -65,7 +65,7 @@ export function UploadChip({ model, file, onAction, onDismiss }: UploadChipProps
           <span />
         </div>
       )}
-      <p className="up-chip__note">{model.note}</p>
+      {model.note && <p className="up-chip__note">{model.note}</p>}
       {model.queue && <p className="up-chip__queue">{model.queue}</p>}
       {showAspect && (
         <p className="up-chip__aspect" role="note">

@@ -134,7 +134,7 @@ describe('Unused panos', () => {
   it('shows an empty state when every pano is in a tour', async () => {
     const { fetch } = server(listing([pano({ referenced: true })]));
     renderAdmin(UNUSED, { fetch });
-    expect(await screen.findByText('Every pano you’ve uploaded is in a tour.')).toBeTruthy();
+    expect(await screen.findByText(/^Every pano you’ve uploaded is in a tour\./)).toBeTruthy();
   });
 
   it('confirms, deletes once despite a double click, and drops the row', async () => {
