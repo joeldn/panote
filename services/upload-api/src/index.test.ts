@@ -1242,10 +1242,6 @@ describe('operator events', () => {
     const s = sink();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(null, { status: 404 })),
-    );
-    vi.stubGlobal(
-      'fetch',
       vi.fn(async (input: Request | string) =>
         isList(input) ? emptyListing() : new Response(null, { status: 404 }),
       ),
