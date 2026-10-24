@@ -1158,6 +1158,13 @@
   animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
 }
 
+/* Its own shadow replaces the error notice's outline: keep both. */
+.ed-banner.pn-notice--error {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    var(--shadow-popover);
+}
+
 /* It floats over the pano: the info tint alone would let the image show through. */
 .ed-banner.pn-notice--info {
   background: var(--cbg-solid);
