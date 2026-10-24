@@ -26,6 +26,14 @@ export const formatMs = (ms: number): string => {
   return `${Number((ms / 60_000).toFixed(1))} min`;
 };
 
+/** How long something has waited: "40 min", "5 h", "3 d". */
+export const formatAge = (ms: number): string => {
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  if (min < 60) return `${min} min`;
+  if (min < 48 * 60) return `${Math.floor(min / 60)} h`;
+  return `${Math.floor(min / (24 * 60))} d`;
+};
+
 const pad = (n: number) => String(n).padStart(2, '0');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 

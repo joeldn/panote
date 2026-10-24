@@ -3144,14 +3144,17 @@ still loads.
 | Section | Source |
 |---|---|
 | Health | What's already recorded in the content bucket: `ops/health/state.json` (failing checks, last alert), the daily cron and tile sweep status, the CDN purge failure marker, a count of `ops/cdn-purge/pending/` and `dead/` (capped at 1,000), and the newest backup set with `complete.json` |
+| Waiting for you | The Explore approval queue (`explore/pending/`, read as `/app/ops/explore` reads it): how many tours wait, how many changed since approved, the five waiting longest; and the flags page's newest page of flags (`moderation/flags/`) by source, `+` when there are more. Links to both pages |
+| Server errors | The operator event stream's `server-error` events (below): every 5xx admin-api, public-api and upload-api answered, by Worker, status and route pattern. Cloudflare counts a 500 the code returns as a successful invocation, so the Workers section's Exceptions never shows these. Sampled |
+| Accounts and content | Listing `panos/`, `tours/` (with metadata) and `upload-log/`, no object read: accounts with content, panoramas and their originals' bytes (the quota's count), tours, shared and Public tours, upload links in the last 24 hours; the ten accounts with the most storage and with the most uploads today, linked to the Users page; the ten tours most recently published (a share or a Save). Each listing stops at 25 pages (25,000 keys), and then every number is marked as a floor; `scripts/account-storage.ts` counts everything. Now, whatever the range, so it is cached on its own for 5 minutes rather than per range |
 | Pipeline | The operator event stream (`OPS_EVENTS_DATASET`, below): upload links issued and their declared size, panoramas tiled, failed (dead-lettered), average and p95 tiling time, refusals and retries by reason, tours created, shared, republished, unshared and deleted, pano and account deletes, invites, rate-limit refusals by Worker and limiter, client error reports by app. Sampled |
 | Viewers | Analytics Engine (`AE_DATASET`) across every tour: views, scenes, hotspots, average dwell, views over time, the ten most viewed tours (titles from `pub/tours/`), page against embed. Sampled |
-| Workers | GraphQL `workersInvocationsAdaptive` for the Workers listed in `OPS_RESOURCES`: requests, errors, subrequests, CPU p50/p99 per Worker, outcomes other than `success`, and requests and errors over time |
+| Workers | GraphQL `workersInvocationsAdaptive` for the Workers listed in `OPS_RESOURCES`: requests, exceptions (Cloudflare's `errors`: thrown, exceeded resources, internal; not a 500 the code answers), subrequests, CPU p50/p99 per Worker, outcomes other than `success`, and requests and exceptions over time |
 | Storage | GraphQL `r2StorageAdaptiveGroups` and `r2OperationsAdaptiveGroups` for the env's bucket: objects, size, Class A/B operations, busiest operations |
-| Upload queue | GraphQL `queueBacklogAdaptiveGroups` and `queueMessageOperationsAdaptiveGroups`: average backlog, written, read, done, sent to the DLQ, average wait and retries |
+| Upload queue | GraphQL `queueMessageOperationsAdaptiveGroups` and the backlog dataset: written, read, done, sent to the DLQ, average wait and retries, and the average (not current) backlog. Cloudflare's docs spell the id dimension `queueId` and `queueID` and the backlog dataset `queueBacklogAdaptiveGroups` and `queuesBacklogAdaptiveGroups`, so each spelling is tried until GraphQL accepts one; a backlog that can't be read (no spelling answers, or the request fails) shows `—` and leaves the rest |
 | Tiler containers | GraphQL `containersMetricsAdaptiveGroups`, whole account: CPU time, instances, peak memory and CPU |
-| Durable Objects | GraphQL `durableObjectsInvocationsAdaptiveGroups` and `durableObjectsStorageGroups`, whole account |
-| This month against the plan | Month-to-date usage against what Workers Paid includes (Cloudflare's pricing pages, checked 2026-10-23; `INCLUDED` in `platform.ts`): Worker requests, R2 Class A/B, R2 storage, queue operations, Durable Object requests, container CPU and memory. Whole account (dev and production share the allowance), except storage, which is the env's bucket |
+| Durable Objects | GraphQL `durableObjectsInvocationsAdaptiveGroups` and `durableObjectsStorageGroups`, whole account, as three requests: errors on invocations aren't in Cloudflare's docs and storage is another dataset, so either refusing shows `—` and keeps the request count. Stored bytes may leave out SQLite-backed storage, which every class here uses |
+| This month against the plan | Month-to-date usage against what Workers Paid includes (Cloudflare's pricing pages, checked 2026-10-23; `INCLUDED` in `platform.ts`): Worker requests, R2 Class A/B, R2 storage, queue operations, Durable Object requests, container CPU and memory. Whole account (dev and production share the allowance), except storage, which is the env's bucket. Worker requests are asked a week at a time (Workers' invocations answer at most a week per query), and so are queue operations and Durable Object requests, whose limits aren't documented |
 
 - **Token.** It uses `CF_ANALYTICS_TOKEN`, the same Account Analytics: Read token as tour insights, so
   there's nothing new to set up. Queue names come from the Queues API, which that token may not be
@@ -3160,8 +3163,10 @@ still loads.
 - **`OPS_RESOURCES`** (var, both env blocks of `services/admin-api/wrangler.jsonc`) names this env's
   Workers, buckets and queues, since dev and production share one account. Add a Worker there when a
   new one ships.
-- **Cost.** An uncached load is 11 GraphQL requests, 8 Analytics Engine queries, a Queues API call
-  and up to about 20 R2 reads. Each range's answer is cached for 60 s in the Worker's location, and the
+- **Cost.** An uncached load is up to about 30 GraphQL node queries (Cloudflare counts each dataset
+  in a request; the month's weekly windows are most of them, and a refused queue spelling adds a
+  retry), 8 Analytics Engine queries, a Queues API call, up to 75 R2 list pages and a read per tour
+  waiting for approval and per flag (at most 200). Each range's answer is cached for 60 s in the Worker's location, and the
   route shares tour insights' limit (`INSIGHTS_LIMITER`, 30 a minute per operator). Cloudflare allows
   300 GraphQL queries per 5 minutes per user.
 - **Not here yet.** Zone traffic (cache hit ratio, status codes, bandwidth) and WAF blocks need a
@@ -3182,7 +3187,7 @@ write, so there's nothing to set up. admin-api reads it back through `OPS_EVENTS
 | tiler-consumer | `tile-ok` (value ms), `tile-retry` (detail the container's status, or `threw`), `tile-refused` (`oversize`, `unsupported`, `unprocessable-key`), `tile-dead`, `tile-skipped` |
 | admin-api | `tour-created`, `tour-published` (`share` or `save`), `tour-unpublished`, `tour-deleted`, `pano-deleted`, `account-deleted` (`deleted` or `pending`), `invite-created`, `invite-accepted` |
 | public-api | `client-error` (detail the app) |
-| upload-api, admin-api, public-api | `rate-limited` (detail the limiter's binding name) |
+| upload-api, admin-api, public-api | `rate-limited` (detail the limiter's binding name), `server-error` (detail `<status> <METHOD> <route pattern>`, such as `500 PUT /api/admin/tours/:tourId`: the route as registered, never the path with its ids; `recordServerErrors` in `packages/worker-kit/src/hono.ts`, registered first in each Hono app, and upload-api's fetch wrapper) |
 
 - **Nothing personal.** No sub, email, IP, tour or pano id: the event, a detail from a fixed
   vocabulary, the Worker and one number. The per-person view stays in each owner's own records.

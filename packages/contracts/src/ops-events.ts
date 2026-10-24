@@ -46,6 +46,12 @@ export const OPS_EVENT_NAMES = [
    * Explore queue. detail: done | failed. value: tours sent back.
    */
   'explore-requeue',
+  /**
+   * A Worker answered 5xx (a throw its error handler turned into a 500, or a 5xx it chose).
+   * Cloudflare counts those as successes, so this is the only count of them. detail:
+   * `<status> <METHOD> <route pattern>`, the pattern as registered (`:tourId`, never an id).
+   */
+  'server-error',
 ] as const;
 export type OpsEventName = (typeof OPS_EVENT_NAMES)[number];
 

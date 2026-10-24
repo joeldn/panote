@@ -296,6 +296,7 @@ const pruneLater = (r2: R2, expired: readonly string[], ctx: ExecutionContext): 
 };
 
 const SERVICE = 'upload-api';
+const UPLOAD_URL_PATH = '/api/upload-url';
 // What a POST's refusal is recorded as: the account, access, quota and ceiling answers,
 // not a 400 for a malformed body or the rate limit's 429 (rateLimit records that one).
 const REFUSAL_STATUSES = new Set([403, 404, 410, 503]);
@@ -315,10 +316,13 @@ const REFUSAL_CODES: Record<string, string> = {
   'original not found': 'original-not-found',
 };
 
-/** An operator event for a POST to the route that was refused (ops-events.ts). */
-const recordRefusal = async (req: Request, res: Response, env: Env): Promise<void> => {
-  if (req.method !== 'POST' || !REFUSAL_STATUSES.has(res.status)) return;
-  if (new URL(req.url).pathname !== '/api/upload-url') return;
+/**
+ * An operator event for a POST to the route that was refused (ops-events.ts). True when the
+ * refusal was a deliberate one (a known code, such as `paused`'s 503), not a fault.
+ */
+const recordRefusal = async (req: Request, res: Response, env: Env): Promise<boolean> => {
+  if (req.method !== 'POST' || !REFUSAL_STATUSES.has(res.status)) return false;
+  if (new URL(req.url).pathname !== UPLOAD_URL_PATH) return false;
   const body = (await res
     .clone()
     .json()
@@ -328,12 +332,13 @@ const recordRefusal = async (req: Request, res: Response, env: Env): Promise<voi
     event: 'upload-refused',
     detail: known ?? `status-${res.status}`,
   });
+  return known !== undefined;
 };
 
 const api = {
   async handle(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
-    if (url.pathname !== '/api/upload-url' || (req.method !== 'POST' && req.method !== 'GET')) {
+    if (url.pathname !== UPLOAD_URL_PATH || (req.method !== 'POST' && req.method !== 'GET')) {
       return Response.json({ error: 'not found' }, { status: 404 });
     }
     const reserved: Reserved = { held: null };
@@ -506,8 +511,17 @@ const api = {
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const res = await api.handle(req, env, ctx);
-    await recordRefusal(req, res, env);
+    // A throw that escapes the handler's own catch is a 500 too, and counted like one.
+    const res = await api.handle(req, env, ctx).catch(toErrorResponse);
+    const deliberate = await recordRefusal(req, res, env);
+    // Cloudflare counts a 5xx answer as a success; this is its only count. One route here.
+    // A deliberate refusal (uploads paused: 503) is an upload-refused event, not a fault.
+    if (res.status >= 500 && !deliberate) {
+      recordOps(env.OPS_EVENTS, SERVICE, {
+        event: 'server-error',
+        detail: `${res.status} ${req.method} ${UPLOAD_URL_PATH}`,
+      });
+    }
     return res;
   },
 };

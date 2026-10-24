@@ -99,7 +99,8 @@ export const OpsQueuesSchema = z.object({
       queueId: z.string(),
       /** Null when the token can't list queues; the id still identifies it. */
       name: z.string().nullable(),
-      backlogAvg: count(),
+      /** Average over the range, not the depth now; null when the backlog dataset won't answer. */
+      backlogAvg: count().nullable(),
       writes: count(),
       reads: count(),
       acked: count(),
@@ -117,7 +118,9 @@ export type OpsQueues = z.infer<typeof OpsQueuesSchema>;
 export const OpsDurableObjectsSchema = z.object({
   /** Across the whole account: the datasets don't name the script. */
   requests: count(),
-  errors: count(),
+  /** Null when the dataset won't give errors (Cloudflare doesn't document the field). */
+  errors: count().nullable(),
+  /** Latest sample; may leave out SQLite-backed storage, which every class here uses. */
   storedBytes: count().nullable(),
 });
 export type OpsDurableObjects = z.infer<typeof OpsDurableObjectsSchema>;
@@ -192,6 +195,79 @@ export const OpsPipelineSchema = z.object({
 });
 export type OpsPipeline = z.infer<typeof OpsPipelineSchema>;
 
+/** What waits for the operator: the Explore approval queue and the flags (moderation.ts). */
+export const OpsModerationSchema = z.object({
+  explore: z.object({
+    waiting: count(),
+    /** Of those, tours approved before and changed since. */
+    changed: count(),
+    /** The tours waiting longest, oldest first. */
+    oldest: z.array(
+      z.object({
+        tourId: z.string(),
+        title: z.string(),
+        slug: z.string(),
+        reason: z.enum(['new', 'changed']),
+        queuedAt: iso(),
+      }),
+    ),
+  }),
+  flags: z.object({
+    viewer: count(),
+    screening: count(),
+    /** More flags than the review page reads at once: the counts are a floor. */
+    more: z.boolean(),
+    newestAt: iso().nullable(),
+  }),
+});
+export type OpsModeration = z.infer<typeof OpsModerationSchema>;
+
+const accountRow = () =>
+  z.object({
+    /** The account id (Auth0 sub), for the Users page. */
+    sub: z.string(),
+    /** Panos that count toward the quota, and their originals' bytes. */
+    panos: count(),
+    originalBytes: count(),
+    tours: count(),
+    /** Upload links issued in the last 24 hours (the daily limit's own log). */
+    uploads24h: count(),
+  });
+
+/** Stocks rather than flows, from listing the bucket (no reads of any object). */
+export const OpsAccountsSchema = z.object({
+  /** A listing stopped at its budget: every number is then a floor. */
+  partial: z.boolean(),
+  totals: z.object({
+    /** Accounts with at least one pano or tour. */
+    accounts: count(),
+    panos: count(),
+    originalBytes: count(),
+    tours: count(),
+    /** Tours shared by link, and of those the ones set to Public. */
+    shared: count(),
+    public: count(),
+    uploads24h: count(),
+  }),
+  /** Most bytes of originals first. */
+  heaviest: z.array(accountRow()),
+  /** Most upload links in the last 24 hours first; only accounts with any. */
+  busiest: z.array(accountRow()),
+  /** Shared tours by when they were last published (a share or a Save), newest first. */
+  recentlyPublished: z.array(
+    z.object({
+      tourId: z.string(),
+      sub: z.string(),
+      /** Null for a tour saved before titles were kept in its metadata. */
+      title: z.string().nullable(),
+      slug: z.string(),
+      visibility: z.enum(['public', 'unlisted']),
+      at: iso(),
+    }),
+  ),
+});
+export type OpsAccounts = z.infer<typeof OpsAccountsSchema>;
+
 export const OpsMetricsSchema = z.object({
   range: z.enum(OPS_RANGES),
   from: iso(),
@@ -205,6 +281,8 @@ export const OpsMetricsSchema = z.object({
   usage: section(OpsUsageSchema),
   product: section(OpsProductSchema),
   pipeline: section(OpsPipelineSchema),
+  moderation: section(OpsModerationSchema),
+  accounts: section(OpsAccountsSchema),
 });
 export type OpsMetrics = z.infer<typeof OpsMetricsSchema>;
 export type OpsSection<T> = { status: 'ok'; data: T } | { status: 'unavailable'; reason: string };

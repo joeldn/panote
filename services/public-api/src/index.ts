@@ -21,7 +21,7 @@ import {
   recordOps,
   type RateLimiter,
 } from '@internal/worker-kit';
-import { errorHandler } from '@internal/worker-kit/hono';
+import { errorHandler, recordServerErrors } from '@internal/worker-kit/hono';
 
 import { logClientError } from './client-error.js';
 import { readBeaconBody, toDataPoint } from './events.js';
@@ -30,7 +30,12 @@ import { storeFlag } from './flags.js';
 import { createPublishedCheck } from './published.js';
 import { TourStats } from './stats.js';
 
+// This Worker's name in the operator event stream (@internal/contracts ops-events.ts).
+const SERVICE = 'public-api';
+
 const app = new Hono<{ Bindings: Env }>();
+// First, so it sees every answer: a 5xx is an operator event (Cloudflare counts it a success).
+app.use('*', recordServerErrors(SERVICE));
 
 const stat = (c: { env: Env }, tourId: string) => c.env.STATS.get(c.env.STATS.idFromName(tourId));
 
@@ -48,7 +53,6 @@ export const RATE_PERIOD_SECONDS = 60;
 // request) every caller shares one key.
 // A refusal is also an operator event (@internal/contracts ops-events.ts), by limiter name.
 type Limiter = keyof { [K in keyof Env as Env[K] extends RateLimiter ? K : never]: true };
-const SERVICE = 'public-api';
 const limitByIp = (limiter: Limiter) =>
   createMiddleware<{ Bindings: Env }>(async (c, next) => {
     const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';

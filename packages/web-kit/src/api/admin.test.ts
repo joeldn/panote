@@ -558,6 +558,8 @@ describe('tour members', () => {
       usage: off,
       product: off,
       pipeline: off,
+      moderation: off,
+      accounts: off,
     };
     const { api, call } = setup(
       json(metrics),

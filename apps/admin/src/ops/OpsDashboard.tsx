@@ -3,9 +3,11 @@ import './ops-dashboard.css';
 import {
   DEFAULT_OPS_RANGE,
   OPS_RANGES,
+  type OpsAccounts,
   type OpsEventName,
   type OpsHealth,
   type OpsMetrics,
+  type OpsModeration,
   type OpsPipeline,
   type OpsRange,
   type OpsSection,
@@ -13,10 +15,13 @@ import {
 } from '@internal/contracts';
 import { Button } from '@internal/ui';
 import { useEffect, useState, type ReactNode } from 'react';
+import { Link } from 'react-router';
 
+import { useAuthEnv } from '../auth-context.js';
 import { useSession } from '../session.js';
 import {
   backupTone,
+  formatAge,
   formatMs,
   formatNumber,
   formatPercent,
@@ -105,6 +110,14 @@ function Metrics({ m }: { m: OpsMetrics }) {
         {(h) => <Health h={h} />}
       </Panel>
 
+      <Panel title="Waiting for you" section={m.moderation}>
+        {(d) => <Moderation d={d} now={m.to} />}
+      </Panel>
+
+      <Panel title="Server errors" section={m.pipeline} note="Sampled by Analytics Engine">
+        {(p) => <ServerErrors p={p} />}
+      </Panel>
+
       <Panel title="Pipeline" section={m.pipeline} note="Sampled by Analytics Engine">
         {(p) => <Pipeline p={p} step={step} />}
       </Panel>
@@ -149,6 +162,10 @@ function Metrics({ m }: { m: OpsMetrics }) {
         )}
       </Panel>
 
+      <Panel title="Accounts and content" section={m.accounts} note="Now, not in the range">
+        {(a) => <Accounts a={a} />}
+      </Panel>
+
       <Panel title="Workers" section={m.workers}>
         {(w) => {
           const requests = w.scripts.reduce((s, x) => s + x.requests, 0);
@@ -158,19 +175,23 @@ function Metrics({ m }: { m: OpsMetrics }) {
               <Tiles>
                 <Tile label="Requests" value={formatNumber(requests)} />
                 <Tile
-                  label="Errors"
+                  label="Exceptions"
                   value={formatNumber(errors)}
                   tone={errors > 0 ? 'bad' : 'ok'}
                 />
-                <Tile label="Error rate" value={formatPercent(errors, requests)} />
+                <Tile label="Exception rate" value={formatPercent(errors, requests)} />
               </Tiles>
+              <p className="opsd__line opsd__muted">
+                Exceptions are invocations Cloudflare saw fail. A 500 our code answers counts as a
+                success here; those are under Server errors.
+              </p>
               <Bars
                 title="Requests"
                 series={w.series.map((d) => ({ t: d.t, v: d.requests }))}
                 step={step}
               />
               <Bars
-                title="Errors"
+                title="Exceptions"
                 tone="bad"
                 series={w.series.map((d) => ({ t: d.t, v: d.errors }))}
                 step={step}
@@ -180,7 +201,7 @@ function Metrics({ m }: { m: OpsMetrics }) {
                 head={[
                   'Worker',
                   'Requests',
-                  'Errors',
+                  'Exceptions',
                   'CPU p50',
                   'CPU p99',
                   'Subrequests',
@@ -237,7 +258,7 @@ function Metrics({ m }: { m: OpsMetrics }) {
             ]}
             rows={q.queues.map((x) => [
               x.name ?? x.queueId,
-              formatNumber(x.backlogAvg),
+              x.backlogAvg === null ? '—' : formatNumber(x.backlogAvg),
               formatNumber(x.writes),
               formatNumber(x.reads),
               formatNumber(x.acked),
@@ -282,8 +303,8 @@ function Metrics({ m }: { m: OpsMetrics }) {
             <Tile label="Requests" value={formatNumber(d.requests)} />
             <Tile
               label="Errors"
-              value={formatNumber(d.errors)}
-              tone={d.errors > 0 ? 'bad' : 'ok'}
+              value={d.errors === null ? '—' : formatNumber(d.errors)}
+              tone={d.errors === null ? undefined : d.errors > 0 ? 'bad' : 'ok'}
             />
             <Tile label="Stored" value={d.storedBytes === null ? '—' : formatSize(d.storedBytes)} />
           </Tiles>
@@ -412,11 +433,149 @@ function Pipeline({ p, step }: { p: OpsPipeline; step: 'hour' | 'day' }) {
   );
 }
 
+function Moderation({ d, now }: { d: OpsModeration; now: string }) {
+  const { origins } = useAuthEnv();
+  const flags = d.flags.viewer + d.flags.screening;
+  const oldest = d.explore.oldest[0];
+  return (
+    <>
+      <Tiles>
+        <Tile
+          label="Waiting for approval"
+          value={formatNumber(d.explore.waiting)}
+          tone={d.explore.waiting > 0 ? 'bad' : 'ok'}
+        />
+        <Tile label="Changed since approved" value={formatNumber(d.explore.changed)} />
+        <Tile
+          label="Longest wait"
+          value={oldest ? formatAge(Date.parse(now) - Date.parse(oldest.queuedAt)) : '—'}
+        />
+        <Tile
+          label="Flags to review"
+          value={`${formatNumber(flags)}${d.flags.more ? '+' : ''}`}
+          tone={flags > 0 ? 'bad' : 'ok'}
+        />
+      </Tiles>
+      <Table
+        caption="Longest in the approval queue"
+        head={['Tour', 'Why', 'Waiting']}
+        rows={d.explore.oldest.map((t) => [
+          <a key="t" href={`${origins.website}/s/${t.slug}`} target="_blank" rel="noreferrer">
+            {t.title || 'Untitled tour'}
+          </a>,
+          t.reason === 'changed' ? 'Changed since approved' : 'New',
+          formatAge(Date.parse(now) - Date.parse(t.queuedAt)),
+        ])}
+        empty="Nothing waiting for approval."
+      />
+      <p className="opsd__line">
+        {`Flags: ${formatNumber(d.flags.viewer)} from visitors, ${formatNumber(d.flags.screening)} from the automatic check`}
+        {d.flags.newestAt && ` · newest ${formatTime(d.flags.newestAt)} UTC`}
+      </p>
+      <p className="opsd__line">
+        <Link to="explore">Open the approval queue</Link> · <Link to="flags">Review flags</Link>
+      </p>
+    </>
+  );
+}
+
+function ServerErrors({ p }: { p: OpsPipeline }) {
+  const rows = p.events
+    .filter((e) => e.event === 'server-error')
+    // detail: "<status> <METHOD> <route>" (worker-kit's recordServerErrors).
+    .map((e) => {
+      const [status = '', method = '', ...route] = e.detail.split(' ');
+      return { service: e.service, status, method, route: route.join(' '), n: e.n };
+    });
+  const total = rows.reduce((s, r) => s + r.n, 0);
+  return (
+    <>
+      <Tiles>
+        <Tile label="5xx answers" value={formatNumber(total)} tone={total > 0 ? 'bad' : 'ok'} />
+      </Tiles>
+      <Table
+        caption="By route"
+        head={['Worker', 'Status', 'Route', 'Count']}
+        rows={rows.map((r) => [r.service, r.status, `${r.method} ${r.route}`, formatNumber(r.n)])}
+        empty="No 5xx answers in this range."
+      />
+    </>
+  );
+}
+
+const UserLink = ({ sub }: { sub: string }) => (
+  <Link to={`users?sub=${encodeURIComponent(sub)}`}>{sub}</Link>
+);
+
+function Accounts({ a }: { a: OpsAccounts }) {
+  const { origins } = useAuthEnv();
+  const floor = a.partial ? '+' : '';
+  const t = a.totals;
+  const accountRows = (list: OpsAccounts['heaviest']) =>
+    list.map((r) => [
+      <UserLink key="u" sub={r.sub} />,
+      formatSize(r.originalBytes),
+      formatNumber(r.panos),
+      formatNumber(r.tours),
+      formatNumber(r.uploads24h),
+    ]);
+  const head = ['Account', 'Originals', 'Panoramas', 'Tours', 'Uploads (24 h)'];
+  return (
+    <>
+      <Tiles>
+        <Tile label="Accounts" value={`${formatNumber(t.accounts)}${floor}`} />
+        <Tile label="Panoramas" value={`${formatNumber(t.panos)}${floor}`} />
+        <Tile label="Originals stored" value={`${formatSize(t.originalBytes)}${floor}`} />
+        <Tile label="Tours" value={`${formatNumber(t.tours)}${floor}`} />
+        <Tile
+          label="Shared (Public)"
+          value={`${formatNumber(t.shared)} (${formatNumber(t.public)})${floor}`}
+        />
+        <Tile label="Uploads (24 h)" value={`${formatNumber(t.uploads24h)}${floor}`} />
+      </Tiles>
+      {a.partial && (
+        <p className="opsd__line opsd__muted">
+          The bucket is bigger than one page load lists, so these are floors. The account-storage
+          script counts everything.
+        </p>
+      )}
+      <Table caption="Most storage" head={head} rows={accountRows(a.heaviest)} />
+      <Table
+        caption="Most uploads in the last 24 hours"
+        head={head}
+        rows={accountRows(a.busiest)}
+        empty="No uploads in the last 24 hours."
+      />
+      <Table
+        caption="Recently published"
+        head={['Tour', 'Sharing', 'Owner', 'Published']}
+        rows={a.recentlyPublished.map((p) => [
+          <a key="t" href={`${origins.website}/s/${p.slug}`} target="_blank" rel="noreferrer">
+            {p.title || 'Untitled tour'}
+          </a>,
+          p.visibility === 'public' ? 'Public' : 'Unlisted',
+          <UserLink key="u" sub={p.sub} />,
+          `${formatTime(p.at)} UTC`,
+        ])}
+        empty="No shared tours."
+      />
+    </>
+  );
+}
+
 function Tiles({ children }: { children: ReactNode }) {
   return <div className="opsd__tiles">{children}</div>;
 }
 
-function Tile({ label, value, tone }: { label: string; value: string; tone?: 'ok' | 'bad' }) {
+function Tile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: 'ok' | 'bad' | undefined;
+}) {
   return (
     <div className="opsd__tile">
       <p className="opsd__label">{label}</p>

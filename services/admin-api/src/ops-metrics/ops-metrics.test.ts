@@ -6,7 +6,15 @@ import {
   HEALTH_STATE_KEY,
   OpsMetricsSchema,
   backupCompleteKey,
+  deletingKey,
+  explorePendingKey,
+  flagKey,
+  originalKey,
+  publishKey,
   pubTourKey,
+  tourKey,
+  uploadLogKey,
+  type ExplorePending,
   type BackupProgress,
   type OpsSection,
 } from '@internal/contracts';
@@ -15,7 +23,10 @@ import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import worker from '../index.js';
-import { getOpsMetrics, opsResources, parseRange } from './index.js';
+import { ACCOUNT_SCAN_PAGES, accountsSection } from './accounts.js';
+import { weeks } from './graphql.js';
+import { cachedAccounts, getOpsMetrics, opsResources, parseRange } from './index.js';
+import { moderationSection } from './moderation.js';
 import { buildPipelineQueries } from './pipeline.js';
 import { INCLUDED, r2ClassOf, usageLines } from './platform.js';
 import { buildProductQueries } from './product.js';
@@ -114,6 +125,12 @@ const pipelineAnswer = (sql: string): Record<string, unknown>[] | 'refuse' => {
   ];
 };
 
+/** One row for each `<alias><n>:` the query names. */
+const perWeek = (query: string, alias: string, row: Record<string, unknown>): Answer =>
+  Object.fromEntries(
+    [...query.matchAll(new RegExp(`\\b(${alias}\\d+):`, 'g'))].map((m) => [m[1]!, [row]]),
+  );
+
 // A full, plausible answer for every dataset the dashboard asks for.
 const platform = (query: string): Answer => {
   if (query.includes('byScript: workersInvocationsAdaptive')) {
@@ -152,12 +169,16 @@ const platform = (query: string): Answer => {
       ],
     };
   }
-  if (query.includes('queueBacklogAdaptiveGroups')) {
+  if (query.includes('backlog: queueBacklogAdaptiveGroups')) {
     return {
       backlog: [
         { avg: { messages: 3 }, dimensions: { queueId: 'q1' } },
         { avg: { messages: 7 }, dimensions: { queueId: 'q9' } },
       ],
+    };
+  }
+  if (query.includes('ops: queueMessageOperationsAdaptiveGroups')) {
+    return {
       ops: [
         {
           count: 10,
@@ -183,10 +204,13 @@ const platform = (query: string): Answer => {
     };
   }
   if (query.includes('inv: durableObjectsInvocationsAdaptiveGroups')) {
-    return {
-      inv: [{ sum: { requests: 70, errors: 1 } }],
-      stored: [{ max: { storedBytes: 4096 } }],
-    };
+    return { inv: [{ sum: { requests: 70 } }] };
+  }
+  if (query.includes('err: durableObjectsInvocationsAdaptiveGroups')) {
+    return { err: [{ sum: { errors: 1 } }] };
+  }
+  if (query.includes('stored: durableObjectsStorageGroups')) {
+    return { stored: [{ max: { storedBytes: 4096 } }] };
   }
   if (query.includes('rows: containersMetricsAdaptiveGroups')) {
     return {
@@ -206,7 +230,10 @@ const platform = (query: string): Answer => {
       ],
     };
   }
-  if (query.includes('w: workersInvocationsAdaptive')) return { w: [{ sum: { requests: 2e6 } }] };
+  // The month so far, a week per alias: each week answers its share.
+  if (query.includes('w0: workersInvocationsAdaptive')) {
+    return perWeek(query, 'w', { sum: { requests: 5e5 } });
+  }
   if (query.includes('r2: r2OperationsAdaptiveGroups')) {
     return {
       r2: [
@@ -218,11 +245,11 @@ const platform = (query: string): Answer => {
   if (query.includes('s0: r2StorageAdaptiveGroups')) {
     return { s0: [{ max: { payloadSize: 6e9, metadataSize: 0 } }] };
   }
-  if (query.includes('q: queueMessageOperationsAdaptiveGroups')) {
-    return { q: [{ sum: { billableOperations: 300 } }] };
+  if (query.includes('q0: queueMessageOperationsAdaptiveGroups')) {
+    return perWeek(query, 'q', { sum: { billableOperations: 75 } });
   }
-  if (query.includes('d: durableObjectsInvocationsAdaptiveGroups')) {
-    return { d: [{ sum: { requests: 900 } }] };
+  if (query.includes('d0: durableObjectsInvocationsAdaptiveGroups')) {
+    return perWeek(query, 'd', { sum: { requests: 225 } });
   }
   if (query.includes('c: containersUsageAdaptiveGroups')) {
     return { c: [{ sum: { cpuTimeSec: 600, allocatedMemory: 1e12 } }] };
@@ -375,6 +402,8 @@ describe('getOpsMetrics', () => {
     });
 
     expect(ok(m.durableObjects)).toEqual({ requests: 70, errors: 1, storedBytes: 4096 });
+    expect(ok(m.moderation).explore.waiting).toBe(0);
+    expect(ok(m.accounts).totals.accounts).toBe(0);
     expect(ok(m.containers)).toMatchObject({
       cpuSeconds: 42,
       maxMemoryBytes: 5e8,
@@ -502,6 +531,248 @@ describe('getOpsMetrics', () => {
       reason: 'OPS_RESOURCES is missing or malformed',
     });
     expect(m.durableObjects.status).toBe('ok');
+  });
+});
+
+describe('weeks', () => {
+  it('splits a month so far into weeks that meet without overlapping', () => {
+    expect(weeks(new Date('2026-10-01T00:00:00.000Z'), NOW)).toEqual([
+      'datetime_geq: "2026-10-01T00:00:00.000Z", datetime_lt: "2026-10-08T00:00:00.000Z"',
+      'datetime_geq: "2026-10-08T00:00:00.000Z", datetime_lt: "2026-10-15T00:00:00.000Z"',
+      'datetime_geq: "2026-10-15T00:00:00.000Z", datetime_lt: "2026-10-22T00:00:00.000Z"',
+      'datetime_geq: "2026-10-22T00:00:00.000Z", datetime_leq: "2026-10-23T10:20:00.000Z"',
+    ]);
+  });
+
+  it('is one window when it fits in a week', () => {
+    expect(
+      weeks(new Date('2026-10-01T00:00:00.000Z'), new Date('2026-10-08T00:00:00.000Z')),
+    ).toEqual([
+      'datetime_geq: "2026-10-01T00:00:00.000Z", datetime_leq: "2026-10-08T00:00:00.000Z"',
+    ]);
+  });
+});
+
+describe('the platform sections, against Cloudflare’s unconfirmed names', () => {
+  it('asks the month’s Worker requests a week at a time, never more', async () => {
+    const queries: string[] = [];
+    stubCloudflare((query) => {
+      queries.push(query);
+      return platform(query);
+    });
+    const late = new Date('2026-10-31T23:00:00.000Z');
+    const usage = ok((await getOpsMetrics(testEnv, '24h', late)).usage);
+    const monthly = queries.find((q) => q.includes('w0: workersInvocationsAdaptive'))!;
+    expect(monthly.match(/w\d+: workersInvocationsAdaptive/g)).toHaveLength(5);
+    for (const [, from, to] of monthly.matchAll(
+      /datetime_geq: "([^"]+)", datetime_l(?:t|eq): "([^"]+)"/g,
+    )) {
+      expect(Date.parse(to!) - Date.parse(from!)).toBeLessThanOrEqual(7 * 24 * 3600 * 1000);
+    }
+    expect(usage.items.find((i) => i.key === 'worker-requests')?.used).toBe(2.5e6);
+  });
+
+  it('keeps Durable Object requests when errors or storage are refused', async () => {
+    stubCloudflare((query) =>
+      query.includes('err: ') || query.includes('stored: ')
+        ? { errors: [{ message: 'unknown field "errors"' }] }
+        : platform(query),
+    );
+    expect(ok((await getOpsMetrics(testEnv, '24h', NOW)).durableObjects)).toEqual({
+      requests: 70,
+      errors: null,
+      storedBytes: null,
+    });
+  });
+
+  it('falls back to queueID and the other backlog spelling', async () => {
+    const asked: string[] = [];
+    stubCloudflare((query) => {
+      asked.push(query);
+      if (query.includes('queueId')) return { errors: [{ message: 'unknown field "queueId"' }] };
+      if (query.includes('backlog: queueBacklogAdaptiveGroups')) {
+        return { errors: [{ message: 'unknown field "queueBacklogAdaptiveGroups"' }] };
+      }
+      const swap = (rows: unknown) =>
+        JSON.parse(JSON.stringify(rows).replaceAll('"queueId"', '"queueID"')) as unknown[];
+      if (query.includes('backlog: queuesBacklogAdaptiveGroups')) {
+        const a = platform(
+          query.replace('queuesBacklog', 'queueBacklog').replace('queueID', 'queueId'),
+        );
+        return { backlog: swap((a as Record<string, unknown>).backlog) };
+      }
+      if (query.includes('ops: queueMessageOperationsAdaptiveGroups')) {
+        const a = platform(query.replace('queueID', 'queueId'));
+        return { ops: swap((a as Record<string, unknown>).ops) };
+      }
+      return platform(query);
+    });
+    const queues = ok((await getOpsMetrics(testEnv, '24h', NOW)).queues);
+    expect(queues.queues[0]).toMatchObject({ name: 'pano-uploads-dev', backlogAvg: 3, writes: 10 });
+    expect(
+      asked.some((q) => q.includes('queuesBacklogAdaptiveGroups') && q.includes('queueID')),
+    ).toBe(true);
+  });
+
+  it('shows the queues without a backlog when no backlog dataset answers', async () => {
+    stubCloudflare((query) =>
+      query.includes('backlog: ') ? { errors: [{ message: 'unknown field' }] } : platform(query),
+    );
+    const queues = ok((await getOpsMetrics(testEnv, '24h', NOW)).queues);
+    expect(queues.queues[0]).toMatchObject({ backlogAvg: null, writes: 10, dlq: 2 });
+  });
+
+  it('blanks the queues with the first refusal when no id spelling answers', async () => {
+    stubCloudflare((query) =>
+      query.includes('ops: ')
+        ? { errors: [{ message: query.includes('queueId') ? 'no queueId' : 'no queueID' }] }
+        : platform(query),
+    );
+    expect((await getOpsMetrics(testEnv, '24h', NOW)).queues).toEqual({
+      status: 'unavailable',
+      reason: 'GraphQL: no queueId',
+    });
+  });
+});
+
+const pending = (tourId: string, queuedAt: string, reason: 'new' | 'changed'): ExplorePending => ({
+  v: 1,
+  tourId,
+  slug: `${tourId}-slug`,
+  title: `Tour ${tourId}`,
+  sceneCount: 2,
+  cover: null,
+  fingerprint: `fp-${tourId}`,
+  reason,
+  queuedAt,
+  updatedAt: queuedAt,
+});
+
+describe('moderationSection', () => {
+  it('counts the approval queue, oldest first, and the flags by source', async () => {
+    const tours = [
+      pending('t3', '2026-10-23T09:00:00.000Z', 'new'),
+      pending('t1', '2026-10-21T09:00:00.000Z', 'changed'),
+      pending('t2', '2026-10-22T09:00:00.000Z', 'new'),
+    ];
+    for (const t of tours) await env.BUCKET.put(explorePendingKey(t.tourId), JSON.stringify(t));
+    const viewerAt = Date.parse('2026-10-23T08:00:00.000Z');
+    await env.BUCKET.put(
+      flagKey(viewerAt, 'f1'),
+      JSON.stringify({
+        v: 1,
+        flagId: 'f1',
+        source: 'viewer',
+        tourId: 't1',
+        slug: 'old-town',
+        panoId: 'p1',
+        reason: 'spam',
+        at: new Date(viewerAt).toISOString(),
+      }),
+    );
+    const screenAt = Date.parse('2026-10-23T09:30:00.000Z');
+    await env.BUCKET.put(
+      flagKey(screenAt, 'f2'),
+      JSON.stringify({
+        v: 1,
+        flagId: 'f2',
+        source: 'screening',
+        panoId: 'p2',
+        version: 'v1',
+        owner: 'auth0|uploader',
+        categories: ['violence'],
+        at: new Date(screenAt).toISOString(),
+      }),
+    );
+    const m = await moderationSection(env.BUCKET);
+    expect(m.explore.waiting).toBe(3);
+    expect(m.explore.changed).toBe(1);
+    expect(m.explore.oldest.map((t) => t.tourId)).toEqual(['t1', 't2', 't3']);
+    expect(m.explore.oldest[0]).toEqual({
+      tourId: 't1',
+      title: 'Tour t1',
+      slug: 't1-slug',
+      reason: 'changed',
+      queuedAt: '2026-10-21T09:00:00.000Z',
+    });
+    expect(m.flags).toEqual({
+      viewer: 1,
+      screening: 1,
+      more: false,
+      newestAt: '2026-10-23T09:30:00.000Z',
+    });
+  });
+});
+
+describe('accountsSection', () => {
+  const put = (key: string, bytes = 0, customMetadata?: Record<string, string>) =>
+    env.BUCKET.put(key, new Uint8Array(bytes), customMetadata ? { customMetadata } : {});
+
+  it('totals the bucket and ranks accounts by bytes and by uploads today', async () => {
+    await put(originalKey('auth0|big', 'p1'), 3000);
+    await put(originalKey('auth0|big', 'p2'), 2000);
+    await put(originalKey('auth0|small', 'p3'), 100);
+    // A pano on its way out counts for nothing, as in the quota.
+    await put(originalKey('auth0|small', 'p4'), 9000);
+    await put(deletingKey('auth0|small', 'p4'));
+    await put(tourKey('auth0|small', 't1'), 10, { title: 'Harbour', sceneCount: '1' });
+    await put(publishKey('auth0|small', 't1'), 10, { slug: 'harbour', visibility: 'public' });
+    await put(tourKey('auth0|big', 't2'), 10, { title: 'Hidden', sceneCount: '1' });
+    await put(publishKey('auth0|big', 't2'), 10, { slug: 'hidden', visibility: 'unlisted' });
+    await put(tourKey('auth0|big', 't3'), 10);
+    const hourAgo = new Date(NOW.getTime() - 3600_000);
+    const twoDaysAgo = new Date(NOW.getTime() - 2 * 86_400_000);
+    await put(uploadLogKey('auth0|small', hourAgo, 'p3'));
+    await put(uploadLogKey('auth0|small', hourAgo, 'p4'));
+    await put(uploadLogKey('auth0|big', twoDaysAgo, 'p1'));
+
+    const a = await accountsSection(env.BUCKET, NOW);
+    expect(a.partial).toBe(false);
+    expect(a.totals).toEqual({
+      accounts: 2,
+      panos: 3,
+      originalBytes: 5100,
+      tours: 3,
+      shared: 2,
+      public: 1,
+      uploads24h: 2,
+    });
+    expect(a.heaviest).toEqual([
+      { sub: 'auth0|big', panos: 2, originalBytes: 5000, tours: 2, uploads24h: 0 },
+      { sub: 'auth0|small', panos: 1, originalBytes: 100, tours: 1, uploads24h: 2 },
+    ]);
+    expect(a.busiest.map((r) => r.sub)).toEqual(['auth0|small']);
+    expect(a.recentlyPublished.map((p) => [p.tourId, p.sub, p.title, p.visibility])).toEqual(
+      expect.arrayContaining([
+        ['t1', 'auth0|small', 'Harbour', 'public'],
+        ['t2', 'auth0|big', 'Hidden', 'unlisted'],
+      ]),
+    );
+  });
+
+  it('lists the bucket once for every range, from its own cache entry', async () => {
+    const list = vi.spyOn(env.BUCKET, 'list');
+    const origin = 'https://accounts-cache.test';
+    await cachedAccounts(env.BUCKET, NOW, origin);
+    const listed = list.mock.calls.length;
+    expect(listed).toBe(3);
+    await cachedAccounts(env.BUCKET, NOW, origin);
+    expect(list.mock.calls.length).toBe(listed);
+    // Without an origin (a direct call), nothing is cached.
+    await cachedAccounts(env.BUCKET, NOW);
+    expect(list.mock.calls.length).toBe(listed + 3);
+  });
+
+  it('says partial when a listing stops at its budget', async () => {
+    const list = vi.spyOn(env.BUCKET, 'list').mockResolvedValue({
+      objects: [],
+      truncated: true,
+      cursor: 'more',
+      delimitedPrefixes: [],
+    } as R2Objects);
+    const a = await accountsSection(env.BUCKET, NOW);
+    expect(a.partial).toBe(true);
+    expect(list).toHaveBeenCalledTimes(3 * ACCOUNT_SCAN_PAGES);
   });
 });
 
