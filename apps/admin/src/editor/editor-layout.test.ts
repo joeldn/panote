@@ -76,6 +76,22 @@ describe('editor layout CSS', () => {
     );
   });
 
+  it('gives the pano rows’ small buttons a 44px target on touch', () => {
+    const coarse = css.slice(css.indexOf('@media (pointer: coarse) {'));
+    // Drawn at 32px, reaching 6px past each edge: 44px, and only into the 6px gaps.
+    expect(coarse).toMatch(
+      /\.ed-scene__star,\s*\.ed-conn \.pn-icon-btn\s*{\s*width: 32px;\s*height: 32px;/,
+    );
+    expect(coarse).toMatch(
+      /\.ed-scene__star::before,\s*\.ed-conn \.pn-icon-btn::before\s*{\s*inset: -6px;/,
+    );
+    // Too wide for a narrow phone with the word "connection" beside them: it goes, visually.
+    const narrow = css.slice(css.indexOf('@media (pointer: coarse) and (max-width: 380px) {'));
+    expect(narrow).toMatch(
+      /\.ed-conn__label:has\(\+ \.ed-conn__deg\)\s*{[^}]*clip-path: inset\(50%\);/,
+    );
+  });
+
   it('has no rule spliced into another’s selector', () => {
     // A comment inside a selector list means a rule was pasted into the middle of another.
     for (const selector of css.matchAll(/(?:^|})\s*([^{}@]+){/g)) {

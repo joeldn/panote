@@ -84,6 +84,7 @@ export function Modal({
   'aria-label': ariaLabel,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const scrimRef = useRef<HTMLDivElement>(null);
   const pressedOnScrim = useRef(false);
   const [token] = useState<object>(() => ({}));
   const parent = useContext(ModalParent);
@@ -112,8 +113,26 @@ export function Modal({
       }
     };
     document.addEventListener('keydown', onKey);
+    // A phone's on-screen keyboard shrinks the visual viewport but not the fixed scrim: the
+    // sheet would sit behind it. The scrim keeps the sheet inside what's visible (components.css).
+    const vv = window.visualViewport;
+    const scrim = scrimRef.current;
+    const fit = () => {
+      if (!vv || !scrim) return;
+      // Pinch-zoomed, the visual viewport is smaller with no keyboard at all: leave it be.
+      const zoomed = vv.scale > 1.01;
+      const top = zoomed ? 0 : Math.max(0, vv.offsetTop);
+      const below = zoomed ? 0 : Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      scrim.style.setProperty('--pn-vv-top', `${top}px`);
+      scrim.style.setProperty('--pn-keyboard', `${below}px`);
+    };
+    fit();
+    vv?.addEventListener('resize', fit);
+    vv?.addEventListener('scroll', fit);
     return () => {
       document.removeEventListener('keydown', onKey);
+      vv?.removeEventListener('resize', fit);
+      vv?.removeEventListener('scroll', fit);
       popModal(self);
       if (previous && previous.isConnected) previous.focus();
     };
@@ -156,6 +175,7 @@ export function Modal({
 
   return createPortal(
     <div
+      ref={scrimRef}
       className="pn-scrim"
       style={depth ? { zIndex: 90 + depth } : undefined}
       onMouseDown={onScrimDown}

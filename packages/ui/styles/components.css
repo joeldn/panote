@@ -185,9 +185,11 @@
 
 /* A phone: a modal rises from the bottom edge as a sheet, clear of the home indicator. */
 @media (max-width: 600px) {
+  /* --pn-vv-top and --pn-keyboard (Modal.tsx) keep the sheet above an on-screen keyboard. */
   .pn-scrim {
     align-items: flex-end;
-    padding: calc(16px + env(safe-area-inset-top, 0px)) 0 0;
+    padding: calc(16px + env(safe-area-inset-top, 0px) + var(--pn-vv-top, 0px)) 0
+      var(--pn-keyboard, 0px);
   }
   .pn-modal {
     max-width: none;
@@ -767,6 +769,11 @@ textarea.pn-input {
     content: '';
     position: absolute;
     inset: -6px;
+  }
+  /* The small size is drawn at 32px too: reaching 44px from 26px would cover a neighbour. */
+  .pn-icon-btn--sm {
+    width: 32px;
+    height: 32px;
   }
   .pn-modal__close,
   .pn-account__avatar {

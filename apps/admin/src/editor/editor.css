@@ -1509,6 +1509,34 @@
   .ed-lang-btn {
     height: 40px;
   }
+
+  /* The row's buttons, drawn at 32px and pressed at 44px, as .pn-icon-btn is on touch. */
+  .ed-scene__star,
+  .ed-conn .pn-icon-btn {
+    width: 32px;
+    height: 32px;
+  }
+
+  .ed-scene__star::before,
+  .ed-conn .pn-icon-btn::before {
+    inset: -6px;
+  }
+}
+
+/*
+ * A narrow phone can't fit a connection's four finger-sized controls beside the word
+ * "connection": the arrow icon and the degrees say it, and the row's group label names it
+ * for a screen reader.
+ */
+@media (pointer: coarse) and (max-width: 380px) {
+  .ed-conn__label:has(+ .ed-conn__deg) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 @media (pointer: coarse) and (max-width: 480px) {
