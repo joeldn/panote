@@ -9,7 +9,7 @@ made yet) and the GitHub repository `joeldn/panote`. Two tools manage them:
 | R2 bucket, its CORS, r2.dev off, `cdn.<zone>` custom domain, upload → queue notification | `infra/pulumi` | `pulumi up` |
 | Queues (`pano-uploads`, its DLQ), 14-day retention | `infra/pulumi` | `pulumi up` |
 | Zone rulesets: WAF custom rules, rate limiting, cache rules, response headers, `www` redirect (production) | `infra/pulumi` | `pulumi up` |
-| Zone settings: HSTS, URL normalization; the apex `AAAA 100::` record (and `www`, production) | `infra/pulumi` | `pulumi up` |
+| Zone settings: HSTS; the apex `AAAA 100::` record (and `www`, production) | `infra/pulumi` | `pulumi up` |
 | Bucket CORS rules (the single source) | `infra/r2/cors.json` (`cors.dev.json`: dev plus localhost) | read by Pulumi |
 | CDN cache rules (the single source) | `infra/cloudflare/cache-rules.<env>.json` | read by Pulumi |
 | Auth0: the SPA both apps sign in with, the API (`https://api.<zone>`), the `google-oauth2` connection and the apps it serves, the password database switched off, Attack Protection | `infra/pulumi` (`src/auth0.ts`) | `pulumi up` |
@@ -19,7 +19,10 @@ made yet) and the GitHub repository `joeldn/panote`. Two tools manage them:
 | Workers, their routes, bindings, secrets | `services/*`, `apps/*` `wrangler.jsonc` | wrangler, `deploy.yml` |
 
 Not managed here yet: API tokens, billing usage alerts, Cloudflare Access (dev), Email Routing
-(production). On GitHub: Actions secrets, `PRODUCTION_PROVISIONED` and the settings the GitHub
+(production), and URL normalization: its API (`/zones/<zone>/url_normalization`) refused every API
+token tried, read and edit, whatever permissions it had, so it is set by hand on each zone (Rules →
+Settings → URL normalization: type Cloudflare, incoming URLs only). The WAF rule that keeps
+`panos/` and `tours/` private relies on it. On GitHub: Actions secrets, `PRODUCTION_PROVISIONED` and the settings the GitHub
 section below leaves alone. In Auth0: the tenants themselves and Pulumi's own clients in them
 (step 11), any connection other than Google and the password database (Apple, Microsoft, Facebook
 and email codes don't exist on either tenant yet), the email provider, Universal Login branding.
@@ -80,10 +83,15 @@ Two custom tokens (My Profile → API Tokens → Create Custom Token), account
 | Zone → Zone WAF | Edit | Read |
 | Zone → Cache Rules | Edit | Read |
 | Zone → Transform Rules | Edit | Read |
-| Zone → Dynamic URL Redirects (Single Redirects) | Edit | Read |
+| Zone → Single Redirect | Edit | Read |
 
-*(unverified)* This list follows each resource's API. If a call fails with `10000
-Authentication error`, the failing request names the missing permission; add it here.
+The token UI accepted every row on dev's first run. The list follows each resource's API; if a
+call fails with `10000 Authentication error`, the failing request names the missing permission:
+add it here. With these permissions every Cloudflare resource dev uses applied on dev's first run
+(dev has no redirect rule, so Single Redirect is still untested). URL
+normalization is not in the program because its API answered `403 request is not authorized` to
+both tokens, with every permission tried (including Zone WAF, Transform Rules, Zone Settings,
+Config Rules and Account Rulesets); it is a dashboard setting (above).
 
 Keep the bootstrap token out of shells you don't need it in; give it a short TTL and roll it after
 use.
@@ -160,16 +168,17 @@ imp cloudflare:index/ruleset:Ruleset waf-custom-rules "zones/$ZONE/<http_request
 imp cloudflare:index/ruleset:Ruleset rate-limit-rules "zones/$ZONE/<http_ratelimit id>"
 imp cloudflare:index/ruleset:Ruleset cache-rules "zones/$ZONE/<http_request_cache_settings id>"
 imp cloudflare:index/ruleset:Ruleset response-header-rules "zones/$ZONE/<http_response_headers_transform id>"
-imp cloudflare:index/zoneSetting:ZoneSetting hsts "$ZONE/security_header"
-imp cloudflare:index/urlNormalizationSettings:UrlNormalizationSettings url-normalization "$ZONE"
 cf "/zones/$ZONE/dns_records?type=AAAA&name.exact=panote.dev" | jq -r '.result[].id'
 imp cloudflare:index/dnsRecord:DnsRecord apex-aaaa "$ZONE/<record id>"
 ```
 
 </details>
 
-Four resources have no import in the provider: `content-bucket-cors`, `content-bucket-r2-dev-domain`,
-`cdn-domain` and `upload-notification`. The first `up` writes them (step 9).
+Five resources are not imported: `content-bucket-cors`, `content-bucket-r2-dev-domain`,
+`cdn-domain` and `upload-notification` have no import in the provider, and `hsts` is a zone-wide
+setting whose create just writes the setting, so `up` writes it with nothing lost (importing it
+panics the 6.22.0 provider and kills every other import in the same run). The first `up` writes
+all five (step 9).
 
 ### 8. Preview: no unexplained changes
 
@@ -179,18 +188,25 @@ pulumi preview --stack dev --diff
 
 After the import, these and only these are expected:
 
-- **create** the four resources above;
+- **create** the five resources above, `hsts` with `max_age` 31536000 (one year, the same as the
+  apps' own `Strict-Transport-Security` header; the dashboard had 15552000);
 - **create** `rate-limit-rules` if the zone had no rate-limiting rule yet;
 - **update** the imported rulesets where the dashboard's rules differ from the code: refs and
   descriptions (dashboard rules carry generated ones), rules the code adds that aren't live yet (the CDN
   nosniff/CSP headers, `panote-json-edge-cache` if it was never applied), and
   `tiles-404-short-ttl`, the dashboard cache rule, replaced by the same-purpose
   `panote-tiles-404-no-store` that production uses;
-- **update** `hsts`: `max_age` 15552000 → 31536000, one year, the same as the apps' own
-  `Strict-Transport-Security` header.
+- rules moving position inside `response-header-rules` (the two header rules swap) and
+  `cache-rules` (reordered around that replacement): the code's order is the one that applies;
+- **update** `uploads-dlq`'s `message_retention_period` to 1209600 (14 days) where it was below,
+  such as the default 345600 (4 days).
+
+With the read token the preview also prints a warning for each ruleset update, `PUT
+.../rulesets/<id>?dry_run=true: 403 Authentication error ... failed to make http request for the
+dry run`: the read token can't dry-run a write. It's harmless; the update itself is still shown.
 
 A ruleset's name is ignored (`ignoreChanges`), so a dashboard name other than `default` never
-shows up. Anything else (a changed expression, another HSTS value, a queue setting, a **replace**
+shows up. Anything else (a changed expression, another HSTS value, any other queue setting, a **replace**
 or **delete** of anything) means the code and the account disagree: fix whichever is wrong and
 preview again. Don't `up` past it.
 
@@ -246,6 +262,10 @@ rejected; adjust `rateLimitRules` in `src/rules.ts` and run a again.
 Production has nothing yet, so there is nothing to import. This replaces Production runbook steps
 1-7 in docs/deploy.md. Its stack file names no Auth0 tenant yet, so this `up` touches Cloudflare
 only; the tenant follows in step 16.
+
+Before the `up`, turn on URL normalization on `panote.io` by hand: Rules → Settings → URL
+normalization, type Cloudflare, incoming URLs only. The WAF rule that keeps `panos/` and `tours/`
+private relies on it, and the program no longer sets it (see "Not managed here yet").
 
 ```bash
 cd infra/pulumi

@@ -170,13 +170,6 @@ describe.each([
     );
   });
 
-  it('normalizes incoming URLs, which the WAF rule relies on', () => {
-    expect(inputsOf(resources, 'urlNormalization')).toMatchObject({
-      type: 'cloudflare',
-      scope: 'incoming',
-    });
-  });
-
   it('points the apex at the Workers routes', () => {
     expect(inputsOf(resources, 'apexRecord')).toMatchObject({
       name: zone,

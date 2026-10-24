@@ -7,10 +7,9 @@ import { readSettings, type Settings } from './settings.js';
  * API. Read-only: it only ever GETs.
  *
  * Names and types come from names.ts, the same table the program uses, so
- * every entry lands on the resource the program declares. Four resources
- * can't be imported at all (the provider has no import for them); they are
- * listed in `notImportable` and adopted by the first `pulumi up` instead
- * (infra/README.md).
+ * every entry lands on the resource the program declares. Five resources are
+ * never imported; they are listed in `notImportable` and adopted by the first
+ * `pulumi up` instead (infra/README.md).
  */
 
 /** GET a Cloudflare API v4 path; `undefined` on 404. */
@@ -30,10 +29,14 @@ export interface ImportPlan {
 }
 
 const NOT_IMPORTABLE: readonly ResourceKey[] = [
+  // The provider has no import for these four.
   'bucketCors',
   'managedDomain',
   'cdnDomain',
   'uploadNotification',
+  // Importing it panics the provider in Read (pulumi-terraform-bridge v3.140.0), which kills
+  // every other import in the run; its create is a PATCH of the setting, so up just writes it.
+  'hsts',
 ];
 
 function results(where: string, body: unknown): Record<string, unknown>[] {
@@ -91,10 +94,6 @@ export async function buildImportPlan(settings: Settings, get: CloudflareGet): P
     const id = (body as { result?: { id?: unknown } } | undefined)?.result?.id;
     add(key, typeof id === 'string' ? `zones/${zoneId}/${id}` : undefined);
   }
-
-  // A zone setting and the URL normalization settings always exist.
-  add('hsts', `${zoneId}/security_header`);
-  add('urlNormalization', zoneId);
 
   const records: [ResourceKey, string][] = [['apexRecord', zone]];
   if (settings.wwwRedirect) records.push(['wwwRecord', `www.${zone}`]);

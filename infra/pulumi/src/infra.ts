@@ -161,15 +161,8 @@ export function createInfra(settings: Settings, auth0Secrets: Auth0Secrets = {})
       value: { strict_transport_security: HSTS },
     }),
   );
-  // Normalizing incoming URLs is what makes `/tiles/../panos/` hit the WAF rule.
-  track(
-    'urlNormalization',
-    new cloudflare.UrlNormalizationSettings(RESOURCES.urlNormalization.name, {
-      zoneId,
-      type: 'cloudflare',
-      scope: 'incoming',
-    }),
-  );
+  // URL normalization, which makes `/tiles/../panos/` hit the WAF rule, is a dashboard setting:
+  // its API refused every API token tried (infra/README.md, "Not managed here yet").
 
   // --- CDN domain, only once the WAF rules guard it ------------------------------
   track(

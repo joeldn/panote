@@ -70,16 +70,6 @@ describe('buildImportPlan', () => {
         name: 'response-header-rules',
         id: `zones/${ZONE}/rs-headers`,
       },
-      {
-        type: 'cloudflare:index/zoneSetting:ZoneSetting',
-        name: 'hsts',
-        id: `${ZONE}/security_header`,
-      },
-      {
-        type: 'cloudflare:index/urlNormalizationSettings:UrlNormalizationSettings',
-        name: 'url-normalization',
-        id: ZONE,
-      },
       { type: 'cloudflare:index/dnsRecord:DnsRecord', name: 'apex-aaaa', id: `${ZONE}/rec-apex` },
     ]);
     // No rate-limit entrypoint yet: the first up creates it.
@@ -89,6 +79,7 @@ describe('buildImportPlan', () => {
       'content-bucket-r2-dev-domain',
       'cdn-domain',
       'upload-notification',
+      'hsts',
     ]);
     // dev has no www redirect, so its ruleset and record are never looked up.
     expect(
@@ -96,7 +87,7 @@ describe('buildImportPlan', () => {
     ).toBe(false);
   });
 
-  it('on an empty production account, imports only what always exists', async () => {
+  it('on an empty production account, imports nothing', async () => {
     const zone = '0123456789abcdef0123456789abcdef';
     const plan = await buildImportPlan(
       stackSettings('production'),
@@ -107,7 +98,7 @@ describe('buildImportPlan', () => {
         [`/zones/${zone}/dns_records?type=AAAA&name.exact=www.panote.io`]: { result: [] },
       }),
     );
-    expect(plan.resources.map((entry) => entry.name)).toEqual(['hsts', 'url-normalization']);
+    expect(plan.resources).toEqual([]);
     expect(plan.missing).toEqual([
       'content-bucket',
       'uploads-queue',
