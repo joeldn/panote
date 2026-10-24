@@ -12,7 +12,7 @@ export interface IconButtonProps extends Omit<
   label: string;
   /**
    * `md` is a 32px square; `sm` draws at 26px for dense rows and still takes presses
-   * over 32px.
+   * over 32px. On a touch screen both draw at 32px and take presses over 44px.
    */
   size?: 'sm' | 'md';
 }
