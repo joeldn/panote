@@ -85,6 +85,11 @@ describe('editor layout CSS', () => {
     expect(coarse).toMatch(
       /\.ed-scene__star::before,\s*\.ed-conn \.pn-icon-btn::before\s*{\s*inset: -6px;/,
     );
+    // Too wide for a narrow phone with the word "connection" beside them: it goes, visually.
+    const narrow = css.slice(css.indexOf('@media (pointer: coarse) and (max-width: 380px) {'));
+    expect(narrow).toMatch(
+      /\.ed-conn__label:has\(\+ \.ed-conn__deg\)\s*{[^}]*clip-path: inset\(50%\);/,
+    );
   });
 
   it('has no rule spliced into another’s selector', () => {
