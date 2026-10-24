@@ -87,7 +87,8 @@ Two custom tokens (My Profile → API Tokens → Create Custom Token), account
 
 The token UI accepted every row on dev's first run. The list follows each resource's API; if a
 call fails with `10000 Authentication error`, the failing request names the missing permission:
-add it here. With these permissions everything in the program applied on dev's first run. URL
+add it here. With these permissions every Cloudflare resource dev uses applied on dev's first run
+(dev has no redirect rule, so Single Redirect is still untested). URL
 normalization is not in the program because its API answered `403 request is not authorized` to
 both tokens, with every permission tried (including Zone WAF, Transform Rules, Zone Settings,
 Config Rules and Account Rulesets); it is a dashboard setting (above).

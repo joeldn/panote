@@ -560,7 +560,7 @@ Production is unprovisioned, like the rest (see Production runbook).
 **Pulumi takes this over.** `infra/pulumi` declares the bucket, its CORS, the r2.dev URL (off),
 `cdn.<zone>`, the R2 → queue notification, both queues, the zone's WAF, rate-limit, cache and
 response-header rules, HSTS and the apex record, for dev and production, and
-will manage them from the first `pulumi up` of each stack (not run yet). [`infra/README.md`](../infra/README.md) is the entry point: install, state backend,
+manages them from the first `pulumi up` of each stack (dev's ran on 2026-10-24; production's hasn't yet). [`infra/README.md`](../infra/README.md) is the entry point: install, state backend,
 importing dev, creating production. The commands below are the manual fallback and the record of
 how dev was first built; anything changed with them by hand shows up as drift in the next
 `pulumi preview`.
