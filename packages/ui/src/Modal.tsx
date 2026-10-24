@@ -119,8 +119,11 @@ export function Modal({
     const scrim = scrimRef.current;
     const fit = () => {
       if (!vv || !scrim) return;
-      const below = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      scrim.style.setProperty('--pn-vv-top', `${Math.max(0, vv.offsetTop)}px`);
+      // Pinch-zoomed, the visual viewport is smaller with no keyboard at all: leave it be.
+      const zoomed = vv.scale > 1.01;
+      const top = zoomed ? 0 : Math.max(0, vv.offsetTop);
+      const below = zoomed ? 0 : Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      scrim.style.setProperty('--pn-vv-top', `${top}px`);
       scrim.style.setProperty('--pn-keyboard', `${below}px`);
     };
     fit();

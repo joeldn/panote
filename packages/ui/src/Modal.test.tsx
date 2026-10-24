@@ -96,7 +96,7 @@ describe('Modal', () => {
   });
 
   it('keeps clear of an on-screen keyboard, following the visual viewport', () => {
-    const vv = Object.assign(new EventTarget(), { height: 800, offsetTop: 0 });
+    const vv = Object.assign(new EventTarget(), { height: 800, offsetTop: 0, scale: 1 });
     vi.stubGlobal('visualViewport', vv);
     vi.stubGlobal('innerHeight', 800);
     const { unmount } = render(
@@ -118,6 +118,13 @@ describe('Modal', () => {
       vv.dispatchEvent(new Event('scroll'));
     });
     expect(scrim.style.getPropertyValue('--pn-keyboard')).toBe('0px');
+    // Pinch-zoomed to 2x: half the height is visible, but there is no keyboard.
+    act(() => {
+      Object.assign(vv, { height: 400, offsetTop: 0, scale: 2 });
+      vv.dispatchEvent(new Event('resize'));
+    });
+    expect(scrim.style.getPropertyValue('--pn-keyboard')).toBe('0px');
+    expect(scrim.style.getPropertyValue('--pn-vv-top')).toBe('0px');
     unmount();
     vi.unstubAllGlobals();
   });
