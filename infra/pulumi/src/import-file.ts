@@ -7,7 +7,7 @@ import { readSettings, type Settings } from './settings.js';
  * API. Read-only: it only ever GETs.
  *
  * Names and types come from names.ts, the same table the program uses, so
- * every entry lands on the resource the program declares. Six resources are
+ * every entry lands on the resource the program declares. Five resources are
  * never imported; they are listed in `notImportable` and adopted by the first
  * `pulumi up` instead (infra/README.md).
  */
@@ -37,9 +37,6 @@ const NOT_IMPORTABLE: readonly ResourceKey[] = [
   // Importing it panics the provider in Read (pulumi-terraform-bridge v3.140.0), which kills
   // every other import in the run; its create is a PATCH of the setting, so up just writes it.
   'hsts',
-  // GET url_normalization answered 403 to the read token; its create is a PUT of the
-  // zone-wide setting, so up just writes it.
-  'urlNormalization',
 ];
 
 function results(where: string, body: unknown): Record<string, unknown>[] {

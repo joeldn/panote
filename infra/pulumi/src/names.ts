@@ -27,10 +27,6 @@ export const RESOURCES = {
   },
   redirectRuleset: { name: 'redirect-rules', type: 'cloudflare:index/ruleset:Ruleset' },
   hsts: { name: 'hsts', type: 'cloudflare:index/zoneSetting:ZoneSetting' },
-  urlNormalization: {
-    name: 'url-normalization',
-    type: 'cloudflare:index/urlNormalizationSettings:UrlNormalizationSettings',
-  },
   apexRecord: { name: 'apex-aaaa', type: 'cloudflare:index/dnsRecord:DnsRecord' },
   wwwRecord: { name: 'www-aaaa', type: 'cloudflare:index/dnsRecord:DnsRecord' },
 

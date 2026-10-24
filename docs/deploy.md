@@ -559,7 +559,7 @@ Production is unprovisioned, like the rest (see Production runbook).
 
 **Pulumi takes this over.** `infra/pulumi` declares the bucket, its CORS, the r2.dev URL (off),
 `cdn.<zone>`, the R2 → queue notification, both queues, the zone's WAF, rate-limit, cache and
-response-header rules, HSTS, URL normalization and the apex record, for dev and production, and
+response-header rules, HSTS and the apex record, for dev and production, and
 will manage them from the first `pulumi up` of each stack (not run yet). [`infra/README.md`](../infra/README.md) is the entry point: install, state backend,
 importing dev, creating production. The commands below are the manual fallback and the record of
 how dev was first built; anything changed with them by hand shows up as drift in the next
@@ -3315,8 +3315,9 @@ on the one before, and step 4 must be done before step 6, or the private keys un
 explains it; the dev version of every step has been done and is recorded there.
 
 Steps 1-7 are one `pulumi up --stack production` now (`infra/README.md`, step 10): bucket,
-queues, notification, CORS, WAF rules (with URL normalization), cache rules, `cdn.panote.io`, and
-the apex and `www` records with the redirect. Their **Verify** lines still apply. The manual
+queues, notification, CORS, WAF rules, cache rules, `cdn.panote.io`, and
+the apex and `www` records with the redirect. URL normalization is not in it: its API refuses API
+tokens, so step 4's check is a by-hand setting, done before that `up`. Their **Verify** lines still apply. The manual
 commands stay below as the fallback. Step 8's Auth0 tenant, once made by hand, is a second
 `pulumi up` (`infra/README.md`, step 16).
 
@@ -3347,8 +3348,9 @@ the account has the resources the config names.
    ```
    (http.host eq "cdn.panote.io" and not (starts_with(http.request.uri.path, "/tiles/") or starts_with(http.request.uri.path, "/pub/") or starts_with(http.request.uri.path, "/slugs/")))
    ```
-   Also check Rules → Settings → URL normalization is on for the zone (it is what makes
-   `/tiles/../panos/` hit the rule).
+   Also turn on Rules → Settings → URL normalization for the zone, type Cloudflare, incoming URLs
+   only (it is what makes `/tiles/../panos/` hit the rule). This one is by hand even with Pulumi:
+   its API refuses API tokens.
    Verify: the rule is listed, **enabled**, action Block, host `cdn.panote.io` (not
    `cdn.panote.dev`, an easy copy-paste miss). It can't be curled until step 6; step 6 does that
    first thing.

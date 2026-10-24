@@ -80,7 +80,6 @@ describe('buildImportPlan', () => {
       'cdn-domain',
       'upload-notification',
       'hsts',
-      'url-normalization',
     ]);
     // dev has no www redirect, so its ruleset and record are never looked up.
     expect(
