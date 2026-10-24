@@ -1,4 +1,5 @@
 import {
+  LIMIT_ERRORS,
   uploadLogKey,
   uploadLogTime,
   userPanosPrefix,
@@ -44,7 +45,7 @@ export const quotaLimits = (env: QuotaEnv): QuotaLimits => ({
 });
 
 export type QuotaRefusal =
-  'pano limit reached' | 'storage limit reached' | 'daily upload limit reached';
+  typeof LIMIT_ERRORS.panos | typeof LIMIT_ERRORS.storage | typeof LIMIT_ERRORS.dailyUploads;
 
 export interface QuotaRequest {
   /** Declared size of the upload, in bytes. */
@@ -77,11 +78,11 @@ export const checkQuota = async (
   if (limits.maxPanos !== null) {
     // A new pano must fit under the limit; a replace only must not be over it.
     if (req.replacing === undefined ? panos >= limits.maxPanos : panos > limits.maxPanos) {
-      return 'pano limit reached';
+      return LIMIT_ERRORS.panos;
     }
   }
   if (limits.maxBytes !== null && bytes + req.size > limits.maxBytes) {
-    return 'storage limit reached';
+    return LIMIT_ERRORS.storage;
   }
   return null;
 };

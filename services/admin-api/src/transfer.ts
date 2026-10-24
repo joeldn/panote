@@ -2,6 +2,7 @@ import {
   configKey,
   isContentId,
   lentPanosKey,
+  LIMIT_ERRORS,
   MAX_TOURS_PER_OWNER,
   membersKey,
   membershipKey,
@@ -219,16 +220,16 @@ export const startTransfer = async (
 
   // The new owner's limits, counting what arrives. Soft, like upload-api's.
   if ((await countTours(bucket, to, MAX_TOURS_PER_OWNER)) >= MAX_TOURS_PER_OWNER) {
-    return refused(403, 'tour limit reached');
+    return refused(403, LIMIT_ERRORS.tours);
   }
   if (limits.maxPanos !== null || limits.maxBytes !== null) {
     const held = await holdings(bucket, to);
     const incoming = Object.keys(panos).length;
     if (limits.maxPanos !== null && held.panos + incoming > limits.maxPanos) {
-      return refused(403, 'pano limit reached');
+      return refused(403, LIMIT_ERRORS.panos);
     }
     if (limits.maxBytes !== null && held.bytes + incomingBytes > limits.maxBytes) {
-      return refused(403, 'storage limit reached');
+      return refused(403, LIMIT_ERRORS.storage);
     }
   }
 

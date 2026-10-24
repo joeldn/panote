@@ -1,4 +1,4 @@
-import { MAX_TOURS_PER_OWNER } from '@internal/contracts';
+import { LIMIT_ERRORS, MAX_TOURS_PER_OWNER } from '@internal/contracts';
 import type { z } from 'zod';
 
 import { CONTACT_EMAIL } from '../contact.js';
@@ -62,25 +62,25 @@ function errorMessage(status: number, body: unknown): string {
       return `This account has been disabled. Write to ${CONTACT_EMAIL} if you think that is a mistake.`;
     }
     // upload-api's per-owner quotas.
-    if (status === 403 && body.error === 'pano limit reached') {
+    if (status === 403 && body.error === LIMIT_ERRORS.panos) {
       return 'This account has reached its pano limit.';
     }
-    if (status === 403 && body.error === 'storage limit reached') {
+    if (status === 403 && body.error === LIMIT_ERRORS.storage) {
       return 'This account has reached its storage limit.';
     }
-    if (status === 403 && body.error === 'daily upload limit reached') {
+    if (status === 403 && body.error === LIMIT_ERRORS.dailyUploads) {
       return 'This account has reached its daily upload limit. Try again later today or tomorrow.';
     }
     // upload-api's per-tour cap on floor-plan images; the editor's save clears unused ones.
-    if (status === 403 && body.error === 'plan storage limit reached') {
+    if (status === 403 && body.error === LIMIT_ERRORS.planStorage) {
       return 'This tour has too many floor-plan images waiting. Save the tour, then try again in an hour.';
     }
     // upload-api's global daily ceiling, across every account: it lifts at 00:00 UTC.
-    if (status === 503 && body.error === 'uploads paused') {
+    if (status === 503 && body.error === LIMIT_ERRORS.paused) {
       return 'Uploads are paused for today. Try again tomorrow.';
     }
     // admin-api's per-owner tour cap (MAX_TOURS_PER_OWNER).
-    if (status === 403 && body.error === 'tour limit reached') {
+    if (status === 403 && body.error === LIMIT_ERRORS.tours) {
       return `This account has reached its limit of ${MAX_TOURS_PER_OWNER} tours.`;
     }
     // admin-api refuses a config for a pano that was never uploaded.

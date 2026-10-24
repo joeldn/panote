@@ -1,3 +1,4 @@
+import { LIMIT_ERRORS } from '@internal/contracts';
 import { WorkerError } from '@internal/worker-kit';
 import { DurableObject } from 'cloudflare:workers';
 
@@ -161,6 +162,6 @@ export const releaseLater = (env: Env, held: Held | null, ctx: ExecutionContext)
 /** The 503 every upload URL gets while the ceiling is reached, until 00:00 UTC. */
 export const pausedResponse = (now: number): Response =>
   Response.json(
-    { error: 'uploads paused' },
+    { error: LIMIT_ERRORS.paused },
     { status: 503, headers: { 'Retry-After': String(secondsToNextDay(now)) } },
   );

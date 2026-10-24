@@ -1,4 +1,9 @@
-import { MAX_PLAN_BYTES, type PlanImageType, type TourPlan } from '@internal/contracts';
+import {
+  LIMIT_ERRORS,
+  MAX_PLAN_BYTES,
+  type PlanImageType,
+  type TourPlan,
+} from '@internal/contracts';
 import {
   ApiError,
   putFile,
@@ -99,7 +104,7 @@ export function planErrorMessage(e: unknown): string {
   if (e instanceof PlanImageError) return e.message;
   if (e instanceof ApiError) {
     const code = (e.body as { error?: unknown } | null)?.error;
-    if ([403, 410, 429].includes(e.status) || (e.status === 503 && code === 'uploads paused')) {
+    if ([403, 410, 429].includes(e.status) || (e.status === 503 && code === LIMIT_ERRORS.paused)) {
       return e.message;
     }
   }

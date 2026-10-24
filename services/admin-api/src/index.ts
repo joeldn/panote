@@ -8,6 +8,7 @@ import {
   InviteAcceptRequestSchema,
   InviteCreateRequestSchema,
   isContentId,
+  LIMIT_ERRORS,
   MAX_TOUR_SCENES,
   MAX_TOURS_PER_OWNER,
   OPERATOR_BACKFILL_PATH,
@@ -500,7 +501,7 @@ app.post('/api/admin/tours', async (c) => {
   // Same shape as upload-api's quota refusals. A soft cap: concurrent creates can
   // each pass, which the write rate limit keeps small.
   if ((await countTours(c.env.BUCKET, sub, MAX_TOURS_PER_OWNER)) >= MAX_TOURS_PER_OWNER) {
-    return c.json({ error: 'tour limit reached' }, 403);
+    return c.json({ error: LIMIT_ERRORS.tours }, 403);
   }
   await putJson(
     c.env.BUCKET,
