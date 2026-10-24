@@ -167,7 +167,11 @@ describe('scene cap', () => {
     await expect(
       assertTourHasRoom(api({ getTour: vi.fn(async () => full()) }), 't1'),
     ).rejects.toThrow(TOUR_FULL_MESSAGE);
-    await expect(assertTourHasRoom(api(), 't1')).resolves.toBeUndefined();
+    await expect(assertTourHasRoom(api(), 't1')).resolves.toEqual({ shared: false });
+    const edited = { ...tourOk([]), data: { ...tourOk([]).data, role: 'editor' as const } };
+    await expect(
+      assertTourHasRoom(api({ getTour: vi.fn(async () => edited) }), 't1'),
+    ).resolves.toEqual({ shared: true });
     await expect(
       assertTourHasRoom(
         api({ getTour: vi.fn(async () => ({ status: 'not-found' }) as const) }),

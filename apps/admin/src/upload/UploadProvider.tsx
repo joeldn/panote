@@ -733,23 +733,24 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           const title = titleFromFileName(file.name, UNTITLED_TOUR, { skipCameraNames: true });
           const { tourId } = await s.api.createTour({ title, scenes: [] });
           panoTarget = { kind: 'add', tourId };
+        } else if (target.kind === 'add') {
+          const { tourId } = target;
+          // Photos already on their way into this tour need room too: the server's
+          // scenes don't list them until each one lands and is appended.
+          const reserved =
+            queue.current.filter((q) => q.target.tourId === tourId).length +
+            [...jobs.current].filter(
+              (j) =>
+                j.target.kind === 'add' &&
+                j.target.tourId === tourId &&
+                !j.done &&
+                j.finalize.status !== 'done' &&
+                j.machine.phase !== 'cancelled',
+            ).length;
+          const room = await assertTourHasRoom(s.api, tourId, files.length, reserved);
+          // The tour says whose it is, even when the target doesn't (a typed `/app/new?tour=`).
+          panoTarget = room.shared && !target.shared ? { ...target, shared: true } : target;
         } else {
-          if (target.kind === 'add') {
-            const { tourId } = target;
-            // Photos already on their way into this tour need room too: the server's
-            // scenes don't list them until each one lands and is appended.
-            const reserved =
-              queue.current.filter((q) => q.target.tourId === tourId).length +
-              [...jobs.current].filter(
-                (j) =>
-                  j.target.kind === 'add' &&
-                  j.target.tourId === tourId &&
-                  !j.done &&
-                  j.finalize.status !== 'done' &&
-                  j.machine.phase !== 'cancelled',
-              ).length;
-            await assertTourHasRoom(s.api, tourId, files.length, reserved);
-          }
           panoTarget = target;
         }
       } catch (e) {
@@ -888,7 +889,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         if (extras.length > 0) openPicker(target, replaceTakesOne(extras));
         else if (check.skipped.length > 0) openPicker(target, someSkipped(check.skipped));
       } catch (e) {
-        openPicker(target, startProblem(e));
+        openPicker(target, startProblem(e, [...check.skipped, ...extras]));
       }
     },
     [begin, navigate, openPicker],

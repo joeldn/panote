@@ -55,9 +55,11 @@ describe('chipModel', () => {
     expect(chipModel(active(ready, { finalize: { status: 'running' } }))?.title).toBe(
       'Processing on our side',
     );
-    expect(chipModel(active(ready, { finalize: { status: 'done' } }))?.title).toBe(
-      'Ready at full resolution',
-    );
+    // The title says it all: no note under it.
+    expect(chipModel(active(ready, { finalize: { status: 'done' } }))).toMatchObject({
+      title: 'Ready at full resolution',
+      note: null,
+    });
     const fail = (auth: boolean, retryable = true): FinalizeState => ({
       status: 'failed',
       auth,

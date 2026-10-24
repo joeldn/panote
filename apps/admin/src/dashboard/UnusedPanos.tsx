@@ -97,7 +97,11 @@ export function UnusedPanos({ panos, tilesBase, now, deletePano }: UnusedPanosPr
   return (
     <>
       {panos.length === 0 ? (
-        <p className="unused__note">Every pano you’ve uploaded is in a tour.</p>
+        // Free up space lands here at a limit, so say where else room comes from.
+        <p className="unused__note">
+          Every pano you’ve uploaded is in a tour. To make room, delete a tour you no longer need,
+          or remove panos from a tour and delete them here.
+        </p>
       ) : (
         <>
           <p className="unused__note">
