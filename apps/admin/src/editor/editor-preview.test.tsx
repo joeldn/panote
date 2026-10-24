@@ -227,7 +227,7 @@ describe('editor: an upload in this tab', () => {
     await saveRenamed('Harbour walk');
     expect(publishes(backend)).toHaveLength(1);
     const calm = screen.getByText(/Publishing as soon as “Town hall” finishes processing\./);
-    expect(calm.closest('.ed-banner')?.classList.contains('ed-banner--info')).toBe(true);
+    expect(calm.closest('.ed-banner')?.classList.contains('pn-notice--info')).toBe(true);
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
 
     backend.state.publishNotReady = [];
@@ -251,7 +251,7 @@ describe('editor: an upload in this tab', () => {
     const notice = screen
       .getByText(/“Town hall” couldn’t be processed, so the share link wasn’t updated/)
       .closest('.ed-banner') as HTMLElement;
-    expect(notice.classList.contains('ed-banner--warn')).toBe(true);
+    expect(notice.classList.contains('pn-notice--warn')).toBe(true);
     expect(within(notice).getByRole('button', { name: 'Try again' })).toBeTruthy();
     // Even tiles turning up later don't publish without the user.
     backend.state.manifests = [manifest('t1-abc')];

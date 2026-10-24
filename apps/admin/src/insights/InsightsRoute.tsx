@@ -1,7 +1,7 @@
 import './insights.css';
 
 import { DEFAULT_INSIGHTS_DAYS, type InsightsOk } from '@internal/contracts';
-import { Button, Modal, ModalHeader, useModalTitleId } from '@internal/ui';
+import { Button, Modal, ModalHeader, Notice, useModalTitleId } from '@internal/ui';
 import { createPublicApi, isAuthError } from '@internal/web-kit';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
@@ -172,19 +172,22 @@ export function InsightsRoute({ over = 'editor' }: { over?: 'editor' | 'dashboar
             <TopPoints top={data.topHotspots} names={names} />
           </>
         ) : (
-          <div className="ins__unavailable" role="alert">
-            <p className="ins__unavailable-title">
+          <Notice
+            tone="warn"
+            className="ins__unavailable"
+            actions={
+              <Button size="sm" variant="secondary" icon="fa-solid fa-rotate-right" onClick={retry}>
+                Retry
+              </Button>
+            }
+          >
+            <strong>
               {insights.status === 'unavailable'
                 ? 'Insights unavailable'
                 : 'Couldn’t load insights'}
-            </p>
-            <p className="ins__unavailable-body">
-              The analytics service didn’t answer. Your tour and its views are unaffected.
-            </p>
-            <Button size="sm" icon="fa-solid fa-rotate-right" onClick={retry}>
-              Retry
-            </Button>
-          </div>
+            </strong>
+            <p>The analytics service didn’t answer. Your tour and its views are unaffected.</p>
+          </Notice>
         )}
       </>
     );

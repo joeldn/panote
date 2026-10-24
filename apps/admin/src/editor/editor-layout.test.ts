@@ -69,6 +69,13 @@ describe('editor layout CSS', () => {
     expect(css).toMatch(/\n\.ed-popover\s*{\s*pointer-events:\s*auto;/);
   });
 
+  it('keeps the error outline on a floating banner, under its shadow', () => {
+    // .ed-banner's shadow would otherwise replace .pn-notice--error's inset outline.
+    expect(css).toMatch(
+      /\n\.ed-banner\.pn-notice--error\s*{\s*box-shadow:\s*inset 0 0 0 1px[^;]*var\(--shadow-popover\);/,
+    );
+  });
+
   it('has no rule spliced into another’s selector', () => {
     // A comment inside a selector list means a rule was pasted into the middle of another.
     for (const selector of css.matchAll(/(?:^|})\s*([^{}@]+){/g)) {

@@ -13,6 +13,7 @@ import {
   ConfirmModal,
   Modal,
   ModalHeader,
+  Notice,
   SignInModal,
   useCopy,
   useModalTitleId,
@@ -298,25 +299,32 @@ export function PeopleRoute() {
     body = (
       <>
         {offeredTo?.you && (
-          <div className="ppl__created" role="status">
-            <p className="ppl__created-text">
-              {ownerEmail ?? 'The owner'} wants to make you this tour’s owner. Its panos would move
-              to your account and count toward your limits, and they would stay on as an editor.
-            </p>
-            <div className="ppl__actions">
-              <Button busy={taking} onClick={() => void onTake()}>
-                Become the owner
-              </Button>
-              <Button variant="ghost" disabled={taking} onClick={() => void onWithdraw()}>
-                Decline
-              </Button>
-            </div>
-          </div>
+          <Notice
+            className="ppl__notice"
+            actions={
+              <>
+                <Button size="sm" busy={taking} onClick={() => void onTake()}>
+                  Become the owner
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={taking}
+                  onClick={() => void onWithdraw()}
+                >
+                  Decline
+                </Button>
+              </>
+            }
+          >
+            {ownerEmail ?? 'The owner'} wants to make you this tour’s owner. Its panos would move to
+            your account and count toward your limits, and they would stay on as an editor.
+          </Notice>
         )}
         {offerError && (
-          <p className="ppl__error" role="alert">
+          <Notice tone="error" className="ppl__notice">
             {offerError}
-          </p>
+          </Notice>
         )}
         {owner && (
           <form className="ppl__invite" onSubmit={(e) => void onInvite(e)}>
@@ -349,12 +357,12 @@ export function PeopleRoute() {
           </form>
         )}
         {created && (
-          <div className="ppl__created" role="status">
-            <p className="ppl__created-text">
+          <Notice className="ppl__notice">
+            <p>
               Send this link to <strong>{created.email}</strong> yourself. It works once, for that
               address, until {formatDate(created.expiresAt)}.
             </p>
-            <div className="ppl__invite-row">
+            <div className="ppl__invite-row ppl__invite-row--link">
               <input
                 className="pn-input pn-input--mono"
                 readOnly
@@ -366,7 +374,7 @@ export function PeopleRoute() {
                 {copied === 'copied' ? 'Copied ✓' : copied === 'failed' ? 'Copy failed' : 'Copy'}
               </Button>
             </div>
-          </div>
+          </Notice>
         )}
         <section className="ppl__section" aria-labelledby="ppl-people">
           <h3 id="ppl-people" className="ppl__label">
@@ -457,9 +465,9 @@ export function PeopleRoute() {
           </section>
         )}
         {rowError && (
-          <p className="ppl__error" role="alert">
+          <Notice tone="error" className="ppl__notice">
             {rowError}
-          </p>
+          </Notice>
         )}
       </>
     );

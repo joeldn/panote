@@ -1150,56 +1150,33 @@
 
 .ed-banner {
   pointer-events: auto;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
   width: min(560px, 100%);
   box-sizing: border-box;
   padding: 12px 14px;
   border-radius: var(--r-card);
-  background: var(--cbg-solid);
   box-shadow: var(--shadow-popover);
-  font-size: 13.5px;
-  line-height: 1.5;
   animation: pn-fadeup var(--dur-fadeup) var(--ease-out);
 }
 
-.ed-banner--conflict,
-.ed-banner--error {
-  border: 1.5px solid color-mix(in srgb, var(--accent) 45%, transparent);
+/* Its own shadow replaces the error notice's outline: keep both. */
+.ed-banner.pn-notice--error {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    var(--shadow-popover);
 }
 
-.ed-banner__icon {
-  margin-top: 3px;
-  color: var(--accent);
+/* It floats over the pano: the info tint alone would let the image show through. */
+.ed-banner.pn-notice--info {
+  background: var(--cbg-solid);
 }
 
-.ed-banner--info .ed-banner__icon {
+.ed-banner.pn-notice--info .pn-notice__icon {
   color: var(--depth);
 }
 
-.ed-banner__text {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  color: var(--ink-82);
-}
-
-p.ed-banner__text {
-  display: block;
-}
-
-.ed-banner__text ul {
+.ed-banner ul {
   margin: 4px 0 0;
   padding-left: 18px;
-}
-
-.ed-banner__actions {
-  display: flex;
-  gap: 6px;
-  align-self: center;
 }
 
 .ed-banner__link {

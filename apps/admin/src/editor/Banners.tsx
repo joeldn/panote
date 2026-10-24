@@ -1,4 +1,4 @@
-import { Button, IconButton } from '@internal/ui';
+import { Button, IconButton, Notice } from '@internal/ui';
 import { Link } from 'react-router';
 
 import { docLabel, type DocKey, type EditorDocs } from './model.js';
@@ -34,25 +34,28 @@ export function ConflictBanner({
   onOverwrite,
 }: ConflictBannerProps) {
   return (
-    <div className="ed-banner ed-banner--conflict" role="alert">
-      <i className="fa-solid fa-code-merge ed-banner__icon" aria-hidden="true" />
-      <div className="ed-banner__text">
-        <strong>This tour changed elsewhere — reload or overwrite.</strong>
-        <span>
-          {conflicts.map((k) => docLabel(docs, k)).join(', ')}{' '}
-          {conflicts.length === 1 ? 'was' : 'were'} saved somewhere else since you opened it. Reload
-          to take that version and drop your changes to it, or overwrite it with yours.
-        </span>
-      </div>
-      <div className="ed-banner__actions">
-        <Button variant="ghost" size="sm" onClick={onReload} disabled={busy}>
-          Reload
-        </Button>
-        <Button variant="danger" size="sm" onClick={onOverwrite} busy={busy}>
-          Overwrite
-        </Button>
-      </div>
-    </div>
+    <Notice
+      tone="error"
+      icon="fa-solid fa-code-merge"
+      className="ed-banner"
+      actions={
+        <>
+          <Button variant="ghost" size="sm" onClick={onReload} disabled={busy}>
+            Reload
+          </Button>
+          <Button variant="danger" size="sm" onClick={onOverwrite} busy={busy}>
+            Overwrite
+          </Button>
+        </>
+      }
+    >
+      <strong>This tour changed elsewhere — reload or overwrite.</strong>
+      <p>
+        {conflicts.map((k) => docLabel(docs, k)).join(', ')}{' '}
+        {conflicts.length === 1 ? 'was' : 'were'} saved somewhere else since you opened it. Reload
+        to take that version and drop your changes to it, or overwrite it with yours.
+      </p>
+    </Notice>
   );
 }
 
@@ -75,19 +78,11 @@ export function ErrorBanner({
   );
   if (rows.length === 0) return null;
   return (
-    <div className="ed-banner ed-banner--error" role="alert">
-      <i className="fa-solid fa-triangle-exclamation ed-banner__icon" aria-hidden="true" />
-      <div className="ed-banner__text">
-        <strong>Some changes weren’t saved.</strong>
-        <ul>
-          {rows.map(([k, f]) => (
-            <li key={k}>
-              {docLabel(docs, k)}: {failureText(f)}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="ed-banner__actions">
+    <Notice
+      tone="error"
+      icon="fa-solid fa-triangle-exclamation"
+      className="ed-banner"
+      actions={
         <Button
           variant="primary"
           size="sm"
@@ -98,8 +93,17 @@ export function ErrorBanner({
         >
           Try again
         </Button>
-      </div>
-    </div>
+      }
+    >
+      <strong>Some changes weren’t saved.</strong>
+      <ul>
+        {rows.map(([k, f]) => (
+          <li key={k}>
+            {docLabel(docs, k)}: {failureText(f)}
+          </li>
+        ))}
+      </ul>
+    </Notice>
   );
 }
 
@@ -125,38 +129,47 @@ export function Notices({
   return (
     <>
       {notices.map((n) => (
-        <div key={n.id} className={`ed-banner ed-banner--${n.tone}`} role="status">
-          <i
-            className={`fa-solid ${n.tone === 'warn' ? 'fa-circle-exclamation' : 'fa-circle-info'} ed-banner__icon`}
-            aria-hidden="true"
-          />
-          <p className="ed-banner__text">
-            {n.text}{' '}
-            {n.link && (
-              <Link to={n.link.to} className="ed-banner__link">
-                {n.link.label}
-              </Link>
-            )}
-          </p>
-          {n.action === 'republish' && (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={onRepublish}
-              busy={busy}
-              disabled={saving || failed}
-              title={saving || failed ? 'Save your changes first' : undefined}
-            >
-              Try again
-            </Button>
+        <Notice
+          key={n.id}
+          tone={n.tone}
+          // Announced politely whatever the tone: these follow the user's own action.
+          role="status"
+          icon={`fa-solid ${n.tone === 'warn' ? 'fa-circle-exclamation' : 'fa-circle-info'}`}
+          className="ed-banner"
+          actions={
+            <>
+              {n.action === 'republish' && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={onRepublish}
+                  busy={busy}
+                  disabled={saving || failed}
+                  title={saving || failed ? 'Save your changes first' : undefined}
+                >
+                  Try again
+                </Button>
+              )}
+              {n.action === 'discard-draft' && (
+                <Button variant="ghost" size="sm" onClick={onDiscardDraft} disabled={saving}>
+                  Discard
+                </Button>
+              )}
+              <IconButton
+                icon="fa-solid fa-xmark"
+                label="Dismiss"
+                onClick={() => onDismiss(n.id)}
+              />
+            </>
+          }
+        >
+          {n.text}{' '}
+          {n.link && (
+            <Link to={n.link.to} className="ed-banner__link">
+              {n.link.label}
+            </Link>
           )}
-          {n.action === 'discard-draft' && (
-            <Button variant="ghost" size="sm" onClick={onDiscardDraft} disabled={saving}>
-              Discard
-            </Button>
-          )}
-          <IconButton icon="fa-solid fa-xmark" label="Dismiss" onClick={() => onDismiss(n.id)} />
-        </div>
+        </Notice>
       ))}
     </>
   );
