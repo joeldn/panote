@@ -67,7 +67,9 @@ export function startProblem(e: unknown, leftOut: readonly string[] = []): Start
     const kept = `Only “${e.kept}” is kept while you sign in: there’s room for one photo.`;
     return {
       message: `You’ve been signed out. Sign in again to continue. ${kept} ${
-        leftOut.length > 0 ? 'These weren’t kept:' : 'Add these again after:'
+        leftOut.length > 0
+          ? 'Add these again after, apart from any with a problem noted:'
+          : 'Add these again after:'
       }`,
       files: [...e.dropped, ...leftOut],
     };

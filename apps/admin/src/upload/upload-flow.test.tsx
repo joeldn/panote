@@ -267,6 +267,8 @@ describe('fresh upload from /app/new', () => {
     expect(chipTitle()).toBe('Processing on our side');
     await tick(1_500);
     expect(chipTitle()).toBe('Ready at full resolution');
+    // The title says it all: no empty note line under it.
+    expect(chip().querySelector('.up-chip__note')).toBeNull();
 
     // Readiness reads bypass the HTTP cache; once ready, the viewer's copy is refreshed.
     expect(backend.manifestPolls().every((c) => c.cache === 'no-store')).toBe(true);
@@ -1444,7 +1446,7 @@ describe('sign-in during an upload', () => {
     await tick();
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain(
-      'Only “Hall.png” is kept while you sign in: there’s room for one photo. These weren’t kept:',
+      'Only “Hall.png” is kept while you sign in: there’s room for one photo. Add these again after, apart from any with a problem noted:',
     );
     expect(
       within(alert)
