@@ -1,3 +1,4 @@
+import { LIMIT_ERRORS } from '@internal/contracts';
 import type { PanoSummary, SharedTourSummary, TourSummary, Usage, Visibility } from './types.js';
 import {
   ApiError,
@@ -315,7 +316,7 @@ export function useDashboard(
       } catch (e) {
         // At the tour cap a retry can't help, so say why; anything else keeps the generic copy.
         setNotice(
-          isStatus(e, 403) && errorText(e) === 'tour limit reached'
+          isStatus(e, 403) && errorText(e) === LIMIT_ERRORS.tours
             ? `Couldn’t duplicate “${tour.title}”. ${(e as Error).message}`
             : `Couldn’t duplicate “${tour.title}”. Try again.`,
         );

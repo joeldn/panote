@@ -4,6 +4,7 @@ import {
   contentIdError,
   deletingKey,
   isContentId,
+  LIMIT_ERRORS,
   MAX_PLAN_BYTES,
   originalKey,
   planKey,
@@ -173,7 +174,7 @@ async function planUrl(
   // pass and take the tour past the cap.
   const stored = await r2.listObjects(planPrefix(tourId)).catch(unavailable);
   if (stored.reduce((sum, o) => sum + o.size, size) > MAX_PLAN_BYTES_PER_TOUR) {
-    return Response.json({ error: 'plan storage limit reached' }, { status: 403 });
+    return Response.json({ error: LIMIT_ERRORS.planStorage }, { status: 403 });
   }
   const planId = crypto.randomUUID();
   const subs = uploaders(sub, owner);
@@ -218,7 +219,7 @@ async function dailyLimit(
   );
   for (const d of daily) pruneLater(r2, d.expired, ctx);
   if (daily.some((d) => d.refused)) {
-    return Response.json({ error: 'daily upload limit reached' }, { status: 403 });
+    return Response.json({ error: LIMIT_ERRORS.dailyUploads }, { status: 403 });
   }
   return null;
 }
@@ -302,11 +303,11 @@ const REFUSAL_STATUSES = new Set([403, 404, 410, 503]);
 // The refusals' error texts, as a fixed vocabulary: anything else is recorded by its
 // status alone, so no text a handler builds can reach the event stream.
 const REFUSAL_CODES: Record<string, string> = {
-  'pano limit reached': 'pano-limit',
-  'storage limit reached': 'storage-limit',
-  'plan storage limit reached': 'plan-storage-limit',
-  'daily upload limit reached': 'daily-limit',
-  'uploads paused': 'paused',
+  [LIMIT_ERRORS.panos]: 'pano-limit',
+  [LIMIT_ERRORS.storage]: 'storage-limit',
+  [LIMIT_ERRORS.planStorage]: 'plan-storage-limit',
+  [LIMIT_ERRORS.dailyUploads]: 'daily-limit',
+  [LIMIT_ERRORS.paused]: 'paused',
   'account deleted': 'account-deleted',
   'account disabled': 'account-disabled',
   'owner account disabled': 'owner-disabled',

@@ -1,7 +1,7 @@
 import './upload.css';
 
 import type { StagePreview } from '@internal/ui';
-import { MAX_TOUR_SCENES } from '@internal/contracts';
+import { LIMIT_ERRORS, MAX_TOUR_SCENES } from '@internal/contracts';
 import {
   ApiError,
   createUploadDeps,
@@ -166,19 +166,19 @@ const isUploading = (j: Job): boolean =>
 function limitOf(e: unknown): UploadLimit {
   if (!(e instanceof ApiError)) return null;
   if (e.status === 429) return 'rate';
-  // The service-wide daily ceiling (upload-api's 503 'uploads paused').
+  // The service-wide daily ceiling (upload-api's 503 with LIMIT_ERRORS.paused).
   if (e.status === 503) {
-    return (e.body as { error?: unknown } | null)?.error === 'uploads paused' ? 'paused' : null;
+    return (e.body as { error?: unknown } | null)?.error === LIMIT_ERRORS.paused ? 'paused' : null;
   }
-  // upload-api answers 403 only for a quota ('pano limit reached', 'storage limit reached',
-  // 'daily upload limit reached') or 'account disabled', and 410 only for 'account deleted'.
+  // upload-api answers 403 only for a quota (LIMIT_ERRORS) or 'account disabled', and 410
+  // only for 'account deleted'.
   if (e.status === 410) return 'account';
   if (e.status !== 403) return null;
   const code = (e.body as { error?: unknown } | null)?.error;
   if (code === 'account disabled') return 'account';
-  // Only these two are freed by deleting unused panos. 'plan storage limit reached' is a
-  // tour's floor-plan images, which panos don't count toward, so it stays a plain quota.
-  return code === 'pano limit reached' || code === 'storage limit reached' ? 'space' : 'quota';
+  // Only these two are freed by deleting unused panos. The plan storage limit is a tour's
+  // floor-plan images, which panos don't count toward, so it stays a plain quota.
+  return code === LIMIT_ERRORS.panos || code === LIMIT_ERRORS.storage ? 'space' : 'quota';
 }
 
 const isInFlight = (a: { machine: UploadState; finalize: FinalizeState } | null): boolean => {

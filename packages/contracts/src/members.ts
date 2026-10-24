@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { TourOwnerRecordSchema, TourRoleSchema, TourSummarySchema, type TourRole } from './api.js';
 import { membersKey, PANO_PATTERN, tourKey, tourOwnerKey } from './keys.js';
+import { LIMIT_ERRORS } from './limits.js';
 import { isContentId } from './schema.js';
 
 // Tour editors (docs/decisions.md, "Tour editors"). A tour has one owner, whose R2 prefix
@@ -225,9 +226,9 @@ export type TransferOfferOk = z.infer<typeof TransferOfferOkSchema>;
 export const TRANSFER_REFUSALS = [
   'no offer',
   'offer expired',
-  'tour limit reached',
-  'pano limit reached',
-  'storage limit reached',
+  LIMIT_ERRORS.tours,
+  LIMIT_ERRORS.panos,
+  LIMIT_ERRORS.storage,
 ] as const;
 export const TransferRefusedSchema = z.object({ error: z.enum(TRANSFER_REFUSALS) });
 export type TransferRefused = z.infer<typeof TransferRefusedSchema>;
